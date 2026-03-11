@@ -18,7 +18,7 @@ Then research what this slice needs:
 2. **Skill Discovery ({{skillDiscoveryMode}}):**{{skillDiscoveryInstructions}}
 3. Explore relevant code for this slice's scope. For targeted exploration, use `rg`, `find`, and reads. For broad or unfamiliar subsystems, use `scout` to map the relevant area first.
 4. Use `resolve_library` / `get_library_docs` for unfamiliar libraries
-5. Read the template at `~/.pi/agent/extensions/gsd/templates/research.md`
+5. Read the template at `~/.gsd/agent/extensions/gsd/templates/research.md`
 6. Write `{{outputPath}}`
 
 The slice directory already exists at `{{slicePath}}/`. Do NOT mkdir — just write the file.

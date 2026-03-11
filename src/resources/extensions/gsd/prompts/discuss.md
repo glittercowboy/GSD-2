@@ -126,11 +126,11 @@ Directories use bare IDs. Files use ID-SUFFIX format. Titles live inside file co
 
 Once the user is satisfied, in a single pass:
 1. `mkdir -p .gsd/milestones/{{milestoneId}}/slices`
-2. Write or update `.gsd/PROJECT.md` — read the template at `~/.pi/agent/extensions/gsd/templates/project.md` first. Describe what the project is, its current state, and list the milestone sequence.
-3. Write or update `.gsd/REQUIREMENTS.md` — read the template at `~/.pi/agent/extensions/gsd/templates/requirements.md` first. Confirm requirement states, ownership, and traceability before roadmap creation.
-4. Write `{{contextAbsPath}}` — read the template at `~/.pi/agent/extensions/gsd/templates/context.md` first. Preserve key risks, unknowns, existing codebase constraints, integration points, and relevant requirements surfaced during discussion.
-5. Write `{{roadmapAbsPath}}` — read the template at `~/.pi/agent/extensions/gsd/templates/roadmap.md` first. Decompose into demoable vertical slices with checkboxes, risk, depends, demo sentences, proof strategy, verification classes, milestone definition of done, requirement coverage, and a boundary map. If the milestone crosses multiple runtime boundaries, include an explicit final integration slice that proves the assembled system works end-to-end in a real environment.
-6. Seed `.gsd/DECISIONS.md` — read the template at `~/.pi/agent/extensions/gsd/templates/decisions.md` first. Append rows for any architectural or pattern decisions made during discussion.
+2. Write or update `.gsd/PROJECT.md` — read the template at `~/.gsd/agent/extensions/gsd/templates/project.md` first. Describe what the project is, its current state, and list the milestone sequence.
+3. Write or update `.gsd/REQUIREMENTS.md` — read the template at `~/.gsd/agent/extensions/gsd/templates/requirements.md` first. Confirm requirement states, ownership, and traceability before roadmap creation.
+4. Write `{{contextAbsPath}}` — read the template at `~/.gsd/agent/extensions/gsd/templates/context.md` first. Preserve key risks, unknowns, existing codebase constraints, integration points, and relevant requirements surfaced during discussion.
+5. Write `{{roadmapAbsPath}}` — read the template at `~/.gsd/agent/extensions/gsd/templates/roadmap.md` first. Decompose into demoable vertical slices with checkboxes, risk, depends, demo sentences, proof strategy, verification classes, milestone definition of done, requirement coverage, and a boundary map. If the milestone crosses multiple runtime boundaries, include an explicit final integration slice that proves the assembled system works end-to-end in a real environment.
+6. Seed `.gsd/DECISIONS.md` — read the template at `~/.gsd/agent/extensions/gsd/templates/decisions.md` first. Append rows for any architectural or pattern decisions made during discussion.
 7. Update `.gsd/STATE.md`
 8. Commit: `docs({{milestoneId}}): context, requirements, and roadmap`
 
@@ -140,8 +140,8 @@ After writing the files and committing, say exactly: "Milestone {{milestoneId}} 
 
 Once the user confirms the milestone split, in a single pass:
 1. `mkdir -p .gsd/milestones/{{milestoneId}}/slices` for each milestone
-2. Write `.gsd/PROJECT.md` — read the template at `~/.pi/agent/extensions/gsd/templates/project.md` first.
-3. Write `.gsd/REQUIREMENTS.md` — read the template at `~/.pi/agent/extensions/gsd/templates/requirements.md` first. Capture Active, Deferred, Out of Scope, and any already Validated requirements. Later milestones may have provisional ownership where slice plans do not exist yet.
+2. Write `.gsd/PROJECT.md` — read the template at `~/.gsd/agent/extensions/gsd/templates/project.md` first.
+3. Write `.gsd/REQUIREMENTS.md` — read the template at `~/.gsd/agent/extensions/gsd/templates/requirements.md` first. Capture Active, Deferred, Out of Scope, and any already Validated requirements. Later milestones may have provisional ownership where slice plans do not exist yet.
 4. Write a `CONTEXT.md` for **every** milestone — capture the intent, scope, risks, constraints, user-visible outcome, completion class, final integrated acceptance, and relevant requirements for each. Each future milestone's CONTEXT.md should be rich enough that a planning agent encountering it fresh — with no memory of this conversation — can understand the intent, constraints, dependencies, what this milestone unlocks, and what "done" looks like.
 5. Write a `ROADMAP.md` for **only the first milestone** — detail-planning later milestones now is waste because the codebase will change. Include requirement coverage and a milestone definition of done.
 6. Seed `.gsd/DECISIONS.md`.

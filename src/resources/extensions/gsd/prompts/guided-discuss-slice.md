@@ -45,7 +45,7 @@ If the user wants to keep going, keep asking. Stop when they say wrap up.
 
 Once the user is ready to wrap up:
 
-1. Read the slice context template at `~/.pi/agent/extensions/gsd/templates/slice-context.md`
+1. Read the slice context template at `~/.gsd/agent/extensions/gsd/templates/slice-context.md`
 2. `mkdir -p {{sliceDirAbsPath}}`
 3. Write `{{contextAbsPath}}` — use the template structure, filling in:
    - **Goal** — one sentence: what this slice delivers

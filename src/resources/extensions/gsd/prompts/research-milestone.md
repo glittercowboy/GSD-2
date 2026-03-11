@@ -11,7 +11,7 @@ Then research the codebase and relevant technologies:
 2. **Skill Discovery ({{skillDiscoveryMode}}):**{{skillDiscoveryInstructions}}
 3. Explore relevant code. For small/familiar codebases, use `rg`, `find`, and targeted reads. For large or unfamiliar codebases, use `scout` to build a broad map efficiently before diving in.
 4. Use `resolve_library` / `get_library_docs` for unfamiliar libraries
-5. Read the template at `~/.pi/agent/extensions/gsd/templates/research.md`
+5. Read the template at `~/.gsd/agent/extensions/gsd/templates/research.md`
 6. If `.gsd/REQUIREMENTS.md` exists, research against it. Identify which Active requirements are table stakes, likely omissions, overbuilt risks, or domain-standard behaviors the user may or may not want.
 7. Write `{{outputPath}}` with:
    - Summary (2-3 paragraphs, primary recommendation)

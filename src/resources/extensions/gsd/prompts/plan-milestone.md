@@ -7,13 +7,13 @@ All relevant context has been preloaded below — start working immediately with
 {{inlinedContext}}
 
 Then:
-1. Read the template at `~/.pi/agent/extensions/gsd/templates/roadmap.md`
+1. Read the template at `~/.gsd/agent/extensions/gsd/templates/roadmap.md`
 2. Read `.gsd/REQUIREMENTS.md` if it exists. Treat **Active** requirements as the capability contract for planning. If it does not exist, continue in legacy compatibility mode but explicitly note that requirement coverage is operating without a contract.
 3. If a `GSD Skill Preferences` block is present in system context, use it to decide which skills to load and follow during planning, without overriding required roadmap formatting
 4. Create the roadmap: decompose into demoable vertical slices — as many as the work needs, no more
 5. Order by risk (high-risk first)
 6. Write `{{outputPath}}` with checkboxes, risk, depends, demo sentences, proof strategy, verification classes, milestone definition of done, **requirement coverage**, and a boundary map. Write success criteria as observable truths, not implementation tasks. If the milestone crosses multiple runtime boundaries, include an explicit final integration slice that proves the assembled system works end-to-end in a real environment
-7. If planning produced structural decisions (e.g. slice ordering rationale, technology choices, scope exclusions), append them to `.gsd/DECISIONS.md` (read the template at `~/.pi/agent/extensions/gsd/templates/decisions.md` if the file doesn't exist yet)
+7. If planning produced structural decisions (e.g. slice ordering rationale, technology choices, scope exclusions), append them to `.gsd/DECISIONS.md` (read the template at `~/.gsd/agent/extensions/gsd/templates/decisions.md` if the file doesn't exist yet)
 8. Update `.gsd/STATE.md`
 
 ## Requirement Mapping Rules

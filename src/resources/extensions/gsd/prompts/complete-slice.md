@@ -8,8 +8,8 @@ All relevant context has been preloaded below — the slice plan, all task summa
 
 Then:
 1. Read the templates:
-   - `~/.pi/agent/extensions/gsd/templates/slice-summary.md`
-   - `~/.pi/agent/extensions/gsd/templates/uat.md`
+   - `~/.gsd/agent/extensions/gsd/templates/slice-summary.md`
+   - `~/.gsd/agent/extensions/gsd/templates/uat.md`
 2. If a `GSD Skill Preferences` block is present in system context, use it to decide which skills to load and follow during completion, without relaxing required verification or artifact rules
 3. Run all slice-level verification checks defined in the slice plan. All must pass before marking the slice done. If any fail, fix them first.
 4. Confirm the slice's observability/diagnostic surfaces are real and useful where relevant: status inspection works, failure state is externally visible, structured errors/logs are actionable, and hidden failures are not being mistaken for success.

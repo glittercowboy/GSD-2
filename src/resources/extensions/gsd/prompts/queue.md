@@ -69,7 +69,7 @@ Determine where the new milestones should go in the overall sequence. Consider d
 Once the user is satisfied, in a single pass for **each** new milestone (starting from {{nextId}}):
 
 1. `mkdir -p .gsd/milestones/<ID>/slices`
-2. Write `.gsd/milestones/<ID>/<ID>-CONTEXT.md` — read the template at `~/.pi/agent/extensions/gsd/templates/context.md` first. Capture intent, scope, risks, constraints, integration points, and relevant requirements. Mark the status as "Queued — pending auto-mode execution."
+2. Write `.gsd/milestones/<ID>/<ID>-CONTEXT.md` — read the template at `~/.gsd/agent/extensions/gsd/templates/context.md` first. Capture intent, scope, risks, constraints, integration points, and relevant requirements. Mark the status as "Queued — pending auto-mode execution."
 
 Then, after all milestone directories and context files are written:
 
