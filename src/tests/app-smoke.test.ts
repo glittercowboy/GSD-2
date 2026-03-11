@@ -366,3 +366,33 @@ test("gsd launches and loads extensions without errors", async () => {
     "no ERR_MODULE_NOT_FOUND",
   );
 });
+/**
+ * 9. buildResourceLoader includes ~/.pi/agent/extensions in additionalExtensionPaths
+ */
+test("buildResourceLoader source includes ~/.pi/agent/extensions path", async () => {
+  const { join } = await import("node:path");
+  
+  // Verify the source code includes the pi extensions path
+  const loaderSrc = readFileSync(join(projectRoot, "src", "resource-loader.ts"), "utf-8");
+  
+  // Check that buildResourceLoader references ~/.pi/agent
+  assert.ok(
+    loaderSrc.includes(".pi"),
+    "resource-loader.ts references .pi directory"
+  );
+  assert.ok(
+    loaderSrc.includes("additionalExtensionPaths"),
+    "resource-loader.ts uses additionalExtensionPaths"
+  );
+  assert.ok(
+    loaderSrc.includes("homedir()"),
+    "resource-loader.ts uses homedir() to construct paths"
+  );
+  
+  // Verify the function constructs the correct path
+  assert.match(
+    loaderSrc,
+    /join\(homedir\(\),\s*['"]\.pi['"],\s*['"]agent['"]\)/,
+    "buildResourceLoader constructs ~/.pi/agent path"
+  );
+});

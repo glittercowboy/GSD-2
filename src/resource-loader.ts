@@ -1,4 +1,5 @@
 import { DefaultResourceLoader } from '@mariozechner/pi-coding-agent'
+import { homedir } from 'node:os'
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -52,10 +53,16 @@ export function initResources(agentDir: string): void {
 }
 
 /**
- * Constructs a DefaultResourceLoader with no additionalExtensionPaths.
- * Extensions are synced to agentDir by initResources() and pi auto-discovers
- * them from ~/.gsd/agent/extensions/ via its normal agentDir scan.
+ * Constructs a DefaultResourceLoader that loads extensions from both
+ * ~/.gsd/agent/extensions/ (GSD's default) and ~/.pi/agent/extensions/ (pi's default).
+ * This allows users to use extensions from either location.
  */
 export function buildResourceLoader(agentDir: string): DefaultResourceLoader {
-  return new DefaultResourceLoader({ agentDir })
+  const piAgentDir = join(homedir(), '.pi', 'agent')
+  const piExtensionsDir = join(piAgentDir, 'extensions')
+  
+  return new DefaultResourceLoader({
+    agentDir,
+    additionalExtensionPaths: [piExtensionsDir],
+  })
 }
