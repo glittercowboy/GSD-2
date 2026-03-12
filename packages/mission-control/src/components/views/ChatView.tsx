@@ -16,7 +16,7 @@ import { SessionTabs } from "@/components/chat/SessionTabs";
 import { SessionCreateModal } from "@/components/chat/SessionCreateModal";
 import { SessionCloseModal } from "@/components/chat/SessionCloseModal";
 import type { AssetItem } from "@/hooks/useAssets";
-import type { PlanningState, PhaseState, PlanState } from "@/server/types";
+import type { PlanningState } from "@/server/types";
 import type { ChatMessage } from "@/server/chat-types";
 import type { SessionTab } from "@/hooks/useSessionManager";
 
@@ -76,28 +76,11 @@ export function ChatView({
     [onChatSend, pendingAttachment],
   );
 
-  const currentPhase: PhaseState | undefined = planningState
-    ? planningState.phases.find((p) => p.status === "in_progress") ??
-      planningState.phases[planningState.phases.length - 1]
-    : undefined;
-
-  const currentPlan: PlanState | undefined = currentPhase
-    ? currentPhase.completedPlans < currentPhase.plans.length
-      ? currentPhase.plans[currentPhase.completedPlans]
-      : undefined
-    : undefined;
-
-  const isExecuting =
-    currentPlan !== undefined && currentPhase?.status === "in_progress";
-
-  const nextPlan: PlanState | undefined = (() => {
-    if (!planningState) return undefined;
-    if (currentPhase && currentPhase.completedPlans < currentPhase.plans.length) {
-      return currentPhase.plans[currentPhase.completedPlans];
-    }
-    const nextPhase = planningState.phases.find((p) => p.status === "not_started");
-    return nextPhase?.plans[0];
-  })();
+  // TODO Phase 13-14: derive currentPlan, isExecuting, nextPlan from GSD2State
+  // GSD2State has no .phases array — task/plan display will be rebuilt in Phase 13-14
+  const currentPlan = undefined;
+  const isExecuting = false;
+  const nextPlan = undefined;
 
   const handleCloseTab = useCallback((id: string) => {
     const session = sessions.find((s) => s.id === id);
@@ -190,7 +173,7 @@ export function ChatView({
             />
           ) : (
             <TaskWaiting
-              lastCompleted={planningState?.state.stopped_at}
+              lastCompleted={planningState?.projectState?.last_activity}
               nextTask={nextPlan ? `Plan ${nextPlan.plan}` : undefined}
               nextPlanNumber={nextPlan?.plan}
             />
