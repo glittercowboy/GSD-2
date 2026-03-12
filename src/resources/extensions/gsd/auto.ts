@@ -17,7 +17,7 @@ import type {
 } from "@mariozechner/pi-coding-agent";
 
 import { deriveState } from "./state.js";
-import type { GSDState } from "./types.js";
+import type { GSDState, TaskPlanEntry } from "./types.js";
 import { loadFile, parseContinue, parsePlan, parseRoadmap, parseSummary, extractUatType, inlinePriorMilestoneSummary } from "./files.js";
 export { inlinePriorMilestoneSummary };
 import type { UatType } from "./files.js";
@@ -48,6 +48,8 @@ import {
   formatValidationIssues,
 } from "./observability-validator.js";
 import { ensureGitignore } from "./gitignore.js";
+import { computeWaves } from "./waves.js";
+import { executeWave } from "./wave-executor.js";
 import { runGSDDoctor, rebuildState } from "./doctor.js";
 import { snapshotSkills, clearSkillSnapshot } from "./skill-discovery.js";
 import {
@@ -1067,9 +1069,90 @@ async function dispatchNextUnit(
     prompt = await buildReplanSlicePrompt(mid, midTitle!, sid, sTitle, basePath);
 
   } else if (state.phase === "executing" && state.activeTask) {
-    // Execute next task
     const sid = state.activeSlice!.id;
     const sTitle = state.activeSlice!.title;
+
+    // Check for parallelizable tasks only when multiple incomplete tasks remain
+    const planPath = resolveSliceFile(basePath, mid, sid, "PLAN");
+    let useWave = false;
+    let currentWave: TaskPlanEntry[] | null = null;
+
+    if (planPath) {
+      const planContent = await loadFile(planPath);
+      if (planContent) {
+        const incompleteTasks = parsePlan(planContent).tasks.filter(t => !t.done);
+        if (incompleteTasks.length > 1) {
+          const waves = computeWaves(incompleteTasks);
+          if (waves.length > 0 && waves[0].length > 1) {
+            currentWave = waves[0];
+            useWave = true;
+          }
+        }
+      }
+    }
+
+    if (useWave && currentWave) {
+      // PARALLEL: multiple independent tasks in this wave
+      const sliceBranch = `gsd/${mid}/${sid}`;
+      const supervisor = resolveAutoSupervisorConfig();
+      const waveTimeoutMs = supervisor.hard_timeout_minutes * 60 * 1000;
+
+      // Snapshot metrics for previous unit before wave execution
+      if (currentUnit) {
+        const modelId = ctx.model?.id ?? "unknown";
+        snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId);
+        saveActivityLog(ctx, basePath, currentUnit.type, currentUnit.id);
+        completedUnits.push({
+          type: currentUnit.type,
+          id: currentUnit.id,
+          startedAt: currentUnit.startedAt,
+          finishedAt: Date.now(),
+        });
+        clearUnitRuntimeRecord(basePath, currentUnit.type, currentUnit.id);
+      }
+
+      const waveTaskIds = currentWave.map(t => t.id).join(",");
+      lastUnit = { type: "execute-wave", id: `${mid}/${sid}/wave[${waveTaskIds}]` };
+      currentUnit = { type: "execute-wave", id: `${mid}/${sid}/wave[${waveTaskIds}]`, startedAt: Date.now() };
+
+      ctx.ui.notify(
+        `Wave: executing ${currentWave.length} tasks in parallel [${waveTaskIds}]`,
+        "info",
+      );
+
+      try {
+        const result = await executeWave(
+          currentWave, basePath, mid, sid, sliceBranch,
+          (tid, tTitle, wtBase) => buildExecuteTaskPrompt(mid, sid, sTitle, tid, tTitle, wtBase),
+          waveTimeoutMs,
+        );
+
+        // Log results
+        for (const tr of result.taskResults) {
+          if (tr.merged) {
+            ctx.ui.notify(`  ${tr.taskId}: merged (${tr.usage.turns} turns, $${tr.usage.cost.toFixed(4)})`, "info");
+          } else {
+            ctx.ui.notify(`  ${tr.taskId}: ${tr.error ?? "failed"}`, "warning");
+          }
+        }
+
+        if (result.failedTasks.length > 0) {
+          ctx.ui.notify(
+            `Wave: ${result.failedTasks.length} task(s) failed, will retry sequentially`,
+            "warning",
+          );
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        ctx.ui.notify(`Wave execution failed: ${message}`, "error");
+      }
+
+      // Re-dispatch to pick up remaining tasks (completed tasks now have summaries on disk)
+      await dispatchNextUnit(ctx, pi);
+      return;
+    }
+
+    // SEQUENTIAL (default): single task or wave of 1, unchanged behavior
     const tid = state.activeTask.id;
     const tTitle = state.activeTask.title;
     unitType = "execute-task";

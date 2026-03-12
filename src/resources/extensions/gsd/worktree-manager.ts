@@ -46,7 +46,7 @@ export interface WorktreeDiffSummary {
 
 // ─── Git Helpers ───────────────────────────────────────────────────────────
 
-function runGit(cwd: string, args: string[], opts: { allowFailure?: boolean } = {}): string {
+export function runGit(cwd: string, args: string[], opts: { allowFailure?: boolean } = {}): string {
   try {
     return execSync(`git ${args.join(" ")}`, {
       cwd,
@@ -91,7 +91,7 @@ export function worktreeBranchName(name: string): string {
  * Create a new git worktree under .gsd/worktrees/<name>/ with branch worktree/<name>.
  * The branch is created from the current HEAD of the main branch.
  */
-export function createWorktree(basePath: string, name: string): WorktreeInfo {
+export function createWorktree(basePath: string, name: string, fromBranch?: string): WorktreeInfo {
   // Validate name: alphanumeric, hyphens, underscores only
   if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
     throw new Error(`Invalid worktree name "${name}". Use only letters, numbers, hyphens, and underscores.`);
@@ -113,7 +113,7 @@ export function createWorktree(basePath: string, name: string): WorktreeInfo {
 
   // Check if the branch already exists (leftover from a previous worktree)
   const branchExists = runGit(basePath, ["show-ref", "--verify", `refs/heads/${branch}`], { allowFailure: true });
-  const mainBranch = getMainBranch(basePath);
+  const startPoint = fromBranch ?? getMainBranch(basePath);
 
   if (branchExists) {
     // Check if the branch is actively used by an existing worktree.
@@ -129,10 +129,10 @@ export function createWorktree(basePath: string, name: string): WorktreeInfo {
     }
 
     // Reset the stale branch to current main, then attach worktree to it
-    runGit(basePath, ["branch", "-f", branch, mainBranch]);
+    runGit(basePath, ["branch", "-f", branch, startPoint]);
     runGit(basePath, ["worktree", "add", wtPath, branch]);
   } else {
-    runGit(basePath, ["worktree", "add", "-b", branch, wtPath, mainBranch]);
+    runGit(basePath, ["worktree", "add", "-b", branch, wtPath, startPoint]);
   }
 
   return {
@@ -377,12 +377,21 @@ export function getWorktreeLog(basePath: string, name: string): string {
  * Returns the merge commit message.
  */
 export function mergeWorktreeToMain(basePath: string, name: string, commitMessage: string): string {
-  const branch = worktreeBranchName(name);
   const mainBranch = getMainBranch(basePath);
+  return mergeWorktreeTo(basePath, name, mainBranch, commitMessage);
+}
+
+/**
+ * Merge a worktree branch into the specified target branch using squash merge.
+ * Must be called while on the target branch.
+ * Returns the commit message.
+ */
+export function mergeWorktreeTo(basePath: string, name: string, targetBranch: string, commitMessage: string): string {
+  const branch = worktreeBranchName(name);
   const current = runGit(basePath, ["branch", "--show-current"]);
 
-  if (current !== mainBranch) {
-    throw new Error(`Must be on ${mainBranch} to merge. Currently on ${current}.`);
+  if (current !== targetBranch) {
+    throw new Error(`Must be on ${targetBranch} to merge. Currently on ${current}.`);
   }
 
   runGit(basePath, ["merge", "--squash", branch]);
