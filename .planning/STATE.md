@@ -3,10 +3,25 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Native Desktop
 status: in_progress
+last_updated: "2026-03-12T20:34:58.119Z"
+last_activity: "2026-03-12 — Plan 13-03 complete: isReconnect helper, refresh-on-reconnect, ChatView crash banner"
+progress:
+  total_phases: 10
+  completed_phases: 1
+  total_plans: 17
+  completed_plans: 13
+  percent: 76
+---
+
+---
+gsd_state_version: 1.0
+milestone: v2.0
+milestone_name: Native Desktop
+status: in_progress
 last_updated: "2026-03-12T20:25:04.650Z"
 last_activity: "2026-03-12 — Plan 12-07 complete: test gap closure (chat-input, fs-api, ChatView v1 fields removed)"
 progress:
-  total_phases: 10
+  [████████░░] 76%
   completed_phases: 1
   total_plans: 17
   completed_plans: 12
@@ -67,11 +82,11 @@ See: .planning/PROJECT.md (updated 2026-03-12)
 ## Current Position
 
 Phase: 13 of 20 (Session Streaming Hardening)
-Plan: 2 of 6 (plan 02 complete — interrupt, process_crashed, killAll)
+Plan: 3 of 6 (plan 03 complete — reconnect refresh signal, crash recovery banner)
 Status: In progress
-Last activity: 2026-03-12 — Plan 13-02 complete: interrupt(), process_crashed event emission, SessionManager.killAll()
+Last activity: 2026-03-12 — Plan 13-03 complete: isReconnect helper, refresh-on-reconnect in usePlanningState, ChatView crash banner
 
-Progress: [███████░░░] 71% (12/17 plans complete)
+Progress: [████████░░] 76% (13/17 plans complete)
 
 ## Milestone Archive
 
@@ -130,6 +145,8 @@ Progress: [███████░░░] 71% (12/17 plans complete)
 - [Phase 13-01]: classifyPiSdkEvent validates required fields per variant — missing fields return null (strict degradation, never throws)
 - [Phase 13]: process_crashed cast as unknown as StreamEvent to pass through existing handler infrastructure — GSD2StreamEvent richer typing deferred to plan 13-05
 - [Phase 13]: killAll() uses Promise.all on listSessions() map — concurrent kill, no registry removal (shutdown-only hook)
+- [Phase 13]: isReconnect(attemptBeforeConnect) extracted as pure helper for testability — mirrors calculateBackoffDelay/shouldProcessMessage pattern
+- [Phase 13]: wsRef pattern in usePlanningState — ref to ReconnectingWebSocketResult so onReconnect always calls latest send() without stale closure
 
 ### Blockers/Concerns
 

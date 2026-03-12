@@ -22,8 +22,8 @@ Requirements for the Native Desktop milestone. Each maps to roadmap phases 12–
 - [x] **STREAM-01**: Pi SDK event parser handles plain text, tool use blocks, tool result blocks, phase transitions (Research/Plan/Execute/Complete), cost/token updates, stuck detection, timeout messages, auto mode phase announcements
 - [x] **STREAM-02**: Stream parser is resilient — malformed chunks logged and skipped, never crash the stream
 - [x] **STREAM-03**: Process lifecycle — clean spawn with correct working directory, graceful shutdown (interrupt → wait → kill), crash recovery (reconnect option, preserve history, attempt restart), orphan prevention (registry kills all processes on app close)
-- [ ] **STREAM-04**: WebSocket reconnect uses exponential backoff (1s → 2s → 4s → 8s → 30s max)
-- [ ] **STREAM-05**: On reconnect, full state re-derived from `.gsd/` files — no reliance on in-memory state; stale state detected via `STATE.md` modified time
+- [x] **STREAM-04**: WebSocket reconnect uses exponential backoff (1s → 2s → 4s → 8s → 30s max)
+- [x] **STREAM-05**: On reconnect, full state re-derived from `.gsd/` files — no reliance on in-memory state; stale state detected via `STATE.md` modified time
 - [ ] **STREAM-06**: Cost/token display — running cost badge in chat header, per-slice total on slice card, milestone total in milestone header; budget ceiling warning at 80% (amber) and 95% (red)
 - [ ] **STREAM-07**: Auto mode indicators — persistent EXECUTING badge in chat header; phase announcements update active slice card in real time; Escape key sends interrupt signal to `gsd` process
 
@@ -134,8 +134,8 @@ Deferred to future release.
 | STREAM-01 | Phase 13 | Complete |
 | STREAM-02 | Phase 13 | Complete |
 | STREAM-03 | Phase 13 | Complete |
-| STREAM-04 | Phase 13 | Pending |
-| STREAM-05 | Phase 13 | Pending |
+| STREAM-04 | Phase 13 | Complete |
+| STREAM-05 | Phase 13 | Complete |
 | STREAM-06 | Phase 13 | Pending |
 | STREAM-07 | Phase 13 | Pending |
 | SLICE-01 | Phase 14 | Pending |
