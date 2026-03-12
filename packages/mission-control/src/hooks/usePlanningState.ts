@@ -11,6 +11,7 @@ import {
   shouldProcessMessage,
   applyStateUpdate,
   type ConnectionStatus,
+  type ReconnectingWebSocketResult,
 } from "./useReconnectingWebSocket";
 
 export interface UsePlanningStateResult {
@@ -33,6 +34,8 @@ export function usePlanningState(
 ): UsePlanningStateResult {
   const [state, setState] = useState<GSD2State | null>(null);
   const lastProcessedSequence = useRef(0);
+  // Ref to stable send function — avoids stale closure in onReconnect callback
+  const wsRef = useRef<ReconnectingWebSocketResult | null>(null);
 
   const handleMessage = useCallback((data: unknown) => {
     const raw = data as Record<string, unknown>;
@@ -60,9 +63,18 @@ export function usePlanningState(
     });
   }, []);
 
-  const { status } = useReconnectingWebSocket(wsUrl, {
+  const handleReconnect = useCallback(() => {
+    wsRef.current?.send("refresh");
+    console.log("[usePlanningState] Reconnected — sent refresh to re-derive state");
+  }, []);
+
+  const ws = useReconnectingWebSocket(wsUrl, {
     onMessage: handleMessage,
+    onReconnect: handleReconnect,
   });
 
-  return { state, status };
+  // Keep wsRef current so handleReconnect always calls the latest send
+  wsRef.current = ws;
+
+  return { state, status: ws.status };
 }

@@ -3,12 +3,17 @@
  *
  * Extracted from TabLayout's "Chat & Task" tab content.
  * Shows session tabs (when multi-session active), compact task status bar, and ChatPanel.
+ *
+ * Architecture note: ChatView is intentionally hook-free so it can be called directly
+ * in tests (direct function call + JSON.stringify pattern). All interactive state
+ * (modals, pending attachment, migration dismissal) is managed by ChatViewConnected,
+ * which is the component used by the app at runtime.
  */
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import type React from "react";
 import { Monitor } from "lucide-react";
 import { MigrationBanner } from "../MigrationBanner";
-import { TaskExecuting } from "@/components/active-task/TaskExecuting";
+import { TaskExecutingConnected as TaskExecuting } from "@/components/active-task/TaskExecuting";
 import { TaskWaiting } from "@/components/active-task/TaskWaiting";
 import { ChatPanel } from "@/components/chat/ChatPanel";
 import { ChatDragDropUpload } from "@/components/chat/ChatDragDropUpload";
@@ -19,8 +24,9 @@ import type { AssetItem } from "@/hooks/useAssets";
 import type { PlanningState } from "@/server/types";
 import type { ChatMessage } from "@/server/chat-types";
 import type { SessionTab } from "@/hooks/useSessionManager";
+import type { CostState } from "@/hooks/useCostTracker";
 
-interface ChatViewProps {
+export interface ChatViewProps {
   planningState: PlanningState | null;
   chatMessages: ChatMessage[];
   onChatSend: (msg: string) => void;
@@ -37,8 +43,44 @@ interface ChatViewProps {
   /** Preview toggle — wired from usePreview via AppShell -> SingleColumnView */
   onTogglePreview?: () => void;
   previewOpen?: boolean;
+  /** Crash recovery — set to true when a process_crashed event arrives */
+  isCrashed?: boolean;
+  /** Called when user dismisses crash banner or sends a new message */
+  onDismissCrash?: () => void;
+  /** Cost tracking — current accumulated cost state from useCostTracker */
+  costState?: CostState;
+  /** Called when user dismisses the budget warning banner */
+  onDismissBudgetWarning?: () => void;
+  /** True when /gsd auto is running — shows EXECUTING badge in header */
+  isAutoMode?: boolean;
+  /** Called on Escape keypress while auto mode is active */
+  onInterrupt?: () => void;
 }
 
+/** Internal props injected by ChatViewConnected; not part of the public API. */
+interface ChatViewInternalProps extends ChatViewProps {
+  showCreateModal?: boolean;
+  closeModalSession?: SessionTab | null;
+  pendingAttachment?: AssetItem | null;
+  migrationDismissed?: boolean;
+  onAssetUploaded?: (asset: AssetItem) => void;
+  onCloseAttachment?: () => void;
+  onRunMigration?: () => void;
+  onDismissMigration?: () => void;
+  onCloseTab?: (id: string) => void;
+  onCreateClick?: () => void;
+  onConfirmClose?: () => void;
+  onConfirmMerge?: () => void;
+  onConfirmKeep?: () => void;
+  onConfirmDelete?: () => void;
+  onCancelClose?: () => void;
+  // isCrashed, onDismissCrash, costState, onDismissBudgetWarning inherited from ChatViewProps
+}
+
+/**
+ * Pure (hook-free) render function for the chat view layout.
+ * Called directly in tests; composed by ChatViewConnected in the running app.
+ */
 export function ChatView({
   planningState,
   chatMessages,
@@ -53,47 +95,32 @@ export function ChatView({
   discussOverlay,
   onTogglePreview,
   previewOpen = false,
-}: ChatViewProps) {
-  const [showCreateModal, setShowCreateModal] = useState(false);
-  const [closeModalSession, setCloseModalSession] = useState<SessionTab | null>(null);
-  const [pendingAttachment, setPendingAttachment] = useState<AssetItem | null>(null);
-  const [migrationDismissed, setMigrationDismissed] = useState(false);
-
-  const handleAssetUploaded = useCallback((asset: AssetItem) => {
-    setPendingAttachment(asset);
-  }, []);
-
-  const handleChatSend = useCallback(
-    (msg: string) => {
-      if (pendingAttachment) {
-        const prefix = `[Attached: .planning/assets/${pendingAttachment.name}]`;
-        onChatSend(`${prefix}\n\n${msg}`);
-        setPendingAttachment(null);
-      } else {
-        onChatSend(msg);
-      }
-    },
-    [onChatSend, pendingAttachment],
-  );
-
+  isCrashed = false,
+  onDismissCrash,
+  showCreateModal = false,
+  closeModalSession = null,
+  pendingAttachment = null,
+  migrationDismissed = false,
+  onAssetUploaded,
+  onCloseAttachment,
+  onRunMigration,
+  onDismissMigration,
+  onCloseTab,
+  onCreateClick,
+  onConfirmClose,
+  onConfirmMerge,
+  onConfirmKeep,
+  onConfirmDelete,
+  onCancelClose,
+  costState,
+  onDismissBudgetWarning,
+  isAutoMode = false,
+}: ChatViewInternalProps) {
   // TODO Phase 13-14: derive currentPlan, isExecuting, nextPlan from GSD2State
   // GSD2State has no .phases array — task/plan display will be rebuilt in Phase 13-14
   const currentPlan = undefined;
   const isExecuting = false;
   const nextPlan = undefined;
-
-  const handleCloseTab = useCallback((id: string) => {
-    const session = sessions.find((s) => s.id === id);
-    if (session?.hasWorktree) {
-      setCloseModalSession(session);
-    } else {
-      onCloseSession?.(id);
-    }
-  }, [sessions, onCloseSession]);
-
-  const handleCreateClick = useCallback(() => {
-    setShowCreateModal(true);
-  }, []);
 
   const hasMultipleSessions = sessions.length > 0;
 
@@ -108,8 +135,8 @@ export function ChatView({
             sessions={sessions}
             activeSessionId={activeSessionId}
             onSelect={onSelectSession}
-            onClose={handleCloseTab}
-            onCreate={handleCreateClick}
+            onClose={onCloseTab ?? (() => {})}
+            onCreate={onCreateClick ?? (() => {})}
             onRename={onRenameSession}
           />
           {/* Preview toggle button — absolute far right of session tabs row */}
@@ -150,17 +177,41 @@ export function ChatView({
       {/* Migration banner — shown when v1 project (.planning/) detected without .gsd/ */}
       {planningState?.needsMigration && !migrationDismissed && (
         <MigrationBanner
-          onRunMigration={() => {
-            handleChatSend("/gsd migrate");
-            setMigrationDismissed(true);
-          }}
-          onDismiss={() => setMigrationDismissed(true)}
+          onRunMigration={onRunMigration ?? (() => {})}
+          onDismiss={onDismissMigration ?? (() => {})}
         />
       )}
 
-      {/* Compact task status at top */}
+      {/* Crash recovery banner — shown when gsd process stops unexpectedly */}
+      {isCrashed && (
+        <div
+          role="alert"
+          className="mx-2 mt-2 rounded border bg-surface p-3 font-mono text-xs"
+          style={{ borderColor: "#F59E0B40", backgroundColor: "#131C2B" }}
+        >
+          <div className="flex items-start gap-2">
+            <span style={{ color: "#F59E0B" }}>&#9888;</span>
+            <div className="flex-1">
+              <p className="font-display text-xs uppercase tracking-wider" style={{ color: "#F59E0B" }}>
+                gsd process stopped unexpectedly
+              </p>
+              <p className="mt-0.5 text-slate-400">Chat history preserved.</p>
+            </div>
+            <button
+              type="button"
+              onClick={onDismissCrash}
+              className="shrink-0 rounded px-2 py-1 text-xs font-mono transition-colors hover:bg-navy-700"
+              style={{ color: "#5BC8F0", border: "1px solid #5BC8F0" }}
+            >
+              Reconnect
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Compact task status at top — relative container for cost badge */}
       <div className="border-b border-navy-600 bg-navy-900/50">
-        <div className="p-2">
+        <div className="relative p-2">
           {isExecuting && currentPlan ? (
             <TaskExecuting
               taskId={`${currentPlan.phase}-${String(currentPlan.plan).padStart(2, "0")}`}
@@ -178,15 +229,59 @@ export function ChatView({
               nextPlanNumber={nextPlan?.plan}
             />
           )}
+          {/* Cost badge — shown when costState has a non-zero total */}
+          {costState && costState.totalCost > 0 && (
+            <span
+              className="absolute right-2 top-2 font-mono text-xs tabular-nums"
+              style={{
+                color:
+                  costState.level === "critical"
+                    ? "#EF4444"
+                    : costState.level === "warning"
+                      ? "#F59E0B"
+                      : "#5BC8F0",
+              }}
+              title={
+                costState.budgetFraction !== null
+                  ? `${Math.round(costState.budgetFraction * 100)}% of budget`
+                  : "Running cost"
+              }
+            >
+              {costState.formatted}
+            </span>
+          )}
         </div>
       </div>
 
+      {/* Budget warning banner — shown at critical level (95%+) */}
+      {costState?.level === "critical" && (
+        <div
+          role="alert"
+          className="mx-2 mt-1 flex items-center justify-between rounded border px-3 py-2 font-mono text-xs"
+          style={{ borderColor: "#EF444440", backgroundColor: "#131C2B", color: "#EF4444" }}
+        >
+          <span>
+            Budget limit nearly reached ({Math.round((costState.budgetFraction ?? 0) * 100)}%)
+          </span>
+          {onDismissBudgetWarning && (
+            <button
+              type="button"
+              onClick={onDismissBudgetWarning}
+              className="ml-2 text-slate-500 hover:text-slate-300"
+              aria-label="Dismiss budget warning"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Chat panel takes remaining space, with drag-drop upload */}
       <div className="flex-1 min-h-0">
-        <ChatDragDropUpload onAssetUploaded={handleAssetUploaded}>
+        <ChatDragDropUpload onAssetUploaded={onAssetUploaded ?? (() => {})}>
           <ChatPanel
             messages={chatMessages}
-            onSend={handleChatSend}
+            onSend={onChatSend}
             isProcessing={isChatProcessing}
             overlay={discussOverlay}
           />
@@ -197,7 +292,7 @@ export function ChatView({
               </span>
               <button
                 type="button"
-                onClick={() => setPendingAttachment(null)}
+                onClick={onCloseAttachment}
                 className="text-slate-400 hover:text-slate-200 text-xs"
               >
                 Remove
@@ -210,7 +305,7 @@ export function ChatView({
       {/* Create session modal */}
       <SessionCreateModal
         isOpen={showCreateModal}
-        onClose={() => setShowCreateModal(false)}
+        onClose={onConfirmClose ?? (() => {})}
         onCreateFresh={() => onCreateSession?.()}
         onCreateFork={() => onCreateSession?.(activeSessionId)}
       />
@@ -220,21 +315,100 @@ export function ChatView({
         <SessionCloseModal
           isOpen={true}
           sessionName={closeModalSession.name}
-          onClose={() => setCloseModalSession(null)}
+          onClose={onCancelClose ?? (() => {})}
           onMerge={() => {
             onCloseSession?.(closeModalSession.id);
-            setCloseModalSession(null);
+            onConfirmMerge?.();
           }}
           onKeep={() => {
             onCloseSession?.(closeModalSession.id);
-            setCloseModalSession(null);
+            onConfirmKeep?.();
           }}
           onDelete={() => {
             onCloseSession?.(closeModalSession.id);
-            setCloseModalSession(null);
+            onConfirmDelete?.();
           }}
         />
       )}
     </div>
+  );
+}
+
+/**
+ * Stateful wrapper around ChatView that manages interactive state.
+ * Use this in the app; use ChatView directly in tests.
+ */
+export function ChatViewConnected(props: ChatViewProps) {
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [closeModalSession, setCloseModalSession] = useState<SessionTab | null>(null);
+  const [pendingAttachment, setPendingAttachment] = useState<AssetItem | null>(null);
+  const [migrationDismissed, setMigrationDismissed] = useState(false);
+  // Crash state — set to true by parent (via isCrashed prop) when process_crashed arrives
+  // Wired to actual crash events in plan 13-05; local state here clears on dismiss
+  const [localCrashed, setLocalCrashed] = useState(false);
+  const isCrashed = props.isCrashed ?? localCrashed;
+  const [budgetWarningDismissed, setBudgetWarningDismissed] = useState(false);
+
+  const handleAssetUploaded = useCallback((asset: AssetItem) => {
+    setPendingAttachment(asset);
+  }, []);
+
+  const handleChatSend = useCallback(
+    (msg: string) => {
+      if (pendingAttachment) {
+        const prefix = `[Attached: .planning/assets/${pendingAttachment.name}]`;
+        props.onChatSend(`${prefix}\n\n${msg}`);
+        setPendingAttachment(null);
+      } else {
+        props.onChatSend(msg);
+      }
+    },
+    [props.onChatSend, pendingAttachment],
+  );
+
+  const handleCloseTab = useCallback((id: string) => {
+    const session = (props.sessions ?? []).find((s) => s.id === id);
+    if (session?.hasWorktree) {
+      setCloseModalSession(session);
+    } else {
+      props.onCloseSession?.(id);
+    }
+  }, [props.sessions, props.onCloseSession]);
+
+  const handleCreateClick = useCallback(() => {
+    setShowCreateModal(true);
+  }, []);
+
+  return (
+    <ChatView
+      {...props}
+      onChatSend={handleChatSend}
+      showCreateModal={showCreateModal}
+      closeModalSession={closeModalSession}
+      pendingAttachment={pendingAttachment}
+      migrationDismissed={migrationDismissed}
+      isCrashed={isCrashed}
+      onDismissCrash={() => setLocalCrashed(false)}
+      onAssetUploaded={handleAssetUploaded}
+      onCloseAttachment={() => setPendingAttachment(null)}
+      onRunMigration={() => {
+        handleChatSend("/gsd migrate");
+        setMigrationDismissed(true);
+      }}
+      onDismissMigration={() => setMigrationDismissed(true)}
+      onCloseTab={handleCloseTab}
+      onCreateClick={handleCreateClick}
+      onConfirmClose={() => setShowCreateModal(false)}
+      onConfirmMerge={() => setCloseModalSession(null)}
+      onConfirmKeep={() => setCloseModalSession(null)}
+      onConfirmDelete={() => setCloseModalSession(null)}
+      onCancelClose={() => setCloseModalSession(null)}
+      costState={
+        budgetWarningDismissed && props.costState?.level === "critical"
+          ? { ...props.costState, level: "warning" as const }
+          : props.costState
+      }
+      onDismissBudgetWarning={() => setBudgetWarningDismissed(true)}
+    />
   );
 }
