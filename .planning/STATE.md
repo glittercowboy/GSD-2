@@ -3,10 +3,25 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Native Desktop
 status: in_progress
+last_updated: "2026-03-12T19:23:57.466Z"
+last_activity: "2026-03-12 — Plan 12-05 complete: SettingsView GSD 2 fields, settings-api.ts preferences.md"
+progress:
+  total_phases: 10
+  completed_phases: 1
+  total_plans: 11
+  completed_plans: 10
+  percent: 91
+---
+
+---
+gsd_state_version: 1.0
+milestone: v2.0
+milestone_name: Native Desktop
+status: in_progress
 last_updated: "2026-03-12T18:43:58.563Z"
 last_activity: "2026-03-12 — Plan 11.1-02 complete: wired guard, reconcile interval pause, MAX_SESSIONS consolidated, validateConfigState added"
 progress:
-  total_phases: 10
+  [█████████░] 91%
   completed_phases: 1
   total_plans: 10
   completed_plans: 9
@@ -38,11 +53,11 @@ See: .planning/PROJECT.md (updated 2026-03-12)
 ## Current Position
 
 Phase: 12 of 20 (GSD 2 Compatibility Pass)
-Plan: 5 of 6 (plans 00-05 complete — one plan remaining: 12-06)
+Plan: 7 of 7 (plans 00-07 complete — Phase 12 complete)
 Status: In progress
-Last activity: 2026-03-12 — Plan 12-05 complete: SettingsView GSD 2 fields, settings-api.ts preferences.md
+Last activity: 2026-03-12 — Plan 12-07 complete: test gap closure (chat-input, fs-api, ChatView v1 fields removed)
 
-Progress: [█████████░] 90% (v2.0 phase 12)
+Progress: [█████████░] 91% (v2.0 phase 12)
 
 ## Milestone Archive
 
@@ -95,6 +110,8 @@ Progress: [█████████░] 90% (v2.0 phase 12)
 - [Phase 12-04]: MigrationBanner uses inline style for amber border (#F59E0B) and surface background (#131C2B); ChatView tracks dismissal via useState
 - [Phase 12]: SettingsView: replaced Claude Code Options section with AI Model Settings (four per-phase selects + budget_ceiling + skill_discovery)
 - [Phase 12]: settings-api.ts project tier changed from config.json to preferences.md YAML frontmatter via gray-matter
+- [Phase 12]: planningState.projectState.last_activity used for TaskWaiting lastCompleted prop — GSD2State.project is string | null (raw markdown), not an object; projectState: GSD2ProjectState has last_activity?: string
+- [Phase 12-07]: ChatView v1 derivation block replaced with stub constants (undefined/false) + TODO Phase 13-14 comment — defers GSD2State task display rebuild while eliminating runtime TypeError
 
 ### Blockers/Concerns
 
