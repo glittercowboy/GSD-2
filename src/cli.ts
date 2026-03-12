@@ -14,7 +14,8 @@ import { join } from 'node:path'
 import { agentDir, sessionsDir, authFilePath } from './app-paths.js'
 import { initResources } from './resource-loader.js'
 import { ensureManagedTools } from './tool-bootstrap.js'
-import { loadStoredEnvKeys, runWizardIfNeeded } from './wizard.js'
+import { loadStoredEnvKeys } from './wizard.js'
+import { shouldRunOnboarding, runOnboarding } from './onboarding.js'
 
 // ---------------------------------------------------------------------------
 // Minimal CLI arg parser — detects print/subagent mode flags
@@ -65,6 +66,8 @@ function parseCliArgs(argv: string[]): CliFlags {
       process.stdout.write('  --tools <a,b,c>          Restrict available tools\n')
       process.stdout.write('  --version, -v            Print version and exit\n')
       process.stdout.write('  --help, -h               Print this help and exit\n')
+      process.stdout.write('\nSubcommands:\n')
+      process.stdout.write('  config                   Re-run the setup wizard\n')
       process.exit(0)
     } else if (!arg.startsWith('--') && !arg.startsWith('-')) {
       flags.messages.push(arg)
@@ -76,6 +79,13 @@ function parseCliArgs(argv: string[]): CliFlags {
 const cliFlags = parseCliArgs(process.argv)
 const isPrintMode = cliFlags.print || cliFlags.mode !== undefined
 
+// `gsd config` — replay the setup wizard and exit
+if (cliFlags.messages[0] === 'config') {
+  const authStorage = AuthStorage.create(authFilePath)
+  await runOnboarding(authStorage)
+  process.exit(0)
+}
+
 // Pi's tool bootstrap can mis-detect already-installed fd/rg on some systems
 // because spawnSync(..., ["--version"]) returns EPERM despite a zero exit code.
 // Provision local managed binaries first so Pi sees them without probing PATH.
@@ -84,9 +94,9 @@ ensureManagedTools(join(agentDir, 'bin'))
 const authStorage = AuthStorage.create(authFilePath)
 loadStoredEnvKeys(authStorage)
 
-// Skip the setup wizard in print mode — it requires TTY interaction
-if (!isPrintMode) {
-  await runWizardIfNeeded(authStorage)
+// Run onboarding wizard on first launch (no LLM provider configured)
+if (!isPrintMode && shouldRunOnboarding(authStorage)) {
+  await runOnboarding(authStorage)
 }
 
 const modelRegistry = new ModelRegistry(authStorage)
