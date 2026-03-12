@@ -34,6 +34,8 @@ export interface SessionState {
   worktreeBranch: string | null;
   createdAt: number;
   claudeSessionId: string | null;
+  /** True once wireSessionEvents has registered handlers — prevents duplicate registration. */
+  wired: boolean;
 }
 
 export interface SessionManagerOptions {
@@ -109,6 +111,7 @@ export class SessionManager {
       worktreeBranch: null,
       createdAt: Date.now(),
       claudeSessionId,
+      wired: false,
     };
 
     this.sessions.set(id, session);
@@ -290,6 +293,7 @@ export class SessionManager {
           worktreeBranch: null,
           createdAt: saved.createdAt,
           claudeSessionId: saved.claudeSessionId,
+          wired: false,
         };
         this.sessions.set(saved.id, session);
       }

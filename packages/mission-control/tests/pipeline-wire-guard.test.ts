@@ -55,14 +55,18 @@ function createMockSession(processManager: ReturnType<typeof createMockProcessMa
     worktreeBranch: null,
     createdAt: Date.now(),
     claudeSessionId: null,
+    /** SC-4: wired flag — set true on first wireSessionEvents call to prevent duplicate registration */
+    wired: false,
   };
 }
 
 /**
- * Simulates wireSessionEvents without the guard.
- * This is the CURRENT (buggy) behavior — calling it twice registers handlers twice.
+ * Simulates wireSessionEvents WITH the guard (Plan 02 implementation).
+ * Checks session.wired before registering; sets it to true on first call.
  */
-function wireSessionEventsWithoutGuard(session: ReturnType<typeof createMockSession>, fireCount: { n: number }) {
+function wireSessionEventsWithGuard(session: ReturnType<typeof createMockSession>, fireCount: { n: number }) {
+  if (session.wired) return;
+  session.wired = true;
   session.processManager.onEvent((_event: unknown) => {
     fireCount.n++;
   });
@@ -70,38 +74,50 @@ function wireSessionEventsWithoutGuard(session: ReturnType<typeof createMockSess
 
 describe("SC-4: wireSessionEvents double-call guard", () => {
   it("calling wireSessionEvents twice does not register handlers twice", () => {
-    // This test FAILS until Plan 02 adds a guard (e.g. a Set<string> of wired session IDs).
-    // Currently, calling wireSessionEvents twice on the same session causes the handler
-    // to fire twice per event — this test asserts it should fire exactly once.
+    // Plan 02 adds a guard: if session.wired is true, return immediately.
+    // Calling wireSessionEvents twice on the same session should register the handler only once.
 
     const pm = createMockProcessManager();
     const session = createMockSession(pm);
 
     const fireCount = { n: 0 };
 
-    // Simulate double-wiring (the bug: no guard exists)
-    wireSessionEventsWithoutGuard(session, fireCount);
-    wireSessionEventsWithoutGuard(session, fireCount);
+    // Call with guard — first call registers, second call returns early
+    wireSessionEventsWithGuard(session, fireCount);
+    wireSessionEventsWithGuard(session, fireCount);
 
     // Emit one test event
     pm.emit({ type: "result", error: null });
 
-    // ASSERTION: handler should fire exactly once, not twice.
-    // This FAILS now (fireCount.n === 2) because there is no deduplication guard.
+    // ASSERTION: handler fires exactly once (not twice)
     expect(fireCount.n).toBe(1);
   });
 
   it("after double-wiring, exactly one handler is registered per session", () => {
-    // Alternative assertion: the internal handler count should remain 1.
-    // This FAILS now because each wireSessionEvents call appends a new handler.
+    // The internal handler count should remain 1 after two wire attempts.
     const pm = createMockProcessManager();
     const session = createMockSession(pm);
     const fireCount = { n: 0 };
 
-    wireSessionEventsWithoutGuard(session, fireCount);
-    wireSessionEventsWithoutGuard(session, fireCount);
+    wireSessionEventsWithGuard(session, fireCount);
+    wireSessionEventsWithGuard(session, fireCount);
 
     // Should have only 1 handler registered after two wire calls
     expect(pm._handlers.length).toBe(1);
+  });
+
+  it("wired flag starts as false on a new session", () => {
+    const pm = createMockProcessManager();
+    const session = createMockSession(pm);
+    expect(session.wired).toBe(false);
+  });
+
+  it("wired flag is set to true after first wireSessionEvents call", () => {
+    const pm = createMockProcessManager();
+    const session = createMockSession(pm);
+    const fireCount = { n: 0 };
+
+    wireSessionEventsWithGuard(session, fireCount);
+    expect(session.wired).toBe(true);
   });
 });

@@ -101,6 +101,8 @@ export async function startPipeline(
 
   /** Wire up Claude event forwarding for a session to its active client. */
   function wireSessionEvents(session: SessionState) {
+    if (session.wired) return;
+    session.wired = true;
     let modeBuffer = "";
 
     session.processManager.onEvent((event: unknown) => {
@@ -325,7 +327,7 @@ export async function startPipeline(
   });
 
   // 5. Set up reconciliation interval
-  const reconcileInterval = setInterval(async () => {
+  let reconcileInterval = setInterval(async () => {
     try {
       const freshState = await buildFullState(planningDir);
       const diff = computeDiff(currentState, freshState);
@@ -374,6 +376,9 @@ export async function startPipeline(
     async switchProject(newPlanningDir: string): Promise<void> {
       await switchGuard.acquire();
       try {
+        // Pause reconcile interval before switch to prevent stale-closure race
+        clearInterval(reconcileInterval);
+
         // Close existing watcher
         watcher.close();
 
@@ -435,6 +440,21 @@ export async function startPipeline(
             }
           },
         });
+
+        // Restart reconcile interval for new project
+        reconcileInterval = setInterval(async () => {
+          try {
+            const freshState = await buildFullState(planningDir);
+            const diff = computeDiff(currentState, freshState);
+            if (diff) {
+              console.warn("[pipeline] Reconciliation detected drift, broadcasting");
+              currentState = freshState;
+              wsServer.broadcast(diff);
+            }
+          } catch (err) {
+            console.error("[pipeline] Reconciliation error:", err);
+          }
+        }, reconcileMs);
 
         // Broadcast project_switched event BEFORE full state (lets clients clear local state)
         wsServer.publishChat({
