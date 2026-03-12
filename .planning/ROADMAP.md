@@ -74,7 +74,7 @@ Plans:
   3. Opening a project that has `.planning/` but no `.gsd/` shows a migration banner; clicking "Run migration" sends `/gsd migrate` to the active session
   4. Settings shows per-phase model selection, budget ceiling, and skill_discovery toggle — v1 fields are absent
   5. The spawned child process is `gsd`, verifiable in Activity Monitor or Task Manager
-**Plans**: 6 plans
+**Plans**: 7 plans
 
 Plans:
 - [ ] 12-01-PLAN.md — Wave 0: Test stubs for COMPAT-04/05/06/07 + GSD 2 fixtures in state-deriver tests
@@ -82,6 +82,7 @@ Plans:
 - [ ] 12-03-PLAN.md — Wave 2: Path migration .planning→.gsd in watcher/server/fs-api + spawn gsd binary (COMPAT-01, COMPAT-05)
 - [ ] 12-04-PLAN.md — Wave 3a: Replace slash command registry + MigrationBanner component (COMPAT-04, COMPAT-06)
 - [ ] 12-05-PLAN.md — Wave 3b: Settings panel GSD 2 fields + settings-api reads preferences.md (COMPAT-07)
+- [ ] 12-07-PLAN.md — Wave 3c: Gap closure — fix test regressions + ChatView v1 state access (COMPAT-01, COMPAT-04)
 - [ ] 12-06-PLAN.md — Wave 4: Full suite + human regression test (all COMPAT-*)
 
 ### Phase 13: Session Streaming Hardening
@@ -203,7 +204,7 @@ Plans:
 | 10. Keyboard Shortcuts + Accessibility | v1.0 | 3/3 | Complete | 2026-03-12 |
 | 11. Documentation Integrity (GAP) | 4/4 | Complete   | 2026-03-12 | 2026-03-12 |
 | 11.1 Pre-v2.0 Stabilization (INSERTED) | 3/4 | Complete    | 2026-03-12 | — |
-| 12. GSD 2 Compatibility Pass | 5/6 | In Progress|  | — |
+| 12. GSD 2 Compatibility Pass | 5/7 | In Progress|  | — |
 | 13. Session Streaming Hardening | v2.0 | 0/TBD | Not started | — |
 | 14. Slice Integration | v2.0 | 0/TBD | Not started | — |
 | 15. Tauri Shell | v2.0 | 0/TBD | Not started | — |

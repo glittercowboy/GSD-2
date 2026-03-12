@@ -12,17 +12,10 @@ import { SlashAutocomplete } from "../src/components/chat/SlashAutocomplete";
 // -- filterCommands --
 
 describe("filterCommands", () => {
-  it("returns commands starting with /gsd:p", () => {
-    const result = filterCommands("/gsd:p");
-    expect(result.length).toBeGreaterThan(0);
-    for (const cmd of result) {
-      expect(cmd.command.startsWith("/gsd:p")).toBe(true);
-    }
-    // Should include plan-phase, pause-work, progress
-    const names = result.map((c) => c.command);
-    expect(names).toContain("/gsd:plan-phase");
-    expect(names).toContain("/gsd:pause-work");
-    expect(names).toContain("/gsd:progress");
+  it("returns only /gsd auto for /gsd a prefix", () => {
+    const result = filterCommands("/gsd a");
+    expect(result.length).toBe(1);
+    expect(result[0].command).toBe("/gsd auto");
   });
 
   it("returns empty array for non-slash input", () => {
@@ -68,8 +61,8 @@ describe("filterCommands", () => {
 // -- GSD_COMMANDS registry --
 
 describe("GSD_COMMANDS", () => {
-  it("contains 22 commands", () => {
-    expect(GSD_COMMANDS.length).toBe(22);
+  it("contains 9 commands", () => {
+    expect(GSD_COMMANDS.length).toBe(9);
   });
 
   it("each command has command, description, and args fields", () => {
@@ -77,8 +70,14 @@ describe("GSD_COMMANDS", () => {
       expect(typeof cmd.command).toBe("string");
       expect(typeof cmd.description).toBe("string");
       expect(typeof cmd.args).toBe("string");
-      expect(cmd.command.startsWith("/gsd:")).toBe(true);
+      expect(cmd.command.startsWith("/gsd")).toBe(true);
     }
+  });
+
+  it("contains /gsd auto and /gsd migrate entries", () => {
+    const names = GSD_COMMANDS.map((c) => c.command);
+    expect(names).toContain("/gsd auto");
+    expect(names).toContain("/gsd migrate");
   });
 });
 
