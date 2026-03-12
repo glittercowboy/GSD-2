@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Native Desktop
 status: in_progress
-last_updated: "2026-03-12T18:35:42.456Z"
+last_updated: "2026-03-12T18:43:14.499Z"
 last_activity: "2026-03-12 — Plan 11.1-02 complete: wired guard, reconcile interval pause, MAX_SESSIONS consolidated, validateConfigState added"
 progress:
   total_phases: 10
   completed_phases: 1
   total_plans: 10
-  completed_plans: 7
+  completed_plans: 8
 ---
 
 ---
@@ -91,6 +91,8 @@ Progress: [██████████] 100% (v2.0 phase 11.1)
 - [Phase 12]: parseGSD2State splits on newline-triple-dash to find all YAML blocks and uses the LAST one with valid GSD2 fields
 - [Phase 12-03]: --resume flag removed entirely; Phase 13 will implement gsd session continuity
 - [Phase 12-03]: planningDir variable name preserved throughout — only the string value changed from .planning to .gsd
+- [Phase 12-04]: GSD_COMMANDS rewritten to exactly 9 GSD 2 entries; all 22 v1 /gsd:* entries removed
+- [Phase 12-04]: MigrationBanner uses inline style for amber border (#F59E0B) and surface background (#131C2B); ChatView tracks dismissal via useState
 
 ### Blockers/Concerns
 
