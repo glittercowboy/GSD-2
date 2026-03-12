@@ -1,52 +1,37 @@
 /**
  * Tests for state differ (computeDiff) and WebSocket server (createWsServer).
+ * Updated for GSD 2: uses GSD2State shape (projectState, roadmap, activePlan, etc.)
  */
 import { describe, test, expect, afterEach } from "bun:test";
 import { computeDiff } from "../src/server/differ";
 import { createWsServer } from "../src/server/ws-server";
-import type { PlanningState } from "../src/server/types";
+import type { GSD2State } from "../src/server/types";
 
-// -- Helper: minimal PlanningState factory --
+// -- Helper: minimal GSD2State factory --
 
-function makePlanningState(overrides?: Partial<PlanningState>): PlanningState {
+function makeGSD2State(overrides?: Partial<GSD2State>): GSD2State {
   return {
-    roadmap: { phases: [] },
-    state: {
-      milestone: "v1.0",
-      milestone_name: "milestone",
+    projectState: {
+      gsd_state_version: "1.0",
+      milestone: "v2.0",
+      milestone_name: "Native Desktop",
       status: "in_progress",
-      stopped_at: "",
-      last_updated: "",
-      last_activity: "",
-      progress: {
-        total_phases: 10,
-        completed_phases: 1,
-        total_plans: 5,
-        completed_plans: 3,
-        percent: 60,
-      },
+      active_milestone: "M001",
+      active_slice: "S01",
+      active_task: "T01",
+      auto_mode: false,
+      cost: 0,
+      tokens: 0,
+      last_updated: "2026-03-12T10:00:00Z",
     },
-    config: {
-      model_profile: "balanced",
-      commit_docs: false,
-      search_gitignored: false,
-      branching_strategy: "none",
-      phase_branch_template: "",
-      milestone_branch_template: "",
-      workflow: {
-        research: true,
-        plan_check: true,
-        verifier: true,
-        nyquist_validation: true,
-        _auto_chain_active: false,
-      },
-      parallelization: false,
-      brave_search: false,
-      mode: "balanced",
-      granularity: "fine",
-    },
-    phases: [],
-    requirements: [],
+    roadmap: null,
+    activePlan: null,
+    activeTask: null,
+    decisions: null,
+    preferences: null,
+    project: null,
+    milestoneContext: null,
+    needsMigration: false,
     ...overrides,
   };
 }
@@ -57,61 +42,60 @@ function makePlanningState(overrides?: Partial<PlanningState>): PlanningState {
 
 describe("computeDiff", () => {
   test("returns null when old and new state are identical", () => {
-    const state = makePlanningState();
+    const state = makeGSD2State();
     const result = computeDiff(state, state);
     expect(result).toBeNull();
   });
 
   test("returns null for deep-equal but different references", () => {
-    const a = makePlanningState();
-    const b = makePlanningState();
+    const a = makeGSD2State();
+    const b = makeGSD2State();
     const result = computeDiff(a, b);
     expect(result).toBeNull();
   });
 
   test("returns StateDiff with only changed top-level keys", () => {
-    const oldState = makePlanningState();
-    const newState = makePlanningState({
-      config: {
-        ...oldState.config,
-        mode: "yolo",
+    const oldState = makeGSD2State();
+    const newState = makeGSD2State({
+      preferences: {
+        budget_ceiling: 100,
+        skill_discovery: "auto",
       },
     });
 
     const result = computeDiff(oldState, newState);
     expect(result).not.toBeNull();
     expect(result!.type).toBe("diff");
-    expect(result!.changes.config).toBeDefined();
-    expect(result!.changes.config!.mode).toBe("yolo");
+    expect(result!.changes.preferences).toBeDefined();
+    expect(result!.changes.preferences!.budget_ceiling).toBe(100);
     // Other keys should NOT be in changes
+    expect(result!.changes.projectState).toBeUndefined();
     expect(result!.changes.roadmap).toBeUndefined();
-    expect(result!.changes.state).toBeUndefined();
-    expect(result!.changes.phases).toBeUndefined();
-    expect(result!.changes.requirements).toBeUndefined();
+    expect(result!.changes.activePlan).toBeUndefined();
+    expect(result!.changes.needsMigration).toBeUndefined();
   });
 
-  test("detects changes in nested objects (e.g., progress.percent)", () => {
-    const oldState = makePlanningState();
-    const newState = makePlanningState({
-      state: {
-        ...oldState.state,
-        progress: {
-          ...oldState.state.progress,
-          percent: 80,
-        },
+  test("detects changes in nested objects (e.g., projectState.status)", () => {
+    const oldState = makeGSD2State();
+    const newState = makeGSD2State({
+      projectState: {
+        ...oldState.projectState,
+        status: "complete",
+        active_milestone: "M002",
       },
     });
 
     const result = computeDiff(oldState, newState);
     expect(result).not.toBeNull();
-    expect(result!.changes.state).toBeDefined();
-    expect(result!.changes.state!.progress.percent).toBe(80);
+    expect(result!.changes.projectState).toBeDefined();
+    expect(result!.changes.projectState!.status).toBe("complete");
+    expect(result!.changes.projectState!.active_milestone).toBe("M002");
   });
 
   test("returns timestamp in diff result", () => {
-    const oldState = makePlanningState();
-    const newState = makePlanningState({
-      requirements: [{ id: "X-01", description: "test", completed: true }],
+    const oldState = makeGSD2State();
+    const newState = makeGSD2State({
+      decisions: "# ADR-001: Use Bun\n",
     });
 
     const before = Date.now();
@@ -121,6 +105,15 @@ describe("computeDiff", () => {
     expect(result).not.toBeNull();
     expect(result!.timestamp).toBeGreaterThanOrEqual(before);
     expect(result!.timestamp).toBeLessThanOrEqual(after);
+  });
+
+  test("detects needsMigration change", () => {
+    const oldState = makeGSD2State({ needsMigration: false });
+    const newState = makeGSD2State({ needsMigration: true });
+
+    const result = computeDiff(oldState, newState);
+    expect(result).not.toBeNull();
+    expect(result!.changes.needsMigration).toBe(true);
   });
 });
 
@@ -139,7 +132,7 @@ describe("createWsServer", () => {
   });
 
   test("accepts connections on specified port", async () => {
-    const state = makePlanningState();
+    const state = makeGSD2State();
     server = createWsServer({ port: 14001, getFullState: () => state });
 
     const ws = new WebSocket("ws://localhost:14001");
@@ -154,7 +147,7 @@ describe("createWsServer", () => {
   });
 
   test("sends full state message on client connect", async () => {
-    const state = makePlanningState();
+    const state = makeGSD2State();
     server = createWsServer({ port: 14002, getFullState: () => state });
 
     const ws = new WebSocket("ws://localhost:14002");
@@ -168,14 +161,15 @@ describe("createWsServer", () => {
     expect(msg).not.toBeNull();
     expect(msg.type).toBe("full");
     expect(msg.state).toBeDefined();
-    expect(msg.state.state.milestone).toBe("v1.0");
+    // GSD2State has projectState not state.milestone
+    expect(msg.state.projectState.milestone).toBe("v2.0");
     expect(typeof msg.sequence).toBe("number");
     expect(typeof msg.timestamp).toBe("number");
     ws.close();
   });
 
   test("broadcasts diff messages to all connected clients", async () => {
-    const state = makePlanningState();
+    const state = makeGSD2State();
     server = createWsServer({ port: 14003, getFullState: () => state });
 
     // Connect two clients
@@ -204,10 +198,10 @@ describe("createWsServer", () => {
       setTimeout(() => resolve(null), 3000);
     });
 
-    // Broadcast a diff
+    // Broadcast a diff with GSD2State field
     server.broadcast({
       type: "diff",
-      changes: { config: { ...state.config, mode: "yolo" } },
+      changes: { decisions: "# ADR-001: Use GSD 2\n" },
       timestamp: Date.now(),
       sequence: 0,
     });
@@ -224,7 +218,7 @@ describe("createWsServer", () => {
   });
 
   test("responds to refresh message with full state", async () => {
-    const state = makePlanningState();
+    const state = makeGSD2State();
     server = createWsServer({ port: 14004, getFullState: () => state });
 
     const ws = new WebSocket("ws://localhost:14004");
@@ -251,7 +245,7 @@ describe("createWsServer", () => {
   });
 
   test("messages include monotonic sequence numbers", async () => {
-    const state = makePlanningState();
+    const state = makeGSD2State();
     server = createWsServer({ port: 14005, getFullState: () => state });
 
     const ws = new WebSocket("ws://localhost:14005");
@@ -277,13 +271,13 @@ describe("createWsServer", () => {
         // Trigger two broadcasts after initial
         server!.broadcast({
           type: "diff",
-          changes: { config: { ...state.config, mode: "yolo" } },
+          changes: { decisions: "# ADR-001\n" },
           timestamp: Date.now(),
           sequence: 0,
         });
         server!.broadcast({
           type: "diff",
-          changes: { config: { ...state.config, mode: "fast" } },
+          changes: { project: "# My Project\n" },
           timestamp: Date.now(),
           sequence: 0,
         });

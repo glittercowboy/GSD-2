@@ -1,139 +1,45 @@
 /**
  * State derivation engine for the file-to-state pipeline.
- * Parses all .planning/ files into a typed PlanningState object.
+ * Reads GSD 2's flat .gsd/ directory schema into a typed GSD2State object.
  * Called on startup (full rebuild) and on file change events.
+ *
+ * GSD 2 file schema (all files live in .gsd/ root):
+ *   STATE.md            — active milestone/slice/task pointers, status
+ *   M{NNN}-ROADMAP.md   — milestone structure (NNN from STATE.md active_milestone)
+ *   S{NN}-PLAN.md       — slice task decomposition (NN from STATE.md active_slice)
+ *   T{NN}-SUMMARY.md    — completed task output (NN from STATE.md active_task)
+ *   DECISIONS.md        — architectural decision register
+ *   preferences.md      — model config, budget ceiling, skill_discovery (YAML frontmatter)
+ *   PROJECT.md          — living project description
+ *   M{NNN}-CONTEXT.md   — user decisions for active milestone
  */
 import matter from "gray-matter";
-import { readdirSync } from "node:fs";
-import { join } from "node:path";
+import { access } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import type {
-  PlanningState,
-  ProjectState,
-  RoadmapState,
-  RoadmapPhase,
-  PhaseState,
-  PhaseStatus,
-  PlanState,
-  ConfigState,
-  RequirementState,
-  MustHaves,
-  MustHavesArtifact,
-  MustHavesKeyLink,
-  VerificationState,
-  VerificationTruth,
+  GSD2State,
+  GSD2ProjectState,
+  GSD2Preferences,
+  GSD2RoadmapState,
+  GSD2SlicePlan,
+  GSD2TaskSummary,
 } from "./types";
 
-// -- Default values for missing files --
+// -- Default values --
 
-const DEFAULT_PROJECT_STATE: ProjectState = {
+const DEFAULT_GSD2_PROJECT_STATE: GSD2ProjectState = {
+  gsd_state_version: "",
   milestone: "",
   milestone_name: "",
   status: "unknown",
-  stopped_at: "",
+  active_milestone: "M001",
+  active_slice: "S01",
+  active_task: "T01",
+  auto_mode: false,
+  cost: 0,
+  tokens: 0,
   last_updated: "",
-  last_activity: "",
-  branch: "",
-  progress: {
-    total_phases: 0,
-    completed_phases: 0,
-    total_plans: 0,
-    completed_plans: 0,
-    percent: 0,
-  },
 };
-
-const DEFAULT_CONFIG_STATE: ConfigState = {
-  model_profile: "balanced",
-  commit_docs: false,
-  search_gitignored: false,
-  branching_strategy: "none",
-  phase_branch_template: "",
-  milestone_branch_template: "",
-  workflow: {
-    research: true,
-    plan_check: true,
-    verifier: true,
-    nyquist_validation: true,
-    _auto_chain_active: false,
-  },
-  parallelization: false,
-  brave_search: false,
-  mode: "balanced",
-  granularity: "fine",
-  skip_permissions: true,
-  worktree_enabled: false,
-};
-
-/**
- * Validates a raw parsed JSON value against the ConfigState shape.
- * Returns a fully-typed ConfigState with DEFAULT_CONFIG_STATE fallbacks for
- * missing or wrong-typed fields. Never throws — corrupt config.json is safe.
- */
-function validateConfigState(raw: unknown): ConfigState {
-  if (!raw || typeof raw !== "object") return { ...DEFAULT_CONFIG_STATE };
-  const r = raw as Record<string, unknown>;
-
-  // Validate the nested workflow object
-  const rawWorkflow = r.workflow && typeof r.workflow === "object"
-    ? r.workflow as Record<string, unknown>
-    : {};
-
-  return {
-    model_profile: typeof r.model_profile === "string"
-      ? r.model_profile
-      : DEFAULT_CONFIG_STATE.model_profile,
-    commit_docs: typeof r.commit_docs === "boolean"
-      ? r.commit_docs
-      : DEFAULT_CONFIG_STATE.commit_docs,
-    search_gitignored: typeof r.search_gitignored === "boolean"
-      ? r.search_gitignored
-      : DEFAULT_CONFIG_STATE.search_gitignored,
-    branching_strategy: typeof r.branching_strategy === "string"
-      ? r.branching_strategy
-      : DEFAULT_CONFIG_STATE.branching_strategy,
-    phase_branch_template: typeof r.phase_branch_template === "string"
-      ? r.phase_branch_template
-      : DEFAULT_CONFIG_STATE.phase_branch_template,
-    milestone_branch_template: typeof r.milestone_branch_template === "string"
-      ? r.milestone_branch_template
-      : DEFAULT_CONFIG_STATE.milestone_branch_template,
-    workflow: {
-      research: typeof rawWorkflow.research === "boolean"
-        ? rawWorkflow.research
-        : DEFAULT_CONFIG_STATE.workflow.research,
-      plan_check: typeof rawWorkflow.plan_check === "boolean"
-        ? rawWorkflow.plan_check
-        : DEFAULT_CONFIG_STATE.workflow.plan_check,
-      verifier: typeof rawWorkflow.verifier === "boolean"
-        ? rawWorkflow.verifier
-        : DEFAULT_CONFIG_STATE.workflow.verifier,
-      nyquist_validation: typeof rawWorkflow.nyquist_validation === "boolean"
-        ? rawWorkflow.nyquist_validation
-        : DEFAULT_CONFIG_STATE.workflow.nyquist_validation,
-      _auto_chain_active: typeof rawWorkflow._auto_chain_active === "boolean"
-        ? rawWorkflow._auto_chain_active
-        : DEFAULT_CONFIG_STATE.workflow._auto_chain_active,
-    },
-    parallelization: typeof r.parallelization === "boolean"
-      ? r.parallelization
-      : DEFAULT_CONFIG_STATE.parallelization,
-    brave_search: typeof r.brave_search === "boolean"
-      ? r.brave_search
-      : DEFAULT_CONFIG_STATE.brave_search,
-    mode: typeof r.mode === "string"
-      ? r.mode
-      : DEFAULT_CONFIG_STATE.mode,
-    granularity: typeof r.granularity === "string"
-      ? r.granularity
-      : DEFAULT_CONFIG_STATE.granularity,
-    skip_permissions: typeof r.skip_permissions === "boolean"
-      ? r.skip_permissions
-      : DEFAULT_CONFIG_STATE.skip_permissions,
-    worktree_enabled: typeof r.worktree_enabled === "boolean"
-      ? r.worktree_enabled
-      : DEFAULT_CONFIG_STATE.worktree_enabled,
-  };
-}
 
 // -- File reading helpers --
 
@@ -145,327 +51,217 @@ async function readFileText(path: string): Promise<string | null> {
   }
 }
 
-async function readFileJson(path: string): Promise<any | null> {
-  try {
-    return await Bun.file(path).json();
-  } catch {
-    return null;
-  }
-}
-
-// -- Parsers --
+// -- GSD 2 STATE.md parser --
 
 /**
- * Parses ROADMAP.md content into RoadmapState.
- * Extracts phase checkbox list: `- [x] **Phase N: Name** - Description`
- */
-export function parseRoadmap(content: string): RoadmapState {
-  const phases: RoadmapPhase[] = [];
-  const phaseRegex = /^- \[([ x])\] \*\*Phase (\d+): (.+?)\*\* - (.+)$/gm;
-  let match;
-
-  while ((match = phaseRegex.exec(content)) !== null) {
-    phases.push({
-      completed: match[1] === "x",
-      number: parseInt(match[2], 10),
-      name: match[3],
-      description: match[4],
-    });
-  }
-
-  return { phases };
-}
-
-/**
- * Parses REQUIREMENTS.md content into RequirementState array.
- * Extracts checkbox list: `- [x] **ID**: Description`
- */
-export function parseRequirements(content: string): RequirementState[] {
-  const requirements: RequirementState[] = [];
-  const reqRegex = /^- \[([ x])\] \*\*([A-Z]+-\d+)\*\*: (.+)$/gm;
-  let match;
-
-  while ((match = reqRegex.exec(content)) !== null) {
-    requirements.push({
-      id: match[2],
-      description: match[3],
-      completed: match[1] === "x",
-    });
-  }
-
-  return requirements;
-}
-
-/**
- * Extracts phase number from a phase directory name like "02-file-to-state-pipeline".
- */
-function extractPhaseNumber(dirName: string): number {
-  const match = dirName.match(/^(\d+)/);
-  return match ? parseInt(match[1], 10) : 0;
-}
-
-/**
- * Extracts phase name from a phase directory name like "02-file-to-state-pipeline".
- */
-function extractPhaseName(dirName: string): string {
-  const match = dirName.match(/^\d+-(.+)$/);
-  if (!match) return dirName;
-  return match[1]
-    .split("-")
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(" ");
-}
-
-/**
- * Discovers and parses all PLAN.md files in the phases directory.
- * Groups plans by phase number into PhaseState objects.
- */
-async function parseAllPhases(planningDir: string): Promise<PhaseState[]> {
-  const phasesDir = join(planningDir, "phases");
-  let phaseDirs: string[];
-
-  try {
-    phaseDirs = readdirSync(phasesDir, { withFileTypes: true })
-      .filter((d) => d.isDirectory())
-      .map((d) => d.name)
-      .sort();
-  } catch {
-    return [];
-  }
-
-  const phaseMap = new Map<number, PhaseState>();
-
-  for (const phaseDir of phaseDirs) {
-    const phaseNumber = extractPhaseNumber(phaseDir);
-    const phaseName = extractPhaseName(phaseDir);
-    const fullPhaseDir = join(phasesDir, phaseDir);
-
-    // Find all PLAN.md files in this phase directory
-    let planFiles: string[];
-    try {
-      planFiles = readdirSync(fullPhaseDir)
-        .filter((f) => f.endsWith("-PLAN.md"))
-        .sort();
-    } catch {
-      continue;
-    }
-
-    const plans: PlanState[] = [];
-
-    for (const planFile of planFiles) {
-      const planPath = join(fullPhaseDir, planFile);
-      const content = await readFileText(planPath);
-      if (!content) continue;
-
-      try {
-        const parsed = matter(content);
-        const data = parsed.data;
-        const body = parsed.content;
-
-        // Parse must_haves if present
-        let must_haves: MustHaves | undefined;
-        if (data.must_haves && typeof data.must_haves === "object") {
-          const mh = data.must_haves;
-          must_haves = {
-            truths: Array.isArray(mh.truths) ? mh.truths : [],
-            artifacts: Array.isArray(mh.artifacts)
-              ? mh.artifacts.map((a: any): MustHavesArtifact => ({
-                  path: a.path || "",
-                  provides: a.provides || "",
-                  ...(a.exports ? { exports: a.exports } : {}),
-                  ...(a.contains ? { contains: a.contains } : {}),
-                  ...(a.min_lines != null ? { min_lines: a.min_lines } : {}),
-                }))
-              : [],
-            key_links: Array.isArray(mh.key_links)
-              ? mh.key_links.map((k: any): MustHavesKeyLink => ({
-                  from: k.from || "",
-                  to: k.to || "",
-                  via: k.via || "",
-                  ...(k.pattern ? { pattern: k.pattern } : {}),
-                }))
-              : [],
-          };
-        }
-
-        // Count <task occurrences in plan body
-        const taskMatches = body.match(/<task[\s>]/g);
-        const task_count = taskMatches ? taskMatches.length : 0;
-
-        plans.push({
-          phase: data.phase || phaseDir,
-          plan: typeof data.plan === "number" ? data.plan : parseInt(data.plan, 10) || 0,
-          wave: typeof data.wave === "number" ? data.wave : parseInt(data.wave, 10) || 0,
-          requirements: Array.isArray(data.requirements) ? data.requirements : [],
-          autonomous: data.autonomous === true,
-          type: data.type || "execute",
-          files_modified: Array.isArray(data.files_modified) ? data.files_modified : [],
-          depends_on: Array.isArray(data.depends_on) ? data.depends_on : [],
-          must_haves,
-          task_count,
-        });
-      } catch {
-        // Skip files that fail to parse
-        continue;
-      }
-    }
-
-    // Determine phase status from plans and summaries
-    let summaryCount = 0;
-    try {
-      summaryCount = readdirSync(fullPhaseDir).filter((f) =>
-        f.endsWith("-SUMMARY.md")
-      ).length;
-    } catch {
-      // ignore
-    }
-
-    // Parse VERIFICATION.md files
-    const verifications: VerificationState[] = [];
-    try {
-      const verificationFiles = readdirSync(fullPhaseDir)
-        .filter((f) => f.endsWith("-VERIFICATION.md"))
-        .sort();
-
-      for (const vFile of verificationFiles) {
-        const vPath = join(fullPhaseDir, vFile);
-        const vContent = await readFileText(vPath);
-        if (!vContent) continue;
-
-        try {
-          const vParsed = matter(vContent);
-          const vData = vParsed.data;
-          const vBody = vParsed.content;
-
-          // Parse truth table rows from body
-          const truths: VerificationTruth[] = [];
-          const truthRegex = /^\|\s*(.+?)\s*\|\s*(pass|fail|skip)\s*\|$/gm;
-          let truthMatch;
-          while ((truthMatch = truthRegex.exec(vBody)) !== null) {
-            const truthText = truthMatch[1].trim();
-            // Skip header/separator rows
-            if (truthText === "Truth" || truthText.startsWith("---")) continue;
-            truths.push({
-              truth: truthText,
-              status: truthMatch[2].trim() as "pass" | "fail" | "skip",
-            });
-          }
-
-          verifications.push({
-            score: typeof vData.score === "number" ? vData.score : 0,
-            status: vData.status || "unknown",
-            truths,
-          });
-        } catch {
-          // Skip unparseable verification files
-        }
-      }
-    } catch {
-      // ignore
-    }
-
-    let status: PhaseStatus = "not_started";
-    if (plans.length > 0 && summaryCount >= plans.length) {
-      status = "complete";
-    } else if (summaryCount > 0) {
-      status = "in_progress";
-    }
-
-    phaseMap.set(phaseNumber, {
-      number: phaseNumber,
-      name: phaseName,
-      status,
-      completedPlans: summaryCount,
-      plans,
-      verifications,
-    });
-  }
-
-  // Return phases sorted by number
-  return Array.from(phaseMap.values()).sort((a, b) => a.number - b.number);
-}
-
-/**
- * Builds the complete PlanningState from .planning/ files.
- * This is the main entry point for state derivation.
+ * Parses GSD 2 STATE.md content into GSD2ProjectState.
  *
- * Handles missing files gracefully by returning default values.
- * Calling this twice on the same files produces identical output (SERV-09).
+ * Handles multiple YAML frontmatter blocks (gray-matter only parses the first).
+ * Strategy: split on "\n---\n" boundaries, find all YAML blocks, use the LAST one.
+ * This ensures the most recent state is used when STATE.md has accumulated history.
  */
-export async function buildFullState(planningDir: string): Promise<PlanningState> {
-  // Read all top-level files concurrently
-  const [stateRaw, roadmapRaw, configRaw, requirementsRaw] = await Promise.all([
-    readFileText(join(planningDir, "STATE.md")),
-    readFileText(join(planningDir, "ROADMAP.md")),
-    readFileJson(join(planningDir, "config.json")),
-    readFileText(join(planningDir, "REQUIREMENTS.md")),
-  ]);
+export function parseGSD2State(raw: string): GSD2ProjectState {
+  // Find all segments between --- delimiters
+  // STATE.md may look like: ---\nblock1\n---\ncontent\n---\nblock2\n---\ncontent
+  const segments = raw.split(/\n---\n|\r\n---\r\n/);
 
-  // Parse STATE.md
-  let projectState: ProjectState = { ...DEFAULT_PROJECT_STATE };
-  if (stateRaw) {
+  // Collect all YAML-containing segments (those that look like frontmatter)
+  // A frontmatter segment starts with "---\n" or is preceded by "---"
+  // After splitting on \n---\n, even-indexed segments (0, 2, 4...) are frontmatter candidates
+  // We want the LAST frontmatter block that has meaningful content
+  let lastYamlData: Record<string, unknown> = {};
+
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i].trim();
+    if (!seg) continue;
+
+    // Try to parse this segment as YAML frontmatter
     try {
-      const parsed = matter(stateRaw);
+      const parsed = matter(`---\n${seg}\n---\n`);
       const data = parsed.data;
-      projectState = {
-        milestone: data.milestone || "",
-        milestone_name: data.milestone_name || "",
-        status: data.status || "unknown",
-        stopped_at: data.stopped_at || "",
-        last_updated: data.last_updated || "",
-        last_activity: data.last_activity || "",
-        branch: "", // Set by git detection below
-        progress: {
-          total_phases: data.progress?.total_phases || 0,
-          completed_phases: data.progress?.completed_phases || 0,
-          total_plans: data.progress?.total_plans || 0,
-          completed_plans: data.progress?.completed_plans || 0,
-          percent: data.progress?.percent || 0,
-        },
-      };
+      // Only accept if it has at least one recognized GSD2 state field
+      if (
+        data.gsd_state_version !== undefined ||
+        data.milestone !== undefined ||
+        data.status !== undefined ||
+        data.active_milestone !== undefined
+      ) {
+        lastYamlData = data as Record<string, unknown>;
+      }
     } catch {
-      // Use defaults on parse failure
+      // Not valid YAML, skip
     }
   }
 
-  // Parse ROADMAP.md
-  const roadmap: RoadmapState = roadmapRaw
-    ? parseRoadmap(roadmapRaw)
-    : { phases: [] };
-
-  // Parse config.json — validated field-by-field to guard against corrupt data
-  const config: ConfigState = configRaw
-    ? validateConfigState(configRaw)
-    : { ...DEFAULT_CONFIG_STATE };
-
-  // Parse REQUIREMENTS.md
-  const requirements: RequirementState[] = requirementsRaw
-    ? parseRequirements(requirementsRaw)
-    : [];
-
-  // Parse all phase/plan files
-  const phases = await parseAllPhases(planningDir);
-
-  // Detect git branch
-  let branch = "unknown";
+  // Also try parsing with gray-matter directly on the full content
+  // to catch single-block STATE.md files
   try {
-    const proc = Bun.spawn(["git", "rev-parse", "--abbrev-ref", "HEAD"], {
-      cwd: planningDir,
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const output = await new Response(proc.stdout).text();
-    branch = output.trim() || "unknown";
+    const directParsed = matter(raw);
+    const directData = directParsed.data as Record<string, unknown>;
+    if (
+      directData.gsd_state_version !== undefined ||
+      directData.active_milestone !== undefined
+    ) {
+      // If we got data from direct parse and segments didn't find anything better,
+      // or if direct parse has active_milestone but lastYamlData doesn't, prefer segments result
+      // The segment approach finds the LAST block; only use direct if no segments found
+      if (Object.keys(lastYamlData).length === 0) {
+        lastYamlData = directData;
+      }
+    }
   } catch {
-    // Keep default "unknown"
+    // ignore
   }
-  projectState.branch = branch;
+
+  const d = lastYamlData;
 
   return {
-    state: projectState,
+    gsd_state_version: typeof d.gsd_state_version === "string"
+      ? d.gsd_state_version
+      : typeof d.gsd_state_version === "number"
+        ? String(d.gsd_state_version)
+        : DEFAULT_GSD2_PROJECT_STATE.gsd_state_version,
+    milestone: typeof d.milestone === "string"
+      ? d.milestone
+      : DEFAULT_GSD2_PROJECT_STATE.milestone,
+    milestone_name: typeof d.milestone_name === "string"
+      ? d.milestone_name
+      : DEFAULT_GSD2_PROJECT_STATE.milestone_name,
+    status: typeof d.status === "string"
+      ? d.status
+      : DEFAULT_GSD2_PROJECT_STATE.status,
+    active_milestone: typeof d.active_milestone === "string"
+      ? d.active_milestone
+      : DEFAULT_GSD2_PROJECT_STATE.active_milestone,
+    active_slice: typeof d.active_slice === "string"
+      ? d.active_slice
+      : DEFAULT_GSD2_PROJECT_STATE.active_slice,
+    active_task: typeof d.active_task === "string"
+      ? d.active_task
+      : DEFAULT_GSD2_PROJECT_STATE.active_task,
+    auto_mode: typeof d.auto_mode === "boolean"
+      ? d.auto_mode
+      : DEFAULT_GSD2_PROJECT_STATE.auto_mode,
+    cost: typeof d.cost === "number"
+      ? d.cost
+      : DEFAULT_GSD2_PROJECT_STATE.cost,
+    tokens: typeof d.tokens === "number"
+      ? d.tokens
+      : DEFAULT_GSD2_PROJECT_STATE.tokens,
+    last_updated: typeof d.last_updated === "string"
+      ? d.last_updated
+      : DEFAULT_GSD2_PROJECT_STATE.last_updated,
+    ...(typeof d.last_activity === "string" ? { last_activity: d.last_activity } : {}),
+  };
+}
+
+// -- Migration detection --
+
+/**
+ * Detects whether the project needs migration from GSD v1 (.planning/) to GSD 2 (.gsd/).
+ * Returns true when .planning/ exists but .gsd/ does not.
+ */
+async function checkMigrationNeeded(repoRoot: string, gsdDir: string): Promise<boolean> {
+  try {
+    await access(join(repoRoot, ".planning"));
+    // .planning exists — now check if .gsd does NOT exist
+    try {
+      await access(gsdDir);
+      return false; // .gsd exists — no migration needed
+    } catch {
+      return true; // .planning exists but .gsd does not — migration needed
+    }
+  } catch {
+    return false; // .planning does not exist — not a v1 project
+  }
+}
+
+// -- Preferences parser --
+
+function parsePreferences(raw: string): GSD2Preferences {
+  try {
+    const parsed = matter(raw);
+    const d = parsed.data as Record<string, unknown>;
+    const prefs: GSD2Preferences = {};
+
+    if (typeof d.research_model === "string") prefs.research_model = d.research_model;
+    if (typeof d.planning_model === "string") prefs.planning_model = d.planning_model;
+    if (typeof d.execution_model === "string") prefs.execution_model = d.execution_model;
+    if (typeof d.completion_model === "string") prefs.completion_model = d.completion_model;
+    if (typeof d.budget_ceiling === "number") prefs.budget_ceiling = d.budget_ceiling;
+    if (d.skill_discovery === "auto" || d.skill_discovery === "suggest" || d.skill_discovery === "off") {
+      prefs.skill_discovery = d.skill_discovery;
+    }
+
+    return prefs;
+  } catch {
+    return {};
+  }
+}
+
+// -- Main entry point --
+
+/**
+ * Builds the complete GSD2State from a .gsd/ directory.
+ * This is the main entry point for state derivation.
+ *
+ * Phase 1: Read STATE.md → parse active pointers
+ * Phase 2: Parallel read of all derived files using dynamic paths
+ * Phase 3: Parse preferences.md with gray-matter
+ * Phase 4: Check migration status
+ *
+ * All missing files return null — never throws.
+ * Calling this twice on the same files produces identical output.
+ */
+export async function buildFullState(gsdDir: string): Promise<GSD2State> {
+  // Phase 1: Read STATE.md to get active pointers
+  const stateRaw = await readFileText(join(gsdDir, "STATE.md"));
+  const projectState: GSD2ProjectState = stateRaw
+    ? parseGSD2State(stateRaw)
+    : { ...DEFAULT_GSD2_PROJECT_STATE };
+
+  const { active_milestone, active_slice, active_task } = projectState;
+
+  // Phase 2: Parallel read of all derived and static files
+  const [
+    roadmapRaw,
+    planRaw,
+    summaryRaw,
+    decisionsRaw,
+    prefsRaw,
+    projectRaw,
+    contextRaw,
+  ] = await Promise.all([
+    readFileText(join(gsdDir, `${active_milestone}-ROADMAP.md`)),
+    readFileText(join(gsdDir, `${active_slice}-PLAN.md`)),
+    readFileText(join(gsdDir, `${active_task}-SUMMARY.md`)),
+    readFileText(join(gsdDir, "DECISIONS.md")),
+    readFileText(join(gsdDir, "preferences.md")),
+    readFileText(join(gsdDir, "PROJECT.md")),
+    readFileText(join(gsdDir, `${active_milestone}-CONTEXT.md`)),
+  ]);
+
+  // Phase 3: Build typed sub-state objects
+  const roadmap: GSD2RoadmapState | null = roadmapRaw ? { raw: roadmapRaw } : null;
+  const activePlan: GSD2SlicePlan | null = planRaw ? { raw: planRaw } : null;
+  const activeTask: GSD2TaskSummary | null = summaryRaw ? { raw: summaryRaw } : null;
+  const preferences: GSD2Preferences | null = prefsRaw
+    ? parsePreferences(prefsRaw)
+    : null;
+
+  // Phase 4: Migration detection
+  const repoRoot = resolve(gsdDir, "..");
+  const needsMigration = await checkMigrationNeeded(repoRoot, gsdDir);
+
+  return {
+    projectState,
     roadmap,
-    config,
-    phases,
-    requirements,
+    activePlan,
+    activeTask,
+    decisions: decisionsRaw,
+    preferences,
+    project: projectRaw,
+    milestoneContext: contextRaw,
+    needsMigration,
   };
 }

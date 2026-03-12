@@ -83,12 +83,14 @@ export async function startPipeline(
   let currentState: PlanningState = await buildFullState(planningDir);
 
   // 2. Create session manager with config-bridge processFactory and restore persisted sessions
-  const skipPermissions = currentState.config.skip_permissions !== false;
+  // GSD 2: config.json removed; skip_permissions defaults to true, worktree_enabled to false.
+  // TODO (Phase 13): read skip_permissions from .gsd/preferences.md or CLI flag.
+  const skipPermissions = true;
   const configuredProcessFactory = injectedProcessFactory
     ? (cwd: string) => injectedProcessFactory(cwd, { skipPermissions })
     : (cwd: string) => new ClaudeProcessManager(cwd, { skipPermissions });
   const sessionManager = new SessionManager(planningDir, { processFactory: configuredProcessFactory });
-  sessionManager.setWorktreeEnabled(currentState.config.worktree_enabled === true);
+  sessionManager.setWorktreeEnabled(false);
   await sessionManager.restoreMetadata(repoRoot);
 
   // Ensure at least one default session exists
@@ -398,13 +400,14 @@ export async function startPipeline(
         currentState = await buildFullState(planningDir);
 
         // Re-apply config bridge for new project
-        const newSkipPermissions = currentState.config.skip_permissions !== false;
+        // GSD 2: config.json removed; skip_permissions defaults to true, worktree_enabled to false.
+        const newSkipPermissions = true;
         const newConfiguredFactory = injectedProcessFactory
           ? (cwd: string) => injectedProcessFactory(cwd, { skipPermissions: newSkipPermissions })
           : (cwd: string) => new ClaudeProcessManager(cwd, { skipPermissions: newSkipPermissions });
         // Update the SessionManager's processFactory for new sessions
         (sessionManager as any)["processFactory"] = newConfiguredFactory;
-        sessionManager.setWorktreeEnabled(currentState.config.worktree_enabled === true);
+        sessionManager.setWorktreeEnabled(false);
 
         // Create fresh default session in new project
         const newSession = sessionManager.createSession(repoRoot);

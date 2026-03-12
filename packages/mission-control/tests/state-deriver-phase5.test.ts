@@ -1,6 +1,15 @@
 /**
- * State deriver tests for Phase 5 extensions:
- * must_haves parsing, task_count, and verification data.
+ * State deriver phase 5 tests — updated for GSD 2 schema.
+ *
+ * v1 tests for must_haves parsing, task_count, and verification data
+ * tested the .planning/phases/ directory traversal which is removed
+ * in Phase 12 GSD 2 compatibility pass.
+ *
+ * GSD 2 state derivation reads a flat .gsd/ directory structure:
+ *   STATE.md, M{NNN}-ROADMAP.md, S{NN}-PLAN.md, T{NN}-SUMMARY.md, etc.
+ *
+ * Must-haves and verification parsing for GSD 2 format is deferred to Phase 14.
+ * These tests now verify the GSD2State shape expectations for those fields.
  */
 import { describe, expect, test, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
@@ -10,7 +19,7 @@ import { buildFullState } from "../src/server/state-deriver";
 
 let tempDir: string;
 
-function makeTempPlanningDir(): string {
+function makeTempDir(): string {
   return mkdtempSync(join(tmpdir(), "state-deriver-p5-"));
 }
 
@@ -24,37 +33,29 @@ afterEach(() => {
   }
 });
 
-const PLAN_WITH_MUST_HAVES = `---
-phase: 05-slice-detail-active-task
-plan: 01
-type: execute
-wave: 1
-depends_on: []
-files_modified:
-  - src/server/types.ts
-  - src/server/state-deriver.ts
-  - src/components/slice-detail/ContextBudgetChart.tsx
-autonomous: true
-requirements: [SLCD-01, SLCD-02]
-must_haves:
-  truths:
-    - "Context usage bar chart renders one colored bar per task"
-    - "Boundary map shows PRODUCES list with green borders"
-  artifacts:
-    - path: "src/server/types.ts"
-      provides: "SliceDetailState types"
-      contains: "VerificationState"
-    - path: "src/components/slice-detail/ContextBudgetChart.tsx"
-      provides: "Bar chart for context budget"
-      exports: ["ContextBudgetChart"]
-  key_links:
-    - from: "TabLayout.tsx"
-      to: "slice-detail components"
-      via: "renderTabContent slice branch"
-      pattern: "activeTab.*slice"
+const GSD2_STATE_MD = `---
+gsd_state_version: "1.0"
+milestone: v2.0
+milestone_name: Native Desktop
+status: in_progress
+active_milestone: M001
+active_slice: S01
+active_task: T01
+auto_mode: false
+cost: 0
+tokens: 0
+last_updated: "2026-03-12T10:00:00Z"
 ---
 
-<objective>Test plan</objective>
+# State
+`;
+
+const GSD2_PLAN_MD = `---
+slice: S01
+name: File watcher wiring
+---
+
+# S01 Plan Content
 
 <tasks>
 <task type="auto" tdd="true">
@@ -69,159 +70,55 @@ must_haves:
 </tasks>
 `;
 
-const PLAN_WITHOUT_MUST_HAVES = `---
-phase: 05-slice-detail-active-task
-plan: 02
-type: execute
-wave: 1
-depends_on: []
-files_modified:
-  - src/foo.ts
-autonomous: true
-requirements: []
----
+describe("GSD2State — activePlan and activeTask (replaces v1 PlanState/PhaseState)", () => {
+  test("activePlan contains raw slice plan markdown", async () => {
+    tempDir = makeTempDir();
+    const gsdDir = join(tempDir, ".gsd");
+    mkdirSync(gsdDir, { recursive: true });
+    writeFileSync(join(gsdDir, "STATE.md"), GSD2_STATE_MD);
+    writeFileSync(join(gsdDir, "S01-PLAN.md"), GSD2_PLAN_MD);
 
-<tasks>
-<task type="auto">
-  <name>Task 1: Only task</name>
-</task>
-</tasks>
-`;
+    const state = await buildFullState(gsdDir);
 
-const VERIFICATION_MD = `---
-phase: 05-slice-detail-active-task
-plan: 01
-score: 85
-status: partial
----
-
-# Verification
-
-| Truth | Status |
-|-------|--------|
-| Context bar renders correctly | pass |
-| Boundary map shows lists | pass |
-| UAT status rows display | fail |
-`;
-
-function setupDir(): string {
-  tempDir = makeTempPlanningDir();
-  writeFileSync(join(tempDir, "STATE.md"), `---
-milestone: v1.0
-milestone_name: milestone
-status: in_progress
-stopped_at: "Working on Phase 5"
-last_updated: "2026-03-10"
-last_activity: "2026-03-10"
-progress:
-  total_phases: 10
-  completed_phases: 4
-  total_plans: 12
-  completed_plans: 7
-  percent: 58
----
-# State
-`);
-  writeFileSync(join(tempDir, "ROADMAP.md"), "# Roadmap\n");
-  writeFileSync(join(tempDir, "config.json"), JSON.stringify({ model_profile: "balanced" }));
-  writeFileSync(join(tempDir, "REQUIREMENTS.md"), "# Requirements\n");
-
-  const phaseDir = join(tempDir, "phases", "05-slice-detail-active-task");
-  mkdirSync(phaseDir, { recursive: true });
-  writeFileSync(join(phaseDir, "05-01-PLAN.md"), PLAN_WITH_MUST_HAVES);
-  writeFileSync(join(phaseDir, "05-02-PLAN.md"), PLAN_WITHOUT_MUST_HAVES);
-
-  return tempDir;
-}
-
-describe("PlanState - must_haves parsing", () => {
-  test("includes must_haves with truths, artifacts, key_links arrays when parsed from PLAN.md frontmatter", async () => {
-    const dir = setupDir();
-    const state = await buildFullState(dir);
-    const phase5 = state.phases.find((p) => p.number === 5);
-    expect(phase5).toBeDefined();
-
-    const plan1 = phase5!.plans.find((p) => p.plan === 1);
-    expect(plan1).toBeDefined();
-    expect(plan1!.must_haves).toBeDefined();
-    expect(plan1!.must_haves!.truths).toHaveLength(2);
-    expect(plan1!.must_haves!.truths[0]).toContain("Context usage bar chart");
-    expect(plan1!.must_haves!.artifacts).toHaveLength(2);
-    expect(plan1!.must_haves!.artifacts[0].path).toBe("src/server/types.ts");
-    expect(plan1!.must_haves!.artifacts[0].provides).toBe("SliceDetailState types");
-    expect(plan1!.must_haves!.artifacts[0].contains).toBe("VerificationState");
-    expect(plan1!.must_haves!.artifacts[1].exports).toEqual(["ContextBudgetChart"]);
-    expect(plan1!.must_haves!.key_links).toHaveLength(1);
-    expect(plan1!.must_haves!.key_links[0].from).toBe("TabLayout.tsx");
-    expect(plan1!.must_haves!.key_links[0].to).toBe("slice-detail components");
-    expect(plan1!.must_haves!.key_links[0].via).toBe("renderTabContent slice branch");
-    expect(plan1!.must_haves!.key_links[0].pattern).toBe("activeTab.*slice");
+    expect(state.activePlan).not.toBeNull();
+    expect(state.activePlan!.raw).toContain("S01 Plan Content");
+    // raw content includes task elements — Phase 14 will parse these into structured data
+    expect(state.activePlan!.raw).toContain("<task");
   });
 
-  test("must_haves is undefined when not present in PLAN.md", async () => {
-    const dir = setupDir();
-    const state = await buildFullState(dir);
-    const phase5 = state.phases.find((p) => p.number === 5);
-    const plan2 = phase5!.plans.find((p) => p.plan === 2);
-    expect(plan2).toBeDefined();
-    expect(plan2!.must_haves).toBeUndefined();
-  });
-});
+  test("activePlan is null when S{NN}-PLAN.md is missing", async () => {
+    tempDir = makeTempDir();
+    const gsdDir = join(tempDir, ".gsd");
+    mkdirSync(gsdDir, { recursive: true });
+    writeFileSync(join(gsdDir, "STATE.md"), GSD2_STATE_MD);
+    // No S01-PLAN.md written
 
-describe("PlanState - task_count parsing", () => {
-  test("task_count parsed from plan body counts task elements", async () => {
-    const dir = setupDir();
-    const state = await buildFullState(dir);
-    const phase5 = state.phases.find((p) => p.number === 5);
-    const plan1 = phase5!.plans.find((p) => p.plan === 1);
-    expect(plan1).toBeDefined();
-    expect(plan1!.task_count).toBe(3);
+    const state = await buildFullState(gsdDir);
+    expect(state.activePlan).toBeNull();
   });
 
-  test("task_count is correct for plan with single task", async () => {
-    const dir = setupDir();
-    const state = await buildFullState(dir);
-    const phase5 = state.phases.find((p) => p.number === 5);
-    const plan2 = phase5!.plans.find((p) => p.plan === 2);
-    expect(plan2).toBeDefined();
-    expect(plan2!.task_count).toBe(1);
-  });
-});
+  test("activeTask is null when T{NN}-SUMMARY.md is missing", async () => {
+    tempDir = makeTempDir();
+    const gsdDir = join(tempDir, ".gsd");
+    mkdirSync(gsdDir, { recursive: true });
+    writeFileSync(join(gsdDir, "STATE.md"), GSD2_STATE_MD);
+    // No T01-SUMMARY.md written
 
-describe("PhaseState - verifications parsing", () => {
-  test("includes verifications array parsed from VERIFICATION.md files", async () => {
-    const dir = setupDir();
-    const phaseDir = join(dir, "phases", "05-slice-detail-active-task");
-    writeFileSync(join(phaseDir, "05-01-VERIFICATION.md"), VERIFICATION_MD);
-
-    const state = await buildFullState(dir);
-    const phase5 = state.phases.find((p) => p.number === 5);
-    expect(phase5).toBeDefined();
-    expect(phase5!.verifications).toBeDefined();
-    expect(phase5!.verifications).toHaveLength(1);
+    const state = await buildFullState(gsdDir);
+    expect(state.activeTask).toBeNull();
   });
 
-  test("VerificationState has score, status, and truths fields", async () => {
-    const dir = setupDir();
-    const phaseDir = join(dir, "phases", "05-slice-detail-active-task");
-    writeFileSync(join(phaseDir, "05-01-VERIFICATION.md"), VERIFICATION_MD);
+  test("GSD2State has no v1 phases array — v1 schema removed", async () => {
+    tempDir = makeTempDir();
+    const gsdDir = join(tempDir, ".gsd");
+    mkdirSync(gsdDir, { recursive: true });
+    writeFileSync(join(gsdDir, "STATE.md"), GSD2_STATE_MD);
 
-    const state = await buildFullState(dir);
-    const phase5 = state.phases.find((p) => p.number === 5);
-    const verification = phase5!.verifications[0];
+    const state = await buildFullState(gsdDir);
 
-    expect(verification.score).toBe(85);
-    expect(verification.status).toBe("partial");
-    expect(verification.truths).toHaveLength(3);
-    expect(verification.truths[0].truth).toContain("Context bar renders correctly");
-    expect(verification.truths[0].status).toBe("pass");
-    expect(verification.truths[2].status).toBe("fail");
-  });
-
-  test("verifications is empty array when no VERIFICATION.md files exist", async () => {
-    const dir = setupDir();
-    const state = await buildFullState(dir);
-    const phase5 = state.phases.find((p) => p.number === 5);
-    expect(phase5!.verifications).toEqual([]);
+    // These v1 fields do not exist on GSD2State
+    expect((state as any).phases).toBeUndefined();
+    expect((state as any).config).toBeUndefined();
+    expect((state as any).requirements).toBeUndefined();
   });
 });

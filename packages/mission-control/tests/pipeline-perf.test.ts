@@ -1,7 +1,9 @@
 /**
- * Tests for the pipeline orchestrator.
+ * Tests for the pipeline orchestrator — updated for GSD 2.
  * Covers: startup state build, file change -> diff -> broadcast,
  * no-op suppression, reconciliation, and SERV-05 latency (<100ms).
+ *
+ * Phase 12 change: pipeline now reads .gsd/ directory schema (GSD2State).
  */
 import { describe, test, expect, afterEach, beforeEach } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
@@ -11,64 +13,46 @@ import { startPipeline } from "../src/server/pipeline";
 
 // Unique temp dir per test run
 const TEST_DIR = join(tmpdir(), `gsd-pipeline-test-${Date.now()}`);
-const PLANNING_DIR = join(TEST_DIR, ".planning");
-const PHASES_DIR = join(PLANNING_DIR, "phases");
+const GSD_DIR = join(TEST_DIR, ".gsd");
 
-// Realistic planning file content
+// GSD 2 STATE.md with active pointers
 const STATE_MD = `---
-gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: milestone
+gsd_state_version: "1.0"
+milestone: v2.0
+milestone_name: Native Desktop
 status: in_progress
-stopped_at: "test"
-last_updated: "2026-01-01"
-last_activity: "test"
-progress:
-  total_phases: 10
-  completed_phases: 1
-  total_plans: 5
-  completed_plans: 3
-  percent: 60
+active_milestone: M001
+active_slice: S01
+active_task: T01
+auto_mode: false
+cost: 0
+tokens: 0
+last_updated: "2026-03-12T10:00:00Z"
 ---
 # Project State
 `;
 
-const CONFIG_JSON = JSON.stringify({
-  model_profile: "balanced",
-  commit_docs: false,
-  search_gitignored: false,
-  branching_strategy: "none",
-  phase_branch_template: "",
-  milestone_branch_template: "",
-  workflow: {
-    research: true,
-    plan_check: true,
-    verifier: true,
-    nyquist_validation: true,
-    _auto_chain_active: false,
-  },
-  parallelization: false,
-  brave_search: false,
-  mode: "balanced",
-  granularity: "fine",
-});
+const ROADMAP_MD = `# M001 — Native Desktop
 
-const ROADMAP_MD = `# Roadmap
-- [x] **Phase 1: Bootstrap** - Setup
-- [ ] **Phase 2: Pipeline** - Data layer
+## Slices
+
+- [ ] S01: File watcher wiring
+- [x] S02: WebSocket server
 `;
 
-const REQUIREMENTS_MD = `# Requirements
-- [x] **SERV-01**: Server requirement
-- [ ] **SERV-02**: Another requirement
+const PLAN_MD = `---
+slice: S01
+name: File watcher wiring
+---
+
+# S01 Plan
 `;
 
 function setupTestDir() {
-  mkdirSync(PHASES_DIR, { recursive: true });
-  writeFileSync(join(PLANNING_DIR, "STATE.md"), STATE_MD);
-  writeFileSync(join(PLANNING_DIR, "config.json"), CONFIG_JSON);
-  writeFileSync(join(PLANNING_DIR, "ROADMAP.md"), ROADMAP_MD);
-  writeFileSync(join(PLANNING_DIR, "REQUIREMENTS.md"), REQUIREMENTS_MD);
+  mkdirSync(GSD_DIR, { recursive: true });
+  writeFileSync(join(GSD_DIR, "STATE.md"), STATE_MD);
+  writeFileSync(join(GSD_DIR, "M001-ROADMAP.md"), ROADMAP_MD);
+  writeFileSync(join(GSD_DIR, "S01-PLAN.md"), PLAN_MD);
 }
 
 function cleanupTestDir() {
@@ -96,13 +80,13 @@ describe("pipeline", () => {
     cleanupTestDir();
   });
 
-  test("start builds initial full state from .planning/ files", async () => {
+  test("start builds initial full state from .gsd/ files", async () => {
     pipeline = await startPipeline({
-      planningDir: PLANNING_DIR,
+      planningDir: GSD_DIR,
       wsPort: 15001,
     });
 
-    // Connect a client and verify it gets full state
+    // Connect a client and verify it gets full GSD2State
     const ws = new WebSocket("ws://localhost:15001");
     const msg = await new Promise<any>((resolve) => {
       ws.onmessage = (event) => resolve(JSON.parse(event.data as string));
@@ -111,14 +95,15 @@ describe("pipeline", () => {
 
     expect(msg).not.toBeNull();
     expect(msg.type).toBe("full");
-    expect(msg.state.state.milestone).toBe("v1.0");
-    expect(msg.state.state.progress.percent).toBe(60);
+    // GSD2State uses projectState not state.milestone
+    expect(msg.state.projectState.milestone).toBe("v2.0");
+    expect(msg.state.projectState.active_milestone).toBe("M001");
     ws.close();
   });
 
   test("file change triggers state rebuild, diff computation, and broadcast", async () => {
     pipeline = await startPipeline({
-      planningDir: PLANNING_DIR,
+      planningDir: GSD_DIR,
       wsPort: 15002,
     });
 
@@ -136,21 +121,21 @@ describe("pipeline", () => {
       setTimeout(() => resolve(null), 5000);
     });
 
-    // Change a file to trigger watcher
-    const updatedState = STATE_MD.replace("percent: 60", "percent: 80");
-    writeFileSync(join(PLANNING_DIR, "STATE.md"), updatedState);
+    // Change STATE.md to trigger watcher
+    const updatedState = STATE_MD.replace("active_slice: S01", "active_slice: S02");
+    writeFileSync(join(GSD_DIR, "STATE.md"), updatedState);
 
     const msg = await diffPromise;
     expect(msg).not.toBeNull();
     expect(msg.type).toBe("diff");
-    expect(msg.changes.state).toBeDefined();
-    expect(msg.changes.state.progress.percent).toBe(80);
+    expect(msg.changes.projectState).toBeDefined();
+    expect(msg.changes.projectState.active_slice).toBe("S02");
     ws.close();
   });
 
   test("file-to-WebSocket-push latency is under 100ms (SERV-05)", async () => {
     pipeline = await startPipeline({
-      planningDir: PLANNING_DIR,
+      planningDir: GSD_DIR,
       wsPort: 15003,
     });
 
@@ -163,6 +148,7 @@ describe("pipeline", () => {
     });
 
     // Listen for diff and measure time
+    let writeTime: number;
     const latencyPromise = new Promise<number>((resolve) => {
       ws.onmessage = () => {
         const elapsed = Date.now() - writeTime;
@@ -172,9 +158,9 @@ describe("pipeline", () => {
     });
 
     // Write file and record time
-    const writeTime = Date.now();
-    const updatedState = STATE_MD.replace("percent: 60", "percent: 99");
-    writeFileSync(join(PLANNING_DIR, "STATE.md"), updatedState);
+    writeTime = Date.now();
+    const updatedState = STATE_MD.replace("active_slice: S01", "active_slice: S03");
+    writeFileSync(join(GSD_DIR, "STATE.md"), updatedState);
 
     const latency = await latencyPromise;
     expect(latency).toBeGreaterThan(0);
@@ -187,7 +173,7 @@ describe("pipeline", () => {
 
   test("no broadcast occurs when file change produces no state diff", async () => {
     pipeline = await startPipeline({
-      planningDir: PLANNING_DIR,
+      planningDir: GSD_DIR,
       wsPort: 15004,
     });
 
@@ -205,7 +191,7 @@ describe("pipeline", () => {
     };
 
     // Write the SAME content (no change)
-    writeFileSync(join(PLANNING_DIR, "STATE.md"), STATE_MD);
+    writeFileSync(join(GSD_DIR, "STATE.md"), STATE_MD);
 
     // Wait longer than debounce + processing
     await new Promise((r) => setTimeout(r, 200));
@@ -215,7 +201,7 @@ describe("pipeline", () => {
 
   test("reconciliation interval detects drift and pushes update", async () => {
     pipeline = await startPipeline({
-      planningDir: PLANNING_DIR,
+      planningDir: GSD_DIR,
       wsPort: 15005,
       reconcileMs: 200, // Short interval for testing
     });
@@ -228,24 +214,23 @@ describe("pipeline", () => {
       setTimeout(resolve, 5000);
     });
 
-    // Simulate drift by directly modifying file without triggering watcher
-    // We write a changed file and force pipeline internal state to be stale
-    // The reconciliation should detect and push
-
     const driftPromise = new Promise<any>((resolve) => {
       ws.onmessage = (event) => resolve(JSON.parse(event.data as string));
       setTimeout(() => resolve(null), 3000);
     });
 
-    // Force drift: update file content (watcher may or may not fire,
+    // Force drift: update STATE.md (watcher may or may not fire,
     // but reconciliation should catch it within 200ms)
-    const driftState = STATE_MD.replace("percent: 60", "percent: 42");
-    writeFileSync(join(PLANNING_DIR, "STATE.md"), driftState);
+    const driftState = STATE_MD.replace("active_slice: S01", "active_slice: S04");
+    writeFileSync(join(GSD_DIR, "STATE.md"), driftState);
 
     const msg = await driftPromise;
     expect(msg).not.toBeNull();
     // Should get either a diff or full message showing updated state
-    expect(msg.changes?.state?.progress?.percent ?? msg.state?.state?.progress?.percent).toBe(42);
+    const activeSlice =
+      msg.changes?.projectState?.active_slice ??
+      msg.state?.projectState?.active_slice;
+    expect(activeSlice).toBe("S04");
     ws.close();
   });
 });

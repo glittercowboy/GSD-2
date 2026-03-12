@@ -1,16 +1,23 @@
 /**
- * Shallow diff engine for PlanningState objects.
+ * Shallow diff engine for GSD2State objects.
  * Compares each top-level key using JSON.stringify.
  * Returns null if no changes, or a StateDiff with only changed keys.
  */
-import type { PlanningState, StateDiff } from "./types";
+import type { GSD2State, StateDiff } from "./types";
 
-const TOP_LEVEL_KEYS: (keyof PlanningState)[] = [
+// Use GSD2State type alias for clarity
+type PlanningState = GSD2State;
+
+const TOP_LEVEL_KEYS: (keyof GSD2State)[] = [
+  "projectState",
   "roadmap",
-  "state",
-  "config",
-  "phases",
-  "requirements",
+  "activePlan",
+  "activeTask",
+  "decisions",
+  "preferences",
+  "project",
+  "milestoneContext",
+  "needsMigration",
 ];
 
 /**
@@ -22,10 +29,10 @@ const TOP_LEVEL_KEYS: (keyof PlanningState)[] = [
  * Caller is responsible for setting the sequence number.
  */
 export function computeDiff(
-  oldState: PlanningState,
-  newState: PlanningState
+  oldState: GSD2State,
+  newState: GSD2State
 ): StateDiff | null {
-  const changes: Partial<PlanningState> = {};
+  const changes: Partial<GSD2State> = {};
   let hasChanges = false;
 
   for (const key of TOP_LEVEL_KEYS) {

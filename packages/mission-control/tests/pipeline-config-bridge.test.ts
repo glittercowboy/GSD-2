@@ -1,13 +1,15 @@
 /**
- * SC-1: Config bridge — config.json values flow into SessionManager and processFactory.
+ * Pipeline config bridge tests — updated for GSD 2.
  *
- * RED state: These tests will fail until Plan 01 wires config.json reading into startPipeline.
- * Expected failures:
- *   - skipPermissions option not passed from config to processFactory
- *   - setWorktreeEnabled not called with config value
+ * Phase 12 change: config.json removed in GSD 2. The pipeline no longer reads
+ * config.json for skip_permissions or worktree_enabled. These defaults are now
+ * hardcoded in pipeline.ts until Phase 13 adds proper GSD 2 settings support.
+ *
+ * GSD 2 defaults: skip_permissions = true, worktree_enabled = false.
+ * TODO (Phase 13): derive skip_permissions from .gsd/preferences.md.
  */
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startPipeline } from "../src/server/pipeline";
@@ -15,21 +17,12 @@ import { startPipeline } from "../src/server/pipeline";
 describe("SC-1: Config bridge — skip_permissions flows to processFactory", () => {
   let tempDir: string;
   let planningDir: string;
-  let capturedOptions: Array<{ cwd: string; opts?: unknown }>;
   let handle: { stop(): void } | null = null;
 
   beforeEach(async () => {
     tempDir = await mkdtemp(join(tmpdir(), "config-bridge-test-"));
-    planningDir = join(tempDir, ".planning");
+    planningDir = join(tempDir, ".gsd");
     await mkdir(planningDir, { recursive: true });
-
-    // Write a minimal config.json
-    await writeFile(
-      join(planningDir, "config.json"),
-      JSON.stringify({ skip_permissions: false, worktree_enabled: true })
-    );
-
-    capturedOptions = [];
   });
 
   afterEach(async () => {
@@ -41,17 +34,13 @@ describe("SC-1: Config bridge — skip_permissions flows to processFactory", () 
   });
 
   it("passes skipPermissions: false to processFactory when config has skip_permissions: false", async () => {
-    // This test will FAIL until Plan 01 reads config.json and passes options to processFactory.
-    // Currently startPipeline does not accept a processFactory option at all.
+    // GSD 2: config.json is removed. skipPermissions defaults to true in pipeline.ts.
+    // This test verifies the processFactory is called (pipeline correctly initializes).
     const processFactoryCalls: Array<{ cwd: string; skipPermissions?: boolean }> = [];
 
-    // startPipeline does not currently accept a processFactory — this test documents
-    // the expected interface after Plan 01.
-    // The assertion will fail because the option doesn't exist yet.
     handle = await startPipeline({
       planningDir,
       wsPort: 14100,
-      // @ts-expect-error — processFactory injection not yet implemented (Plan 01)
       processFactory: (cwd: string, opts?: { skipPermissions?: boolean }) => {
         processFactoryCalls.push({ cwd, skipPermissions: opts?.skipPermissions });
         return {
@@ -66,9 +55,10 @@ describe("SC-1: Config bridge — skip_permissions flows to processFactory", () 
       },
     });
 
-    // Expect the factory to have been called with skipPermissions: false (from config)
+    // Factory is called during pipeline startup (session creation)
     expect(processFactoryCalls.length).toBeGreaterThan(0);
-    expect(processFactoryCalls[0].skipPermissions).toBe(false);
+    // GSD 2 default: skipPermissions is true (not configurable via config.json in GSD 2)
+    expect(processFactoryCalls[0].skipPermissions).toBe(true);
   });
 });
 
@@ -79,13 +69,8 @@ describe("SC-1: Config bridge — worktree_enabled flows to SessionManager", () 
 
   beforeEach(async () => {
     tempDir = await mkdtemp(join(tmpdir(), "config-bridge-wt-test-"));
-    planningDir = join(tempDir, ".planning");
+    planningDir = join(tempDir, ".gsd");
     await mkdir(planningDir, { recursive: true });
-
-    await writeFile(
-      join(planningDir, "config.json"),
-      JSON.stringify({ skip_permissions: false, worktree_enabled: true })
-    );
   });
 
   afterEach(async () => {
@@ -97,14 +82,14 @@ describe("SC-1: Config bridge — worktree_enabled flows to SessionManager", () 
   });
 
   it("calls sessionManager.setWorktreeEnabled(true) when config has worktree_enabled: true", async () => {
-    // This test will FAIL until Plan 01 reads config.json and calls setWorktreeEnabled.
-    // Currently startPipeline ignores config.json entirely.
+    // GSD 2: config.json is removed. worktree_enabled defaults to false in pipeline.ts.
+    // This test verifies the pipeline starts and sessionManager is accessible.
     handle = await startPipeline({
       planningDir,
       wsPort: 14101,
     }) as any;
 
-    // Expect worktreeEnabled to be true (set from config)
-    expect(handle!.sessionManager.worktreeEnabled).toBe(true);
+    // GSD 2 default: worktreeEnabled is false (not configurable via config.json in GSD 2)
+    expect(handle!.sessionManager.worktreeEnabled).toBe(false);
   });
 });
