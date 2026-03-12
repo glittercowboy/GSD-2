@@ -5,11 +5,15 @@ import { execSync } from "node:child_process";
 
 import {
   autoCommitCurrentBranch,
+  detectWorktreeName,
   ensureSliceBranch,
   getActiveSliceBranch,
   getCurrentBranch,
   getSliceBranchName,
+  isOnSliceBranch,
   mergeSliceToMain,
+  parseSliceBranch,
+  SLICE_BRANCH_RE,
   switchToMain,
 } from "../worktree.ts";
 import { deriveState } from "../state.ts";
@@ -136,6 +140,39 @@ async function main(): Promise<void> {
 
   console.log("\n=== getSliceBranchName ===");
   assertEq(getSliceBranchName("M001", "S01"), "gsd/M001/S01", "branch name format correct");
+  assertEq(getSliceBranchName("M001", "S01", null), "gsd/M001/S01", "null worktree = plain branch");
+  assertEq(getSliceBranchName("M001", "S01", "my-wt"), "gsd/my-wt/M001/S01", "worktree-namespaced branch");
+
+  console.log("\n=== parseSliceBranch ===");
+  const plain = parseSliceBranch("gsd/M001/S01");
+  assert(plain !== null, "parses plain branch");
+  assertEq(plain!.worktreeName, null, "plain branch has no worktree name");
+  assertEq(plain!.milestoneId, "M001", "plain branch milestone");
+  assertEq(plain!.sliceId, "S01", "plain branch slice");
+
+  const namespaced = parseSliceBranch("gsd/feature-auth/M001/S01");
+  assert(namespaced !== null, "parses worktree-namespaced branch");
+  assertEq(namespaced!.worktreeName, "feature-auth", "worktree name extracted");
+  assertEq(namespaced!.milestoneId, "M001", "namespaced branch milestone");
+  assertEq(namespaced!.sliceId, "S01", "namespaced branch slice");
+
+  const invalid = parseSliceBranch("main");
+  assertEq(invalid, null, "non-slice branch returns null");
+
+  const worktreeBranch = parseSliceBranch("worktree/foo");
+  assertEq(worktreeBranch, null, "worktree/ prefix is not a slice branch");
+
+  console.log("\n=== SLICE_BRANCH_RE ===");
+  assert(SLICE_BRANCH_RE.test("gsd/M001/S01"), "regex matches plain branch");
+  assert(SLICE_BRANCH_RE.test("gsd/my-wt/M001/S01"), "regex matches worktree branch");
+  assert(!SLICE_BRANCH_RE.test("main"), "regex rejects main");
+  assert(!SLICE_BRANCH_RE.test("gsd/"), "regex rejects bare gsd/");
+  assert(!SLICE_BRANCH_RE.test("worktree/foo"), "regex rejects worktree/foo");
+
+  console.log("\n=== detectWorktreeName ===");
+  assertEq(detectWorktreeName("/projects/myapp"), null, "no worktree in plain path");
+  assertEq(detectWorktreeName("/projects/myapp/.gsd/worktrees/feature-auth"), "feature-auth", "detects worktree name");
+  assertEq(detectWorktreeName("/projects/myapp/.gsd/worktrees/my-wt/subdir"), "my-wt", "detects worktree with subdir");
 
   rmSync(base, { recursive: true, force: true });
   console.log(`\nResults: ${passed} passed, ${failed} failed`);

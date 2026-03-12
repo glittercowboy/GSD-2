@@ -61,10 +61,11 @@ import {
   autoCommitCurrentBranch,
   ensureSliceBranch,
   getCurrentBranch,
+  getMainBranch,
   getSliceBranchName,
+  parseSliceBranch,
   switchToMain,
   mergeSliceToMain,
-  getCurrentBranch,
 } from "./worktree.ts";
 import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import { makeUI, GLYPH, INDENT } from "../shared/ui.js";
@@ -902,10 +903,10 @@ async function dispatchNextUnit(
   //   - complete-milestone runs on a slice branch (last slice bypass)
   {
     const currentBranch = getCurrentBranch(basePath);
-    const branchMatch = currentBranch.match(/^gsd\/(M\d+)\/(S\d+)$/);
-    if (branchMatch) {
-      const branchMid = branchMatch[1]!;
-      const branchSid = branchMatch[2]!;
+    const parsedBranch = parseSliceBranch(currentBranch);
+    if (parsedBranch) {
+      const branchMid = parsedBranch.milestoneId;
+      const branchSid = parsedBranch.sliceId;
       // Check if this slice is marked done in the roadmap
       const roadmapFile = resolveMilestoneFile(basePath, branchMid, "ROADMAP");
       const roadmapContent = roadmapFile ? await loadFile(roadmapFile) : null;
@@ -919,8 +920,9 @@ async function dispatchNextUnit(
             const mergeResult = mergeSliceToMain(
               basePath, branchMid, branchSid, sliceTitleForMerge,
             );
+            const targetBranch = getMainBranch(basePath);
             ctx.ui.notify(
-              `Merged ${mergeResult.branch} → main.`,
+              `Merged ${mergeResult.branch} → ${targetBranch}.`,
               "info",
             );
             // Re-derive state from main so downstream logic sees merged state
