@@ -1,13 +1,14 @@
 /**
- * Claude Code process manager.
+ * GSD process manager.
  *
- * Spawns Claude Code CLI per user message using:
- *   claude -p "<prompt>" --output-format stream-json --verbose
+ * Spawns gsd binary per user message using:
+ *   gsd -p "<prompt>" --output-format stream-json --verbose
  *
- * Each message gets a fresh process. Session continuity via --resume.
+ * Each message gets a fresh process.
  * Uses Node's child_process.spawn for reliable stdin/stdout on Windows
  * (Bun.spawn has known issues with stream handling on Windows).
  *
+ * TODO(Phase-13): update args for Pi SDK interface (full arg mapping).
  * CRITICAL: CLAUDECODE env var is stripped to avoid "nested session" rejection.
  */
 
@@ -29,9 +30,9 @@ export interface ClaudeProcessOptions {
 }
 
 /**
- * Manages Claude Code child processes.
+ * Manages gsd child processes.
  * Spawns a new process per message for reliability.
- * Tracks session ID for conversation continuity via --resume.
+ * TODO(Phase-13): implement gsd session continuity (replaces --resume).
  */
 export class ClaudeProcessManager {
   private activeProcess: ChildProcess | null = null;
@@ -75,8 +76,8 @@ export class ClaudeProcessManager {
   }
 
   /**
-   * Send a user message by spawning a Claude Code process.
-   * Uses --resume with session ID for conversation continuity.
+   * Send a user message by spawning a gsd process.
+   * TODO(Phase-13): add gsd session continuity args.
    */
   async sendMessage(prompt: string): Promise<void> {
     if (this._isProcessing) {
@@ -91,10 +92,6 @@ export class ClaudeProcessManager {
       "--verbose",
       "--include-partial-messages",
     ];
-
-    if (this._sessionId) {
-      args.push("--resume", this._sessionId);
-    }
 
     if (this.options.allowedTools) {
       args.push("--allowedTools", this.options.allowedTools.join(","));
@@ -113,14 +110,11 @@ export class ClaudeProcessManager {
     const env = { ...process.env };
     delete env.CLAUDECODE;
 
-    console.log(`[claude-process] Spawning: claude ${args.slice(0, 6).join(" ")}...`);
+    console.log(`[claude-process] Spawning: gsd ${args.slice(0, 6).join(" ")}...`);
     console.log(`[claude-process] CWD: ${this.cwd}`);
-    if (this._sessionId) {
-      console.log(`[claude-process] Resuming session: ${this._sessionId}`);
-    }
 
     // Use Node's spawn for reliable stream handling on Windows
-    const proc = this._spawnFn("claude", args, {
+    const proc = this._spawnFn("gsd", args, {
       cwd: this.cwd,
       env,
       stdio: ["ignore", "pipe", "pipe"],
