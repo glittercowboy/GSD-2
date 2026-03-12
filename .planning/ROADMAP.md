@@ -32,6 +32,7 @@
 
 **Milestone Goal:** Wrap Mission Control in a Tauri 2 native app, migrate all GSD v1 conventions to GSD 2 (`.gsd/`, `gsd` CLI, Pi SDK streaming), add OAuth + keychain, a Builder mode for non-technical users, and ship signed installers for macOS and Windows.
 
+- [ ] **Phase 11.1: Pre-v2.0 Stabilization (INSERTED)** — Address CONCERNS.md: config bridge, security hardening, fragile areas, tech debt, and missing critical features before v2.0 begins
 - [ ] **Phase 12: GSD 2 Compatibility Pass** — Migrate file watcher, state schema, child process, and command syntax to GSD 2 conventions
 - [ ] **Phase 13: Session Streaming Hardening** — Pi SDK event parser, resilient stream, process lifecycle, reconnect, cost/token display, auto mode indicators
 - [ ] **Phase 14: Slice Integration** — Milestones view renders slices with four states (Planned/In Progress/Needs Review/Complete) and state-appropriate actions
@@ -43,6 +44,25 @@
 - [ ] **Phase 20: Installer + Distribution** — GitHub Actions CI pipeline, code signing, auto-update, landing page
 
 ## Phase Details
+
+### Phase 11.1: Pre-v2.0 Stabilization (INSERTED)
+**Goal**: All concerns in `.planning/codebase/CONCERNS.md` are resolved — config bridge wired, security hardened, fragile areas guarded, tech debt cleared, and missing critical features added — so v2.0 development starts from a stable, correct foundation
+**Depends on**: Phase 11 (v1.0 complete)
+**Success Criteria** (what must be TRUE):
+  1. `worktree_enabled` and `skip_permissions` from `config.json` are read and applied by the server at session-creation time
+  2. `--dangerously-skip-permissions` is not passed unless the config explicitly enables it; the Settings UI toggle has observable effect
+  3. WebSocket server (port 4001) binds to `127.0.0.1`; CORS is restricted to `http://localhost:4000`
+  4. `wireSessionEvents` is guarded against double-call; `switchProject` pauses the reconcile interval during the switch
+  5. `MAX_SESSIONS` is defined in one place and imported everywhere; `readFileJson` validates against a schema
+  6. A React `ErrorBoundary` wraps the component tree; the `nul/` directory is removed
+  7. All artificial branding from v1.0 (placeholder logos, icons, wordmarks) is replaced with the official GSD assets from `packages/mission-control/assets/`
+**Plans**: 4 plans
+
+Plans:
+- [ ] 11.1-00-PLAN.md — Wave 0: Create 5 failing test stubs for SC-1, SC-3, SC-4, SC-6
+- [ ] 11.1-01-PLAN.md — Server security + config bridge (SC-1, SC-2, SC-3)
+- [ ] 11.1-02-PLAN.md — Pipeline guards + constants consolidation (SC-4, SC-5)
+- [ ] 11.1-03-PLAN.md — ErrorBoundary + branding swap + nul/ removal (SC-6, SC-7)
 
 ### Phase 12: GSD 2 Compatibility Pass
 **Goal**: The dashboard reads, derives, and operates entirely from GSD 2 conventions — `.gsd/` directory, new file schema, `gsd` binary, and updated command syntax — with zero references to v1 `.planning/` paths or `claude-code` process names
@@ -174,6 +194,7 @@
 | 9. Live Preview | v1.0 | 4/4 | Complete | — |
 | 10. Keyboard Shortcuts + Accessibility | v1.0 | 3/3 | Complete | 2026-03-12 |
 | 11. Documentation Integrity (GAP) | v1.0 | 2/2 | Complete | 2026-03-12 |
+| 11.1 Pre-v2.0 Stabilization (INSERTED) | v2.0 | 0/4 | Not started | — |
 | 12. GSD 2 Compatibility Pass | v2.0 | 0/TBD | Not started | — |
 | 13. Session Streaming Hardening | v2.0 | 0/TBD | Not started | — |
 | 14. Slice Integration | v2.0 | 0/TBD | Not started | — |
