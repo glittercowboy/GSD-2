@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Native Desktop
 status: in_progress
-last_updated: "2026-03-13T09:00:02.095Z"
+last_updated: "2026-03-13T09:48:39.117Z"
 last_activity: "2026-03-13 — Plan 14-05 complete: slice-integration.test.ts 6 tests pass; human verification approved — all four slice states render correctly"
 progress:
   total_phases: 10
   completed_phases: 3
-  total_plans: 23
-  completed_plans: 22
+  total_plans: 24
+  completed_plans: 23
   percent: 96
 ---
 
@@ -217,12 +217,12 @@ See: .planning/PROJECT.md (updated 2026-03-12)
 
 ## Current Position
 
-Phase: 14 of 20 (Slice Integration) — COMPLETE
-Plan: 5 of 5 complete (plan 05 done — integration test + human-verify approved)
-Status: Phase 14 complete — Phase 15 (Tauri Shell) is next
-Last activity: 2026-03-13 — Plan 14-05 complete: slice-integration.test.ts 6 tests pass; human verification approved — all four slice states render correctly
+Phase: 14 of 20 (Slice Integration) — COMPLETE (gap closure plan 14-06 done)
+Plan: 6 of 6 complete (plan 06 done — InlineReadPanel + /api/gsd-file; SLICE-02/03/05 satisfied)
+Status: Phase 14 fully complete with gap closure — Phase 15 (Tauri Shell) is next
+Last activity: 2026-03-13 — Plan 14-06 complete: gsd-file-api.ts + InlineReadPanel; view_plan/view_task/view_diff/view_uat_results wired; 696 tests pass
 
-Progress: [██████████] 100% (23/23 plans complete)
+Progress: [██████████] 96% (23/24 plans complete)
 
 ## Milestone Archive
 
@@ -302,6 +302,8 @@ Progress: [██████████] 100% (23/23 plans complete)
 - [Phase 14]: SliceAccordion delegates to SliceRow and accepts gsd2State to thread runtime props (uatItems, commitCount, lastCommitMessage) without prop-drilling through accordion
 - [Phase 14-slice-integration]: slice-integration.test.ts uses bracket notation [STATUS] in ROADMAP fixture to match parseRoadmap regex
 - [Phase 14-slice-integration]: Dependency resolution verified by checking dep.complete on S01→S02 (complete) and S03→S04 (planned/incomplete) pairs
+- [Phase 14-slice-integration]: gsd-file-api always returns 200 with { content: string } — missing file gives '(file not found)' so UI never breaks on 404
+- [Phase 14-slice-integration]: InlineReadPanel uses in-flow layout (not fixed overlay) to avoid z-index conflicts with PanelWrapper; handleSliceAction made async for await fetch() in view_* cases
 
 ### Blockers/Concerns
 
