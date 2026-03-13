@@ -1,0 +1,598 @@
+/**
+ * Integration tests: deriveState, indexWorkspace, inlinePriorMilestoneSummary,
+ * dispatch-guard, and branch operations with new-format (M-abc123-001) and
+ * mixed old+new milestone directories.
+ *
+ * Uses real filesystem and git fixtures — no mocking.
+ */
+
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execSync } from 'node:child_process';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+
+import { deriveState } from '../state.ts';
+import { indexWorkspace } from '../workspace-index.ts';
+import { inlinePriorMilestoneSummary } from '../files.ts';
+import { getPriorSliceCompletionBlocker } from '../dispatch-guard.ts';
+import {
+  ensureSliceBranch,
+  getCurrentBranch,
+  getSliceBranchName,
+  mergeSliceToMain,
+  parseSliceBranch,
+  switchToMain,
+} from '../worktree.ts';
+
+// ─── Assertion Helpers ────────────────────────────────────────────────────
+
+let passed = 0;
+let failed = 0;
+
+function assert(condition: boolean, message: string): void {
+  if (condition) {
+    passed++;
+  } else {
+    failed++;
+    console.error(`  FAIL: ${message}`);
+  }
+}
+
+function assertEq<T>(actual: T, expected: T, message: string): void {
+  if (JSON.stringify(actual) === JSON.stringify(expected)) {
+    passed++;
+  } else {
+    failed++;
+    console.error(`  FAIL: ${message} — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+  }
+}
+
+function assertMatch(actual: string, pattern: RegExp, message: string): void {
+  if (pattern.test(actual)) {
+    passed++;
+  } else {
+    failed++;
+    console.error(`  FAIL: ${message} — expected match for ${pattern}, got ${JSON.stringify(actual)}`);
+  }
+}
+
+// ─── Fixture Helpers ──────────────────────────────────────────────────────
+
+function createFixtureBase(): string {
+  const base = mkdtempSync(join(tmpdir(), 'gsd-integration-mixed-'));
+  mkdirSync(join(base, '.gsd', 'milestones'), { recursive: true });
+  return base;
+}
+
+function writeRoadmap(base: string, mid: string, content: string): void {
+  const dir = join(base, '.gsd', 'milestones', mid);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${mid}-ROADMAP.md`), content);
+}
+
+function writePlan(base: string, mid: string, sid: string, content: string): void {
+  const dir = join(base, '.gsd', 'milestones', mid, 'slices', sid);
+  mkdirSync(join(dir, 'tasks'), { recursive: true });
+  writeFileSync(join(dir, `${sid}-PLAN.md`), content);
+}
+
+function writeMilestoneSummary(base: string, mid: string, content: string): void {
+  const dir = join(base, '.gsd', 'milestones', mid);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${mid}-SUMMARY.md`), content);
+}
+
+function cleanup(base: string): void {
+  rmSync(base, { recursive: true, force: true });
+}
+
+function run(command: string, cwd: string): string {
+  return execSync(command, { cwd, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf-8' }).trim();
+}
+
+function createGitRepo(): string {
+  const base = mkdtempSync(join(tmpdir(), 'gsd-integration-git-'));
+  mkdirSync(join(base, '.gsd', 'milestones'), { recursive: true });
+  run('git init -b main', base);
+  run("git config user.name 'Integration Test'", base);
+  run("git config user.email 'test@example.com'", base);
+  return base;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Test Groups
+// ═══════════════════════════════════════════════════════════════════════════
+
+async function main(): Promise<void> {
+
+  // ─── Group 1: deriveState with new-format-only milestones ─────────────
+  console.log('\n=== Group 1: deriveState with new-format-only milestones ===');
+  {
+    const base = createFixtureBase();
+    try {
+      // Create M-abc123-001 with roadmap + 2 slices (S01 complete, S02 in-progress)
+      writeRoadmap(base, 'M-abc123-001', `# M-abc123-001: Test Feature
+
+**Vision:** Test vision
+
+## Slices
+- [x] **S01: Setup** \`risk:low\` \`depends:[]\`
+  > Foundation work
+- [ ] **S02: Core Logic** \`risk:medium\` \`depends:[]\`
+  > Main implementation
+`);
+
+      // S01 is complete — write a plan with all tasks done
+      writePlan(base, 'M-abc123-001', 'S01', `# S01: Setup
+
+**Goal:** Setup
+**Demo:** Setup works
+
+## Tasks
+- [x] **T01: Init** \`est:10m\`
+  Initialize project.
+`);
+
+      // S02 is in-progress — write a plan with first task not done
+      writePlan(base, 'M-abc123-001', 'S02', `# S02: Core Logic
+
+**Goal:** Implement core
+**Demo:** Core works
+
+## Tasks
+- [ ] **T01: Build core** \`est:20m\`
+  Build the core logic.
+- [ ] **T02: Test core** \`est:15m\`
+  Test the core logic.
+`);
+
+      const state = await deriveState(base);
+
+      // Phase should be executing (active milestone with incomplete slice + plan + tasks)
+      assertEq(state.phase, 'executing', 'G1: phase is executing');
+      assert(state.activeMilestone !== null, 'G1: activeMilestone is not null');
+      assertEq(state.activeMilestone?.id, 'M-abc123-001', 'G1: activeMilestone id is M-abc123-001');
+      assertEq(state.activeMilestone?.title, 'Test Feature', 'G1: title stripped to Test Feature');
+
+      // Registry
+      assertEq(state.registry.length, 1, 'G1: registry has 1 entry');
+      assertEq(state.registry[0]?.id, 'M-abc123-001', 'G1: registry entry id');
+      assertEq(state.registry[0]?.status, 'active', 'G1: registry entry status is active');
+      assertEq(state.registry[0]?.title, 'Test Feature', 'G1: registry title stripped');
+
+      // Active slice
+      assert(state.activeSlice !== null, 'G1: activeSlice is not null');
+      assertEq(state.activeSlice?.id, 'S02', 'G1: activeSlice is S02');
+
+      // Progress
+      assertEq(state.progress?.milestones?.done, 0, 'G1: milestones done = 0');
+      assertEq(state.progress?.milestones?.total, 1, 'G1: milestones total = 1');
+    } finally {
+      cleanup(base);
+    }
+  }
+
+  // ─── Group 2: deriveState with mixed-format milestones ────────────────
+  console.log('\n=== Group 2: deriveState with mixed old+new format milestones ===');
+  {
+    const base = createFixtureBase();
+    try {
+      // M001 — complete milestone (all slices done + summary)
+      writeRoadmap(base, 'M001', `# M001: Legacy Feature
+
+**Vision:** Legacy vision
+
+## Slices
+- [x] **S01: Only Slice** \`risk:low\` \`depends:[]\`
+  > Done
+`);
+
+      writePlan(base, 'M001', 'S01', `# S01: Only Slice
+
+**Goal:** Done
+**Demo:** Works
+
+## Tasks
+- [x] **T01: Do it** \`est:10m\`
+  Did it.
+`);
+
+      writeMilestoneSummary(base, 'M001', `# M001: Legacy Feature Summary
+
+**One-liner summary**
+
+## What Happened
+Everything worked.
+`);
+
+      // M-abc123-002 — active milestone (incomplete slice)
+      writeRoadmap(base, 'M-abc123-002', `# M-abc123-002: New Feature
+
+**Vision:** New vision
+
+## Slices
+- [x] **S01: Setup** \`risk:low\` \`depends:[]\`
+  > Setup done
+- [ ] **S02: Implementation** \`risk:medium\` \`depends:[]\`
+  > Main work
+`);
+
+      writePlan(base, 'M-abc123-002', 'S01', `# S01: Setup
+
+**Goal:** Setup
+**Demo:** Setup done
+
+## Tasks
+- [x] **T01: Init** \`est:10m\`
+  Init done.
+`);
+
+      writePlan(base, 'M-abc123-002', 'S02', `# S02: Implementation
+
+**Goal:** Implement
+**Demo:** Works
+
+## Tasks
+- [ ] **T01: Build** \`est:20m\`
+  Build it.
+`);
+
+      const state = await deriveState(base);
+
+      // Registry — should have 2 entries sorted by seq number
+      assertEq(state.registry.length, 2, 'G2: registry has 2 entries');
+      assertEq(state.registry[0]?.id, 'M001', 'G2: registry[0] is M001 (sorted first)');
+      assertEq(state.registry[1]?.id, 'M-abc123-002', 'G2: registry[1] is M-abc123-002 (sorted second)');
+
+      // M001 is complete
+      assertEq(state.registry[0]?.status, 'complete', 'G2: M001 status is complete');
+      assertEq(state.registry[0]?.title, 'Legacy Feature', 'G2: M001 title stripped');
+
+      // M-abc123-002 is active
+      assertEq(state.registry[1]?.status, 'active', 'G2: M-abc123-002 status is active');
+      assertEq(state.registry[1]?.title, 'New Feature', 'G2: M-abc123-002 title stripped');
+
+      // Active milestone
+      assert(state.activeMilestone !== null, 'G2: activeMilestone is not null');
+      assertEq(state.activeMilestone?.id, 'M-abc123-002', 'G2: activeMilestone is M-abc123-002');
+      assertEq(state.activeMilestone?.title, 'New Feature', 'G2: activeMilestone title stripped');
+
+      // Phase
+      assertEq(state.phase, 'executing', 'G2: phase is executing');
+
+      // Active slice
+      assertEq(state.activeSlice?.id, 'S02', 'G2: activeSlice is S02');
+
+      // Progress
+      assertEq(state.progress?.milestones?.done, 1, 'G2: milestones done = 1');
+      assertEq(state.progress?.milestones?.total, 2, 'G2: milestones total = 2');
+    } finally {
+      cleanup(base);
+    }
+  }
+
+  // ─── Group 3: indexWorkspace with mixed-format milestones ─────────────
+  console.log('\n=== Group 3: indexWorkspace with mixed-format milestones ===');
+  {
+    const base = createFixtureBase();
+    try {
+      // Same fixture as Group 2: M001 (complete) + M-abc123-002 (active)
+      writeRoadmap(base, 'M001', `# M001: Legacy Feature
+
+**Vision:** Legacy vision
+
+## Slices
+- [x] **S01: Only Slice** \`risk:low\` \`depends:[]\`
+  > Done
+`);
+
+      writePlan(base, 'M001', 'S01', `# S01: Only Slice
+
+**Goal:** Done
+**Demo:** Works
+
+## Tasks
+- [x] **T01: Do it** \`est:10m\`
+  Did it.
+`);
+
+      writeMilestoneSummary(base, 'M001', `# M001: Legacy Feature Summary
+
+**One-liner summary**
+
+## What Happened
+Everything worked.
+`);
+
+      writeRoadmap(base, 'M-abc123-002', `# M-abc123-002: New Feature
+
+**Vision:** New vision
+
+## Slices
+- [ ] **S01: First Slice** \`risk:low\` \`depends:[]\`
+  > First work
+`);
+
+      writePlan(base, 'M-abc123-002', 'S01', `# S01: First Slice
+
+**Goal:** First
+**Demo:** First works
+
+## Tasks
+- [ ] **T01: Build** \`est:20m\`
+  Build it.
+`);
+
+      const index = await indexWorkspace(base);
+
+      // Both milestones indexed
+      assertEq(index.milestones.length, 2, 'G3: 2 milestones in index');
+      assertEq(index.milestones[0]?.id, 'M001', 'G3: index[0] is M001');
+      assertEq(index.milestones[1]?.id, 'M-abc123-002', 'G3: index[1] is M-abc123-002');
+
+      // Titles stripped from both formats
+      assertEq(index.milestones[0]?.title, 'Legacy Feature', 'G3: M001 title stripped');
+      assertEq(index.milestones[1]?.title, 'New Feature', 'G3: M-abc123-002 title stripped');
+
+      // Active state
+      assertEq(index.active.milestoneId, 'M-abc123-002', 'G3: active milestone is M-abc123-002');
+      assertEq(index.active.sliceId, 'S01', 'G3: active slice is S01');
+
+      // Scopes include new-format paths
+      assert(
+        index.scopes.some(s => s.scope === 'M-abc123-002'),
+        'G3: scope includes M-abc123-002 milestone',
+      );
+      assert(
+        index.scopes.some(s => s.scope === 'M-abc123-002/S01'),
+        'G3: scope includes M-abc123-002/S01 slice',
+      );
+      assert(
+        index.scopes.some(s => s.scope === 'M-abc123-002/S01/T01'),
+        'G3: scope includes M-abc123-002/S01/T01 task',
+      );
+    } finally {
+      cleanup(base);
+    }
+  }
+
+  // ─── Group 4: inlinePriorMilestoneSummary with mixed formats ──────────
+  console.log('\n=== Group 4: inlinePriorMilestoneSummary with mixed formats ===');
+  {
+    const base = createFixtureBase();
+    try {
+      // M001 — completed with summary
+      mkdirSync(join(base, '.gsd', 'milestones', 'M001'), { recursive: true });
+      writeMilestoneSummary(base, 'M001', `# M001: Legacy Feature Summary
+
+**Completed legacy feature**
+
+## What Happened
+Built the legacy feature successfully.
+
+## Key Decisions
+- Used old format for milestone IDs.
+`);
+
+      // M-abc123-002 — active milestone (just needs directory to exist)
+      mkdirSync(join(base, '.gsd', 'milestones', 'M-abc123-002'), { recursive: true });
+
+      const result = await inlinePriorMilestoneSummary('M-abc123-002', base);
+
+      // Result should be non-null (M001 is before M-abc123-002)
+      assert(result !== null, 'G4: result is non-null');
+      assert(typeof result === 'string', 'G4: result is a string');
+
+      // Should contain the M001 summary content
+      assert(result!.includes('Prior Milestone Summary'), 'G4: contains Prior Milestone Summary header');
+      assert(result!.includes('Built the legacy feature successfully'), 'G4: contains M001 summary content');
+      assert(result!.includes('Used old format for milestone IDs'), 'G4: contains M001 key decisions');
+    } finally {
+      cleanup(base);
+    }
+  }
+
+  // ─── Group 5: dispatch-guard with new-format milestones ──────────────
+  console.log('\n=== Group 5: dispatch-guard with new-format milestones ===');
+  {
+    const base = createGitRepo();
+    try {
+      // M-abc123-001: all slices complete
+      writeRoadmap(base, 'M-abc123-001', `# M-abc123-001: First Feature
+
+**Vision:** First
+
+## Slices
+- [x] **S01: Done** \`risk:low\` \`depends:[]\`
+  > Completed
+`);
+
+      // M-abc123-002: S01 incomplete
+      writeRoadmap(base, 'M-abc123-002', `# M-abc123-002: Second Feature
+
+**Vision:** Second
+
+## Slices
+- [ ] **S01: Pending** \`risk:low\` \`depends:[]\`
+  > Not started
+- [ ] **S02: Also Pending** \`risk:low\` \`depends:[S01]\`
+  > Not started
+`);
+
+      // Initial commit so dispatch-guard can read from git branch
+      writeFileSync(join(base, 'README.md'), 'init\n');
+      run('git add .', base);
+      run('git commit -m init', base);
+
+      // No blocker: M-abc123-001 is complete, dispatching M-abc123-002/S01
+      assertEq(
+        getPriorSliceCompletionBlocker(base, 'main', 'plan-slice', 'M-abc123-002/S01'),
+        null,
+        'G5: no blocker for M-abc123-002/S01 when M-abc123-001 all complete',
+      );
+
+      // No blocker for first slice of first milestone
+      assertEq(
+        getPriorSliceCompletionBlocker(base, 'main', 'execute-task', 'M-abc123-001/S01/T01'),
+        null,
+        'G5: no blocker for M-abc123-001/S01/T01 (first milestone first slice)',
+      );
+
+      // Blocker: trying to dispatch M-abc123-002/S02 when S01 is incomplete
+      assertMatch(
+        getPriorSliceCompletionBlocker(base, 'main', 'execute-task', 'M-abc123-002/S02/T01') ?? '',
+        /earlier slice M-abc123-002\/S01 is not complete/,
+        'G5: blocks M-abc123-002/S02 when S01 incomplete',
+      );
+
+      // Non-slice dispatch type should not be blocked
+      assertEq(
+        getPriorSliceCompletionBlocker(base, 'main', 'plan-milestone', 'M-abc123-002'),
+        null,
+        'G5: non-slice dispatch type not blocked',
+      );
+
+      // Mixed format: M001 (incomplete) + M-abc123-002
+      writeRoadmap(base, 'M001', `# M001: Legacy Feature
+
+**Vision:** Legacy
+
+## Slices
+- [x] **S01: Done** \`risk:low\` \`depends:[]\`
+  > Done
+- [ ] **S02: Pending** \`risk:low\` \`depends:[S01]\`
+  > Pending
+`);
+      run('git add .', base);
+      run('git commit -m add-m001', base);
+
+      // M001 (seq=1) < M-abc123-001 (seq=1) — but M001 has incomplete S02
+      // Since M001 seq=1 and M-abc123-002 seq=2, blocker should reference M001/S02
+      assertMatch(
+        getPriorSliceCompletionBlocker(base, 'main', 'plan-slice', 'M-abc123-002/S01') ?? '',
+        /earlier slice M001\/S02 is not complete/,
+        'G5: mixed-format blocker references M001/S02',
+      );
+
+      // Complete M001 and verify no blocker
+      writeRoadmap(base, 'M001', `# M001: Legacy Feature
+
+**Vision:** Legacy
+
+## Slices
+- [x] **S01: Done** \`risk:low\` \`depends:[]\`
+  > Done
+- [x] **S02: Done** \`risk:low\` \`depends:[S01]\`
+  > Done
+`);
+      run('git add .', base);
+      run('git commit -m complete-m001', base);
+
+      assertEq(
+        getPriorSliceCompletionBlocker(base, 'main', 'plan-slice', 'M-abc123-002/S01'),
+        null,
+        'G5: no blocker after M001 completed (mixed format)',
+      );
+
+      // M-abc123-001 still has all complete, M-abc123-002/S01 still incomplete
+      // Check that S02 of M-abc123-002 is still blocked by its own S01
+      assertMatch(
+        getPriorSliceCompletionBlocker(base, 'main', 'execute-task', 'M-abc123-002/S02/T01') ?? '',
+        /earlier slice M-abc123-002\/S01 is not complete/,
+        'G5: intra-milestone blocker still works in mixed-format context',
+      );
+    } finally {
+      cleanup(base);
+    }
+  }
+
+  // ─── Group 6: Branch operations with new-format IDs ─────────────────
+  console.log('\n=== Group 6: Branch operations with new-format IDs ===');
+  {
+    const base = createGitRepo();
+    try {
+      // Need a milestone dir and initial commit for branch ops
+      writeRoadmap(base, 'M-abc123-001', `# M-abc123-001: Branch Test
+
+**Vision:** Test branches
+
+## Slices
+- [ ] **S01: Slice One** \`risk:low\` \`depends:[]\`
+  > Branch test
+`);
+      writePlan(base, 'M-abc123-001', 'S01', `# S01: Slice One
+
+**Goal:** Test
+**Demo:** Branch works
+
+## Tasks
+- [ ] **T01: Build** \`est:10m\`
+  Build it.
+`);
+      writeFileSync(join(base, 'README.md'), 'initial\n');
+      run('git add .', base);
+      run('git commit -m init', base);
+
+      // Test getSliceBranchName with new-format ID
+      assertEq(
+        getSliceBranchName('M-abc123-001', 'S01'),
+        'gsd/M-abc123-001/S01',
+        'G6: getSliceBranchName returns gsd/M-abc123-001/S01',
+      );
+
+      // Test parseSliceBranch with new-format branch name
+      const parsed = parseSliceBranch('gsd/M-abc123-001/S01');
+      assert(parsed !== null, 'G6: parseSliceBranch returns non-null for new-format');
+      assertEq(parsed?.milestoneId, 'M-abc123-001', 'G6: parsed milestoneId is M-abc123-001');
+      assertEq(parsed?.sliceId, 'S01', 'G6: parsed sliceId is S01');
+      assertEq(parsed?.worktreeName, null, 'G6: parsed worktreeName is null (no worktree)');
+
+      // Test ensureSliceBranch creates the branch
+      const created = ensureSliceBranch(base, 'M-abc123-001', 'S01');
+      assert(created, 'G6: ensureSliceBranch returns true (branch created)');
+      assertEq(
+        getCurrentBranch(base),
+        'gsd/M-abc123-001/S01',
+        'G6: getCurrentBranch returns gsd/M-abc123-001/S01',
+      );
+
+      // Idempotent: second ensure should not create
+      const secondCreate = ensureSliceBranch(base, 'M-abc123-001', 'S01');
+      assertEq(secondCreate, false, 'G6: second ensureSliceBranch returns false');
+
+      // Make a change on the slice branch, commit, then merge to main
+      writeFileSync(join(base, 'feature.txt'), 'new feature from slice\n');
+      run('git add feature.txt', base);
+      run("git commit -m 'feat: slice work'", base);
+
+      // Switch to main and merge
+      switchToMain(base);
+      assertEq(getCurrentBranch(base), 'main', 'G6: back on main after switchToMain');
+
+      const merge = mergeSliceToMain(base, 'M-abc123-001', 'S01', 'Slice One');
+      assertEq(merge.branch, 'gsd/M-abc123-001/S01', 'G6: merge reports correct branch');
+      assertEq(getCurrentBranch(base), 'main', 'G6: still on main after merge');
+      assert(merge.deletedBranch, 'G6: merge deleted the slice branch');
+
+      // Verify the merged content exists on main
+      const content = readFileSync(join(base, 'feature.txt'), 'utf-8');
+      assert(content.includes('new feature from slice'), 'G6: merged content on main');
+
+      // Verify branch is gone
+      const branches = run('git branch', base);
+      assert(!branches.includes('gsd/M-abc123-001/S01'), 'G6: slice branch deleted after merge');
+    } finally {
+      cleanup(base);
+    }
+  }
+
+  // ─── Summary ──────────────────────────────────────────────────────────
+  console.log(`\nResults: ${passed} passed, ${failed} failed`);
+  if (failed > 0) process.exit(1);
+  console.log('All tests passed ✓');
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
