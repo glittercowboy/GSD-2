@@ -1261,7 +1261,7 @@ export default function (pi: ExtensionAPI) {
 					if (!params.command) {
 						return {
 							content: [{ type: "text" as const, text: "Error: 'command' is required for start" }],
-							isError: true,
+							isError: true, details: undefined as unknown,
 						};
 					}
 
@@ -1316,7 +1316,7 @@ export default function (pi: ExtensionAPI) {
 						if (!bg) {
 							return {
 								content: [{ type: "text" as const, text: `Error: No process found with id '${params.id}'` }],
-								isError: true,
+								isError: true, details: undefined as unknown,
 							};
 						}
 						const digest = generateDigest(bg, true);
@@ -1356,7 +1356,7 @@ export default function (pi: ExtensionAPI) {
 					if (!params.id) {
 						return {
 							content: [{ type: "text" as const, text: "Error: 'id' is required for highlights" }],
-							isError: true,
+							isError: true, details: undefined as unknown,
 						};
 					}
 
@@ -1364,7 +1364,7 @@ export default function (pi: ExtensionAPI) {
 					if (!bg) {
 						return {
 							content: [{ type: "text" as const, text: `Error: No process found with id '${params.id}'` }],
-							isError: true,
+							isError: true, details: undefined as unknown,
 						};
 					}
 
@@ -1388,7 +1388,7 @@ export default function (pi: ExtensionAPI) {
 					if (!params.id) {
 						return {
 							content: [{ type: "text" as const, text: "Error: 'id' is required for output" }],
-							isError: true,
+							isError: true, details: undefined as unknown,
 						};
 					}
 
@@ -1396,7 +1396,7 @@ export default function (pi: ExtensionAPI) {
 					if (!bg) {
 						return {
 							content: [{ type: "text" as const, text: `Error: No process found with id '${params.id}'` }],
-							isError: true,
+							isError: true, details: undefined as unknown,
 						};
 					}
 
@@ -1429,7 +1429,7 @@ export default function (pi: ExtensionAPI) {
 					if (!params.id) {
 						return {
 							content: [{ type: "text" as const, text: "Error: 'id' is required for wait_for_ready" }],
-							isError: true,
+							isError: true, details: undefined as unknown,
 						};
 					}
 
@@ -1437,7 +1437,7 @@ export default function (pi: ExtensionAPI) {
 					if (!bg) {
 						return {
 							content: [{ type: "text" as const, text: `Error: No process found with id '${params.id}'` }],
-							isError: true,
+							isError: true, details: undefined as unknown,
 						};
 					}
 
@@ -1472,13 +1472,13 @@ export default function (pi: ExtensionAPI) {
 					if (!params.id) {
 						return {
 							content: [{ type: "text" as const, text: "Error: 'id' is required for send" }],
-							isError: true,
+							isError: true, details: undefined as unknown,
 						};
 					}
 					if (params.input === undefined) {
 						return {
 							content: [{ type: "text" as const, text: "Error: 'input' is required for send" }],
-							isError: true,
+							isError: true, details: undefined as unknown,
 						};
 					}
 
@@ -1486,14 +1486,14 @@ export default function (pi: ExtensionAPI) {
 					if (!bg) {
 						return {
 							content: [{ type: "text" as const, text: `Error: No process found with id '${params.id}'` }],
-							isError: true,
+							isError: true, details: undefined as unknown,
 						};
 					}
 
 					if (!bg.alive) {
 						return {
 							content: [{ type: "text" as const, text: `Error: Process ${params.id} has already exited` }],
-							isError: true,
+							isError: true, details: undefined as unknown,
 						};
 					}
 
@@ -1506,7 +1506,7 @@ export default function (pi: ExtensionAPI) {
 					} catch (err) {
 						return {
 							content: [{ type: "text" as const, text: `Error writing to stdin: ${err instanceof Error ? err.message : String(err)}` }],
-							isError: true,
+							isError: true, details: undefined as unknown,
 						};
 					}
 				}
@@ -1516,19 +1516,19 @@ export default function (pi: ExtensionAPI) {
 					if (!params.id) {
 						return {
 							content: [{ type: "text" as const, text: "Error: 'id' is required for send_and_wait" }],
-							isError: true,
+							isError: true, details: undefined as unknown,
 						};
 					}
 					if (params.input === undefined) {
 						return {
 							content: [{ type: "text" as const, text: "Error: 'input' is required for send_and_wait" }],
-							isError: true,
+							isError: true, details: undefined as unknown,
 						};
 					}
 					if (!params.wait_pattern) {
 						return {
 							content: [{ type: "text" as const, text: "Error: 'wait_pattern' is required for send_and_wait" }],
-							isError: true,
+							isError: true, details: undefined as unknown,
 						};
 					}
 
@@ -1536,14 +1536,14 @@ export default function (pi: ExtensionAPI) {
 					if (!bg) {
 						return {
 							content: [{ type: "text" as const, text: `Error: No process found with id '${params.id}'` }],
-							isError: true,
+							isError: true, details: undefined as unknown,
 						};
 					}
 
 					if (!bg.alive) {
 						return {
 							content: [{ type: "text" as const, text: `Error: Process ${params.id} has already exited` }],
-							isError: true,
+							isError: true, details: undefined as unknown,
 						};
 					}
 
@@ -1568,7 +1568,7 @@ export default function (pi: ExtensionAPI) {
 					if (!params.id) {
 						return {
 							content: [{ type: "text" as const, text: "Error: 'id' is required for signal" }],
-							isError: true,
+							isError: true, details: undefined as unknown,
 						};
 					}
 
@@ -1576,7 +1576,7 @@ export default function (pi: ExtensionAPI) {
 					if (!bg) {
 						return {
 							content: [{ type: "text" as const, text: `Error: No process found with id '${params.id}'` }],
-							isError: true,
+							isError: true, details: undefined as unknown,
 						};
 					}
 
@@ -1621,7 +1621,7 @@ export default function (pi: ExtensionAPI) {
 					if (!params.id) {
 						return {
 							content: [{ type: "text" as const, text: "Error: 'id' is required for kill" }],
-							isError: true,
+							isError: true, details: undefined as unknown,
 						};
 					}
 
@@ -1629,7 +1629,7 @@ export default function (pi: ExtensionAPI) {
 					if (!bg) {
 						return {
 							content: [{ type: "text" as const, text: `Error: No process found with id '${params.id}'` }],
-							isError: true,
+							isError: true, details: undefined as unknown,
 						};
 					}
 
@@ -1657,7 +1657,7 @@ export default function (pi: ExtensionAPI) {
 					if (!params.id) {
 						return {
 							content: [{ type: "text" as const, text: "Error: 'id' is required for restart" }],
-							isError: true,
+							isError: true, details: undefined as unknown,
 						};
 					}
 
@@ -1665,7 +1665,7 @@ export default function (pi: ExtensionAPI) {
 					if (!newBg) {
 						return {
 							content: [{ type: "text" as const, text: `Error: No process found with id '${params.id}'` }],
-							isError: true,
+							isError: true, details: undefined as unknown,
 						};
 					}
 
@@ -1732,7 +1732,7 @@ export default function (pi: ExtensionAPI) {
 				default:
 					return {
 						content: [{ type: "text" as const, text: `Unknown action: ${params.action}` }],
-						isError: true,
+						isError: true, details: undefined as unknown,
 					};
 			}
 		},
@@ -1760,7 +1760,7 @@ export default function (pi: ExtensionAPI) {
 
 			const action = details.action as string;
 
-			if (result.isError) {
+			if ((result as any).isError) {
 				const text = result.content[0];
 				return new Text(
 					theme.fg("error", text?.type === "text" ? text.text : "Error"),
@@ -2338,17 +2338,14 @@ export default function (pi: ExtensionAPI) {
 	}, 2000);
 
 	// Refresh widget after agent actions and session events
-	for (const event of [
-		"turn_end",
-		"agent_end",
-		"session_start",
-		"session_switch",
-	] as const) {
-		pi.on(event, async (_event: unknown, ctx: ExtensionContext) => {
-			latestCtx = ctx;
-			refreshWidget();
-		});
-	}
+	const refreshHandler = async (_event: unknown, ctx: ExtensionContext) => {
+		latestCtx = ctx;
+		refreshWidget();
+	};
+	pi.on("turn_end", refreshHandler as any);
+	pi.on("agent_end", refreshHandler as any);
+	pi.on("session_start", refreshHandler as any);
+	pi.on("session_switch", refreshHandler as any);
 
 	pi.on("tool_execution_end", async (_event, ctx) => {
 		latestCtx = ctx;

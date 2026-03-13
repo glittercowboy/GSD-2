@@ -233,7 +233,7 @@ export default function (pi: ExtensionAPI) {
 		renderResult(result, { isPartial }, theme) {
 			const d = result.details as ResolveDetails | undefined;
 			if (isPartial) return new Text(theme.fg("warning", "Searching Context7..."), 0, 0);
-			if (result.isError || d?.error) {
+			if ((result as any).isError || d?.error) {
 				return new Text(theme.fg("error", `Error: ${d?.error ?? "unknown"}`), 0, 0);
 			}
 			let text = theme.fg("success", `${d?.resultCount ?? 0} ${d?.resultCount === 1 ? "library" : "libraries"} found`);
@@ -388,7 +388,7 @@ export default function (pi: ExtensionAPI) {
 			const d = result.details as DocsDetails | undefined;
 
 			if (isPartial) return new Text(theme.fg("warning", "Fetching documentation..."), 0, 0);
-			if (result.isError || d?.error) {
+			if ((result as any).isError || d?.error) {
 				return new Text(theme.fg("error", `Error: ${d?.error ?? "unknown"}`), 0, 0);
 			}
 

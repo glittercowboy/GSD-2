@@ -123,7 +123,7 @@ function execMacAgent(command: string, params?: Record<string, any>): MacAgentRe
 			stdio: ["pipe", "pipe", "pipe"],
 			maxBuffer: 5 * 1024 * 1024, // 5MB — needed for retina screenshot base64 payloads
 		});
-		stdout = typeof result === "string" ? result : result.toString();
+		stdout = typeof result === "string" ? result : String(result);
 	} catch (err: any) {
 		stderr = err.stderr?.toString() || "";
 		const isTimeout = err.killed || err.signal === "SIGTERM";

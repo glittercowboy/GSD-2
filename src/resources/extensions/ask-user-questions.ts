@@ -137,12 +137,12 @@ export default function AskUserQuestions(pi: ExtensionAPI) {
 			if (!ctx.hasUI) {
 				const { tryRemoteQuestions } = await import("./remote-questions/manager.js");
 				const remoteResult = await tryRemoteQuestions(params.questions, signal);
-				if (remoteResult) return remoteResult;
+				if (remoteResult) return { ...remoteResult, details: remoteResult.details as unknown };
 				return errorResult("Error: UI not available (non-interactive mode)", params.questions);
 			}
 
 			// Delegate to shared interview UI
-			const result = await showInterviewRound(params.questions, {}, ctx);
+			const result = await showInterviewRound(params.questions, {}, ctx as any);
 
 			// RPC mode fallback: custom() returns undefined, so showInterviewRound
 			// may return undefined. Fall back to sequential ctx.ui.select() calls.

@@ -160,7 +160,7 @@ async function collectOneSecret(
 ): Promise<string | null> {
 	if (!ctx.hasUI) return null;
 
-	return ctx.ui.custom<string | null>((tui: any, theme: any, _kb: any, done: (r: string | null) => void) => {
+	return ctx.ui.custom((tui: any, theme: any, _kb: any, done: (r: string | null) => void) => {
 		let value = "";
 		let cachedLines: string[] | undefined;
 
@@ -286,7 +286,7 @@ export async function showSecretsSummary(
 
 	const existingSet = new Set(existingKeys);
 
-	await ctx.ui.custom<void>((tui: any, theme: Theme, _kb: any, done: () => void) => {
+	await (ctx.ui.custom as Function)((tui: any, theme: Theme, _kb: any, done: () => void) => {
 		let cachedLines: string[] | undefined;
 
 		function handleInput(_data: string) {
@@ -549,6 +549,7 @@ export default function secureEnv(pi: ExtensionAPI) {
 				return {
 					content: [{ type: "text", text: "Error: UI not available (interactive mode required for secure env collection)." }],
 					isError: true,
+					details: undefined as unknown,
 				};
 			}
 

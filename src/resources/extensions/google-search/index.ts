@@ -261,7 +261,7 @@ export default function (pi: ExtensionAPI) {
 			const d = result.details as SearchDetails | undefined;
 
 			if (isPartial) return new Text(theme.fg("warning", "Searching Google..."), 0, 0);
-			if (result.isError || d?.error) {
+			if ((result as any).isError || d?.error) {
 				return new Text(theme.fg("error", `Error: ${d?.error ?? "unknown"}`), 0, 0);
 			}
 
