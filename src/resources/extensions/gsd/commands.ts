@@ -74,7 +74,7 @@ export function registerGSDCommand(pi: ExtensionAPI): void {
 
       if (parts[0] === "prefs" && parts.length <= 2) {
         const subPrefix = parts[1] ?? "";
-        return ["global", "project", "status"]
+        return ["global", "project", "status", "wizard", "setup"]
           .filter((cmd) => cmd.startsWith(subPrefix))
           .map((cmd) => ({ value: `prefs ${cmd}`, label: cmd }));
       }
@@ -168,7 +168,7 @@ export function registerGSDCommand(pi: ExtensionAPI): void {
       }
 
       ctx.ui.notify(
-        `Unknown: /gsd ${trimmed}. Use /gsd, /gsd next, /gsd auto, /gsd stop, /gsd status, /gsd queue, /gsd discuss, /gsd prefs [global|project|status], /gsd doctor [audit|fix|heal] [M###/S##], /gsd migrate <path>, or /gsd remote [slack|discord|status|disconnect].`,
+        `Unknown: /gsd ${trimmed}. Use /gsd, /gsd next, /gsd auto, /gsd stop, /gsd status, /gsd queue, /gsd discuss, /gsd prefs [global|project|status|wizard|setup], /gsd doctor [audit|fix|heal] [M###/S##], /gsd migrate <path>, or /gsd remote [slack|discord|status|disconnect].`,
         "warning",
       );
     },
@@ -219,6 +219,13 @@ async function handlePrefs(args: string, ctx: ExtensionCommandContext): Promise<
     return;
   }
 
+  if (trimmed === "wizard" || trimmed === "setup" || trimmed === "wizard global" || trimmed === "setup global"
+    || trimmed === "wizard project" || trimmed === "setup project") {
+    const scope = trimmed.includes("project") ? "project" : "global";
+    await handlePrefsWizard(ctx, scope);
+    return;
+  }
+
   if (trimmed === "status") {
     const globalPrefs = loadGlobalGSDPreferences();
     const projectPrefs = loadProjectGSDPreferences();
@@ -249,7 +256,7 @@ async function handlePrefs(args: string, ctx: ExtensionCommandContext): Promise<
     return;
   }
 
-  ctx.ui.notify("Usage: /gsd prefs [global|project|status]", "info");
+  ctx.ui.notify("Usage: /gsd prefs [global|project|status|wizard|setup]", "info");
 }
 
 async function handleDoctor(args: string, ctx: ExtensionCommandContext, pi: ExtensionAPI): Promise<void> {
@@ -288,6 +295,214 @@ async function handleDoctor(args: string, ctx: ExtensionCommandContext, pi: Exte
     dispatchDoctorHeal(pi, effectiveScope, reportText, structuredIssues);
     ctx.ui.notify(`Doctor heal dispatched ${actionable.length} issue(s) to the LLM.`, "info");
   }
+}
+
+// ─── Preferences Wizard ───────────────────────────────────────────────────────
+
+async function handlePrefsWizard(
+  ctx: ExtensionCommandContext,
+  scope: "global" | "project",
+): Promise<void> {
+  const path = scope === "project" ? getProjectGSDPreferencesPath() : getGlobalGSDPreferencesPath();
+  const existing = scope === "project" ? loadProjectGSDPreferences() : loadGlobalGSDPreferences();
+  const prefs: Record<string, unknown> = existing?.preferences ? { ...existing.preferences } : {};
+
+  ctx.ui.notify(`GSD preferences wizard (${scope}) — press Escape at any prompt to skip it.`, "info");
+
+  // ─── Models ──────────────────────────────────────────────────────────────
+  const modelPhases = ["research", "planning", "execution", "completion"] as const;
+  const models: Record<string, string> = (prefs.models as Record<string, string>) ?? {};
+
+  for (const phase of modelPhases) {
+    const current = models[phase] ?? "";
+    const input = await ctx.ui.input(
+      `Model for ${phase} phase${current ? ` (current: ${current})` : ""}:`,
+      current || "e.g. claude-sonnet-4-20250514",
+    );
+    if (input !== null && input !== undefined) {
+      const val = input.trim();
+      if (val) {
+        models[phase] = val;
+      } else if (current) {
+        // User cleared it — remove
+        delete models[phase];
+      }
+    }
+    // null/undefined = Escape/skip — keep existing value
+  }
+  if (Object.keys(models).length > 0) {
+    prefs.models = models;
+  }
+
+  // ─── Auto-supervisor timeouts ────────────────────────────────────────────
+  const autoSup: Record<string, unknown> = (prefs.auto_supervisor as Record<string, unknown>) ?? {};
+  const timeoutFields = [
+    { key: "soft_timeout_minutes", label: "Soft timeout (minutes)", defaultVal: "20" },
+    { key: "idle_timeout_minutes", label: "Idle timeout (minutes)", defaultVal: "10" },
+    { key: "hard_timeout_minutes", label: "Hard timeout (minutes)", defaultVal: "30" },
+  ] as const;
+
+  for (const field of timeoutFields) {
+    const current = autoSup[field.key];
+    const currentStr = current !== undefined && current !== null ? String(current) : "";
+    const input = await ctx.ui.input(
+      `${field.label}${currentStr ? ` (current: ${currentStr})` : ` (default: ${field.defaultVal})`}:`,
+      currentStr || field.defaultVal,
+    );
+    if (input !== null && input !== undefined) {
+      const val = input.trim();
+      if (val && /^\d+$/.test(val)) {
+        autoSup[field.key] = Number(val);
+      } else if (val && !/^\d+$/.test(val)) {
+        ctx.ui.notify(`Invalid value "${val}" for ${field.label} — must be a whole number. Keeping previous value.`, "warning");
+      } else if (!val && currentStr) {
+        delete autoSup[field.key];
+      }
+    }
+  }
+  if (Object.keys(autoSup).length > 0) {
+    prefs.auto_supervisor = autoSup;
+  }
+
+  // ─── Git main branch ────────────────────────────────────────────────────
+  const git: Record<string, unknown> = (prefs.git as Record<string, unknown>) ?? {};
+  const currentBranch = git.main_branch ? String(git.main_branch) : "";
+  const branchInput = await ctx.ui.input(
+    `Git main branch${currentBranch ? ` (current: ${currentBranch})` : ""}:`,
+    currentBranch || "main",
+  );
+  if (branchInput !== null && branchInput !== undefined) {
+    const val = branchInput.trim();
+    if (val) {
+      git.main_branch = val;
+    } else if (currentBranch) {
+      delete git.main_branch;
+    }
+  }
+  if (Object.keys(git).length > 0) {
+    prefs.git = git;
+  }
+
+  // ─── Skill discovery mode ───────────────────────────────────────────────
+  const currentDiscovery = (prefs.skill_discovery as string) ?? "";
+  const discoveryChoice = await ctx.ui.select(
+    `Skill discovery mode${currentDiscovery ? ` (current: ${currentDiscovery})` : ""}:`,
+    ["auto", "suggest", "off", "(keep current)"],
+  );
+  if (discoveryChoice && discoveryChoice !== "(keep current)") {
+    prefs.skill_discovery = discoveryChoice;
+  }
+
+  // ─── Serialize to frontmatter ───────────────────────────────────────────
+  prefs.version = prefs.version || 1;
+  const frontmatter = serializePreferencesToFrontmatter(prefs);
+
+  // Preserve existing body content (everything after closing ---)
+  let body = "\n# GSD Skill Preferences\n\nSee `~/.gsd/agent/extensions/gsd/docs/preferences-reference.md` for full field documentation and examples.\n";
+  if (existsSync(path)) {
+    const existingContent = readFileSync(path, "utf-8");
+    const closingIdx = existingContent.indexOf("\n---", existingContent.indexOf("---"));
+    if (closingIdx !== -1) {
+      const afterFrontmatter = existingContent.slice(closingIdx + 4); // skip past "\n---"
+      if (afterFrontmatter.trim()) {
+        body = afterFrontmatter;
+      }
+    }
+  }
+
+  const content = `---\n${frontmatter}---${body}`;
+
+  await saveFile(path, content);
+  await ctx.waitForIdle();
+  await ctx.reload();
+  ctx.ui.notify(`Saved ${scope} preferences to ${path}`, "success");
+}
+
+/** Wrap a YAML value in double quotes if it contains special characters. */
+function yamlSafeString(val: unknown): string {
+  if (typeof val !== "string") return String(val);
+  if (/[:#{\[\]'"`,|>&*!?@%]/.test(val) || val.trim() !== val || val === "") {
+    return `"${val.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  }
+  return val;
+}
+
+function serializePreferencesToFrontmatter(prefs: Record<string, unknown>): string {
+  const lines: string[] = [];
+
+  function serializeValue(key: string, value: unknown, indent: number): void {
+    const prefix = "  ".repeat(indent);
+    if (value === null || value === undefined) return;
+
+    if (Array.isArray(value)) {
+      if (value.length === 0) {
+        lines.push(`${prefix}${key}: []`);
+        return;
+      }
+      lines.push(`${prefix}${key}:`);
+      for (const item of value) {
+        if (typeof item === "object" && item !== null) {
+          const entries = Object.entries(item as Record<string, unknown>);
+          if (entries.length > 0) {
+            const [firstKey, firstVal] = entries[0];
+            lines.push(`${prefix}  - ${firstKey}: ${yamlSafeString(firstVal)}`);
+            for (let i = 1; i < entries.length; i++) {
+              const [k, v] = entries[i];
+              if (Array.isArray(v)) {
+                lines.push(`${prefix}    ${k}:`);
+                for (const arrItem of v) {
+                  lines.push(`${prefix}      - ${yamlSafeString(arrItem)}`);
+                }
+              } else {
+                lines.push(`${prefix}    ${k}: ${yamlSafeString(v)}`);
+              }
+            }
+          }
+        } else {
+          lines.push(`${prefix}  - ${yamlSafeString(item)}`);
+        }
+      }
+      return;
+    }
+
+    if (typeof value === "object") {
+      const entries = Object.entries(value as Record<string, unknown>);
+      if (entries.length === 0) {
+        lines.push(`${prefix}${key}: {}`);
+        return;
+      }
+      lines.push(`${prefix}${key}:`);
+      for (const [k, v] of entries) {
+        serializeValue(k, v, indent + 1);
+      }
+      return;
+    }
+
+    lines.push(`${prefix}${key}: ${yamlSafeString(value)}`);
+  }
+
+  // Ordered keys for consistent output
+  const orderedKeys = [
+    "version", "always_use_skills", "prefer_skills", "avoid_skills",
+    "skill_rules", "custom_instructions", "models", "skill_discovery",
+    "auto_supervisor", "uat_dispatch", "budget_ceiling", "remote_questions", "git",
+  ];
+
+  const seen = new Set<string>();
+  for (const key of orderedKeys) {
+    if (key in prefs) {
+      serializeValue(key, prefs[key], 0);
+      seen.add(key);
+    }
+  }
+  // Any remaining keys not in the ordered list
+  for (const [key, value] of Object.entries(prefs)) {
+    if (!seen.has(key)) {
+      serializeValue(key, value, 0);
+    }
+  }
+
+  return lines.join("\n") + "\n";
 }
 
 async function ensurePreferencesFile(

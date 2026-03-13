@@ -7,7 +7,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentMessage } from "@gsd/pi-agent-core";
+import type { AgentMessage, ThinkingLevel } from "@gsd/pi-agent-core";
 import type { AssistantMessage, ImageContent, Message, Model, OAuthProviderId } from "@gsd/pi-ai";
 import type {
 	AutocompleteItem,
@@ -85,7 +85,7 @@ import { ModelSelectorComponent } from "./components/model-selector.js";
 import { OAuthSelectorComponent } from "./components/oauth-selector.js";
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.js";
 import { SessionSelectorComponent } from "./components/session-selector.js";
-import { SettingsSelectorComponent } from "./components/settings-selector.js";
+import { SelectSubmenu, SettingsSelectorComponent, THINKING_DESCRIPTIONS } from "./components/settings-selector.js";
 import { SkillInvocationMessageComponent } from "./components/skill-invocation-message.js";
 import { ToolExecutionComponent } from "./components/tool-execution.js";
 import { TreeSelectorComponent } from "./components/tree-selector.js";
@@ -176,7 +176,7 @@ export class InteractiveMode {
 	private pendingTools = new Map<string, ToolExecutionComponent>();
 
 	// Tool output expansion state
-	private toolOutputExpanded = false;
+	private toolOutputExpanded = true;
 
 	// Thinking block visibility state
 	private hideThinkingBlock = false;
@@ -824,10 +824,12 @@ export class InteractiveMode {
 
 		// Try parent directories (package manager stores directory paths)
 		let current = p;
-		while (current.includes("/")) {
-			current = current.substring(0, current.lastIndexOf("/"));
-			const parent = metadata.get(current);
-			if (parent) return parent;
+		let parent = path.dirname(current);
+		while (parent !== current) {
+			const meta = metadata.get(parent);
+			if (meta) return meta;
+			current = parent;
+			parent = path.dirname(current);
 		}
 
 		return undefined;
@@ -2013,6 +2015,12 @@ export class InteractiveMode {
 				await this.handleReloadCommand();
 				return;
 			}
+			if (text === "/thinking" || text.startsWith("/thinking ")) {
+				const arg = text.startsWith("/thinking ") ? text.slice(10).trim() : undefined;
+				this.editor.setText("");
+				this.handleThinkingCommand(arg);
+				return;
+			}
 			if (text === "/debug") {
 				this.handleDebugCommand();
 				this.editor.setText("");
@@ -2741,6 +2749,57 @@ export class InteractiveMode {
 			this.updateEditorBorderColor();
 			this.showStatus(`Thinking level: ${newLevel}`);
 		}
+	}
+
+	private handleThinkingCommand(arg?: string): void {
+		if (!this.session.supportsThinking()) {
+			this.showStatus("Current model does not support thinking");
+			return;
+		}
+
+		const availableLevels = this.session.getAvailableThinkingLevels();
+
+		if (arg) {
+			const level = arg.toLowerCase();
+			if (!availableLevels.includes(level as ThinkingLevel)) {
+				this.showStatus(`Invalid thinking level "${arg}". Available: ${availableLevels.join(", ")}`);
+				return;
+			}
+			this.session.setThinkingLevel(level as ThinkingLevel);
+			this.footer.invalidate();
+			this.updateEditorBorderColor();
+			this.showStatus(`Thinking level: ${level}`);
+			return;
+		}
+
+		this.showThinkingSelector();
+	}
+
+	private showThinkingSelector(): void {
+		const availableLevels = this.session.getAvailableThinkingLevels();
+		this.showSelector((done) => {
+			const selector = new SelectSubmenu(
+				"Thinking Level",
+				"Select reasoning depth for thinking-capable models",
+				availableLevels.map((level) => ({
+					value: level,
+					label: level,
+					description: THINKING_DESCRIPTIONS[level],
+				})),
+				this.session.thinkingLevel,
+				(value) => {
+					this.session.setThinkingLevel(value as ThinkingLevel);
+					this.footer.invalidate();
+					this.updateEditorBorderColor();
+					done();
+					this.showStatus(`Thinking level: ${value}`);
+				},
+				() => {
+					done();
+				},
+			);
+			return { component: selector, focus: selector };
+		});
 	}
 
 	private async cycleModel(direction: "forward" | "backward"): Promise<void> {
@@ -3693,6 +3752,21 @@ export class InteractiveMode {
 							this.session.modelRegistry.authStorage.logout(providerId);
 							this.session.modelRegistry.refresh();
 							await this.updateAvailableProviderCount();
+
+							// Auto-switch model if current model belongs to the logged-out provider
+							const currentModel = this.session.model;
+							if (currentModel?.provider === providerId) {
+								try {
+									const available = this.session.modelRegistry.getAvailable();
+									const fallback = available.find((m) => m.provider !== providerId);
+									if (fallback) {
+										await this.session.setModel(fallback);
+									}
+								} catch {
+									// Model switch failed — user can manually switch via /model
+								}
+							}
+
 							this.showStatus(`Logged out of ${providerName}`);
 						} catch (error: unknown) {
 							this.showError(`Logout failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -3787,6 +3861,26 @@ export class InteractiveMode {
 			restoreEditor();
 			this.session.modelRegistry.refresh();
 			await this.updateAvailableProviderCount();
+
+			// Auto-switch model if current model has no valid API key
+			try {
+				const currentModel = this.session.model;
+				if (currentModel) {
+					const currentKey = await this.session.modelRegistry.getApiKey(currentModel);
+					if (!currentKey) {
+						const available = this.session.modelRegistry.getAvailable();
+						const newProviderModel = available.find((m) => m.provider === providerId);
+						if (newProviderModel) {
+							await this.session.setModel(newProviderModel);
+						} else if (available.length > 0) {
+							await this.session.setModel(available[0]);
+						}
+					}
+				}
+			} catch (error: unknown) {
+				// Model switch failed — user can manually switch via /model
+			}
+
 			this.showStatus(`Logged in to ${providerName}. Credentials saved to ${getAuthPath()}`);
 		} catch (error: unknown) {
 			restoreEditor();

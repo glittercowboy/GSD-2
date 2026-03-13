@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { execSync } from "node:child_process";
@@ -9,6 +9,8 @@ import {
   RUNTIME_EXCLUSION_PATHS,
   VALID_BRANCH_NAME,
   runGit,
+  readIntegrationBranch,
+  writeIntegrationBranch,
   type GitPreferences,
   type CommitOptions,
   type MergeSliceResult,
@@ -210,8 +212,8 @@ async function main(): Promise<void> {
 
   assertEq(
     RUNTIME_EXCLUSION_PATHS.length,
-    6,
-    "exactly 6 runtime exclusion paths"
+    7,
+    "exactly 7 runtime exclusion paths"
   );
 
   const expectedPaths = [
@@ -220,6 +222,7 @@ async function main(): Promise<void> {
     ".gsd/worktrees/",
     ".gsd/auto.lock",
     ".gsd/metrics.json",
+    ".gsd/completed-units.json",
     ".gsd/STATE.md",
   ];
 
@@ -347,52 +350,76 @@ async function main(): Promise<void> {
     rmSync(repo, { recursive: true, force: true });
   }
 
-  // ─── GitServiceImpl: smart staging fallback ────────────────────────────
+  // ─── GitServiceImpl: smart staging excludes tracked runtime files ──────
 
-  console.log("\n=== GitServiceImpl: smart staging fallback ===");
+  console.log("\n=== GitServiceImpl: smart staging excludes tracked runtime files ===");
 
   {
-    // We can't easily make the pathspec fail in a real repo, but we can test
-    // the fallback behavior by verifying that if smart staging somehow fails,
-    // everything gets staged. We do this by checking that a commit with both
-    // runtime and real files works when pathspec would fail.
+    // Reproduces the real bug: .gsd/ runtime files that are already tracked
+    // (in the git index) must be excluded from staging even when .gsd/ is
+    // in .gitignore. The old pathspec-exclude approach failed silently in
+    // this case and fell back to `git add -A`, staging everything.
     //
-    // To force the fallback: temporarily override RUNTIME_EXCLUSION_PATHS
-    // with an invalid pathspec. Since we can't modify a readonly array,
-    // we'll test the actual fallback by creating a custom subclass.
+    // The fix has three layers:
+    // 1. Auto-cleanup: git rm --cached removes tracked runtime files from index
+    // 2. Stage-then-unstage: git add -A + git reset HEAD replaces pathspec excludes
+    // 3. Pre-checkout discard: git checkout -- .gsd/ clears dirty runtime files
 
     const repo = initTempRepo();
+    const svc = new GitServiceImpl(repo);
 
-    // Create a subclass that overrides smartStage to simulate failure + fallback
-    class FallbackTestService extends GitServiceImpl {
-      fallbackUsed = false;
-      smartStageWithBadPathspec(): void {
-        // Simulate: try bad pathspec, catch, fallback
-        try {
-          runGit(this.basePath, ["add", "-A", "--", ".", ":(exclude)__NONEXISTENT_PATHSPEC_SYNTAX_ERROR__["]);
-          // If the above doesn't throw, git accepted it (some versions do).
-          // That's fine — the point is testing the fallback path.
-          throw new Error("force fallback for test");
-        } catch {
-          console.error("GitService: smart staging failed, falling back to git add -A");
-          this.fallbackUsed = true;
-          runGit(this.basePath, ["add", "-A"]);
-        }
-      }
-    }
-
-    const svc = new FallbackTestService(repo);
+    // Simulate a repo where .gsd/ files were previously force-added
+    createFile(repo, ".gsd/metrics.json", '{"version":1}');
+    createFile(repo, ".gsd/completed-units.json", '["unit1"]');
+    createFile(repo, ".gsd/activity/log.jsonl", '{"ts":1}');
     createFile(repo, "src/real.ts", "real code");
-    createFile(repo, ".gsd/activity/log.jsonl", "log");
+    // Force-add .gsd/ files to simulate historical tracking
+    runGit(repo, ["add", "-f", ".gsd/metrics.json", ".gsd/completed-units.json", ".gsd/activity/log.jsonl", "src/real.ts"]);
+    runGit(repo, ["commit", "-F", "-"], { input: "init with tracked runtime files" });
 
-    // Call the fallback path manually
-    svc.smartStageWithBadPathspec();
+    // Add .gitignore with .gsd/ (matches real-world setup from ensureGitignore)
+    createFile(repo, ".gitignore", ".gsd/\n");
+    runGit(repo, ["add", ".gitignore"]);
+    runGit(repo, ["commit", "-F", "-"], { input: "add gitignore" });
 
-    // Check that everything was staged (fallback stages all)
-    const staged = run("git diff --cached --name-only", repo);
-    assert(staged.includes("src/real.ts"), "fallback stages real files");
-    assert(staged.includes(".gsd/activity/log.jsonl"), "fallback stages runtime files too (no exclusion)");
-    assert(svc.fallbackUsed, "fallback path was actually used");
+    // Verify runtime files are tracked (precondition)
+    const tracked = run("git ls-files .gsd/", repo);
+    assert(tracked.includes("metrics.json"), "precondition: metrics.json tracked");
+    assert(tracked.includes("completed-units.json"), "precondition: completed-units.json tracked");
+    assert(tracked.includes("activity/log.jsonl"), "precondition: activity log tracked");
+
+    // Now modify both runtime and real files
+    createFile(repo, ".gsd/metrics.json", '{"version":2}');
+    createFile(repo, ".gsd/completed-units.json", '["unit1","unit2"]');
+    createFile(repo, ".gsd/activity/log.jsonl", '{"ts":2}');
+    createFile(repo, "src/real.ts", "updated code");
+
+    // autoCommit should commit real.ts. The first call also runs auto-cleanup
+    // which removes runtime files from the index via a dedicated commit.
+    const msg = svc.autoCommit("execute-task", "M001/S01/T01");
+    assert(msg !== null, "autoCommit produces a commit");
+
+    const show = run("git show --stat HEAD", repo);
+    assert(show.includes("src/real.ts"), "real files are committed");
+
+    // After the commit, runtime files must no longer be in the git index.
+    // They remain on disk but are untracked (protected by .gitignore).
+    const trackedAfter = run("git ls-files .gsd/", repo);
+    assertEq(trackedAfter, "", "no .gsd/ runtime files remain in the index");
+
+    // Verify a second autoCommit with changed runtime files does NOT stage them
+    createFile(repo, ".gsd/metrics.json", '{"version":3}');
+    createFile(repo, ".gsd/completed-units.json", '["unit1","unit2","unit3"]');
+    createFile(repo, "src/real.ts", "third version");
+
+    const msg2 = svc.autoCommit("execute-task", "M001/S01/T02");
+    assert(msg2 !== null, "second autoCommit produces a commit");
+
+    const show2 = run("git show --stat HEAD", repo);
+    assert(show2.includes("src/real.ts"), "real files committed in second commit");
+    assert(!show2.includes("metrics"), "metrics.json not in second commit");
+    assert(!show2.includes("completed-units"), "completed-units.json not in second commit");
+    assert(!show2.includes("activity"), "activity not in second commit");
 
     rmSync(repo, { recursive: true, force: true });
   }
@@ -1343,6 +1370,282 @@ async function main(): Promise<void> {
   {
     const _checkResult: PreMergeCheckResult = { passed: true, skipped: false };
     assert(true, "PreMergeCheckResult type exported and usable");
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // Integration branch — feature-branch workflow support
+  // ═══════════════════════════════════════════════════════════════════════
+
+  // ─── writeIntegrationBranch / readIntegrationBranch: round-trip ────────
+
+  console.log("\n=== Integration branch: write and read ===");
+
+  {
+    const repo = initBranchTestRepo();
+
+    // Initially no integration branch
+    assertEq(readIntegrationBranch(repo, "M001"), null, "readIntegrationBranch returns null when no metadata");
+
+    // Write integration branch
+    writeIntegrationBranch(repo, "M001", "f-123-new-thing");
+    assertEq(readIntegrationBranch(repo, "M001"), "f-123-new-thing", "readIntegrationBranch returns written branch");
+
+    rmSync(repo, { recursive: true, force: true });
+  }
+
+  // ─── writeIntegrationBranch: idempotent — doesn't overwrite ───────────
+
+  console.log("\n=== Integration branch: idempotent write ===");
+
+  {
+    const repo = initBranchTestRepo();
+
+    writeIntegrationBranch(repo, "M001", "f-123-first");
+    writeIntegrationBranch(repo, "M001", "f-456-second"); // should NOT overwrite
+
+    assertEq(readIntegrationBranch(repo, "M001"), "f-123-first", "second write does not overwrite existing integration branch");
+
+    rmSync(repo, { recursive: true, force: true });
+  }
+
+  // ─── writeIntegrationBranch: rejects slice branches ───────────────────
+
+  console.log("\n=== Integration branch: rejects slice branches ===");
+
+  {
+    const repo = initBranchTestRepo();
+
+    writeIntegrationBranch(repo, "M001", "gsd/M001/S01");
+    assertEq(readIntegrationBranch(repo, "M001"), null, "slice branches are not recorded as integration branch");
+
+    rmSync(repo, { recursive: true, force: true });
+  }
+
+  // ─── writeIntegrationBranch: rejects invalid branch names ─────────────
+
+  console.log("\n=== Integration branch: rejects invalid names ===");
+
+  {
+    const repo = initBranchTestRepo();
+
+    writeIntegrationBranch(repo, "M001", "bad; rm -rf /");
+    assertEq(readIntegrationBranch(repo, "M001"), null, "invalid branch name is not recorded");
+
+    rmSync(repo, { recursive: true, force: true });
+  }
+
+  // ─── getMainBranch: uses integration branch when milestone set ────────
+
+  console.log("\n=== getMainBranch: integration branch from milestone metadata ===");
+
+  {
+    const repo = initBranchTestRepo();
+
+    // Create a feature branch
+    run("git checkout -b f-123-feature", repo);
+    run("git checkout main", repo);
+
+    // Write integration branch metadata
+    writeIntegrationBranch(repo, "M001", "f-123-feature");
+
+    // Without milestone set, getMainBranch returns "main"
+    const svc = new GitServiceImpl(repo);
+    assertEq(svc.getMainBranch(), "main", "getMainBranch returns main when no milestone set");
+
+    // With milestone set, getMainBranch returns the integration branch
+    svc.setMilestoneId("M001");
+    assertEq(svc.getMainBranch(), "f-123-feature", "getMainBranch returns integration branch when milestone set");
+
+    rmSync(repo, { recursive: true, force: true });
+  }
+
+  // ─── getMainBranch: main_branch pref still takes priority ─────────────
+
+  console.log("\n=== getMainBranch: main_branch pref overrides integration branch ===");
+
+  {
+    const repo = initBranchTestRepo();
+
+    run("git checkout -b f-123-feature", repo);
+    run("git checkout -b trunk", repo);
+    run("git checkout main", repo);
+
+    writeIntegrationBranch(repo, "M001", "f-123-feature");
+
+    // Explicit preference still wins
+    const svc = new GitServiceImpl(repo, { main_branch: "trunk" });
+    svc.setMilestoneId("M001");
+    assertEq(svc.getMainBranch(), "trunk", "main_branch preference overrides integration branch");
+
+    rmSync(repo, { recursive: true, force: true });
+  }
+
+  // ─── getMainBranch: falls back when integration branch deleted ────────
+
+  console.log("\n=== getMainBranch: fallback when integration branch deleted ===");
+
+  {
+    const repo = initBranchTestRepo();
+
+    // Write metadata pointing to a branch that doesn't exist
+    writeIntegrationBranch(repo, "M001", "deleted-branch");
+
+    const svc = new GitServiceImpl(repo);
+    svc.setMilestoneId("M001");
+    assertEq(svc.getMainBranch(), "main", "getMainBranch falls back to main when integration branch no longer exists");
+
+    rmSync(repo, { recursive: true, force: true });
+  }
+
+  // ─── End-to-end: feature branch workflow ──────────────────────────────
+
+  console.log("\n=== End-to-end: feature branch workflow ===");
+
+  {
+    const repo = initBranchTestRepo();
+
+    // Simulate: user creates feature branch and starts GSD
+    run("git checkout -b f-123-new-thing", repo);
+    createFile(repo, "setup.txt", "initial setup");
+    run("git add -A", repo);
+    run("git commit -m 'initial feature setup'", repo);
+
+    // Record integration branch (this is what auto.ts does at startup)
+    writeIntegrationBranch(repo, "M001", "f-123-new-thing");
+
+    // Create GitServiceImpl with milestone set
+    const svc = new GitServiceImpl(repo);
+    svc.setMilestoneId("M001");
+
+    // Verify getMainBranch returns the feature branch, not "main"
+    assertEq(svc.getMainBranch(), "f-123-new-thing", "e2e: getMainBranch returns feature branch");
+
+    // Create slice branch — should branch from f-123-new-thing (current)
+    svc.ensureSliceBranch("M001", "S01");
+    assertEq(svc.getCurrentBranch(), "gsd/M001/S01", "e2e: slice branch created");
+
+    // The slice branch should have the feature branch's commit
+    const log = run("git log --oneline", repo);
+    assert(log.includes("initial feature setup"), "e2e: slice branch inherits feature branch content");
+
+    // Do work on the slice branch
+    createFile(repo, "src/feature.ts", "export const feature = true;");
+    svc.commit({ message: "feat: add feature module" });
+
+    // switchToMain should go to feature branch
+    svc.switchToMain();
+    assertEq(svc.getCurrentBranch(), "f-123-new-thing", "e2e: switchToMain goes to feature branch, not main");
+
+    // mergeSliceToMain should merge into feature branch
+    const result = svc.mergeSliceToMain("M001", "S01", "Add feature module");
+    assertEq(result.mergedCommitMessage, "feat(M001/S01): Add feature module", "e2e: merge commit message correct");
+    assertEq(svc.getCurrentBranch(), "f-123-new-thing", "e2e: after merge, still on feature branch");
+
+    // The feature branch should have the merged work
+    const files = run("git ls-files", repo);
+    assert(files.includes("src/feature.ts"), "e2e: merged file exists on feature branch");
+
+    // Main should NOT have the merged work
+    run("git checkout main", repo);
+    const mainFiles = run("git ls-files", repo);
+    assert(!mainFiles.includes("src/feature.ts"), "e2e: main does NOT have merged work — it stays on the feature branch");
+
+    rmSync(repo, { recursive: true, force: true });
+  }
+
+  // ─── Per-milestone isolation: different milestones, different targets ──
+
+  console.log("\n=== Integration branch: per-milestone isolation ===");
+
+  {
+    const repo = initBranchTestRepo();
+
+    run("git checkout -b feature-a", repo);
+    run("git checkout -b feature-b", repo);
+    run("git checkout main", repo);
+
+    writeIntegrationBranch(repo, "M001", "feature-a");
+    writeIntegrationBranch(repo, "M002", "feature-b");
+
+    const svc = new GitServiceImpl(repo);
+
+    svc.setMilestoneId("M001");
+    assertEq(svc.getMainBranch(), "feature-a", "M001 integration branch is feature-a");
+
+    svc.setMilestoneId("M002");
+    assertEq(svc.getMainBranch(), "feature-b", "M002 integration branch is feature-b");
+
+    svc.setMilestoneId(null);
+    assertEq(svc.getMainBranch(), "main", "no milestone set → falls back to main");
+
+    rmSync(repo, { recursive: true, force: true });
+  }
+
+  // ─── Backward compatibility: no metadata → existing behavior ──────────
+
+  console.log("\n=== Integration branch: backward compat ===");
+
+  {
+    const repo = initBranchTestRepo();
+    const svc = new GitServiceImpl(repo);
+
+    // Set milestone but no metadata file exists
+    svc.setMilestoneId("M001");
+    assertEq(svc.getMainBranch(), "main", "backward compat: no metadata file → falls back to main");
+
+    rmSync(repo, { recursive: true, force: true });
+  }
+
+  // ─── untrackRuntimeFiles: removes tracked runtime files from index ───
+
+  console.log("\n=== untrackRuntimeFiles ===");
+
+  {
+    const { untrackRuntimeFiles } = await import("../gitignore.ts");
+    const repo = mkdtempSync(join(tmpdir(), "gsd-untrack-"));
+    run("git init -b main", repo);
+    run("git config user.email test@test.com", repo);
+    run("git config user.name Test", repo);
+
+    // Create and track runtime files (simulates pre-.gitignore state)
+    mkdirSync(join(repo, ".gsd", "activity"), { recursive: true });
+    mkdirSync(join(repo, ".gsd", "runtime"), { recursive: true });
+    writeFileSync(join(repo, ".gsd", "completed-units.json"), '["u1"]');
+    writeFileSync(join(repo, ".gsd", "metrics.json"), '{}');
+    writeFileSync(join(repo, ".gsd", "STATE.md"), "# State");
+    writeFileSync(join(repo, ".gsd", "activity", "log.jsonl"), "{}");
+    writeFileSync(join(repo, ".gsd", "runtime", "data.json"), "{}");
+    writeFileSync(join(repo, "src.ts"), "code");
+    run("git add -A", repo);
+    run("git commit -m init", repo);
+
+    // Precondition: runtime files are tracked
+    const trackedBefore = run("git ls-files .gsd/", repo);
+    assert(trackedBefore.includes("completed-units.json"), "untrack: precondition — completed-units tracked");
+    assert(trackedBefore.includes("metrics.json"), "untrack: precondition — metrics tracked");
+
+    // Run untrackRuntimeFiles
+    untrackRuntimeFiles(repo);
+
+    // Runtime files should be removed from the index
+    const trackedAfter = run("git ls-files .gsd/", repo);
+    assertEq(trackedAfter, "", "untrack: all runtime files removed from index");
+
+    // Non-runtime files remain tracked
+    const srcTracked = run("git ls-files src.ts", repo);
+    assert(srcTracked.includes("src.ts"), "untrack: non-runtime files remain tracked");
+
+    // Files still exist on disk
+    assert(existsSync(join(repo, ".gsd", "completed-units.json")),
+      "untrack: completed-units.json still on disk");
+    assert(existsSync(join(repo, ".gsd", "metrics.json")),
+      "untrack: metrics.json still on disk");
+
+    // Idempotent — running again doesn't error
+    untrackRuntimeFiles(repo);
+    assert(true, "untrack: second call is idempotent (no error)");
+
+    rmSync(repo, { recursive: true, force: true });
   }
 
   console.log(`\nResults: ${passed} passed, ${failed} failed`);

@@ -198,6 +198,9 @@ export {
 	type SessionMessageEntry,
 	type ThinkingLevelChangeEntry,
 } from "./core/session-manager.js";
+// Blob and artifact storage
+export { BlobStore, isBlobRef, parseBlobRef, externalizeImageData, resolveImageData } from "./core/blob-store.js";
+export { ArtifactManager } from "./core/artifact-manager.js";
 export {
 	type CompactionSettings,
 	type ImageSettings,
@@ -330,4 +333,4 @@ export {
 export { copyToClipboard } from "./utils/clipboard.js";
 export { parseFrontmatter, stripFrontmatter } from "./utils/frontmatter.js";
 // Shell utilities
-export { getShellConfig } from "./utils/shell.js";
+export { getShellConfig, sanitizeCommand } from "./utils/shell.js";

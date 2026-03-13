@@ -13,6 +13,61 @@ Full documentation for `~/.gsd/preferences.md` (global) and `.gsd/preferences.md
 
 ---
 
+## Semantics
+
+### Empty Arrays vs Omitted Fields
+
+**Empty arrays (`[]`) are equivalent to omitting the field entirely.** During validation, GSD deletes empty arrays from the preferences object (see `validatePreferences()` in `preferences.ts`):
+
+```typescript
+for (const key of ["always_use_skills", "prefer_skills", "avoid_skills", "custom_instructions"] as const) {
+  if (validated[key] && validated[key]!.length === 0) {
+    delete validated[key];
+  }
+}
+```
+
+These are functionally identical:
+
+```yaml
+# Explicit empty arrays — will be normalized away
+prefer_skills: []
+avoid_skills: []
+skill_rules: []
+
+# Omitted entirely — same result
+# (just don't write these fields)
+```
+
+**Recommendation:** Omit fields you don't need. Empty arrays add noise with no effect.
+
+### Global vs Project Preferences
+
+Preferences are loaded from two locations and merged:
+
+1. **Global:** `~/.gsd/preferences.md` — applies to all projects
+2. **Project:** `.gsd/preferences.md` — applies to the current project only
+
+**Merge behavior** (see `mergePreferences()` in `preferences.ts`):
+- **Scalar fields** (`skill_discovery`, `budget_ceiling`, etc.): Project wins if defined, otherwise global. Uses nullish coalescing (`??`).
+- **Array fields** (`always_use_skills`, `prefer_skills`, etc.): Concatenated via `mergeStringLists()` (global first, then project).
+- **Object fields** (`models`, `git`, `auto_supervisor`): Shallow merge via spread operator `{ ...base, ...override }`.
+
+For `models`, project settings override global at the phase level. If global has `planning: opus` and project has `planning: sonnet`, the project wins. But if project omits `research`, global's `research` setting is preserved.
+
+### Skill Discovery vs Skill Preferences
+
+These are **separate concerns**:
+
+| Field | What it controls | Code reference |
+|-------|-----------------|----------------|
+| `skill_discovery` | **Whether** GSD looks for relevant skills during research | `resolveSkillDiscoveryMode()` in `preferences.ts` |
+| `always_use_skills`, `prefer_skills`, `avoid_skills` | **Which** skills to use when they're found relevant | `renderPreferencesForSystemPrompt()` in `preferences.ts` |
+
+Setting `prefer_skills: []` does **not** disable skill discovery — it just means you have no preference overrides. Use `skill_discovery: off` to disable discovery entirely.
+
+---
+
 ## Field Guide
 
 - `version`: schema version. Start at `1`.
@@ -60,6 +115,27 @@ Full documentation for `~/.gsd/preferences.md` (global) and `.gsd/preferences.md
 - Use `skill_rules` for situational routing, not broad personality preferences.
 - Prefer skill names for stable built-in skills.
 - Prefer absolute paths for local personal skills.
+- **Omit fields you don't need** — empty arrays add noise with no effect.
+
+---
+
+## Minimal Example
+
+The cleanest preferences file only specifies what you actually want:
+
+```yaml
+---
+version: 1
+always_use_skills:
+  - debug-like-expert
+skill_discovery: suggest
+models:
+  planning: claude-opus-4-6
+  execution: claude-sonnet-4-6
+---
+```
+
+Everything else uses defaults. No `prefer_skills: []`, no `avoid_skills: []`, no `auto_supervisor: {}` — those are just noise.
 
 ---
 

@@ -94,5 +94,11 @@ process.env.GSD_BUNDLED_EXTENSION_PATHS = [
   join(agentDir, 'extensions', 'get-secrets-from-user.ts'),
 ].join(':')
 
+// Respect HTTP_PROXY / HTTPS_PROXY / NO_PROXY env vars for all outbound requests.
+// pi-coding-agent's cli.ts sets this, but GSD bypasses that entry point — so we
+// must set it here before any SDK clients are created.
+import { EnvHttpProxyAgent, setGlobalDispatcher } from 'undici'
+setGlobalDispatcher(new EnvHttpProxyAgent())
+
 // Dynamic import defers ESM evaluation — config.js will see PI_PACKAGE_DIR above
 await import('./cli.js')

@@ -86,6 +86,8 @@ export interface ExtensionUIDialogOptions {
 	signal?: AbortSignal;
 	/** Timeout in milliseconds. Dialog auto-dismisses with live countdown display. */
 	timeout?: number;
+	/** When true, the user can select multiple options. The return type becomes `string[]`. */
+	allowMultiple?: boolean;
 }
 
 /** Placement for extension widgets. */
@@ -105,8 +107,8 @@ export type TerminalInputHandler = (data: string) => { consume?: boolean; data?:
  * Each mode (interactive, RPC, print) provides its own implementation.
  */
 export interface ExtensionUIContext {
-	/** Show a selector and return the user's choice. */
-	select(title: string, options: string[], opts?: ExtensionUIDialogOptions): Promise<string | undefined>;
+	/** Show a selector and return the user's choice. When `opts.allowMultiple` is true, returns an array. */
+	select(title: string, options: string[], opts?: ExtensionUIDialogOptions): Promise<string | string[] | undefined>;
 
 	/** Show a confirmation dialog. */
 	confirm(title: string, message: string, opts?: ExtensionUIDialogOptions): Promise<boolean>;

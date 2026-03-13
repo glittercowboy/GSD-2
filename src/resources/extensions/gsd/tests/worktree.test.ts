@@ -5,17 +5,21 @@ import { execSync } from "node:child_process";
 
 import {
   autoCommitCurrentBranch,
+  captureIntegrationBranch,
   detectWorktreeName,
   ensureSliceBranch,
   getActiveSliceBranch,
   getCurrentBranch,
+  getMainBranch,
   getSliceBranchName,
   isOnSliceBranch,
   mergeSliceToMain,
   parseSliceBranch,
+  setActiveMilestoneId,
   SLICE_BRANCH_RE,
   switchToMain,
 } from "../worktree.ts";
+import { readIntegrationBranch } from "../git-service.ts";
 import { deriveState } from "../state.ts";
 import { indexWorkspace } from "../workspace-index.ts";
 
@@ -251,6 +255,354 @@ async function main(): Promise<void> {
   assertEq(s02Base, mainHead, "S02 is based on main, not on S01 slice branch");
 
   rmSync(base3, { recursive: true, force: true });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // Integration branch — facade-level tests
+  //
+  // These exercise the same codepath auto.ts uses:
+  //   captureIntegrationBranch() → setActiveMilestoneId() → getMainBranch()
+  //   → switchToMain() → mergeSliceToMain()
+  // ═══════════════════════════════════════════════════════════════════════
+
+  // ── captureIntegrationBranch on a feature branch ──────────────────────
+
+  console.log("\n=== captureIntegrationBranch: records current branch ===");
+
+  {
+    const repo = mkdtempSync(join(tmpdir(), "gsd-integ-facade-"));
+    run("git init -b main", repo);
+    run("git config user.name 'Pi Test'", repo);
+    run("git config user.email 'pi@example.com'", repo);
+    writeFileSync(join(repo, "README.md"), "init\n");
+    run("git add -A && git commit -m init", repo);
+
+    run("git checkout -b f-123-thing", repo);
+    assertEq(getCurrentBranch(repo), "f-123-thing", "on feature branch");
+
+    captureIntegrationBranch(repo, "M001");
+    assertEq(readIntegrationBranch(repo, "M001"), "f-123-thing",
+      "captureIntegrationBranch records the current branch");
+
+    // Verify it was committed (not just written to disk)
+    const logOut = run("git log --oneline -1", repo);
+    assert(logOut.includes("integration branch"), "metadata committed to git");
+
+    rmSync(repo, { recursive: true, force: true });
+  }
+
+  // ── captureIntegrationBranch is idempotent on same lineage ──────────
+
+  console.log("\n=== captureIntegrationBranch: idempotent ===");
+
+  {
+    const repo = mkdtempSync(join(tmpdir(), "gsd-integ-idem-"));
+    run("git init -b main", repo);
+    run("git config user.name 'Pi Test'", repo);
+    run("git config user.email 'pi@example.com'", repo);
+    writeFileSync(join(repo, "README.md"), "init\n");
+    run("git add -A && git commit -m init", repo);
+    run("git checkout -b f-first", repo);
+
+    captureIntegrationBranch(repo, "M001");
+    setActiveMilestoneId(repo, "M001");
+    assertEq(readIntegrationBranch(repo, "M001"), "f-first",
+      "first capture records f-first");
+
+    // Capture again on the same branch (simulates restart/resume) — should NOT overwrite
+    captureIntegrationBranch(repo, "M001");
+    assertEq(readIntegrationBranch(repo, "M001"), "f-first",
+      "second capture on same branch does not overwrite");
+
+    // After creating a slice branch (which inherits the metadata commit),
+    // capture should still be idempotent
+    ensureSliceBranch(repo, "M001", "S01");
+    // Now on gsd/M001/S01 — capture should be no-op (slice branch rejected)
+    captureIntegrationBranch(repo, "M001");
+    switchToMain(repo);
+    assertEq(readIntegrationBranch(repo, "M001"), "f-first",
+      "capture from slice branch is no-op, original preserved");
+    assertEq(getCurrentBranch(repo), "f-first",
+      "switchToMain returns to feature branch, confirming integration branch works");
+
+    rmSync(repo, { recursive: true, force: true });
+  }
+
+  // ── captureIntegrationBranch skips slice branches ─────────────────────
+
+  console.log("\n=== captureIntegrationBranch: skips slice branches ===");
+
+  {
+    const repo = mkdtempSync(join(tmpdir(), "gsd-integ-skip-"));
+    run("git init -b main", repo);
+    run("git config user.name 'Pi Test'", repo);
+    run("git config user.email 'pi@example.com'", repo);
+    writeFileSync(join(repo, "README.md"), "init\n");
+    run("git add -A && git commit -m init", repo);
+
+    run("git checkout -b gsd/M001/S01", repo);
+    captureIntegrationBranch(repo, "M001");
+
+    assertEq(readIntegrationBranch(repo, "M001"), null,
+      "capture from slice branch is a no-op");
+
+    rmSync(repo, { recursive: true, force: true });
+  }
+
+  // ── setActiveMilestoneId makes getMainBranch return integration branch ─
+
+  console.log("\n=== setActiveMilestoneId + getMainBranch ===");
+
+  {
+    const repo = mkdtempSync(join(tmpdir(), "gsd-integ-main-"));
+    run("git init -b main", repo);
+    run("git config user.name 'Pi Test'", repo);
+    run("git config user.email 'pi@example.com'", repo);
+    writeFileSync(join(repo, "README.md"), "init\n");
+    run("git add -A && git commit -m init", repo);
+
+    run("git checkout -b my-feature", repo);
+    captureIntegrationBranch(repo, "M001");
+
+    // Without milestone set, getMainBranch returns "main"
+    setActiveMilestoneId(repo, null);
+    assertEq(getMainBranch(repo), "main",
+      "getMainBranch returns main without milestone set");
+
+    // With milestone set, getMainBranch returns feature branch
+    setActiveMilestoneId(repo, "M001");
+    assertEq(getMainBranch(repo), "my-feature",
+      "getMainBranch returns integration branch with milestone set");
+
+    rmSync(repo, { recursive: true, force: true });
+  }
+
+  // ── Full multi-slice lifecycle on a feature branch ────────────────────
+  //
+  // Simulates what auto.ts does: start on feature branch, capture it,
+  // create S01, work, merge S01 back to feature branch, then S02 branches
+  // from feature branch (not main), works, merges to feature branch.
+  // Main stays untouched throughout.
+
+  console.log("\n=== Multi-slice lifecycle on feature branch ===");
+
+  {
+    const repo = mkdtempSync(join(tmpdir(), "gsd-integ-multi-"));
+    run("git init -b main", repo);
+    run("git config user.name 'Pi Test'", repo);
+    run("git config user.email 'pi@example.com'", repo);
+    writeFileSync(join(repo, "README.md"), "base\n");
+    run("git add -A && git commit -m init", repo);
+
+    // User creates feature branch
+    run("git checkout -b feature/big-change", repo);
+    writeFileSync(join(repo, "setup.txt"), "feature setup\n");
+    run("git add -A && git commit -m 'feat: initial setup'", repo);
+
+    // auto.ts startup: capture + set milestone
+    captureIntegrationBranch(repo, "M001");
+    setActiveMilestoneId(repo, "M001");
+
+    assertEq(getMainBranch(repo), "feature/big-change",
+      "multi: getMainBranch returns feature branch");
+
+    // ── S01 lifecycle ──────────────────────────────────────────────────
+    ensureSliceBranch(repo, "M001", "S01");
+    assertEq(getCurrentBranch(repo), "gsd/M001/S01", "multi: on S01");
+
+    // Verify S01 has feature branch content
+    assert(existsSync(join(repo, "setup.txt")),
+      "multi: S01 inherited feature branch content");
+
+    writeFileSync(join(repo, "s01-work.txt"), "s01 output\n");
+    run("git add -A && git commit -m 'feat(S01): work'", repo);
+
+    switchToMain(repo);
+    assertEq(getCurrentBranch(repo), "feature/big-change",
+      "multi: switchToMain goes to feature branch");
+
+    const s01merge = mergeSliceToMain(repo, "M001", "S01", "First slice");
+    assertEq(getCurrentBranch(repo), "feature/big-change",
+      "multi: after S01 merge, on feature branch");
+    assert(existsSync(join(repo, "s01-work.txt")),
+      "multi: S01 work merged to feature branch");
+    assert(s01merge.deletedBranch, "multi: S01 branch deleted");
+
+    // Main should NOT have S01 work
+    run("git stash", repo); // stash any .gsd changes
+    run("git checkout main", repo);
+    assert(!existsSync(join(repo, "s01-work.txt")),
+      "multi: main does NOT have S01 work");
+    run("git checkout feature/big-change", repo);
+    run("git stash pop || true", repo);
+
+    // ── S02 lifecycle ──────────────────────────────────────────────────
+    // S02 should branch from feature/big-change which now has S01's work
+    ensureSliceBranch(repo, "M001", "S02");
+    assertEq(getCurrentBranch(repo), "gsd/M001/S02", "multi: on S02");
+
+    // S02 should have S01's merged output (branched from feature branch)
+    assert(existsSync(join(repo, "s01-work.txt")),
+      "multi: S02 has S01 output (inherited via feature branch)");
+
+    writeFileSync(join(repo, "s02-work.txt"), "s02 output\n");
+    run("git add -A && git commit -m 'feat(S02): work'", repo);
+
+    switchToMain(repo);
+    assertEq(getCurrentBranch(repo), "feature/big-change",
+      "multi: switchToMain goes to feature branch after S02");
+
+    const s02merge = mergeSliceToMain(repo, "M001", "S02", "Second slice");
+    assertEq(getCurrentBranch(repo), "feature/big-change",
+      "multi: after S02 merge, on feature branch");
+    assert(existsSync(join(repo, "s02-work.txt")),
+      "multi: S02 work merged to feature branch");
+    assert(existsSync(join(repo, "s01-work.txt")),
+      "multi: S01 work still on feature branch after S02 merge");
+    assert(s02merge.deletedBranch, "multi: S02 branch deleted");
+
+    // Final check: main still untouched
+    run("git stash", repo);
+    run("git checkout main", repo);
+    assert(!existsSync(join(repo, "s01-work.txt")),
+      "multi: main still lacks S01 work at end");
+    assert(!existsSync(join(repo, "s02-work.txt")),
+      "multi: main still lacks S02 work at end");
+    assertEq(readFileSync(join(repo, "README.md"), "utf-8").trim(), "base",
+      "multi: main README unchanged");
+
+    rmSync(repo, { recursive: true, force: true });
+  }
+
+  // ── Resume scenario: milestone ID re-set after restart ────────────────
+  //
+  // Simulates crash + restart: the cached GitServiceImpl is lost, but the
+  // metadata file persists on disk. Re-calling setActiveMilestoneId should
+  // restore integration branch resolution.
+
+  console.log("\n=== Resume: milestone ID re-set restores integration branch ===");
+
+  {
+    const repo = mkdtempSync(join(tmpdir(), "gsd-integ-resume-"));
+    run("git init -b main", repo);
+    run("git config user.name 'Pi Test'", repo);
+    run("git config user.email 'pi@example.com'", repo);
+    writeFileSync(join(repo, "README.md"), "init\n");
+    run("git add -A && git commit -m init", repo);
+
+    run("git checkout -b my-feature", repo);
+    captureIntegrationBranch(repo, "M001");
+    setActiveMilestoneId(repo, "M001");
+
+    // Create a slice and do some work
+    ensureSliceBranch(repo, "M001", "S01");
+    writeFileSync(join(repo, "work.txt"), "wip\n");
+    run("git add -A && git commit -m 'wip'", repo);
+
+    // Simulate "restart" — clear milestone ID (fresh service instance)
+    setActiveMilestoneId(repo, null);
+    assertEq(getMainBranch(repo), "main",
+      "resume: getMainBranch returns main when milestone cleared");
+
+    // Re-set milestone ID (what auto.ts does on resume)
+    setActiveMilestoneId(repo, "M001");
+    assertEq(getMainBranch(repo), "my-feature",
+      "resume: getMainBranch returns feature branch after re-set");
+
+    // Full lifecycle still works after resume
+    switchToMain(repo);
+    assertEq(getCurrentBranch(repo), "my-feature",
+      "resume: switchToMain goes to feature branch after re-set");
+
+    const result = mergeSliceToMain(repo, "M001", "S01", "Resume slice");
+    assertEq(getCurrentBranch(repo), "my-feature",
+      "resume: merge lands on feature branch after re-set");
+    assert(existsSync(join(repo, "work.txt")),
+      "resume: merged work exists on feature branch");
+
+    rmSync(repo, { recursive: true, force: true });
+  }
+
+  // ── Backward compat: no metadata file, plain main workflow ────────────
+  //
+  // Simulates existing projects that were created before this feature.
+  // No metadata file exists, milestone ID is set — getMainBranch should
+  // still return "main" and the entire slice lifecycle works unchanged.
+
+  console.log("\n=== Backward compat: no metadata, main workflow ===");
+
+  {
+    const repo = mkdtempSync(join(tmpdir(), "gsd-integ-compat-"));
+    run("git init -b main", repo);
+    run("git config user.name 'Pi Test'", repo);
+    run("git config user.email 'pi@example.com'", repo);
+    writeFileSync(join(repo, "README.md"), "init\n");
+    run("git add -A && git commit -m init", repo);
+
+    // Set milestone but DON'T capture integration branch (simulates old project)
+    setActiveMilestoneId(repo, "M001");
+
+    assertEq(getMainBranch(repo), "main",
+      "compat: getMainBranch returns main without metadata");
+
+    // Full lifecycle on main still works
+    ensureSliceBranch(repo, "M001", "S01");
+    writeFileSync(join(repo, "feature.txt"), "new\n");
+    run("git add -A && git commit -m 'feat: work'", repo);
+
+    switchToMain(repo);
+    assertEq(getCurrentBranch(repo), "main",
+      "compat: switchToMain goes to main");
+
+    const result = mergeSliceToMain(repo, "M001", "S01", "Compat slice");
+    assertEq(getCurrentBranch(repo), "main",
+      "compat: merge lands on main");
+    assert(existsSync(join(repo, "feature.txt")),
+      "compat: merged work exists on main");
+    assert(result.deletedBranch, "compat: branch deleted");
+
+    rmSync(repo, { recursive: true, force: true });
+  }
+
+  // ── ensureSliceBranch from another slice with integration branch ──────
+  //
+  // When on gsd/M001/S01 and creating S02, the code falls back to
+  // getMainBranch() (not the current slice). With integration branch set,
+  // S02 should branch from the feature branch.
+
+  console.log("\n=== ensureSliceBranch: S02 from S01 uses integration branch as base ===");
+
+  {
+    const repo = mkdtempSync(join(tmpdir(), "gsd-integ-chain-"));
+    run("git init -b main", repo);
+    run("git config user.name 'Pi Test'", repo);
+    run("git config user.email 'pi@example.com'", repo);
+    writeFileSync(join(repo, "README.md"), "init\n");
+    run("git add -A && git commit -m init", repo);
+
+    run("git checkout -b dev-branch", repo);
+    writeFileSync(join(repo, "dev-only.txt"), "from dev\n");
+    run("git add -A && git commit -m 'dev setup'", repo);
+
+    captureIntegrationBranch(repo, "M001");
+    setActiveMilestoneId(repo, "M001");
+
+    // Create S01 (from dev-branch)
+    ensureSliceBranch(repo, "M001", "S01");
+    writeFileSync(join(repo, "s01.txt"), "s01\n");
+    run("git add -A && git commit -m 's01 work'", repo);
+
+    // While on S01, create S02 — should fall back to integration branch
+    ensureSliceBranch(repo, "M001", "S02");
+    assertEq(getCurrentBranch(repo), "gsd/M001/S02", "chain: on S02");
+
+    // S02 should be based on dev-branch (the integration branch)
+    assert(existsSync(join(repo, "dev-only.txt")),
+      "chain: S02 has dev-branch content");
+    assert(!existsSync(join(repo, "s01.txt")),
+      "chain: S02 does NOT have S01 content (not chained from S01)");
+
+    rmSync(repo, { recursive: true, force: true });
+  }
 
   rmSync(base, { recursive: true, force: true });
   console.log(`\nResults: ${passed} passed, ${failed} failed`);

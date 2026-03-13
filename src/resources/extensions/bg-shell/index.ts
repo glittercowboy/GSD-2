@@ -34,6 +34,7 @@ import {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
 	getShellConfig,
+	sanitizeCommand,
 } from "@gsd/pi-coding-agent";
 import {
 	Text,
@@ -582,7 +583,7 @@ function startProcess(opts: StartOptions): BgProcess {
 	const env = { ...process.env, ...(opts.env || {}) };
 
 	const { shell, args: shellArgs } = getShellConfig();
-	const proc = spawn(shell, [...shellArgs, opts.command], {
+	const proc = spawn(shell, [...shellArgs, sanitizeCommand(opts.command)], {
 		cwd: opts.cwd,
 		stdio: ["pipe", "pipe", "pipe"],
 		env,

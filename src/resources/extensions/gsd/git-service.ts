@@ -9,7 +9,8 @@
  */
 
 import { execSync } from "node:child_process";
-import { sep } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join, sep } from "node:path";
 
 import {
   detectWorktreeName,
@@ -27,6 +28,7 @@ export interface GitPreferences {
   pre_merge_check?: boolean | string;
   commit_type?: string;
   main_branch?: string;
+  merge_strategy?: "squash" | "merge";
 }
 
 export const VALID_BRANCH_NAME = /^[a-zA-Z0-9_\-\/.]+$/;
@@ -55,7 +57,7 @@ export interface PreMergeCheckResult {
  * GSD runtime paths that should be excluded from smart staging.
  * These are transient/generated artifacts that should never be committed.
  * Matches the union of SKIP_PATHS + SKIP_EXACT in worktree-manager.ts
- * and the first 6 entries in gitignore.ts BASELINE_PATTERNS.
+ * and the first 7 entries in gitignore.ts BASELINE_PATTERNS.
  */
 export const RUNTIME_EXCLUSION_PATHS: readonly string[] = [
   ".gsd/activity/",
@@ -63,8 +65,89 @@ export const RUNTIME_EXCLUSION_PATHS: readonly string[] = [
   ".gsd/worktrees/",
   ".gsd/auto.lock",
   ".gsd/metrics.json",
+  ".gsd/completed-units.json",
   ".gsd/STATE.md",
 ];
+
+// ─── Integration Branch Metadata ───────────────────────────────────────────
+
+/**
+ * Path to the milestone metadata file that stores the integration branch.
+ * Format: .gsd/milestones/<MID>/<MID>-META.json
+ */
+function milestoneMetaPath(basePath: string, milestoneId: string): string {
+  return join(basePath, ".gsd", "milestones", milestoneId, `${milestoneId}-META.json`);
+}
+
+/**
+ * Read the integration branch recorded for a milestone.
+ * Returns null if no metadata file exists or the branch isn't set.
+ */
+export function readIntegrationBranch(basePath: string, milestoneId: string): string | null {
+  try {
+    const metaFile = milestoneMetaPath(basePath, milestoneId);
+    if (!existsSync(metaFile)) return null;
+    const data = JSON.parse(readFileSync(metaFile, "utf-8"));
+    const branch = data?.integrationBranch;
+    if (typeof branch === "string" && branch.trim() !== "" && VALID_BRANCH_NAME.test(branch)) {
+      return branch;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Persist the integration branch for a milestone.
+ *
+ * Called once when auto-mode starts on a milestone. Records the branch
+ * the user was on at that point, so that slice branches merge back to it
+ * instead of the repo's default branch.
+ *
+ * The file is committed immediately so it survives branch switches — the
+ * pre-switch auto-commit excludes `.gsd/` to avoid merge conflicts, and
+ * uncommitted `.gsd/` files are discarded during checkout.
+ *
+ * Skips writing if an integration branch is already recorded (idempotent
+ * across restarts) or if the current branch is already a GSD slice branch.
+ */
+export function writeIntegrationBranch(basePath: string, milestoneId: string, branch: string): void {
+  // Don't record slice branches as the integration target
+  if (SLICE_BRANCH_RE.test(branch)) return;
+  // Don't overwrite an existing integration branch
+  if (readIntegrationBranch(basePath, milestoneId) !== null) return;
+  // Validate
+  if (!VALID_BRANCH_NAME.test(branch)) return;
+
+  const metaFile = milestoneMetaPath(basePath, milestoneId);
+  mkdirSync(join(basePath, ".gsd", "milestones", milestoneId), { recursive: true });
+
+  // Merge with existing metadata if present
+  let existing: Record<string, unknown> = {};
+  try {
+    if (existsSync(metaFile)) {
+      existing = JSON.parse(readFileSync(metaFile, "utf-8"));
+    }
+  } catch { /* corrupt file — overwrite */ }
+
+  existing.integrationBranch = branch;
+  writeFileSync(metaFile, JSON.stringify(existing, null, 2) + "\n", "utf-8");
+
+  // Commit immediately — .gsd/ files are discarded during branch switches
+  // (ensureSliceBranch excludes .gsd/ from pre-switch auto-commit and runs
+  // git checkout -- .gsd/ to prevent checkout conflicts). Without this
+  // commit, the metadata would be lost on the first branch switch.
+  try {
+    runGit(basePath, ["add", "--force", metaFile]);
+    runGit(basePath, ["commit", "-F", "-"], {
+      input: `chore(${milestoneId}): record integration branch`,
+    });
+  } catch {
+    // Non-fatal — file is on disk even if commit fails (e.g. nothing to commit
+    // because the file was already tracked with identical content)
+  }
+}
 
 // ─── Git Helper ────────────────────────────────────────────────────────────
 
@@ -113,9 +196,21 @@ export class GitServiceImpl {
   readonly basePath: string;
   readonly prefs: GitPreferences;
 
+  /** Active milestone ID — used to resolve the integration branch. */
+  private _milestoneId: string | null = null;
+
   constructor(basePath: string, prefs: GitPreferences = {}) {
     this.basePath = basePath;
     this.prefs = prefs;
+  }
+
+  /**
+   * Set the active milestone ID for integration branch resolution.
+   * When set, getMainBranch() will check the milestone's metadata file
+   * for a recorded integration branch before falling back to repo defaults.
+   */
+  setMilestoneId(milestoneId: string | null): void {
+    this._milestoneId = milestoneId;
   }
 
   /** Convenience wrapper: run git in this repo's basePath. */
@@ -130,15 +225,41 @@ export class GitServiceImpl {
    */
   private smartStage(extraExclusions: readonly string[] = []): void {
     const allExclusions = [...RUNTIME_EXCLUSION_PATHS, ...extraExclusions];
-    const excludes = allExclusions.map(p => `':(exclude)${p}'`);
-    const args = ["add", "-A", "--", ".", ...excludes];
-    try {
-      this.git(args);
-    } catch {
-      console.error("GitService: smart staging failed, falling back to git add -A");
-      this.git(["add", "-A"]);
+
+    // One-time cleanup: if runtime files are already tracked in the index
+    // (from older versions where the fallback bug staged them), untrack them
+    // in a dedicated commit. This must happen as a separate commit because
+    // the git reset HEAD step below would otherwise undo the rm --cached.
+    if (!this._runtimeFilesCleanedUp) {
+      let cleaned = false;
+      for (const exclusion of RUNTIME_EXCLUSION_PATHS) {
+        const result = this.git(["rm", "--cached", "-r", "--ignore-unmatch", exclusion], { allowFailure: true });
+        if (result && result.includes("rm '")) cleaned = true;
+      }
+      if (cleaned) {
+        this.git(["commit", "-F", "-"], { input: "chore: untrack .gsd/ runtime files from git index" });
+      }
+      this._runtimeFilesCleanedUp = true;
+    }
+
+    // Stage everything, then unstage excluded paths.
+    //
+    // Previous approach used pathspec excludes (:(exclude)...) with git add -A,
+    // but that fails when .gsd/ is in .gitignore — git exits non-zero before
+    // evaluating the excludes. The catch fallback ran plain `git add -A`,
+    // staging all tracked runtime files unconditionally and defeating the
+    // exclusion list entirely.
+    //
+    // git reset HEAD silently succeeds when the path isn't staged, so no
+    // error handling is needed per-path.
+    this.git(["add", "-A"]);
+    for (const exclusion of allExclusions) {
+      this.git(["reset", "HEAD", "--", exclusion], { allowFailure: true });
     }
   }
+
+  /** Tracks whether runtime file cleanup has run this session. */
+  private _runtimeFilesCleanedUp = false;
 
   /**
    * Stage files (smart staging) and commit.
@@ -184,14 +305,33 @@ export class GitServiceImpl {
   // ─── Branch Queries ────────────────────────────────────────────────────
 
   /**
-   * Get the "main" branch for this repo.
-   * In a worktree: returns worktree/<name> (the worktree's base branch).
-   * In the main tree: origin/HEAD symbolic-ref → main/master fallback → current branch.
+   * Get the "main" (integration) branch for this repo.
+   *
+   * Resolution order:
+   * 1. Explicit `main_branch` preference (user override, highest priority)
+   * 2. Milestone integration branch from metadata file (recorded at milestone start)
+   * 3. Worktree base branch (worktree/<name>)
+   * 4. origin/HEAD symbolic-ref → main/master fallback → current branch
+   *
+   * The integration branch (step 2) is what makes feature-branch workflows
+   * work correctly: when a user starts GSD on `f-123-new-thing`, that branch
+   * is recorded as the integration target, and all slice branches merge back
+   * to it instead of the repo's default branch.
    */
   getMainBranch(): string {
     // Explicit preference takes priority (double-check validity as defense-in-depth)
     if (this.prefs.main_branch && VALID_BRANCH_NAME.test(this.prefs.main_branch)) {
       return this.prefs.main_branch;
+    }
+
+    // Check milestone integration branch — recorded when auto-mode starts
+    if (this._milestoneId) {
+      const integrationBranch = readIntegrationBranch(this.basePath, this._milestoneId);
+      if (integrationBranch) {
+        // Verify the branch still exists locally (could have been deleted)
+        const exists = this.git(["show-ref", "--verify", `refs/heads/${integrationBranch}`], { allowFailure: true });
+        if (exists) return integrationBranch;
+      }
     }
 
     const wtName = detectWorktreeName(this.basePath);
@@ -312,6 +452,12 @@ export class GitServiceImpl {
     // Exclude .gsd/ to prevent merge conflicts when both branches modify planning artifacts.
     this.autoCommit("pre-switch", current, [".gsd/"]);
 
+    // Discard uncommitted .gsd/ changes so checkout doesn't fail.
+    // These are runtime files (metrics, completed-units, STATE) that were
+    // intentionally excluded from the commit above. If they remain dirty,
+    // git checkout refuses when the target branch has different versions.
+    this.git(["checkout", "--", ".gsd/"], { allowFailure: true });
+
     this.git(["checkout", branch]);
     return created;
   }
@@ -326,6 +472,9 @@ export class GitServiceImpl {
 
     // Exclude .gsd/ to prevent merge conflicts when both branches modify planning artifacts.
     this.autoCommit("pre-switch", current, [".gsd/"]);
+
+    // Discard uncommitted .gsd/ changes so checkout doesn't fail.
+    this.git(["checkout", "--", ".gsd/"], { allowFailure: true });
 
     this.git(["checkout", mainBranch]);
   }
@@ -487,25 +636,74 @@ export class GitServiceImpl {
       commitType, milestoneId, sliceId, sliceTitle, mainBranch, branch,
     );
 
-    // Squash merge — abort cleanly on conflict so the working tree is never
-    // left in a half-merged state (see: merge-bug-fix).
-    try {
-      this.git(["merge", "--squash", branch]);
-    } catch (mergeError) {
-      // git merge --squash exits non-zero on conflict. The working tree now
-      // has conflict markers and a dirty index. Reset to restore a clean state.
-      this.git(["reset", "--hard", "HEAD"], { allowFailure: true });
-      const msg = mergeError instanceof Error ? mergeError.message : String(mergeError);
-      throw new Error(
-        `Squash-merge of "${branch}" into "${mainBranch}" failed with conflicts. ` +
-        `Working tree has been reset to a clean state. ` +
-        `Resolve manually: git checkout ${mainBranch} && git merge --squash ${branch}\n` +
-        `Original error: ${msg}`,
-      );
+    // Pull latest main before merging to avoid conflicts from remote changes
+    this.git(["pull", "--rebase", "origin", mainBranch], { allowFailure: true });
+
+    // Untrack runtime files that may have been manually committed (e.g. via `gsd queue`)
+    // to prevent merge conflicts on files that belong in .gitignore (#189)
+    for (const exclusion of RUNTIME_EXCLUSION_PATHS) {
+      this.git(["rm", "--cached", "-r", "--ignore-unmatch", exclusion], { allowFailure: true });
+    }
+    const untrackDiff = this.git(["diff", "--cached", "--stat"], { allowFailure: true });
+    if (untrackDiff && untrackDiff.trim()) {
+      this.git(["commit", "-m", "chore: untrack .gsd/ runtime files before merge"], { allowFailure: true });
     }
 
-    // Commit with rich message via stdin pipe
-    this.git(["commit", "-F", "-"], { input: message });
+    // Merge slice branch — strategy is configurable via git.merge_strategy
+    // preference. Default: "squash" (preserves existing behavior).
+    // "merge" uses --no-ff which is more resilient to conflicts from
+    // long-lived branches or frequently-changing .gsd/* artifacts.
+    const strategy = this.prefs.merge_strategy ?? "squash";
+    const mergeArgs = strategy === "merge"
+      ? ["merge", "--no-ff", "-m", message, branch]
+      : ["merge", "--squash", branch];
+
+    try {
+      this.git(mergeArgs);
+    } catch (mergeError) {
+      // Check if conflicts are limited to runtime files we can auto-resolve (#189)
+      const conflicted = this.git(["diff", "--name-only", "--diff-filter=U"], { allowFailure: true });
+      if (conflicted) {
+        const conflictedFiles = conflicted.split("\n").filter(Boolean);
+        const allRuntime = conflictedFiles.every(f =>
+          RUNTIME_EXCLUSION_PATHS.some(excl => f.startsWith(excl.replace(/\/$/, ""))),
+        );
+        if (allRuntime) {
+          // Runtime-only conflicts: take ours and remove from index
+          for (const f of conflictedFiles) {
+            this.git(["checkout", "--ours", "--", f], { allowFailure: true });
+            this.git(["rm", "--cached", "--ignore-unmatch", f], { allowFailure: true });
+          }
+          this.git(["add", "-A"], { allowFailure: true });
+          // Don't throw — let the merge proceed
+        } else {
+          // Non-runtime conflicts: reset and throw as before
+          this.git(["reset", "--hard", "HEAD"], { allowFailure: true });
+          const msg = mergeError instanceof Error ? mergeError.message : String(mergeError);
+          throw new Error(
+            `${strategy === "merge" ? "Merge" : "Squash-merge"} of "${branch}" into "${mainBranch}" failed with conflicts. ` +
+            `Working tree has been reset to a clean state. ` +
+            `Resolve manually: git checkout ${mainBranch} && git merge ${strategy === "merge" ? "--no-ff" : "--squash"} ${branch}\n` +
+            `Original error: ${msg}`,
+          );
+        }
+      } else {
+        // No conflicted files detected but merge still failed — reset and throw
+        this.git(["reset", "--hard", "HEAD"], { allowFailure: true });
+        const msg = mergeError instanceof Error ? mergeError.message : String(mergeError);
+        throw new Error(
+          `${strategy === "merge" ? "Merge" : "Squash-merge"} of "${branch}" into "${mainBranch}" failed. ` +
+          `Working tree has been reset to a clean state. ` +
+          `Resolve manually: git checkout ${mainBranch} && git merge ${strategy === "merge" ? "--no-ff" : "--squash"} ${branch}\n` +
+          `Original error: ${msg}`,
+        );
+      }
+    }
+
+    // Squash merge needs a separate commit; --no-ff merge already committed
+    if (strategy === "squash") {
+      this.git(["commit", "-F", "-"], { input: message });
+    }
 
     // Delete the merged branch
     this.git(["branch", "-D", branch]);

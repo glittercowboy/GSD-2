@@ -119,8 +119,8 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 	 */
 	const createExtensionUIContext = (): ExtensionUIContext => ({
 		select: (title, options, opts) =>
-			createDialogPromise(opts, undefined, { method: "select", title, options, timeout: opts?.timeout }, (r) =>
-				"cancelled" in r && r.cancelled ? undefined : "value" in r ? r.value : undefined,
+			createDialogPromise(opts, undefined, { method: "select", title, options, timeout: opts?.timeout, allowMultiple: opts?.allowMultiple }, (r) =>
+				"cancelled" in r && r.cancelled ? undefined : "values" in r ? r.values : "value" in r ? r.value : undefined,
 			),
 
 		confirm: (title, message, opts) =>

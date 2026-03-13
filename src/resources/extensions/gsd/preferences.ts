@@ -702,6 +702,14 @@ function validatePreferences(preferences: GSDPreferences): {
         errors.push(`git.commit_type must be one of: feat, fix, refactor, docs, test, chore, perf, ci, build, style`);
       }
     }
+    if (g.merge_strategy !== undefined) {
+      const validStrategies = new Set(["squash", "merge"]);
+      if (typeof g.merge_strategy === "string" && validStrategies.has(g.merge_strategy)) {
+        git.merge_strategy = g.merge_strategy as "squash" | "merge";
+      } else {
+        errors.push("git.merge_strategy must be one of: squash, merge");
+      }
+    }
     if (g.main_branch !== undefined) {
       if (typeof g.main_branch === "string" && g.main_branch.trim() !== "" && VALID_BRANCH_NAME.test(g.main_branch)) {
         git.main_branch = g.main_branch;

@@ -14,15 +14,16 @@ import { deriveState } from "./state.js";
 import { startAuto } from "./auto.js";
 import { readCrashLock, clearLock, formatCrashInfo } from "./crash-recovery.js";
 import {
-  gsdRoot, milestonesDir, resolveMilestoneFile,
+  gsdRoot, milestonesDir, resolveMilestoneFile, resolveMilestonePath,
   resolveSliceFile, resolveSlicePath, resolveGsdRootFile, relGsdRootFile,
   relMilestoneFile, relSliceFile, relSlicePath,
 } from "./paths.js";
 import { join } from "node:path";
-import { readFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { execSync, execFileSync } from "node:child_process";
-import { ensureGitignore, ensurePreferences } from "./gitignore.js";
+import { ensureGitignore, ensurePreferences, untrackRuntimeFiles } from "./gitignore.js";
 import { loadEffectiveGSDPreferences } from "./preferences.js";
+import { showConfirm } from "../shared/confirm-ui.js";
 
 // ─── Auto-start after discuss ─────────────────────────────────────────────────
 
@@ -34,6 +35,11 @@ let pendingAutoStart: {
   milestoneId: string; // the milestone being discussed
   step?: boolean; // preserve step mode through discuss → auto transition
 } | null = null;
+
+/** Returns the milestoneId being discussed, or null if no discussion is active */
+export function getDiscussionMilestoneId(): string | null {
+  return pendingAutoStart?.milestoneId ?? null;
+}
 
 /** Called from agent_end to check if auto-mode should start after discuss */
 export function checkAutoStartAfterDiscuss(): boolean {
@@ -81,13 +87,13 @@ function dispatchWorkflow(pi: ExtensionAPI, note: string, customType = "gsd-run"
  * Build the discuss-and-plan prompt for a new milestone.
  * Used by all three "new milestone" paths (first ever, no active, all complete).
  */
-function buildDiscussPrompt(nextId: string, preamble: string, basePath: string): string {
-  const milestoneDirAbs = join(basePath, ".gsd", "milestones", nextId);
+function buildDiscussPrompt(nextId: string, preamble: string, _basePath: string): string {
+  const milestoneRel = `.gsd/milestones/${nextId}`;
   return loadPrompt("discuss", {
     milestoneId: nextId,
     preamble,
-    contextAbsPath: join(milestoneDirAbs, `${nextId}-CONTEXT.md`),
-    roadmapAbsPath: join(milestoneDirAbs, `${nextId}-ROADMAP.md`),
+    contextPath: `${milestoneRel}/${nextId}-CONTEXT.md`,
+    roadmapPath: `${milestoneRel}/${nextId}-ROADMAP.md`,
   });
 }
 
@@ -104,6 +110,19 @@ function findMilestoneIds(basePath: string): string[] {
   } catch {
     return [];
   }
+}
+
+/** Return the highest numeric suffix among milestone IDs (0 when the list is empty or has no numeric IDs). */
+export function maxMilestoneNum(milestoneIds: string[]): number {
+  return milestoneIds.reduce((max, id) => {
+    const num = parseInt(id.replace(/^M/, ""), 10);
+    return num > max ? num : max;
+  }, 0);
+}
+
+/** Derive the next milestone ID from existing IDs using max-based approach to avoid collisions after deletions. */
+export function nextMilestoneId(milestoneIds: string[]): string {
+  return `M${String(maxMilestoneNum(milestoneIds) + 1).padStart(3, "0")}`;
 }
 
 // ─── Queue ─────────────────────────────────────────────────────────────────────
@@ -147,12 +166,9 @@ export async function showQueue(
   const existingContext = await buildExistingMilestonesContext(basePath, milestoneIds, state);
 
   // ── Determine next milestone ID ─────────────────────────────────────
-  const maxNum = milestoneIds.reduce((max, id) => {
-    const num = parseInt(id.replace(/^M/, ""), 10);
-    return num > max ? num : max;
-  }, 0);
-  const nextId = `M${String(maxNum + 1).padStart(3, "0")}`;
-  const nextIdPlus1 = `M${String(maxNum + 2).padStart(3, "0")}`;
+  const max = maxMilestoneNum(milestoneIds);
+  const nextId = `M${String(max + 1).padStart(3, "0")}`;
+  const nextIdPlus1 = `M${String(max + 2).padStart(3, "0")}`;
 
   // ── Build preamble ──────────────────────────────────────────────────
   const activePart = state.activeMilestone
@@ -339,16 +355,16 @@ async function buildDiscussSlicePrompt(
     ? `## Inlined Context (preloaded — do not re-read these files)\n\n${inlined.join("\n\n---\n\n")}`
     : `## Inlined Context\n\n_(no context files found yet — go in blind and ask broad questions)_`;
 
-  const sliceDirAbsPath = join(base, ".gsd", "milestones", mid, "slices", sid);
-  const contextAbsPath = join(sliceDirAbsPath, `${sid}-CONTEXT.md`);
+  const sliceDirPath = `.gsd/milestones/${mid}/slices/${sid}`;
+  const sliceContextPath = `${sliceDirPath}/${sid}-CONTEXT.md`;
 
   return loadPrompt("guided-discuss-slice", {
     milestoneId: mid,
     sliceId: sid,
     sliceTitle: sTitle,
     inlinedContext,
-    sliceDirAbsPath,
-    contextAbsPath,
+    sliceDirPath,
+    contextPath: sliceContextPath,
     projectRoot: base,
   });
 }
@@ -451,6 +467,7 @@ export async function showSmartEntry(
 
   // ── Ensure .gitignore has baseline patterns ──────────────────────────
   ensureGitignore(basePath);
+  untrackRuntimeFiles(basePath);
 
   // ── No GSD project OR no milestone → Create first/next milestone ────
   if (!existsSync(join(basePath, ".gsd"))) {
@@ -501,7 +518,7 @@ export async function showSmartEntry(
     }
 
     const milestoneIds = findMilestoneIds(basePath);
-    const nextId = `M${String(milestoneIds.length + 1).padStart(3, "0")}`;
+    const nextId = nextMilestoneId(milestoneIds);
     const isFirst = milestoneIds.length === 0;
 
     if (isFirst) {
@@ -563,7 +580,7 @@ export async function showSmartEntry(
 
     if (choice === "new_milestone") {
       const milestoneIds = findMilestoneIds(basePath);
-      const nextId = `M${String(milestoneIds.length + 1).padStart(3, "0")}`;
+      const nextId = nextMilestoneId(milestoneIds);
 
       pendingAutoStart = { ctx, pi, basePath, milestoneId: nextId, step: stepMode };
       dispatchWorkflow(pi, buildDiscussPrompt(nextId,
@@ -601,6 +618,16 @@ export async function showSmartEntry(
           label: "Discuss first",
           description: "Capture decisions on gray areas before planning.",
         }] : []),
+        {
+          id: "skip_milestone",
+          label: "Skip — create new milestone",
+          description: "Leave this milestone on disk and start a fresh one.",
+        },
+        {
+          id: "discard_milestone",
+          label: "Discard this milestone",
+          description: "Delete the milestone directory and start over.",
+        },
       ];
 
       const choice = await showNextAction(ctx as any, {
@@ -619,6 +646,27 @@ export async function showSmartEntry(
         dispatchWorkflow(pi, loadPrompt("guided-discuss-milestone", {
           milestoneId, milestoneTitle,
         }));
+      } else if (choice === "skip_milestone") {
+        const milestoneIds = findMilestoneIds(basePath);
+        const nextId = nextMilestoneId(milestoneIds);
+        pendingAutoStart = { ctx, pi, basePath, milestoneId: nextId, step: stepMode };
+        dispatchWorkflow(pi, buildDiscussPrompt(nextId,
+          `New milestone ${nextId}.`,
+          basePath
+        ));
+      } else if (choice === "discard_milestone") {
+        const mDir = resolveMilestonePath(basePath, milestoneId);
+        if (!mDir) return;
+        const confirmed = await showConfirm(ctx as any, {
+          title: "Discard milestone?",
+          message: `This will permanently delete ${milestoneId} and all its contents.`,
+          confirmLabel: "Discard",
+          declineLabel: "Cancel",
+        });
+        if (confirmed) {
+          rmSync(mDir, { recursive: true, force: true });
+          return showSmartEntry(ctx, pi, basePath, options);
+        }
       }
     } else {
       // Roadmap exists — either blocked or ready for auto

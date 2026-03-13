@@ -81,7 +81,7 @@ export function registerSearchProviderCommand(pi: ExtensionAPI): void {
           return
         }
 
-        chosen = parseSelectChoice(result)
+        chosen = parseSelectChoice(Array.isArray(result) ? result[0] : result)
       }
 
       setSearchProviderPreference(chosen)

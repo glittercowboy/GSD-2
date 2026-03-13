@@ -210,7 +210,7 @@ export type RpcResponse =
 
 /** Emitted when an extension needs user input */
 export type RpcExtensionUIRequest =
-	| { type: "extension_ui_request"; id: string; method: "select"; title: string; options: string[]; timeout?: number }
+	| { type: "extension_ui_request"; id: string; method: "select"; title: string; options: string[]; timeout?: number; allowMultiple?: boolean }
 	| { type: "extension_ui_request"; id: string; method: "confirm"; title: string; message: string; timeout?: number }
 	| {
 			type: "extension_ui_request";
@@ -253,6 +253,7 @@ export type RpcExtensionUIRequest =
 /** Response to an extension UI request */
 export type RpcExtensionUIResponse =
 	| { type: "extension_ui_response"; id: string; value: string }
+	| { type: "extension_ui_response"; id: string; values: string[] }
 	| { type: "extension_ui_response"; id: string; confirmed: boolean }
 	| { type: "extension_ui_response"; id: string; cancelled: true };
 

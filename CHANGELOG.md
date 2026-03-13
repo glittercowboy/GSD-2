@@ -6,6 +6,78 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.8.3] - 2026-03-13
+
+### Fixed
+- `ask_user_questions` handles undefined `custom()` result in RPC mode
+- Provider-aware model resolution for per-phase preferences (respects `provider` field instead of parsing model name prefixes)
+- Execute-task artifact verification aligned with `deriveState` — adds self-repair for missing artifacts
+- Research phase infinite loop broken; state synced on stop
+- Auto-resolve merge conflicts on `.gsd/` runtime files
+- Auto-switch model after `/login` and `/logout` to prevent API key errors
+- Anthropic provider detection uses `provider` field instead of model name prefix matching
+
+## [2.8.2] - 2026-03-13
+
+### Fixed
+- Path operations use `node:path` stdlib instead of hardcoded forward slashes, fixing cross-platform compatibility
+- Prompts use relative paths to prevent Windows drive letter mangling
+- Runtime files already in the git index are untracked to prevent merge conflicts
+- HTTP_PROXY and HTTPS_PROXY environment variables respected for all outbound requests
+- Windows NUL redirects sanitized to /dev/null in Git Bash environments
+
+### Changed
+- `.claude/` and `.gsd/` directories untracked from repo, `*.tgz` gitignored
+
+## [2.8.1] - 2026-03-13
+
+### Added
+- Discussion depth verification and context write-gate for richer milestone discussions
+- TTSR + blob/artifact storage (ported from oh-my-pi)
+- Skip/discard escape hatches in no-roadmap wizard
+- Configurable `merge_strategy` preference for slice completion
+
+### Fixed
+- `fsevents` bumped to ~2.3.3 for Node 25 compatibility; added as optional dep for Linux installs
+- Observability warnings injected into agent prompt for enforcement
+- Auto-detect headless environment for Playwright browser launch
+- UAT artifact verified before marking complete-slice done
+- Prior slices must complete on main before next slice dispatches
+- smartStage fallback bypasses runtime exclusions when `.gsd/` is gitignored
+- `/exit` uses graceful shutdown instead of hard kill
+
+## [2.8.0] - 2026-03-13
+
+### Added
+- Browser tools: `browser_analyze_form` and `browser_fill_form` — form field inventory and intelligent filling by label/name/placeholder
+- Browser tools: `browser_find_best` — scored element candidates for semantic intents
+- Browser tools: `browser_act` — execute common browser micro-tasks in one call
+- Browser tools: 108 unit and integration tests covering all new components
+
+### Changed
+- Browser tools: decomposed 5000-line monolithic `index.ts` into focused modules (state, capture, settle, lifecycle, refs, utils) with 11 categorized tool files
+- Browser tools: consolidated state capture reduces evaluate round-trips per action
+- Browser tools: zero-mutation settle short-circuit for faster page interaction
+- Browser tools: conditional body text capture — low-signal tools skip it for smaller token payloads
+- Browser tools: screenshot resizing uses `sharp` instead of canvas evaluate calls
+- Browser tools: screenshots opt-in on navigate (no longer sent by default)
+
+## [2.7.1] - 2026-03-13
+
+### Added
+- Model fallback support for auto-mode phases — if the configured model fails, GSD tries alternate models before stopping
+- `/kill` command for immediate process termination
+
+### Fixed
+- `npm install -g gsd-pi` now works — workspace packages bundled in npm tarball via `bundleDependencies`
+- External PI ecosystem packages (pi-rtk, pi-context, etc.) can now resolve `@mariozechner/*` imports through jiti aliases
+- Missing `export-html` vendor files (marked.min.js, highlight.min.js) restored
+- Skipped API keys now persist so the setup wizard doesn't repeat on every launch
+- Provider config and extension loading reused correctly
+
+### Changed
+- `/exit` uses graceful shutdown (saves session state); `/kill` replaces the old immediate-exit behavior
+
 ## [2.7.0] - 2026-03-12
 
 ### Changed
@@ -263,7 +335,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 - License updated to MIT
 
-[Unreleased]: https://github.com/gsd-build/gsd-2/compare/v2.7.0...HEAD
+[Unreleased]: https://github.com/gsd-build/gsd-2/compare/v2.8.3...HEAD
+[2.8.3]: https://github.com/gsd-build/gsd-2/compare/v2.8.2...v2.8.3
+[2.8.2]: https://github.com/gsd-build/gsd-2/compare/v2.8.1...v2.8.2
+[2.8.1]: https://github.com/gsd-build/gsd-2/compare/v2.8.0...v2.8.1
+[2.8.0]: https://github.com/gsd-build/gsd-2/compare/v2.7.1...v2.8.0
+[2.7.1]: https://github.com/gsd-build/gsd-2/compare/v2.7.0...v2.7.1
 [2.7.0]: https://github.com/gsd-build/gsd-2/compare/v2.6.0...v2.7.0
 [2.6.0]: https://github.com/gsd-build/gsd-2/compare/v2.5.1...v2.6.0
 [2.5.1]: https://github.com/gsd-build/gsd-2/compare/v2.5.0...v2.5.1
