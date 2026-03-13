@@ -144,6 +144,46 @@ export default function AskUserQuestions(pi: ExtensionAPI) {
 			// Delegate to shared interview UI
 			const result = await showInterviewRound(params.questions, {}, ctx);
 
+			// RPC mode fallback: custom() returns undefined, so showInterviewRound
+			// may return undefined. Fall back to sequential ctx.ui.select() calls.
+			if (!result) {
+				const answers: Record<string, { answers: string[] }> = {};
+				for (const q of params.questions) {
+					const options = q.options.map((o) => o.label);
+					if (!q.allowMultiple) {
+						options.push(OTHER_OPTION_LABEL);
+					}
+					const selected = await ctx.ui.select(
+						`${q.header}: ${q.question}`,
+						options,
+						{ signal, ...(q.allowMultiple ? { allowMultiple: true } : {}) },
+					);
+					if (selected === undefined) {
+						return errorResult("ask_user_questions was cancelled", params.questions);
+					}
+					answers[q.id] = {
+						answers: Array.isArray(selected) ? selected : [selected],
+					};
+				}
+				const roundResult: RoundResult = {
+					endInterview: false,
+					answers: Object.fromEntries(
+						Object.entries(answers).map(([id, a]) => [
+							id,
+							{ selected: a.answers.length === 1 ? a.answers[0] : a.answers, notes: "" },
+						]),
+					),
+				};
+				return {
+					content: [{ type: "text" as const, text: JSON.stringify({ answers }) }],
+					details: {
+						questions: params.questions,
+						response: roundResult,
+						cancelled: false,
+					} satisfies LocalResultDetails,
+				};
+			}
+
 			// Check if cancelled (empty answers = user exited)
 			const hasAnswers = Object.keys(result.answers).length > 0;
 			if (!hasAnswers) {
