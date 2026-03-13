@@ -10,9 +10,11 @@
  *
  * When only one session or no worktrees: renders standard single milestone view.
  */
+import { useState } from "react";
 import { PanelWrapper } from "@/components/layout/PanelWrapper";
 import { MilestoneHeader } from "@/components/milestone/MilestoneHeader";
 import { SliceAccordion } from "@/components/milestone/SliceAccordion";
+import { InlineReadPanel } from "@/components/milestone/InlineReadPanel";
 import type { GSD2State, SliceAction } from "@/server/types";
 
 export interface WorktreeSessionInfo {
@@ -41,7 +43,14 @@ function MilestoneContent({ gsd2State, onAction }: { gsd2State: GSD2State | null
   const activeSliceId = gsd2State?.projectState.active_slice ?? "";
   const isAutoMode = gsd2State?.projectState.auto_mode ?? false;
 
-  function handleSliceAction(action: SliceAction) {
+  const [panelState, setPanelState] = useState<{
+    isOpen: boolean;
+    title: string;
+    content: string;
+    isLoading: boolean;
+  }>({ isOpen: false, title: '', content: '', isLoading: false });
+
+  async function handleSliceAction(action: SliceAction) {
     switch (action.type) {
       case 'start_slice':
         // "/gsd auto" starts the slice gsd workflow
@@ -58,13 +67,34 @@ function MilestoneContent({ gsd2State, onAction }: { gsd2State: GSD2State | null
         // Git squash merge on active slice branch
         onAction?.({ type: 'send_message', message: `/gsd merge ${gsd2State?.projectState.active_slice}` });
         break;
-      case 'view_plan':
-      case 'view_task':
-      case 'view_diff':
-      case 'view_uat_results':
-        // TODO: inline read panel — deferred to Phase 14 gap if needed
-        console.log('[MilestoneView] view action deferred:', action);
+      case 'view_plan': {
+        setPanelState({ isOpen: true, title: `${action.sliceId} Plan`, content: '', isLoading: true });
+        const res = await fetch(`/api/gsd-file?sliceId=${action.sliceId}&type=plan`);
+        const data = await res.json() as { content: string };
+        setPanelState(prev => ({ ...prev, content: data.content, isLoading: false }));
         break;
+      }
+      case 'view_task': {
+        setPanelState({ isOpen: true, title: 'Current Task', content: '', isLoading: true });
+        const res = await fetch(`/api/gsd-file?sliceId=${action.sliceId}&type=task`);
+        const data = await res.json() as { content: string };
+        setPanelState(prev => ({ ...prev, content: data.content, isLoading: false }));
+        break;
+      }
+      case 'view_diff': {
+        setPanelState({ isOpen: true, title: 'Slice Diff', content: '', isLoading: true });
+        const res = await fetch(`/api/gsd-file?sliceId=${action.sliceId}&type=diff`);
+        const data = await res.json() as { content: string };
+        setPanelState(prev => ({ ...prev, content: data.content, isLoading: false }));
+        break;
+      }
+      case 'view_uat_results': {
+        setPanelState({ isOpen: true, title: 'UAT Results', content: '', isLoading: true });
+        const res = await fetch(`/api/gsd-file?sliceId=${action.sliceId}&type=uat_results`);
+        const data = await res.json() as { content: string };
+        setPanelState(prev => ({ ...prev, content: data.content, isLoading: false }));
+        break;
+      }
     }
   }
 
@@ -99,6 +129,13 @@ function MilestoneContent({ gsd2State, onAction }: { gsd2State: GSD2State | null
         gsd2State={gsd2State}
         onAction={handleSliceAction}
         onUatItemToggle={handleUatItemToggle}
+      />
+      <InlineReadPanel
+        isOpen={panelState.isOpen}
+        title={panelState.title}
+        content={panelState.content}
+        isLoading={panelState.isLoading}
+        onClose={() => setPanelState(prev => ({ ...prev, isOpen: false }))}
       />
     </div>
   );
