@@ -82,21 +82,21 @@ describe("native grep: search()", () => {
     assert.equal(result.matches[0].contextAfter[0].line, "line4");
   });
 
-  test("returns error for invalid regex", () => {
+  test("throws on invalid regex", () => {
     const content = Buffer.from("hello");
-    const result = native.search(content, { pattern: "[invalid" });
-
-    assert.ok(result.error);
-    assert.equal(result.matchCount, 0);
+    assert.throws(() => {
+      native.search(content, { pattern: "[invalid" });
+    });
   });
 });
 
 describe("native grep: grep()", () => {
   let tmpDir;
 
-  test("searches files on disk", () => {
-    // Create temp files
+  test("searches files on disk", (t) => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "gsd-grep-test-"));
+    t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
     fs.writeFileSync(path.join(tmpDir, "file1.txt"), "hello world\nfoo bar\n");
     fs.writeFileSync(path.join(tmpDir, "file2.txt"), "hello rust\nbaz qux\n");
     fs.writeFileSync(path.join(tmpDir, "file3.log"), "no match here\n");
@@ -113,13 +113,12 @@ describe("native grep: grep()", () => {
     // Matches should be sorted by file path
     const paths = result.matches.map((m) => m.path);
     assert.deepEqual(paths, [...paths].sort());
-
-    // Cleanup
-    fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  test("respects glob filter", () => {
+  test("respects glob filter", (t) => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "gsd-grep-test-"));
+    t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
     fs.writeFileSync(path.join(tmpDir, "code.ts"), "hello typescript\n");
     fs.writeFileSync(path.join(tmpDir, "code.js"), "hello javascript\n");
     fs.writeFileSync(path.join(tmpDir, "readme.md"), "hello markdown\n");
@@ -132,12 +131,12 @@ describe("native grep: grep()", () => {
 
     assert.equal(result.totalMatches, 1);
     assert.equal(result.matches[0].line, "hello typescript");
-
-    fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  test("respects maxCount", () => {
+  test("respects maxCount", (t) => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "gsd-grep-test-"));
+    t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
     for (let i = 0; i < 10; i++) {
       fs.writeFileSync(path.join(tmpDir, `file${i}.txt`), "match_me\n");
     }
@@ -150,8 +149,6 @@ describe("native grep: grep()", () => {
 
     assert.ok(result.matches.length <= 3);
     assert.equal(result.limitReached, true);
-
-    fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
   test("errors on non-existent path", () => {

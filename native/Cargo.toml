@@ -7,7 +7,7 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 authors = ["GSD Contributors"]
-repository = "https://github.com/glittercowboy/gsd-pi"
+repository = "https://github.com/gsd-build/gsd-2"
 
 [profile.release]
 opt-level = 3

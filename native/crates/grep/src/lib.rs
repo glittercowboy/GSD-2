@@ -348,7 +348,6 @@ pub fn search_path(options: &GrepOptions) -> Result<FileSearchResult, String> {
         .git_exclude(options.gitignore);
 
     if let Some(ref glob_pattern) = options.glob {
-        walk_builder.add_custom_ignore_filename("");
         let mut overrides = ignore::overrides::OverrideBuilder::new(&search_root);
         overrides
             .add(glob_pattern)

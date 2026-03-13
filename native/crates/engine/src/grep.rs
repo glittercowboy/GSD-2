@@ -33,7 +33,6 @@ pub struct NapiSearchResult {
     pub match_count: u32,
     #[napi(js_name = "limitReached")]
     pub limit_reached: bool,
-    pub error: Option<String>,
 }
 
 #[napi(object)]
@@ -139,7 +138,7 @@ fn convert_file_match(m: gsd_grep::FileMatch) -> NapiGrepMatch {
 /// Accepts a Buffer/Uint8Array or a string. Returns matches with line numbers
 /// and optional context lines.
 #[napi(js_name = "search")]
-pub fn search(content: Buffer, options: NapiSearchOptions) -> NapiSearchResult {
+pub fn search(content: Buffer, options: NapiSearchOptions) -> Result<NapiSearchResult> {
     let opts = gsd_grep::SearchOptions {
         pattern: options.pattern,
         ignore_case: options.ignore_case.unwrap_or(false),
@@ -151,18 +150,12 @@ pub fn search(content: Buffer, options: NapiSearchOptions) -> NapiSearchResult {
     };
 
     match gsd_grep::search_content(content.as_ref(), &opts) {
-        Ok(result) => NapiSearchResult {
+        Ok(result) => Ok(NapiSearchResult {
             matches: result.matches.into_iter().map(convert_search_match).collect(),
             match_count: clamp_u32(result.match_count),
             limit_reached: result.limit_reached,
-            error: None,
-        },
-        Err(err) => NapiSearchResult {
-            matches: Vec::new(),
-            match_count: 0,
-            limit_reached: false,
-            error: Some(err),
-        },
+        }),
+        Err(err) => Err(Error::from_reason(err)),
     }
 }
 

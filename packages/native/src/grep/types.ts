@@ -28,8 +28,6 @@ export interface SearchResult {
   matchCount: number;
   /** Whether the limit was reached. */
   limitReached: boolean;
-  /** Error message, if any. */
-  error?: string;
 }
 
 /** Options for in-memory content search. */
