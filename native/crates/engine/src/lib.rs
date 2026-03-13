@@ -23,3 +23,4 @@ mod text;
 mod ttsr;
 mod gsd_parser;
 mod image;
+pub mod git;

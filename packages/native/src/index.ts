@@ -94,6 +94,17 @@ export type { NativeImageHandle } from "./image/index.js";
 export { ttsrCompileRules, ttsrCheckBuffer, ttsrFreeRules } from "./ttsr/index.js";
 export type { TtsrHandle, TtsrRuleInput } from "./ttsr/index.js";
 export {
+  gitStatus,
+  gitDiff,
+  gitLog,
+  gitCurrentBranch,
+  gitIsClean,
+  gitStageFiles,
+  gitCommit,
+} from "./git/index.js";
+export type { GitStatusResult, GitLogEntry } from "./git/index.js";
+
+export {
   parseFrontmatter,
   extractSection as nativeExtractSection,
   extractAllSections,

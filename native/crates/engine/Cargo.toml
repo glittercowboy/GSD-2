@@ -24,6 +24,7 @@ image = { version = "0.25", default-features = false, features = [
   "gif",
   "webp",
 ] }
+git2 = { version = "0.19", features = ["vendored"] }
 napi = { version = "2", features = ["napi8"] }
 napi-derive = "2"
 regex = "1"

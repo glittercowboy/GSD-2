@@ -129,4 +129,11 @@ export const native = loadNative() as {
   extractAllSections: (content: string, level?: number) => string;
   batchParseGsdFiles: (directory: string) => unknown;
   parseRoadmapFile: (content: string) => unknown;
+  gitStatus: (repoPath: string) => unknown;
+  gitDiff: (repoPath: string, staged?: boolean) => string;
+  gitLog: (repoPath: string, maxCount?: number) => unknown;
+  gitCurrentBranch: (repoPath: string) => string;
+  gitIsClean: (repoPath: string) => boolean;
+  gitStageFiles: (repoPath: string, paths: string[]) => void;
+  gitCommit: (repoPath: string, message: string, authorName: string, authorEmail: string) => string;
 };
