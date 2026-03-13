@@ -1,9 +1,10 @@
 mod bun_manager;
 mod commands;
 mod dep_check;
+mod oauth;
 
 use bun_manager::BunState;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tauri_plugin_window_state::{Builder as WindowStateBuilder, StateFlags};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -20,13 +21,16 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
-        .register_uri_scheme_protocol("gsd", |_app, request| {
-            // Stub: full OAuth callback handling implemented in a later phase.
-            // Tauri requires gsd:// to be registered here (not in tauri.conf.json)
-            // so the OS registers the protocol on install.
+        .register_uri_scheme_protocol("gsd", |app, request| {
+            let url = request.uri().to_string();
+            if url.starts_with("gsd://oauth/callback") {
+                let params = parse_oauth_params(&url);
+                let _ = app.emit("oauth-callback", params);
+            }
             tauri::http::Response::builder()
                 .status(200)
-                .body(Vec::new())
+                .header("Content-Type", "text/html")
+                .body(b"<html><body>Authentication complete. Return to GSD Mission Control.</body></html>".to_vec())
                 .unwrap()
         })
         .setup(|app| {
@@ -61,7 +65,59 @@ pub fn run() {
             commands::get_platform,
             commands::restart_bun,
             commands::retry_dep_check,
+            commands::get_active_provider,
+            commands::start_oauth,
+            commands::complete_oauth,
+            commands::save_api_key,
+            commands::get_provider_status,
+            commands::change_provider,
+            commands::check_and_refresh_token,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// Parse `code` and `state` query parameters from a gsd://oauth/callback URL.
+/// Returns a serde_json::Value with { "code": "...", "state": "..." }.
+fn parse_oauth_params(url: &str) -> serde_json::Value {
+    let query = url
+        .find('?')
+        .map(|i| &url[i + 1..])
+        .unwrap_or("");
+
+    let mut code = String::new();
+    let mut state = String::new();
+
+    for pair in query.split('&') {
+        if let Some((k, v)) = pair.split_once('=') {
+            match k {
+                "code" => code = url_decode(v),
+                "state" => state = url_decode(v),
+                _ => {}
+            }
+        }
+    }
+
+    serde_json::json!({ "code": code, "state": state })
+}
+
+/// Minimal percent-decoding for OAuth callback query params.
+fn url_decode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '%' {
+            let h1 = chars.next().unwrap_or('0');
+            let h2 = chars.next().unwrap_or('0');
+            let hex = format!("{h1}{h2}");
+            if let Ok(b) = u8::from_str_radix(&hex, 16) {
+                out.push(b as char);
+            }
+        } else if c == '+' {
+            out.push(' ');
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
