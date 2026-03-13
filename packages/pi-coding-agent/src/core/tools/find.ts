@@ -1,10 +1,8 @@
 import type { AgentTool } from "@gsd/pi-agent-core";
+import { glob as nativeGlob } from "@gsd/native/glob";
 import { type Static, Type } from "@sinclair/typebox";
-import { spawnSync } from "child_process";
 import { existsSync } from "fs";
-import { globSync } from "glob";
 import path from "path";
-import { ensureTool } from "../../utils/tools-manager.js";
 import { resolveToCwd } from "./path-utils.js";
 import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult, truncateHead } from "./truncate.js";
 
@@ -39,13 +37,13 @@ export interface FindOperations {
 const defaultFindOperations: FindOperations = {
 	exists: existsSync,
 	glob: (_pattern, _searchCwd, _options) => {
-		// This is a placeholder - actual fd execution happens in execute
+		// Placeholder — actual native glob execution happens in execute
 		return [];
 	},
 };
 
 export interface FindToolOptions {
-	/** Custom operations for find. Default: local filesystem + fd */
+	/** Custom operations for find. Default: local filesystem + native glob */
 	operations?: FindOperations;
 }
 
@@ -136,72 +134,18 @@ export function createFindTool(cwd: string, options?: FindToolOptions): AgentToo
 							return;
 						}
 
-						// Default: use fd
-						const fdPath = await ensureTool("fd", true);
-						if (!fdPath) {
-							reject(new Error("fd is not available and could not be downloaded"));
-							return;
-						}
-
-						// Build fd arguments
-						const args: string[] = [
-							"--glob",
-							"--color=never",
-							"--hidden",
-							"--max-results",
-							String(effectiveLimit),
-						];
-
-						// Include .gitignore files
-						const gitignoreFiles = new Set<string>();
-						const rootGitignore = path.join(searchPath, ".gitignore");
-						if (existsSync(rootGitignore)) {
-							gitignoreFiles.add(rootGitignore);
-						}
-
-						try {
-							const nestedGitignores = globSync("**/.gitignore", {
-								cwd: searchPath,
-								dot: true,
-								absolute: true,
-								ignore: ["**/node_modules/**", "**/.git/**"],
-							});
-							for (const file of nestedGitignores) {
-								gitignoreFiles.add(file);
-							}
-						} catch {
-							// Ignore glob errors
-						}
-
-						for (const gitignorePath of gitignoreFiles) {
-							args.push("--ignore-file", gitignorePath);
-						}
-
-						args.push(pattern, searchPath);
-
-						const result = spawnSync(fdPath, args, {
-							encoding: "utf-8",
-							maxBuffer: 10 * 1024 * 1024,
+						// Default: use native Rust glob
+						const globResult = await nativeGlob({
+							pattern,
+							path: searchPath,
+							hidden: true,
+							gitignore: true,
+							maxResults: effectiveLimit,
 						});
 
 						signal?.removeEventListener("abort", onAbort);
 
-						if (result.error) {
-							reject(new Error(`Failed to run fd: ${result.error.message}`));
-							return;
-						}
-
-						const output = result.stdout?.trim() || "";
-
-						if (result.status !== 0) {
-							const errorMsg = result.stderr?.trim() || `fd exited with code ${result.status}`;
-							if (!output) {
-								reject(new Error(errorMsg));
-								return;
-							}
-						}
-
-						if (!output) {
+						if (globResult.matches.length === 0) {
 							resolve({
 								content: [{ type: "text", text: "No files found matching pattern" }],
 								details: undefined,
@@ -209,27 +153,8 @@ export function createFindTool(cwd: string, options?: FindToolOptions): AgentToo
 							return;
 						}
 
-						const lines = output.split("\n");
-						const relativized: string[] = [];
-
-						for (const rawLine of lines) {
-							const line = rawLine.replace(/\r$/, "").trim();
-							if (!line) continue;
-
-							const hadTrailingSlash = line.endsWith("/") || line.endsWith("\\");
-							let relativePath = line;
-							if (line.startsWith(searchPath)) {
-								relativePath = line.slice(searchPath.length + 1);
-							} else {
-								relativePath = path.relative(searchPath, line);
-							}
-
-							if (hadTrailingSlash && !relativePath.endsWith("/")) {
-								relativePath += "/";
-							}
-
-							relativized.push(relativePath);
-						}
+						// Native glob returns paths relative to the search root
+						const relativized = globResult.matches.map((m: { path: string }) => m.path);
 
 						const resultLimitReached = relativized.length >= effectiveLimit;
 						const rawOutput = relativized.join("\n");
