@@ -876,6 +876,73 @@ async function waitForReady(bg: BgProcess, timeout: number, signal?: AbortSignal
 	return { ready: false, detail: `Timed out after ${timeout}ms waiting for ready signal` };
 }
 
+// ── Query Shell Environment ────────────────────────────────────────────────
+
+async function queryShellEnv(
+	bg: BgProcess,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<{ cwd: string; env: Record<string, string>; shell: string } | null> {
+	const sentinel = `__GSD_ENV_${randomUUID().slice(0, 8)}__`;
+	const startIndex = bg.output.length;
+
+	const cmd = [
+		`echo "${sentinel}_START"`,
+		`echo "CWD=$(pwd)"`,
+		`echo "SHELL=$SHELL"`,
+		`echo "PATH=$PATH"`,
+		`echo "VIRTUAL_ENV=$VIRTUAL_ENV"`,
+		`echo "NODE_ENV=$NODE_ENV"`,
+		`echo "HOME=$HOME"`,
+		`echo "USER=$USER"`,
+		`echo "NVM_DIR=$NVM_DIR"`,
+		`echo "GOPATH=$GOPATH"`,
+		`echo "CARGO_HOME=$CARGO_HOME"`,
+		`echo "PYTHONPATH=$PYTHONPATH"`,
+		`echo "${sentinel}_END"`,
+	].join(" && ");
+
+	bg.proc.stdin?.write(cmd + "\n");
+
+	const start = Date.now();
+	while (Date.now() - start < timeout) {
+		if (signal?.aborted) return null;
+		if (!bg.alive) return null;
+
+		const newEntries = bg.output.slice(startIndex);
+		const endIdx = newEntries.findIndex(e => e.line.includes(`${sentinel}_END`));
+		if (endIdx >= 0) {
+			const startIdx = newEntries.findIndex(e => e.line.includes(`${sentinel}_START`));
+			if (startIdx >= 0) {
+				const envLines = newEntries.slice(startIdx + 1, endIdx);
+				const env: Record<string, string> = {};
+				let cwd = "";
+				let shell = "";
+
+				for (const entry of envLines) {
+					const match = entry.line.match(/^([A-Z_]+)=(.*)$/);
+					if (match) {
+						const [, key, value] = match;
+						if (key === "CWD") {
+							cwd = value;
+						} else if (key === "SHELL") {
+							shell = value;
+						} else if (value) {
+							env[key] = value;
+						}
+					}
+				}
+
+				return { cwd, env, shell };
+			}
+		}
+
+		await new Promise(r => setTimeout(r, 100));
+	}
+
+	return null;
+}
+
 // ── Send and Wait ──────────────────────────────────────────────────────────
 
 async function sendAndWait(
@@ -1175,6 +1242,7 @@ export default function (pi: ExtensionAPI) {
 			"Actions: start (launch with auto-classification & readiness detection), digest (structured summary ~30 tokens vs ~2000 raw), " +
 			"output (raw lines with incremental delivery), wait_for_ready (block until process signals readiness), " +
 			"send (write stdin), send_and_wait (expect-style: send + wait for output pattern), " +
+			"env (query shell cwd and environment variables), " +
 			"signal (send OS signal), list (all processes with status), kill (terminate), restart (kill + relaunch), " +
 			"group_status (health of a process group), highlights (significant output lines only).",
 
@@ -1188,6 +1256,7 @@ export default function (pi: ExtensionAPI) {
 			"Set type:'server' and ready_port:3000 for dev servers so readiness detection is automatic.",
 			"Set group:'my-stack' on related processes to manage them together with 'group_status'.",
 			"Use 'send_and_wait' for interactive CLIs: send input and wait for expected output pattern.",
+			"Use 'env' to check the current working directory and active environment variables of a shell session — useful after cd, source, or export commands.",
 			"Use 'restart' to kill and relaunch with the same config — preserves restart count.",
 			"Background processes are auto-classified (server/build/test/watcher) based on the command.",
 			"Process crashes and errors are automatically surfaced as alerts at the start of your next turn — you don't need to poll.",
@@ -1202,6 +1271,7 @@ export default function (pi: ExtensionAPI) {
 				"wait_for_ready",
 				"send",
 				"send_and_wait",
+				"env",
 				"signal",
 				"list",
 				"kill",
@@ -1560,6 +1630,59 @@ export default function (pi: ExtensionAPI) {
 					return {
 						content: [{ type: "text" as const, text }],
 						details: { action: "send_and_wait", process: getInfo(bg), matched: result.matched },
+					};
+				}
+
+				// ── env ───────────────────────────────────────────
+				case "env": {
+					if (!params.id) {
+						return {
+							content: [{ type: "text" as const, text: "Error: 'id' is required for env" }],
+							isError: true, details: undefined as unknown,
+						};
+					}
+
+					const bg = processes.get(params.id);
+					if (!bg) {
+						return {
+							content: [{ type: "text" as const, text: `Error: No process found with id '${params.id}'` }],
+							isError: true, details: undefined as unknown,
+						};
+					}
+
+					if (!bg.alive) {
+						return {
+							content: [{ type: "text" as const, text: `Error: Process ${params.id} has already exited` }],
+							isError: true, details: undefined as unknown,
+						};
+					}
+
+					const timeout = params.timeout || 5000;
+					const envResult = await queryShellEnv(bg, timeout, signal ?? undefined);
+
+					if (!envResult) {
+						return {
+							content: [{ type: "text" as const, text: `Failed to query environment for process ${bg.id} (timed out or process died)` }],
+							isError: true, details: undefined as unknown,
+						};
+					}
+
+					let text = `Shell environment for ${bg.id} (${bg.label}):\n`;
+					text += `  cwd: ${envResult.cwd}\n`;
+					text += `  shell: ${envResult.shell}\n`;
+
+					const envEntries = Object.entries(envResult.env);
+					if (envEntries.length > 0) {
+						text += `  environment:\n`;
+						for (const [key, value] of envEntries) {
+							const displayValue = value.length > 100 ? value.slice(0, 97) + "..." : value;
+							text += `    ${key}=${displayValue}\n`;
+						}
+					}
+
+					return {
+						content: [{ type: "text" as const, text: text.trimEnd() }],
+						details: { action: "env", process: getInfo(bg), env: envResult },
 					};
 				}
 
@@ -1924,6 +2047,25 @@ export default function (pi: ExtensionAPI) {
 						theme.fg("success", "↻ Restarted ") + theme.fg("accent", proc.id) + " " + theme.fg("muted", proc.label) + " " + theme.fg("dim", `#${proc.restartCount}`),
 						0, 0,
 					);
+				}
+
+				case "env": {
+					const proc = details.process as BgProcessInfo;
+					const envData = details.env as { cwd: string; shell: string } | undefined;
+					let text = theme.fg("accent", proc.id) + " " + theme.fg("muted", proc.label);
+					if (envData) {
+						text += " " + theme.fg("dim", `cwd: ${envData.cwd}`);
+					}
+					if (expanded) {
+						const rawText = result.content[0];
+						if (rawText?.type === "text") {
+							const lines = rawText.text.split("\n").slice(1);
+							for (const line of lines.slice(0, 15)) {
+								text += "\n  " + theme.fg("dim", line);
+							}
+						}
+					}
+					return new Text(text, 0, 0);
 				}
 
 				case "group_status": {
