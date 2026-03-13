@@ -325,11 +325,21 @@ export default function (pi: ExtensionAPI) {
     // If auto-mode is already running, advance to next unit
     if (!isAutoActive()) return;
 
-    // If the agent was aborted (user pressed Escape), pause auto-mode
-    // instead of advancing. This preserves the conversation so the user
-    // can inspect what happened, interact with the agent, or resume.
+    // If the agent was aborted (user pressed Escape) or hit a provider
+    // error (fetch failure, rate limit, etc.), pause auto-mode instead of
+    // advancing. This preserves the conversation so the user can inspect
+    // what happened, interact with the agent, or resume.
     const lastMsg = event.messages[event.messages.length - 1];
     if (lastMsg && "stopReason" in lastMsg && lastMsg.stopReason === "aborted") {
+      await pauseAuto(ctx, pi);
+      return;
+    }
+    if (lastMsg && "stopReason" in lastMsg && lastMsg.stopReason === "error") {
+      const errorDetail =
+        "errorMessage" in lastMsg && lastMsg.errorMessage
+          ? `: ${lastMsg.errorMessage}`
+          : "";
+      ctx.log(`Auto-mode paused due to provider error${errorDetail}`);
       await pauseAuto(ctx, pi);
       return;
     }
