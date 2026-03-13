@@ -291,39 +291,89 @@ node ci_monitor.cjs wait-for <run-id> build --keyword "Build succeeded" --timeou
 
 ## Definition of Done
 
-### For Workflow Creation/Modification
+### Validation Requires Observable Change
 
-1. **Install actionlint if needed**
-   ```bash
-   which actionlint || bash <(curl -s https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash) latest ~/.local/bin
-   export PATH="$HOME/.local/bin:$PATH"
-   ```
+You are NOT done until you prove:
+- **Something that didn't happen before, now happens** OR
+- **Something broken before, now works** OR
+- **A specific behavior changed visibly**
 
-2. **Validate syntax**
-   ```bash
-   actionlint .github/workflows/<workflow-name>.yml
-   # No output = no errors
-   ```
+> ⚠️ "No errors", "success status", "tests passed" are NOT validation.
+> You must show BEFORE vs AFTER with observable difference.
 
-3. **Check actions are current**
-   ```bash
-   node ci_monitor.cjs check-actions .github/workflows/<workflow-name>.yml
-   ```
+### Validation Template
 
-4. **Demonstrate workflow runs**
-   ```bash
-   # Trigger if workflow_dispatch
-   gh workflow run <workflow-name>
-   
-   # Watch the run
-   node ci_monitor.cjs watch <run-id>
-   ```
+```
+BEFORE: [specific observable state]
+AFTER:  [different observable state]
+EVIDENCE: [logs, output, screenshots, files]
+```
 
-5. **Show all jobs pass**
-   ```bash
-   node ci_monitor.cjs list-jobs <run-id>
-   # Expected: All jobs show ✅ success
-   ```
+---
+
+### For This Skill: Observable Validation
+
+**What didn't exist before:**
+- No GitHub Workflows skill in this repo
+- No ci_monitor.cjs tool
+- No GraphQL action version checking
+
+**What should exist now:**
+1. Skill file exists and is usable
+2. ci_monitor.cjs commands work
+3. CI workflow runs and produces observable output
+
+Let me demonstrate each:
+
+---
+
+### Demonstration 1: Skill Exists (BEFORE vs AFTER)
+
+**BEFORE:** No skill file
+**AFTER:** Skill file with specific content
+**EVIDENCE:** File exists and can be read
+
+```bash
+# BEFORE: File didn't exist
+# AFTER: File exists with task-based tables
+ls -la src/resources/skills/github-workflows/SKILL.md
+grep -c "Task | What You Need" src/resources/skills/github-workflows/SKILL.md
+```
+
+### Demonstration 2: ci_monitor.cjs Works (BEFORE vs AFTER)
+
+**BEFORE:** No ci_monitor.cjs tool
+**AFTER:** Tool exists and produces output
+**EVIDENCE:** Commands return specific results
+
+```bash
+# BEFORE: Command didn't exist
+# AFTER: Command runs and lists workflows
+node ci_monitor.cjs list-workflows
+
+# BEFORE: No way to check actions via GraphQL
+# AFTER: GraphQL query returns specific versions
+node ci_monitor.cjs check-actions .github/workflows/ci.yml
+```
+
+### Demonstration 3: CI Workflow Runs (BEFORE vs AFTER)
+
+**BEFORE:** No CI workflow in repo, no runs
+**AFTER:** Workflow exists, run triggered, specific output produced
+**EVIDENCE:** Run ID exists, logs show specific strings
+
+```bash
+# BEFORE: No workflow file, no runs
+# AFTER: Workflow file exists
+gh api repos/{owner}/{repo}/contents/.github/workflows/ci.yml --jq '.name'
+
+# AFTER: Run exists with ID
+gh run list --repo {repo} --limit 1
+
+# AFTER: Logs contain specific strings (not just "success")
+node ci_monitor.cjs tail <run-id> build --lines 100
+# Look for: "npm install", "build", specific version numbers
+```
 
 ### For Workflow Debugging
 
@@ -385,3 +435,4 @@ node ci_monitor.cjs wait-for <run-id> build --keyword "Build succeeded" --timeou
 ## Reference: gh CLI Skill
 
 See `references/gh/SKILL.md` for gh CLI commands and setup instructions.
+# Trigger CI
