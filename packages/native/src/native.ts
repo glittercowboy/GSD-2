@@ -43,4 +43,5 @@ function loadNative(): Record<string, unknown> {
 export const native = loadNative() as {
   search: (content: Buffer | Uint8Array, options: unknown) => unknown;
   grep: (options: unknown) => unknown;
+  fuzzyFind: (options: unknown) => unknown;
 };

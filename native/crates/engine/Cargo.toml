@@ -12,6 +12,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 gsd-grep = { path = "../grep" }
+ignore = "0.4"
 napi = { version = "2", features = ["napi8"] }
 napi-derive = "2"
 

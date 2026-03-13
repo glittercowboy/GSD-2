@@ -157,6 +157,7 @@ name = "gsd-engine"
 version = "0.1.0"
 dependencies = [
  "gsd-grep",
+ "ignore",
  "napi",
  "napi-build",
  "napi-derive",

@@ -8,4 +8,5 @@
 
 #![allow(clippy::needless_pass_by_value)]
 
+mod fd;
 mod grep;
