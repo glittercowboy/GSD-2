@@ -58,16 +58,70 @@ async function handleSetupDiscord(ctx: ExtensionCommandContext): Promise<void> {
   if (!token) return void ctx.ui.notify("Discord setup cancelled.", "info");
 
   ctx.ui.notify("Validating token...", "info");
-  const auth = await fetchJson("https://discord.com/api/v10/users/@me", { headers: { Authorization: `Bot ${token}` } });
+  const headers = { Authorization: `Bot ${token}` };
+  const auth = await fetchJson("https://discord.com/api/v10/users/@me", { headers });
   if (!auth?.id) return void ctx.ui.notify("Token validation failed — check the bot token.", "error");
 
-  const channelId = await promptInput(ctx, "Channel ID", "Paste the Discord channel ID (e.g. 1234567890123456789)");
-  if (!channelId) return void ctx.ui.notify("Discord setup cancelled.", "info");
-  if (!isValidChannelId("discord", channelId)) return void ctx.ui.notify("Invalid Discord channel ID format — expected 17-20 digit numeric ID.", "error");
+  // Fetch guilds the bot is a member of
+  const guilds: Array<{ id: string; name: string }> | null = await fetchJson("https://discord.com/api/v10/users/@me/guilds", { headers });
+  if (!Array.isArray(guilds) || guilds.length === 0) {
+    return void ctx.ui.notify("Bot is not in any Discord servers.", "error");
+  }
+
+  let guildId: string;
+  let guildName: string;
+  if (guilds.length === 1) {
+    guildId = guilds[0].id;
+    guildName = guilds[0].name;
+  } else {
+    const guildOptions = guilds.map((g) => g.name);
+    const selectedGuild = await ctx.ui.select("Select a Discord server", guildOptions);
+    if (!selectedGuild) return void ctx.ui.notify("Discord setup cancelled.", "info");
+    const chosen = guilds.find((g) => g.name === selectedGuild);
+    if (!chosen) return void ctx.ui.notify("Discord setup cancelled.", "info");
+    guildId = chosen.id;
+    guildName = chosen.name;
+  }
+
+  // Fetch text and announcement channels in the selected guild
+  ctx.ui.notify(`Fetching channels for ${guildName}...`, "info");
+  const allChannels: Array<{ id: string; name: string; type: number }> | null = await fetchJson(
+    `https://discord.com/api/v10/guilds/${guildId}/channels`,
+    { headers },
+  );
+  const textChannels = Array.isArray(allChannels)
+    ? allChannels.filter((ch) => ch.type === 0 || ch.type === 5)
+    : [];
+
+  const MANUAL_OPTION = "Enter channel ID manually";
+  let channelId: string;
+
+  if (textChannels.length === 0) {
+    ctx.ui.notify("No text channels found — falling back to manual entry.", "warning");
+    const manualId = await promptInput(ctx, "Channel ID", "Paste the Discord channel ID (e.g. 1234567890123456789)");
+    if (!manualId) return void ctx.ui.notify("Discord setup cancelled.", "info");
+    if (!isValidChannelId("discord", manualId)) return void ctx.ui.notify("Invalid Discord channel ID format — expected 17-20 digit numeric ID.", "error");
+    channelId = manualId;
+  } else {
+    const channelOptions = [...textChannels.map((ch) => `#${ch.name}`), MANUAL_OPTION];
+    const selectedChannel = await ctx.ui.select("Select a channel", channelOptions);
+    if (!selectedChannel) return void ctx.ui.notify("Discord setup cancelled.", "info");
+
+    if (selectedChannel === MANUAL_OPTION) {
+      const manualId = await promptInput(ctx, "Channel ID", "Paste the Discord channel ID (e.g. 1234567890123456789)");
+      if (!manualId) return void ctx.ui.notify("Discord setup cancelled.", "info");
+      if (!isValidChannelId("discord", manualId)) return void ctx.ui.notify("Invalid Discord channel ID format — expected 17-20 digit numeric ID.", "error");
+      channelId = manualId;
+    } else {
+      const chosenChannel = textChannels.find((ch) => `#${ch.name}` === selectedChannel);
+      if (!chosenChannel) return void ctx.ui.notify("Discord setup cancelled.", "info");
+      channelId = chosenChannel.id;
+    }
+  }
 
   const sendResponse = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
     method: "POST",
-    headers: { Authorization: `Bot ${token}`, "Content-Type": "application/json" },
+    headers: { ...headers, "Content-Type": "application/json" },
     body: JSON.stringify({ content: "GSD remote questions connected." }),
     signal: AbortSignal.timeout(15_000),
   });
@@ -165,7 +219,7 @@ function removeProviderToken(provider: string): void {
   auth.set(provider, { type: "api_key", key: "" });
 }
 
-function saveRemoteQuestionsConfig(channel: "slack" | "discord", channelId: string): void {
+export function saveRemoteQuestionsConfig(channel: "slack" | "discord", channelId: string): void {
   const prefsPath = getGlobalGSDPreferencesPath();
   const block = [
     "remote_questions:",

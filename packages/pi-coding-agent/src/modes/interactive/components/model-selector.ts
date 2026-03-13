@@ -15,6 +15,18 @@ import { theme } from "../theme/theme.js";
 import { DynamicBorder } from "./dynamic-border.js";
 import { keyHint } from "./keybinding-hints.js";
 
+function formatTokenCount(count: number): string {
+	if (count >= 1_000_000) {
+		const millions = count / 1_000_000;
+		return millions % 1 === 0 ? `${millions}M` : `${millions.toFixed(1)}M`;
+	}
+	if (count >= 1_000) {
+		const thousands = count / 1_000;
+		return thousands % 1 === 0 ? `${thousands}K` : `${thousands.toFixed(1)}K`;
+	}
+	return count.toString();
+}
+
 interface ModelItem {
 	provider: string;
 	id: string;
@@ -178,12 +190,15 @@ export class ModelSelectorComponent extends Container implements Focusable {
 
 	private sortModels(models: ModelItem[]): ModelItem[] {
 		const sorted = [...models];
-		// Sort: current model first, then by provider
+		// Sort: current model first, then by name descending (newest first), then by provider
 		sorted.sort((a, b) => {
 			const aIsCurrent = modelsAreEqual(this.currentModel, a.model);
 			const bIsCurrent = modelsAreEqual(this.currentModel, b.model);
 			if (aIsCurrent && !bIsCurrent) return -1;
 			if (!aIsCurrent && bIsCurrent) return 1;
+			// Group by model name (display name), newest/largest first
+			const nameCmp = b.model.name.localeCompare(a.model.name);
+			if (nameCmp !== 0) return nameCmp;
 			return a.provider.localeCompare(b.provider);
 		});
 		return sorted;
@@ -236,18 +251,17 @@ export class ModelSelectorComponent extends Container implements Focusable {
 			const isSelected = i === this.selectedIndex;
 			const isCurrent = modelsAreEqual(this.currentModel, item.model);
 
+			const ctx = formatTokenCount(item.model.contextWindow);
+			const ctxBadge = theme.fg("muted", `${ctx}`);
+			const providerBadge = theme.fg("muted", `[${item.provider}]`);
+			const checkmark = isCurrent ? theme.fg("success", " ✓") : "";
+
 			let line = "";
 			if (isSelected) {
 				const prefix = theme.fg("accent", "→ ");
-				const modelText = `${item.id}`;
-				const providerBadge = theme.fg("muted", `[${item.provider}]`);
-				const checkmark = isCurrent ? theme.fg("success", " ✓") : "";
-				line = `${prefix + theme.fg("accent", modelText)} ${providerBadge}${checkmark}`;
+				line = `${prefix}${theme.fg("accent", item.id)} ${ctxBadge} ${providerBadge}${checkmark}`;
 			} else {
-				const modelText = `  ${item.id}`;
-				const providerBadge = theme.fg("muted", `[${item.provider}]`);
-				const checkmark = isCurrent ? theme.fg("success", " ✓") : "";
-				line = `${modelText} ${providerBadge}${checkmark}`;
+				line = `  ${item.id} ${ctxBadge} ${providerBadge}${checkmark}`;
 			}
 
 			this.listContainer.addChild(new Text(line, 0, 0));
@@ -270,8 +284,18 @@ export class ModelSelectorComponent extends Container implements Focusable {
 			this.listContainer.addChild(new Text(theme.fg("muted", "  No matching models"), 0, 0));
 		} else {
 			const selected = this.filteredModels[this.selectedIndex];
-			this.listContainer.addChild(new Spacer(1));
-			this.listContainer.addChild(new Text(theme.fg("muted", `  Model Name: ${selected.model.name}`), 0, 0));
+			if (selected) {
+				const m = selected.model;
+				const details = [
+					m.name,
+					`ctx: ${formatTokenCount(m.contextWindow)}`,
+					`out: ${formatTokenCount(m.maxTokens)}`,
+					m.reasoning ? "thinking" : "",
+					m.input.includes("image") ? "vision" : "",
+				].filter(Boolean).join(" · ");
+				this.listContainer.addChild(new Spacer(1));
+				this.listContainer.addChild(new Text(theme.fg("muted", `  ${details}`), 0, 0));
+			}
 		}
 	}
 

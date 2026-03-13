@@ -49,18 +49,6 @@ const TOOL_KEYS: ToolKeyConfig[] = [
     label: 'Jina AI',
     hint: 'clean web page extraction',
   },
-  {
-    provider: 'slack_bot',
-    envVar: 'SLACK_BOT_TOKEN',
-    label: 'Slack Bot',
-    hint: 'remote questions in auto-mode',
-  },
-  {
-    provider: 'discord_bot',
-    envVar: 'DISCORD_BOT_TOKEN',
-    label: 'Discord Bot',
-    hint: 'remote questions in auto-mode',
-  },
 ]
 
 /** Known LLM provider IDs that, if authed, mean the user doesn't need onboarding */
@@ -207,6 +195,18 @@ export async function runOnboarding(authStorage: AuthStorage): Promise<void> {
     p.log.warn(`Web search setup failed: ${err instanceof Error ? err.message : String(err)}`)
   }
 
+  // ── Remote Questions ─────────────────────────────────────────────────────
+  let remoteConfigured: string | null = null
+  try {
+    remoteConfigured = await runRemoteQuestionsStep(p, pc, authStorage)
+  } catch (err) {
+    if (isCancelError(p, err)) {
+      p.cancel('Setup cancelled.')
+      return
+    }
+    p.log.warn(`Remote questions setup failed: ${err instanceof Error ? err.message : String(err)}`)
+  }
+
   // ── Tool API Keys ─────────────────────────────────────────────────────────
   let toolKeyCount = 0
   try {
@@ -238,6 +238,12 @@ export async function runOnboarding(authStorage: AuthStorage): Promise<void> {
     summaryLines.push(`${pc.green('✓')} Web search: ${searchConfigured}`)
   } else {
     summaryLines.push(`${pc.dim('↷')} Web search: not configured — use /search-provider inside GSD`)
+  }
+
+  if (remoteConfigured) {
+    summaryLines.push(`${pc.green('✓')} Remote questions: ${remoteConfigured}`)
+  } else {
+    summaryLines.push(`${pc.dim('↷')} Remote questions: not configured — use /gsd remote inside GSD`)
   }
 
   if (toolKeyCount > 0) {
@@ -539,6 +545,208 @@ async function runToolKeysStep(
   }
 
   return savedCount
+}
+
+// ─── Remote Questions Step ────────────────────────────────────────────────────
+
+async function runRemoteQuestionsStep(
+  p: ClackModule,
+  pc: PicoModule,
+  authStorage: AuthStorage,
+): Promise<string | null> {
+  // Check existing config
+  const hasDiscord = authStorage.has('discord_bot') && !!(authStorage.get('discord_bot') as any)?.key
+  const hasSlack = authStorage.has('slack_bot') && !!(authStorage.get('slack_bot') as any)?.key
+  const existingChannel = hasDiscord ? 'Discord' : hasSlack ? 'Slack' : null
+
+  type RemoteOption = { value: string; label: string; hint?: string }
+  const options: RemoteOption[] = []
+
+  if (existingChannel) {
+    options.push({ value: 'keep', label: `Keep current (${existingChannel})`, hint: 'already configured' })
+  }
+
+  options.push(
+    { value: 'discord', label: 'Discord', hint: 'receive questions in a Discord channel' },
+    { value: 'slack', label: 'Slack', hint: 'receive questions in a Slack channel' },
+    { value: 'skip', label: 'Skip for now', hint: 'use /gsd remote inside GSD later' },
+  )
+
+  const choice = await p.select({
+    message: 'Set up remote questions? (get notified when GSD needs input)',
+    options,
+  })
+
+  if (p.isCancel(choice) || choice === 'skip') return null
+  if (choice === 'keep') return existingChannel
+
+  if (choice === 'discord') {
+    const token = await p.password({
+      message: 'Paste your Discord bot token:',
+      mask: '●',
+    })
+    if (p.isCancel(token) || !(token as string)?.trim()) return null
+    const trimmed = (token as string).trim()
+
+    authStorage.set('discord_bot', { type: 'api_key', key: trimmed })
+    process.env.DISCORD_BOT_TOKEN = trimmed
+
+    const channelName = await runDiscordChannelStep(p, pc, trimmed)
+    return channelName ? `Discord #${channelName}` : 'Discord'
+  }
+
+  if (choice === 'slack') {
+    const token = await p.password({
+      message: `Paste your Slack bot token ${pc.dim('(xoxb-...)')}:`,
+      mask: '●',
+    })
+    if (p.isCancel(token) || !(token as string)?.trim()) return null
+    const trimmed = (token as string).trim()
+    if (!trimmed.startsWith('xoxb-')) {
+      p.log.warn('Invalid token format — Slack bot tokens start with xoxb-.')
+      return null
+    }
+
+    // Validate
+    const s = p.spinner()
+    s.start('Validating Slack token...')
+    try {
+      const res = await fetch('https://slack.com/api/auth.test', {
+        headers: { Authorization: `Bearer ${trimmed}` },
+        signal: AbortSignal.timeout(15_000),
+      })
+      const data = await res.json() as any
+      if (!data?.ok) {
+        s.stop('Slack token validation failed')
+        return null
+      }
+      s.stop(`Slack authenticated as ${pc.green(data.user ?? 'bot')}`)
+    } catch {
+      s.stop('Could not reach Slack API')
+      return null
+    }
+
+    authStorage.set('slack_bot', { type: 'api_key', key: trimmed })
+    process.env.SLACK_BOT_TOKEN = trimmed
+
+    const channelId = await p.text({
+      message: 'Paste the Slack channel ID (e.g. C0123456789):',
+      validate: (val) => {
+        if (!val || !/^[A-Z0-9]{9,12}$/.test(val.trim())) return 'Expected 9-12 uppercase alphanumeric characters'
+      },
+    })
+    if (p.isCancel(channelId) || !channelId) return null
+
+    const { saveRemoteQuestionsConfig } = await import('./resources/extensions/remote-questions/remote-command.js')
+    saveRemoteQuestionsConfig('slack', (channelId as string).trim())
+    p.log.success(`Slack channel: ${pc.green((channelId as string).trim())}`)
+    return 'Slack'
+  }
+
+  return null
+}
+
+async function runDiscordChannelStep(p: ClackModule, pc: PicoModule, token: string): Promise<string | null> {
+  const headers = { Authorization: `Bot ${token}` }
+
+  // Validate token
+  const s = p.spinner()
+  s.start('Validating Discord bot token...')
+  let auth: any
+  try {
+    const res = await fetch('https://discord.com/api/v10/users/@me', { headers, signal: AbortSignal.timeout(15_000) })
+    auth = await res.json()
+  } catch {
+    s.stop('Could not reach Discord API')
+    return null
+  }
+  if (!auth?.id) {
+    s.stop('Discord token validation failed')
+    return null
+  }
+  s.stop(`Bot authenticated as ${pc.green(auth.username ?? 'unknown')}`)
+
+  // Fetch guilds
+  let guilds: Array<{ id: string; name: string }>
+  try {
+    const res = await fetch('https://discord.com/api/v10/users/@me/guilds', { headers, signal: AbortSignal.timeout(15_000) })
+    const data = await res.json()
+    guilds = Array.isArray(data) ? data : []
+  } catch {
+    p.log.warn('Could not fetch Discord servers — configure channel later with /gsd remote discord')
+    return null
+  }
+
+  if (guilds.length === 0) {
+    p.log.warn('Bot is not in any Discord servers — configure channel later with /gsd remote discord')
+    return null
+  }
+
+  // Select guild
+  let guildId: string
+  let guildName: string
+  if (guilds.length === 1) {
+    guildId = guilds[0].id
+    guildName = guilds[0].name
+    p.log.info(`Server: ${pc.green(guildName)}`)
+  } else {
+    const choice = await p.select({
+      message: 'Which Discord server?',
+      options: guilds.map(g => ({ value: g.id, label: g.name })),
+    })
+    if (p.isCancel(choice)) return null
+    guildId = choice as string
+    guildName = guilds.find(g => g.id === guildId)?.name ?? guildId
+  }
+
+  // Fetch channels
+  let channels: Array<{ id: string; name: string; type: number }>
+  try {
+    const res = await fetch(`https://discord.com/api/v10/guilds/${guildId}/channels`, { headers, signal: AbortSignal.timeout(15_000) })
+    const data = await res.json()
+    channels = Array.isArray(data) ? data.filter((ch: any) => ch.type === 0 || ch.type === 5) : []
+  } catch {
+    p.log.warn('Could not fetch channels — configure later with /gsd remote discord')
+    return null
+  }
+
+  if (channels.length === 0) {
+    p.log.warn('No text channels found — configure later with /gsd remote discord')
+    return null
+  }
+
+  // Select channel
+  const MANUAL_VALUE = '__manual__'
+  const channelChoice = await p.select({
+    message: 'Which channel should GSD use for remote questions?',
+    options: [
+      ...channels.map(ch => ({ value: ch.id, label: `#${ch.name}` })),
+      { value: MANUAL_VALUE, label: 'Enter channel ID manually' },
+    ],
+  })
+  if (p.isCancel(channelChoice)) return null
+
+  let channelId: string
+  if (channelChoice === MANUAL_VALUE) {
+    const manualId = await p.text({
+      message: 'Paste the Discord channel ID:',
+      placeholder: '1234567890123456789',
+      validate: (val) => {
+        if (!val || !/^\d{17,20}$/.test(val.trim())) return 'Expected 17-20 digit numeric ID'
+      },
+    })
+    if (p.isCancel(manualId) || !manualId) return null
+    channelId = (manualId as string).trim()
+  } else {
+    channelId = channelChoice as string
+  }
+
+  // Save remote questions config
+  const { saveRemoteQuestionsConfig } = await import('./resources/extensions/remote-questions/remote-command.js')
+  saveRemoteQuestionsConfig('discord', channelId)
+  const channelName = channels.find(ch => ch.id === channelId)?.name
+  p.log.success(`Discord channel: ${pc.green(channelName ? `#${channelName}` : channelId)}`)
+  return channelName ?? null
 }
 
 // ─── Env hydration (migrated from wizard.ts) ─────────────────────────────────
