@@ -10,6 +10,7 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync, accessSync } from "
 import { join } from "node:path";
 
 const BLOB_PREFIX = "blob:sha256:";
+const SHA256_HEX_RE = /^[a-f0-9]{64}$/;
 
 export interface BlobPutResult {
 	hash: string;
@@ -42,6 +43,7 @@ export class BlobStore {
 
 	/** Read blob by hash, returns Buffer or null if not found. */
 	get(hash: string): Buffer | null {
+		if (!SHA256_HEX_RE.test(hash)) return null;
 		const blobPath = join(this.dir, hash);
 		try {
 			return readFileSync(blobPath);
@@ -52,6 +54,7 @@ export class BlobStore {
 
 	/** Check if a blob exists. */
 	has(hash: string): boolean {
+		if (!SHA256_HEX_RE.test(hash)) return false;
 		try {
 			accessSync(join(this.dir, hash));
 			return true;
@@ -66,10 +69,12 @@ export function isBlobRef(data: string): boolean {
 	return data.startsWith(BLOB_PREFIX);
 }
 
-/** Extract the SHA-256 hash from a blob reference string. */
+/** Extract the SHA-256 hash from a blob reference string. Returns null if format is invalid. */
 export function parseBlobRef(data: string): string | null {
 	if (!data.startsWith(BLOB_PREFIX)) return null;
-	return data.slice(BLOB_PREFIX.length);
+	const hash = data.slice(BLOB_PREFIX.length);
+	if (!SHA256_HEX_RE.test(hash)) return null;
+	return hash;
 }
 
 /**

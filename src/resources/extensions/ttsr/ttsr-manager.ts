@@ -70,6 +70,9 @@ const DEFAULT_SETTINGS: Required<TtsrSettings> = {
 	repeatGap: 10,
 };
 
+/** Cap per-stream buffer at 512KB to prevent unbounded memory growth. */
+const MAX_BUFFER_BYTES = 512 * 1024;
+
 const DEFAULT_SCOPE: TtsrScope = {
 	allowText: true,
 	allowThinking: false,
@@ -101,8 +104,8 @@ export class TtsrManager {
 		for (const pattern of rule.condition ?? []) {
 			try {
 				compiled.push(new RegExp(pattern));
-			} catch {
-				// Invalid regex — skip silently
+			} catch (err) {
+				console.warn(`[ttsr] Rule "${rule.name}": invalid regex "${pattern}" — ${(err as Error).message}`);
 			}
 		}
 		return compiled;
@@ -265,7 +268,11 @@ export class TtsrManager {
 	 */
 	checkDelta(delta: string, context: TtsrMatchContext): Rule[] {
 		const bufferKey = this.#bufferKey(context);
-		const nextBuffer = `${this.#buffers.get(bufferKey) ?? ""}${delta}`;
+		let nextBuffer = `${this.#buffers.get(bufferKey) ?? ""}${delta}`;
+		// Cap buffer size — keep the tail so patterns still match recent output
+		if (nextBuffer.length > MAX_BUFFER_BYTES) {
+			nextBuffer = nextBuffer.slice(-MAX_BUFFER_BYTES);
+		}
 		this.#buffers.set(bufferKey, nextBuffer);
 
 		const matches: Rule[] = [];
