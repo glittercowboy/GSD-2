@@ -9,6 +9,8 @@ import {
   RUNTIME_EXCLUSION_PATHS,
   VALID_BRANCH_NAME,
   runGit,
+  readIntegrationBranch,
+  writeIntegrationBranch,
   type GitPreferences,
   type CommitOptions,
   type MergeSliceResult,
@@ -1368,6 +1370,230 @@ async function main(): Promise<void> {
   {
     const _checkResult: PreMergeCheckResult = { passed: true, skipped: false };
     assert(true, "PreMergeCheckResult type exported and usable");
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // Integration branch — feature-branch workflow support
+  // ═══════════════════════════════════════════════════════════════════════
+
+  // ─── writeIntegrationBranch / readIntegrationBranch: round-trip ────────
+
+  console.log("\n=== Integration branch: write and read ===");
+
+  {
+    const repo = initBranchTestRepo();
+
+    // Initially no integration branch
+    assertEq(readIntegrationBranch(repo, "M001"), null, "readIntegrationBranch returns null when no metadata");
+
+    // Write integration branch
+    writeIntegrationBranch(repo, "M001", "f-123-new-thing");
+    assertEq(readIntegrationBranch(repo, "M001"), "f-123-new-thing", "readIntegrationBranch returns written branch");
+
+    rmSync(repo, { recursive: true, force: true });
+  }
+
+  // ─── writeIntegrationBranch: idempotent — doesn't overwrite ───────────
+
+  console.log("\n=== Integration branch: idempotent write ===");
+
+  {
+    const repo = initBranchTestRepo();
+
+    writeIntegrationBranch(repo, "M001", "f-123-first");
+    writeIntegrationBranch(repo, "M001", "f-456-second"); // should NOT overwrite
+
+    assertEq(readIntegrationBranch(repo, "M001"), "f-123-first", "second write does not overwrite existing integration branch");
+
+    rmSync(repo, { recursive: true, force: true });
+  }
+
+  // ─── writeIntegrationBranch: rejects slice branches ───────────────────
+
+  console.log("\n=== Integration branch: rejects slice branches ===");
+
+  {
+    const repo = initBranchTestRepo();
+
+    writeIntegrationBranch(repo, "M001", "gsd/M001/S01");
+    assertEq(readIntegrationBranch(repo, "M001"), null, "slice branches are not recorded as integration branch");
+
+    rmSync(repo, { recursive: true, force: true });
+  }
+
+  // ─── writeIntegrationBranch: rejects invalid branch names ─────────────
+
+  console.log("\n=== Integration branch: rejects invalid names ===");
+
+  {
+    const repo = initBranchTestRepo();
+
+    writeIntegrationBranch(repo, "M001", "bad; rm -rf /");
+    assertEq(readIntegrationBranch(repo, "M001"), null, "invalid branch name is not recorded");
+
+    rmSync(repo, { recursive: true, force: true });
+  }
+
+  // ─── getMainBranch: uses integration branch when milestone set ────────
+
+  console.log("\n=== getMainBranch: integration branch from milestone metadata ===");
+
+  {
+    const repo = initBranchTestRepo();
+
+    // Create a feature branch
+    run("git checkout -b f-123-feature", repo);
+    run("git checkout main", repo);
+
+    // Write integration branch metadata
+    writeIntegrationBranch(repo, "M001", "f-123-feature");
+
+    // Without milestone set, getMainBranch returns "main"
+    const svc = new GitServiceImpl(repo);
+    assertEq(svc.getMainBranch(), "main", "getMainBranch returns main when no milestone set");
+
+    // With milestone set, getMainBranch returns the integration branch
+    svc.setMilestoneId("M001");
+    assertEq(svc.getMainBranch(), "f-123-feature", "getMainBranch returns integration branch when milestone set");
+
+    rmSync(repo, { recursive: true, force: true });
+  }
+
+  // ─── getMainBranch: main_branch pref still takes priority ─────────────
+
+  console.log("\n=== getMainBranch: main_branch pref overrides integration branch ===");
+
+  {
+    const repo = initBranchTestRepo();
+
+    run("git checkout -b f-123-feature", repo);
+    run("git checkout -b trunk", repo);
+    run("git checkout main", repo);
+
+    writeIntegrationBranch(repo, "M001", "f-123-feature");
+
+    // Explicit preference still wins
+    const svc = new GitServiceImpl(repo, { main_branch: "trunk" });
+    svc.setMilestoneId("M001");
+    assertEq(svc.getMainBranch(), "trunk", "main_branch preference overrides integration branch");
+
+    rmSync(repo, { recursive: true, force: true });
+  }
+
+  // ─── getMainBranch: falls back when integration branch deleted ────────
+
+  console.log("\n=== getMainBranch: fallback when integration branch deleted ===");
+
+  {
+    const repo = initBranchTestRepo();
+
+    // Write metadata pointing to a branch that doesn't exist
+    writeIntegrationBranch(repo, "M001", "deleted-branch");
+
+    const svc = new GitServiceImpl(repo);
+    svc.setMilestoneId("M001");
+    assertEq(svc.getMainBranch(), "main", "getMainBranch falls back to main when integration branch no longer exists");
+
+    rmSync(repo, { recursive: true, force: true });
+  }
+
+  // ─── End-to-end: feature branch workflow ──────────────────────────────
+
+  console.log("\n=== End-to-end: feature branch workflow ===");
+
+  {
+    const repo = initBranchTestRepo();
+
+    // Simulate: user creates feature branch and starts GSD
+    run("git checkout -b f-123-new-thing", repo);
+    createFile(repo, "setup.txt", "initial setup");
+    run("git add -A", repo);
+    run("git commit -m 'initial feature setup'", repo);
+
+    // Record integration branch (this is what auto.ts does at startup)
+    writeIntegrationBranch(repo, "M001", "f-123-new-thing");
+
+    // Create GitServiceImpl with milestone set
+    const svc = new GitServiceImpl(repo);
+    svc.setMilestoneId("M001");
+
+    // Verify getMainBranch returns the feature branch, not "main"
+    assertEq(svc.getMainBranch(), "f-123-new-thing", "e2e: getMainBranch returns feature branch");
+
+    // Create slice branch — should branch from f-123-new-thing (current)
+    svc.ensureSliceBranch("M001", "S01");
+    assertEq(svc.getCurrentBranch(), "gsd/M001/S01", "e2e: slice branch created");
+
+    // The slice branch should have the feature branch's commit
+    const log = run("git log --oneline", repo);
+    assert(log.includes("initial feature setup"), "e2e: slice branch inherits feature branch content");
+
+    // Do work on the slice branch
+    createFile(repo, "src/feature.ts", "export const feature = true;");
+    svc.commit({ message: "feat: add feature module" });
+
+    // switchToMain should go to feature branch
+    svc.switchToMain();
+    assertEq(svc.getCurrentBranch(), "f-123-new-thing", "e2e: switchToMain goes to feature branch, not main");
+
+    // mergeSliceToMain should merge into feature branch
+    const result = svc.mergeSliceToMain("M001", "S01", "Add feature module");
+    assertEq(result.mergedCommitMessage, "feat(M001/S01): Add feature module", "e2e: merge commit message correct");
+    assertEq(svc.getCurrentBranch(), "f-123-new-thing", "e2e: after merge, still on feature branch");
+
+    // The feature branch should have the merged work
+    const files = run("git ls-files", repo);
+    assert(files.includes("src/feature.ts"), "e2e: merged file exists on feature branch");
+
+    // Main should NOT have the merged work
+    run("git checkout main", repo);
+    const mainFiles = run("git ls-files", repo);
+    assert(!mainFiles.includes("src/feature.ts"), "e2e: main does NOT have merged work — it stays on the feature branch");
+
+    rmSync(repo, { recursive: true, force: true });
+  }
+
+  // ─── Per-milestone isolation: different milestones, different targets ──
+
+  console.log("\n=== Integration branch: per-milestone isolation ===");
+
+  {
+    const repo = initBranchTestRepo();
+
+    run("git checkout -b feature-a", repo);
+    run("git checkout -b feature-b", repo);
+    run("git checkout main", repo);
+
+    writeIntegrationBranch(repo, "M001", "feature-a");
+    writeIntegrationBranch(repo, "M002", "feature-b");
+
+    const svc = new GitServiceImpl(repo);
+
+    svc.setMilestoneId("M001");
+    assertEq(svc.getMainBranch(), "feature-a", "M001 integration branch is feature-a");
+
+    svc.setMilestoneId("M002");
+    assertEq(svc.getMainBranch(), "feature-b", "M002 integration branch is feature-b");
+
+    svc.setMilestoneId(null);
+    assertEq(svc.getMainBranch(), "main", "no milestone set → falls back to main");
+
+    rmSync(repo, { recursive: true, force: true });
+  }
+
+  // ─── Backward compatibility: no metadata → existing behavior ──────────
+
+  console.log("\n=== Integration branch: backward compat ===");
+
+  {
+    const repo = initBranchTestRepo();
+    const svc = new GitServiceImpl(repo);
+
+    // Set milestone but no metadata file exists
+    svc.setMilestoneId("M001");
+    assertEq(svc.getMainBranch(), "main", "backward compat: no metadata file → falls back to main");
+
+    rmSync(repo, { recursive: true, force: true });
   }
 
   console.log(`\nResults: ${passed} passed, ${failed} failed`);

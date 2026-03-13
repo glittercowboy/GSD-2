@@ -9,7 +9,8 @@
  */
 
 import { execSync } from "node:child_process";
-import { sep } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join, sep } from "node:path";
 
 import {
   detectWorktreeName,
@@ -68,6 +69,86 @@ export const RUNTIME_EXCLUSION_PATHS: readonly string[] = [
   ".gsd/STATE.md",
 ];
 
+// ─── Integration Branch Metadata ───────────────────────────────────────────
+
+/**
+ * Path to the milestone metadata file that stores the integration branch.
+ * Format: .gsd/milestones/<MID>/<MID>-META.json
+ */
+function milestoneMetaPath(basePath: string, milestoneId: string): string {
+  return join(basePath, ".gsd", "milestones", milestoneId, `${milestoneId}-META.json`);
+}
+
+/**
+ * Read the integration branch recorded for a milestone.
+ * Returns null if no metadata file exists or the branch isn't set.
+ */
+export function readIntegrationBranch(basePath: string, milestoneId: string): string | null {
+  try {
+    const metaFile = milestoneMetaPath(basePath, milestoneId);
+    if (!existsSync(metaFile)) return null;
+    const data = JSON.parse(readFileSync(metaFile, "utf-8"));
+    const branch = data?.integrationBranch;
+    if (typeof branch === "string" && branch.trim() !== "" && VALID_BRANCH_NAME.test(branch)) {
+      return branch;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Persist the integration branch for a milestone.
+ *
+ * Called once when auto-mode starts on a milestone. Records the branch
+ * the user was on at that point, so that slice branches merge back to it
+ * instead of the repo's default branch.
+ *
+ * The file is committed immediately so it survives branch switches — the
+ * pre-switch auto-commit excludes `.gsd/` to avoid merge conflicts, and
+ * uncommitted `.gsd/` files are discarded during checkout.
+ *
+ * Skips writing if an integration branch is already recorded (idempotent
+ * across restarts) or if the current branch is already a GSD slice branch.
+ */
+export function writeIntegrationBranch(basePath: string, milestoneId: string, branch: string): void {
+  // Don't record slice branches as the integration target
+  if (SLICE_BRANCH_RE.test(branch)) return;
+  // Don't overwrite an existing integration branch
+  if (readIntegrationBranch(basePath, milestoneId) !== null) return;
+  // Validate
+  if (!VALID_BRANCH_NAME.test(branch)) return;
+
+  const metaFile = milestoneMetaPath(basePath, milestoneId);
+  mkdirSync(join(basePath, ".gsd", "milestones", milestoneId), { recursive: true });
+
+  // Merge with existing metadata if present
+  let existing: Record<string, unknown> = {};
+  try {
+    if (existsSync(metaFile)) {
+      existing = JSON.parse(readFileSync(metaFile, "utf-8"));
+    }
+  } catch { /* corrupt file — overwrite */ }
+
+  existing.integrationBranch = branch;
+  writeFileSync(metaFile, JSON.stringify(existing, null, 2) + "\n", "utf-8");
+
+  // Commit immediately — .gsd/ files are discarded during branch switches
+  // (ensureSliceBranch excludes .gsd/ from pre-switch auto-commit and runs
+  // git checkout -- .gsd/ to prevent checkout conflicts). Without this
+  // commit, the metadata would be lost on the first branch switch.
+  try {
+    runGit(basePath, ["add", "--force", metaFile]);
+    runGit(basePath, ["commit", "-F", "-"], {
+      input: `chore(${milestoneId}): record integration branch`,
+    });
+  } catch {
+    // Non-fatal — file is on disk even if commit fails (e.g. nothing to commit
+    // because the file was already tracked with identical content)
+  }
+}
+
 // ─── Git Helper ────────────────────────────────────────────────────────────
 
 /**
@@ -115,9 +196,21 @@ export class GitServiceImpl {
   readonly basePath: string;
   readonly prefs: GitPreferences;
 
+  /** Active milestone ID — used to resolve the integration branch. */
+  private _milestoneId: string | null = null;
+
   constructor(basePath: string, prefs: GitPreferences = {}) {
     this.basePath = basePath;
     this.prefs = prefs;
+  }
+
+  /**
+   * Set the active milestone ID for integration branch resolution.
+   * When set, getMainBranch() will check the milestone's metadata file
+   * for a recorded integration branch before falling back to repo defaults.
+   */
+  setMilestoneId(milestoneId: string | null): void {
+    this._milestoneId = milestoneId;
   }
 
   /** Convenience wrapper: run git in this repo's basePath. */
@@ -212,14 +305,33 @@ export class GitServiceImpl {
   // ─── Branch Queries ────────────────────────────────────────────────────
 
   /**
-   * Get the "main" branch for this repo.
-   * In a worktree: returns worktree/<name> (the worktree's base branch).
-   * In the main tree: origin/HEAD symbolic-ref → main/master fallback → current branch.
+   * Get the "main" (integration) branch for this repo.
+   *
+   * Resolution order:
+   * 1. Explicit `main_branch` preference (user override, highest priority)
+   * 2. Milestone integration branch from metadata file (recorded at milestone start)
+   * 3. Worktree base branch (worktree/<name>)
+   * 4. origin/HEAD symbolic-ref → main/master fallback → current branch
+   *
+   * The integration branch (step 2) is what makes feature-branch workflows
+   * work correctly: when a user starts GSD on `f-123-new-thing`, that branch
+   * is recorded as the integration target, and all slice branches merge back
+   * to it instead of the repo's default branch.
    */
   getMainBranch(): string {
     // Explicit preference takes priority (double-check validity as defense-in-depth)
     if (this.prefs.main_branch && VALID_BRANCH_NAME.test(this.prefs.main_branch)) {
       return this.prefs.main_branch;
+    }
+
+    // Check milestone integration branch — recorded when auto-mode starts
+    if (this._milestoneId) {
+      const integrationBranch = readIntegrationBranch(this.basePath, this._milestoneId);
+      if (integrationBranch) {
+        // Verify the branch still exists locally (could have been deleted)
+        const exists = this.git(["show-ref", "--verify", `refs/heads/${integrationBranch}`], { allowFailure: true });
+        if (exists) return integrationBranch;
+      }
     }
 
     const wtName = detectWorktreeName(this.basePath);
