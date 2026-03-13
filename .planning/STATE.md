@@ -3,11 +3,26 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Native Desktop
 status: in_progress
+last_updated: "2026-03-13T17:32:06.893Z"
+last_activity: "2026-03-13 — Plan 15-05 complete: tauri:dev + tauri:build scripts wired; 7 Rust/config compile errors fixed (Emitter/Manager imports, StateFlags::all(), keyring feature, tauri.conf.json invalid block, icons/ dir); SC-1 human-verified — native window opens"
+progress:
+  total_phases: 10
+  completed_phases: 4
+  total_plans: 33
+  completed_plans: 29
+  percent: 88
+---
+
+---
+gsd_state_version: 1.0
+milestone: v2.0
+milestone_name: Native Desktop
+status: in_progress
 last_updated: "2026-03-13T13:00:00Z"
 last_activity: "2026-03-13 — Plan 15-05 complete: tauri:dev/tauri:build scripts wired; 7 Rust/config fixes applied (Emitter/Manager imports, StateFlags::all(), keyring windows-native feature, invalid tauri.conf.json block removed, icons/ dir added); SC-1 human-verified — native Tauri window opens and renders Mission Control"
 stopped_at: "Completed 15-05-PLAN.md — Phase 15 Tauri Shell fully complete; SC-2 through SC-5 deferred to future pass"
 progress:
-  [██████████] 100%
+  [█████████░] 88%
   total_phases: 10
   completed_phases: 5
   total_plans: 29
@@ -393,6 +408,9 @@ Progress: [██████████] 100% (29/29 plans complete)
 - [Phase 15-05]: plugins.window-state is not a valid Tauri 2 tauri.conf.json key — window-state plugin is registered solely in the Rust Builder chain
 - [Phase 15-05]: tauri::Emitter and tauri::Manager must be explicitly imported in any file using app.emit() or app.get_webview_window() — not re-exported from tauri prelude
 - [Phase 15-05]: SC-2 through SC-5 deferred as acceptable for M2 — Bun kill on close, dep screen, window-state restore, tauri:build installer
+- [Phase 16]: @tauri-apps/api@2.10.1 added to package.json — was missing from Phase 15 Tauri shell work
+- [Phase 16]: useRef used in useAuthGuard to avoid stale closure on pendingProvider in oauth-callback event listener
+- [Phase 16]: oauth-callback event listener placed in useAuthGuard (not useTokenRefresh) — auth state ownership determines listener location
 
 ### Blockers/Concerns
 
