@@ -1,0 +1,40 @@
+{
+  "name": "@gsd/pi-ai",
+  "version": "0.57.1",
+  "description": "Unified LLM API (vendored from pi-mono)",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./oauth": {
+      "types": "./dist/oauth.d.ts",
+      "import": "./dist/oauth.js"
+    },
+    "./bedrock-provider": {
+      "types": "./bedrock-provider.d.ts",
+      "import": "./bedrock-provider.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.73.0",
+    "@aws-sdk/client-bedrock-runtime": "^3.983.0",
+    "@google/genai": "^1.40.0",
+    "@mistralai/mistralai": "1.14.1",
+    "@sinclair/typebox": "^0.34.41",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "chalk": "^5.6.2",
+    "openai": "6.26.0",
+    "partial-json": "^0.1.7",
+    "proxy-agent": "^6.5.0",
+    "undici": "^7.19.1",
+    "zod-to-json-schema": "^3.24.6"
+  }
+}

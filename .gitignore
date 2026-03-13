@@ -23,10 +23,15 @@ __pycache__/
 venv/
 target/
 vendor/
+!packages/pi-coding-agent/src/core/export-html/vendor/
 *.log
 coverage/
 .cache/
 tmp/
+
+# ── Workspace packages ──
+packages/*/dist/
+packages/*/node_modules/
 
 # ── GSD baseline (auto-generated) ──
 dist/
@@ -36,6 +41,7 @@ dist/
 AGENTS.md
 .bg-shell/
 TODOS.md
+.planning/
 
 # ── GSD baseline (auto-generated) ──
 .gsd/

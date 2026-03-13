@@ -15,7 +15,7 @@ const { readFileSync, writeFileSync } = require('fs')
 const { resolve, join } = require('path')
 
 const root = resolve(__dirname, '..')
-const piPkgPath = join(root, 'node_modules', '@mariozechner', 'pi-coding-agent', 'package.json')
+const piPkgPath = join(root, 'packages', 'pi-coding-agent', 'package.json')
 const gsdPkgPath = join(root, 'pkg', 'package.json')
 
 const piPkg = JSON.parse(readFileSync(piPkgPath, 'utf-8'))

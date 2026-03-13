@@ -21,8 +21,8 @@
  *   panel.dispose();           // remove widget and status
  */
 
-import type { ExtensionUIContext, Theme } from "@mariozechner/pi-coding-agent";
-import type { TUI } from "@mariozechner/pi-tui";
+import type { ExtensionUIContext, Theme } from "@gsd/pi-coding-agent";
+import type { TUI } from "@gsd/pi-tui";
 import { makeUI, type ProgressStatus } from "./ui.js";
 
 // ─── Exported types ───────────────────────────────────────────────────────────

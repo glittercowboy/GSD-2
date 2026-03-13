@@ -15,14 +15,14 @@
  *   - mcporter installed globally: npm i -g mcporter
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@gsd/pi-coding-agent";
 import {
 	truncateHead,
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
 	formatSize,
-} from "@mariozechner/pi-coding-agent";
-import { Text } from "@mariozechner/pi-tui";
+} from "@gsd/pi-coding-agent";
+import { Text } from "@gsd/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { execFile, exec } from "node:child_process";
 import { promisify } from "node:util";

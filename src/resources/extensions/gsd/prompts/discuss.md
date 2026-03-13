@@ -9,7 +9,7 @@ Special handling: if the user message is not a project description (for example,
 After the user describes their idea, **do not ask questions yet**. First, prove you understood by reflecting back:
 
 1. Summarize what you understood in your own words — concretely, not abstractly.
-2. Include a complexity/scale read: "This sounds like [task/project/product] scale — roughly N milestone(s)."
+2. Give an honest size read: roughly how many milestones, roughly how many slices in the first one. Base this on the actual work involved, not a classification label. A config change might be 1 milestone with 1 slice. A social network might be 5 milestones with 8+ slices each. Use your judgment.
 3. Include scope honesty — a bullet list of the major capabilities you're hearing: "Here's what I'm hearing: [bullet list of major capabilities]."
 4. Ask: "Did I get that right, or did I miss something?" — plain text, not `ask_user_questions`. Let them correct freely.
 
@@ -17,18 +17,14 @@ This prevents runaway questioning by forcing comprehension proof before anything
 
 ## Vision Mapping
 
-After reflection is confirmed, classify the scale:
+After reflection is confirmed, decide the approach based on the actual scope — not a label:
 
-- **Task** — a focused piece of work (single milestone, few slices)
-- **Project** — a coherent product with multiple major capabilities (multi-milestone likely)
-- **Product/Platform** — a large vision with distinct phases, audiences, or systems (definitely multi-milestone)
-
-**For Project or Product/Platform scale:** Before drilling into details, map the full landscape:
+**If the work spans multiple milestones:** Before drilling into details, map the full landscape:
 1. Propose a milestone sequence — names, one-line intents, rough dependencies
 2. Present this to the user for confirmation or adjustment
 3. Only then begin the deep Q&A — and scope the Q&A to the full vision, not just M001
 
-**For Task scale:** Proceed directly to questioning.
+**If the work fits in a single milestone:** Proceed directly to questioning.
 
 **Anti-reduction rule:** If the user describes a big vision, plan the big vision. Do not ask "what's the minimum viable version?" or try to reduce scope unless the user explicitly asks for an MVP or minimal version. When something is complex or risky, phase it into a later milestone — do not cut it. The user's ambition is the target, and your job is to sequence it intelligently, not shrink it.
 
@@ -77,15 +73,13 @@ Do NOT offer to proceed until ALL of the following are satisfied. Track these in
 - [ ] **The biggest technical unknowns / risks** — what could fail, what hasn't been proven
 - [ ] **What external systems/services this touches** — APIs, databases, third-party services, hardware
 
-**Minimum round counts before the wrap-up gate is allowed:**
-- **Task scale:** at least 2 full rounds (6+ questions asked and answered)
-- **Project/Product scale:** at least 4 full rounds (12+ questions asked and answered)
+**Questioning depth should match scope.** Simple, well-defined work needs fewer rounds — maybe 1-2. Large, ambiguous visions need more — maybe 4+. Don't pad rounds to hit a number. Stop when the depth checklist is satisfied and you genuinely understand the work.
 
 Do not count the reflection step as a question round. Rounds start after reflection is confirmed.
 
 ## Wrap-up Gate
 
-Only after the depth checklist is fully satisfied AND minimum rounds are hit, offer to proceed.
+Only after the depth checklist is fully satisfied and you genuinely understand the work, offer to proceed.
 
 The wrap-up gate must include a scope reflection:
 "Here's what I'm planning to build: [list of capabilities with rough complexity]. Does this match your vision, or did I miss something?"
@@ -149,9 +143,7 @@ If the project is new or has no `REQUIREMENTS.md`, confirm candidate requirement
 
 ## Scope Assessment
 
-Confirm the scale assessment from Vision Mapping still holds after discussion. If the scope grew or shrank significantly during Q&A, adjust the milestone count accordingly.
-
-If Vision Mapping classified the work as Task but discussion revealed Project-scale complexity, upgrade to multi-milestone and propose the split. If Vision Mapping classified it as Project but the scope narrowed to a single coherent body of work (roughly 2-12 slices), downgrade to single-milestone.
+Before moving to output, confirm the size estimate from your reflection still holds. Discussion often reveals hidden complexity or simplifies things. If the scope grew or shrank significantly during Q&A, adjust the milestone and slice counts accordingly. Be honest — if something you thought was multi-milestone turns out to be 3 slices, plan 3 slices. If something you thought was simple turns out to need multiple milestones, say so.
 
 ## Output Phase
 

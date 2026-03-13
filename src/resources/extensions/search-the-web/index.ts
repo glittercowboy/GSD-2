@@ -44,7 +44,7 @@
  *   JINA_API_KEY   — Optional. Higher rate limits for page extraction.
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@gsd/pi-coding-agent";
 import { registerSearchTool } from "./tool-search";
 import { registerFetchPageTool } from "./tool-fetch-page";
 import { registerLLMContextTool } from "./tool-llm-context";

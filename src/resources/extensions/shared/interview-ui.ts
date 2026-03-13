@@ -25,15 +25,15 @@
  *   Esc          exit confirmation
  */
 
-import type { ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
-import { type Theme } from "@mariozechner/pi-coding-agent";
+import type { ExtensionCommandContext } from "@gsd/pi-coding-agent";
+import { type Theme } from "@gsd/pi-coding-agent";
 import {
 	Editor,
 	Key,
 	matchesKey,
 	truncateToWidth,
 	type TUI,
-} from "@mariozechner/pi-tui";
+} from "@gsd/pi-tui";
 import { makeUI, INDENT } from "./ui.js";
 
 // ─── Exported types ───────────────────────────────────────────────────────────

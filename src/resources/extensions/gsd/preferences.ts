@@ -1,8 +1,9 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
-import { getAgentDir } from "@mariozechner/pi-coding-agent";
+import { getAgentDir } from "@gsd/pi-coding-agent";
 import type { GitPreferences } from "./git-service.ts";
+import { VALID_BRANCH_NAME } from "./git-service.ts";
 
 const GLOBAL_PREFERENCES_PATH = join(homedir(), ".gsd", "preferences.md");
 const LEGACY_GLOBAL_PREFERENCES_PATH = join(homedir(), ".pi", "agent", "gsd-preferences.md");
@@ -16,11 +17,43 @@ export interface GSDSkillRule {
   avoid?: string[];
 }
 
+/**
+ * Model configuration for a single phase.
+ * Supports primary model with optional fallbacks for resilience.
+ */
+export interface GSDPhaseModelConfig {
+  /** Primary model ID (e.g., "claude-opus-4-6") */
+  model: string;
+  /** Fallback models to try in order if primary fails (e.g., rate limits, credits exhausted) */
+  fallbacks?: string[];
+}
+
+/**
+ * Legacy model config — simple string per phase.
+ * Kept for backward compatibility; will be migrated to GSDModelConfigV2 on load.
+ */
 export interface GSDModelConfig {
-  research?: string;   // e.g. "claude-sonnet-4-6"
-  planning?: string;   // e.g. "claude-opus-4-6"
-  execution?: string;  // e.g. "claude-sonnet-4-6"
-  completion?: string; // e.g. "claude-sonnet-4-6"
+  research?: string;
+  planning?: string;
+  execution?: string;
+  completion?: string;
+}
+
+/**
+ * Extended model config with per-phase fallback support.
+ * Each phase can specify a primary model and ordered fallbacks.
+ */
+export interface GSDModelConfigV2 {
+  research?: string | GSDPhaseModelConfig;
+  planning?: string | GSDPhaseModelConfig;
+  execution?: string | GSDPhaseModelConfig;
+  completion?: string | GSDPhaseModelConfig;
+}
+
+/** Normalized model selection with resolved fallbacks */
+export interface ResolvedModelConfig {
+  primary: string;
+  fallbacks: string[];
 }
 
 export type SkillDiscoveryMode = "auto" | "suggest" | "off";
@@ -463,26 +496,56 @@ export function resolveSkillDiscoveryMode(): SkillDiscoveryMode {
  * Returns undefined if no model preference is set for this unit type.
  */
 export function resolveModelForUnit(unitType: string): string | undefined {
+  const resolved = resolveModelWithFallbacksForUnit(unitType);
+  return resolved?.primary;
+}
+
+/**
+ * Resolve model and fallbacks for a given auto-mode unit type.
+ * Returns the primary model and ordered fallbacks, or undefined if not configured.
+ *
+ * Supports both legacy string format and extended object format:
+ * - Legacy: `planning: claude-opus-4-6`
+ * - Extended: `planning: { model: claude-opus-4-6, fallbacks: [glm-5, minimax-m2.5] }`
+ */
+export function resolveModelWithFallbacksForUnit(unitType: string): ResolvedModelConfig | undefined {
   const prefs = loadEffectiveGSDPreferences();
   if (!prefs?.preferences.models) return undefined;
-  const m = prefs.preferences.models;
+  const m = prefs.preferences.models as GSDModelConfigV2;
 
+  let phaseConfig: string | GSDPhaseModelConfig | undefined;
   switch (unitType) {
     case "research-milestone":
     case "research-slice":
-      return m.research;
+      phaseConfig = m.research;
+      break;
     case "plan-milestone":
     case "plan-slice":
     case "replan-slice":
-      return m.planning;
+      phaseConfig = m.planning;
+      break;
     case "execute-task":
-      return m.execution;
+      phaseConfig = m.execution;
+      break;
     case "complete-slice":
     case "run-uat":
-      return m.completion;
+      phaseConfig = m.completion;
+      break;
     default:
       return undefined;
   }
+
+  if (!phaseConfig) return undefined;
+
+  // Normalize: string -> { model, fallbacks: [] }
+  if (typeof phaseConfig === "string") {
+    return { primary: phaseConfig, fallbacks: [] };
+  }
+
+  return {
+    primary: phaseConfig.model,
+    fallbacks: phaseConfig.fallbacks ?? [],
+  };
 }
 
 export function resolveAutoSupervisorConfig(): AutoSupervisorConfig {
@@ -637,6 +700,13 @@ function validatePreferences(preferences: GSDPreferences): {
         git.commit_type = g.commit_type;
       } else {
         errors.push(`git.commit_type must be one of: feat, fix, refactor, docs, test, chore, perf, ci, build, style`);
+      }
+    }
+    if (g.main_branch !== undefined) {
+      if (typeof g.main_branch === "string" && g.main_branch.trim() !== "" && VALID_BRANCH_NAME.test(g.main_branch)) {
+        git.main_branch = g.main_branch;
+      } else {
+        errors.push("git.main_branch must be a valid branch name (alphanumeric, _, -, /, .)");
       }
     }
 

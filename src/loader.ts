@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { fileURLToPath } from 'url'
 import { dirname, resolve, join } from 'path'
-import { readFileSync } from 'fs'
-import { agentDir } from './app-paths.js'
+import { existsSync, readFileSync } from 'fs'
+import { agentDir, appRoot } from './app-paths.js'
+import { renderLogo } from './logo.js'
 
 // pkg/ is a shim directory: contains gsd's piConfig (package.json) and pi's
 // theme assets (dist/modes/interactive/theme/) without a src/ directory.
@@ -17,7 +18,25 @@ process.env.PI_PACKAGE_DIR = pkgDir
 process.env.PI_SKIP_VERSION_CHECK = '1'  // GSD ships its own update check — suppress pi's
 process.title = 'gsd'
 
-// First-launch branding is handled by the onboarding wizard (src/onboarding.ts)
+// Print branded banner on first launch (before ~/.gsd/ exists)
+if (!existsSync(appRoot)) {
+  const cyan  = '\x1b[36m'
+  const green = '\x1b[32m'
+  const dim   = '\x1b[2m'
+  const reset = '\x1b[0m'
+  const colorCyan = (s: string) => `${cyan}${s}${reset}`
+  let version = ''
+  try {
+    const pkgJson = JSON.parse(readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '..', 'package.json'), 'utf-8'))
+    version = pkgJson.version ?? ''
+  } catch { /* ignore */ }
+  process.stderr.write(
+    renderLogo(colorCyan) +
+    '\n' +
+    `  Get Shit Done ${dim}v${version}${reset}\n` +
+    `  ${green}Welcome.${reset} Setting up your environment...\n\n`
+  )
+}
 
 // GSD_CODING_AGENT_DIR — tells pi's getAgentDir() to return ~/.gsd/agent/ instead of ~/.gsd/agent/
 process.env.GSD_CODING_AGENT_DIR = agentDir

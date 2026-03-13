@@ -145,6 +145,7 @@ See \`~/.gsd/agent/extensions/gsd/docs/preferences-reference.md\` for full field
 - \`models\`: Model preferences for specific task types
 - \`skill_discovery\`: Automatic skill detection preferences
 - \`auto_supervisor\`: Supervision and gating rules for autonomous modes
+- \`git\`: Git preferences — \`main_branch\` (default branch name for new repos, e.g., "main", "master", "trunk"), \`auto_push\`, \`snapshots\`, etc.
 
 ## Examples
 

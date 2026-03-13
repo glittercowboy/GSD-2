@@ -15,9 +15,9 @@
  *   if (!confirmed) return textResult("Cancelled.");
  */
 
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { type Theme } from "@mariozechner/pi-coding-agent";
-import { Key, matchesKey, truncateToWidth, type TUI } from "@mariozechner/pi-tui";
+import type { ExtensionContext } from "@gsd/pi-coding-agent";
+import { type Theme } from "@gsd/pi-coding-agent";
+import { Key, matchesKey, truncateToWidth, type TUI } from "@gsd/pi-tui";
 import { makeUI, GLYPH } from "./ui.js";
 
 export interface ConfirmOptions {

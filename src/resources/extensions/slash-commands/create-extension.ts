@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@gsd/pi-coding-agent";
 import { showInterviewRound, type Question, type RoundResult } from "../shared/interview-ui.js";
 
 export default function createExtension(pi: ExtensionAPI) {
@@ -281,7 +281,7 @@ Then register it in the main extensions index:
 ## Rules you must follow exactly
 
 - Extension entry point: \`export default function <camelCaseName>(pi: ExtensionAPI): void { ... }\`
-- Import type: \`import type { ExtensionAPI, ExtensionContext, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";\`
+- Import type: \`import type { ExtensionAPI, ExtensionContext, ExtensionCommandContext } from "@gsd/pi-coding-agent";\`
 - \`pi\` is the registration surface — call \`pi.registerCommand\`, \`pi.registerTool\`, \`pi.on\`, \`pi.registerShortcut\` inside the default export
 - \`ctx\` (ExtensionCommandContext or ExtensionContext) is passed to handlers and event callbacks — never stored, never assumed available globally
 - To send a message to the agent: \`pi.sendUserMessage("...")\` or \`pi.sendMessage({ content, display }, { triggerTurn })\`

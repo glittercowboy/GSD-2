@@ -1,4 +1,4 @@
-import { parseRoadmap, parsePlan, parseSummary, parseContinue, parseRequirementCounts } from '../files.ts';
+import { parseRoadmap, parsePlan, parseSummary, parseContinue, parseRequirementCounts, parseSecretsManifest, formatSecretsManifest } from '../files.ts';
 
 let passed = 0;
 let failed = 0;
@@ -1249,97 +1249,433 @@ console.log('\n=== parseRequirementCounts: total is sum of all section counts ==
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// parseSummary: bare scalar frontmatter fields (regression test for #91)
+// parseSecretsManifest / formatSecretsManifest tests
 // ═══════════════════════════════════════════════════════════════════════════
 
-console.log('\n=== parseSummary: bare scalar "none" coerced to string array (#91) ===');
+console.log('\n=== parseSecretsManifest: full manifest with 3 keys ===');
 {
-  const content = `---
-id: T04
-parent: S03
-milestone: M001
-provides:
-  - iOS rules
-key_files:
-  - .claude/rules/swift-style.md
-key_decisions: none
-patterns_established: none
-drill_down_paths: none
-observability_surfaces: none — static reference files
-affects: single-value
----
+  const content = `# Secrets Manifest
 
-# T04: iOS Rules
+**Milestone:** M003
+**Generated:** 2025-06-15T10:00:00Z
 
-**Created iOS-specific rules.**
+### OPENAI_API_KEY
 
-## What Happened
+**Service:** OpenAI
+**Dashboard:** https://platform.openai.com/api-keys
+**Format hint:** starts with sk-
+**Status:** pending
+**Destination:** dotenv
 
-Added rules.
+1. Go to https://platform.openai.com/api-keys
+2. Click "Create new secret key"
+3. Copy the key immediately — it won't be shown again
 
-## Deviations
+### STRIPE_SECRET_KEY
 
-None.
+**Service:** Stripe
+**Dashboard:** https://dashboard.stripe.com/apikeys
+**Format hint:** starts with sk_test_ or sk_live_
+**Status:** collected
+**Destination:** dotenv
+
+1. Go to https://dashboard.stripe.com/apikeys
+2. Reveal the secret key
+3. Copy it
+
+### SUPABASE_URL
+
+**Service:** Supabase
+**Dashboard:** https://app.supabase.com/project/settings/api
+**Format hint:** https://<project-ref>.supabase.co
+**Status:** skipped
+**Destination:** vercel
+
+1. Go to project settings in Supabase
+2. Copy the URL from the API section
 `;
 
-  const s = parseSummary(content);
+  const m = parseSecretsManifest(content);
 
-  // Array fields should remain arrays
-  assertEq(s.frontmatter.provides.length, 1, '#91: provides array preserved');
-  assertEq(s.frontmatter.provides[0], 'iOS rules', '#91: provides value');
-  assertEq(s.frontmatter.key_files.length, 1, '#91: key_files array preserved');
+  assertEq(m.milestone, 'M003', 'manifest milestone');
+  assertEq(m.generatedAt, '2025-06-15T10:00:00Z', 'manifest generatedAt');
+  assertEq(m.entries.length, 3, 'three entries');
 
-  // Bare scalar "none" must be coerced to ["none"], not crash
-  assertEq(Array.isArray(s.frontmatter.key_decisions), true, '#91: key_decisions is array');
-  assertEq(s.frontmatter.key_decisions.length, 1, '#91: key_decisions has 1 element');
-  assertEq(s.frontmatter.key_decisions[0], 'none', '#91: key_decisions[0] is "none"');
+  // First entry
+  assertEq(m.entries[0].key, 'OPENAI_API_KEY', 'entry 0 key');
+  assertEq(m.entries[0].service, 'OpenAI', 'entry 0 service');
+  assertEq(m.entries[0].dashboardUrl, 'https://platform.openai.com/api-keys', 'entry 0 dashboardUrl');
+  assertEq(m.entries[0].formatHint, 'starts with sk-', 'entry 0 formatHint');
+  assertEq(m.entries[0].status, 'pending', 'entry 0 status');
+  assertEq(m.entries[0].destination, 'dotenv', 'entry 0 destination');
+  assertEq(m.entries[0].guidance.length, 3, 'entry 0 guidance count');
+  assertEq(m.entries[0].guidance[0], 'Go to https://platform.openai.com/api-keys', 'entry 0 guidance[0]');
+  assertEq(m.entries[0].guidance[2], 'Copy the key immediately — it won\'t be shown again', 'entry 0 guidance[2]');
 
-  assertEq(Array.isArray(s.frontmatter.patterns_established), true, '#91: patterns_established is array');
-  assertEq(s.frontmatter.patterns_established.length, 1, '#91: patterns_established coerced');
+  // Second entry
+  assertEq(m.entries[1].key, 'STRIPE_SECRET_KEY', 'entry 1 key');
+  assertEq(m.entries[1].service, 'Stripe', 'entry 1 service');
+  assertEq(m.entries[1].status, 'collected', 'entry 1 status');
+  assertEq(m.entries[1].formatHint, 'starts with sk_test_ or sk_live_', 'entry 1 formatHint');
+  assertEq(m.entries[1].guidance.length, 3, 'entry 1 guidance count');
 
-  assertEq(Array.isArray(s.frontmatter.drill_down_paths), true, '#91: drill_down_paths is array');
-  assertEq(s.frontmatter.drill_down_paths.length, 1, '#91: drill_down_paths coerced');
-
-  // Scalar with spaces: "none — static reference files"
-  assertEq(Array.isArray(s.frontmatter.observability_surfaces), true, '#91: observability_surfaces is array');
-  assertEq(s.frontmatter.observability_surfaces.length, 1, '#91: observability_surfaces coerced');
-  assertEq(s.frontmatter.observability_surfaces[0], 'none — static reference files', '#91: full scalar preserved');
-
-  // Single value (not "none") also coerced
-  assertEq(Array.isArray(s.frontmatter.affects), true, '#91: affects is array');
-  assertEq(s.frontmatter.affects.length, 1, '#91: affects single value coerced');
-  assertEq(s.frontmatter.affects[0], 'single-value', '#91: affects value');
-
-  // .slice().join() must not crash (the original bug)
-  const decisions = s.frontmatter.key_decisions.slice(0, 2).join('; ');
-  assertEq(decisions, 'none', '#91: .slice().join() works on coerced array');
+  // Third entry
+  assertEq(m.entries[2].key, 'SUPABASE_URL', 'entry 2 key');
+  assertEq(m.entries[2].status, 'skipped', 'entry 2 status');
+  assertEq(m.entries[2].destination, 'vercel', 'entry 2 destination');
+  assertEq(m.entries[2].guidance.length, 2, 'entry 2 guidance count');
 }
 
-console.log('\n=== parseSummary: missing/empty frontmatter fields yield empty arrays ===');
+console.log('\n=== parseSecretsManifest: single-key manifest ===');
 {
-  const content = `---
-id: T05
-parent: S04
-milestone: M001
----
+  const content = `# Secrets Manifest
 
-# T05: Minimal Summary
+**Milestone:** M001
+**Generated:** 2025-06-15T12:00:00Z
 
-**Minimal.**
+### DATABASE_URL
 
-## What Happened
+**Service:** PostgreSQL
+**Dashboard:** https://console.neon.tech
+**Format hint:** postgresql://...
+**Status:** pending
+**Destination:** dotenv
 
-Nothing.
+1. Create a database on Neon
+2. Copy the connection string
 `;
 
-  const s = parseSummary(content);
-  assertEq(s.frontmatter.provides.length, 0, 'missing provides = empty array');
-  assertEq(s.frontmatter.key_decisions.length, 0, 'missing key_decisions = empty array');
-  assertEq(s.frontmatter.affects.length, 0, 'missing affects = empty array');
-  assertEq(s.frontmatter.key_files.length, 0, 'missing key_files = empty array');
-  assertEq(s.frontmatter.patterns_established.length, 0, 'missing patterns_established = empty array');
-  assertEq(s.frontmatter.drill_down_paths.length, 0, 'missing drill_down_paths = empty array');
-  assertEq(s.frontmatter.observability_surfaces.length, 0, 'missing observability_surfaces = empty array');
+  const m = parseSecretsManifest(content);
+  assertEq(m.milestone, 'M001', 'single-key milestone');
+  assertEq(m.entries.length, 1, 'single entry');
+  assertEq(m.entries[0].key, 'DATABASE_URL', 'single entry key');
+  assertEq(m.entries[0].service, 'PostgreSQL', 'single entry service');
+  assertEq(m.entries[0].guidance.length, 2, 'single entry guidance count');
+}
+
+console.log('\n=== parseSecretsManifest: empty/no-secrets manifest ===');
+{
+  const content = `# Secrets Manifest
+
+**Milestone:** M002
+**Generated:** 2025-06-15T14:00:00Z
+`;
+
+  const m = parseSecretsManifest(content);
+  assertEq(m.milestone, 'M002', 'empty manifest milestone');
+  assertEq(m.generatedAt, '2025-06-15T14:00:00Z', 'empty manifest generatedAt');
+  assertEq(m.entries.length, 0, 'no entries in empty manifest');
+}
+
+console.log('\n=== parseSecretsManifest: missing optional fields default correctly ===');
+{
+  const content = `# Secrets Manifest
+
+**Milestone:** M004
+**Generated:** 2025-06-15T16:00:00Z
+
+### SOME_API_KEY
+
+**Service:** SomeService
+
+1. Get the key from the dashboard
+`;
+
+  const m = parseSecretsManifest(content);
+  assertEq(m.entries.length, 1, 'one entry with missing fields');
+  assertEq(m.entries[0].key, 'SOME_API_KEY', 'key parsed');
+  assertEq(m.entries[0].service, 'SomeService', 'service parsed');
+  assertEq(m.entries[0].dashboardUrl, '', 'missing dashboardUrl defaults to empty string');
+  assertEq(m.entries[0].formatHint, '', 'missing formatHint defaults to empty string');
+  assertEq(m.entries[0].status, 'pending', 'missing status defaults to pending');
+  assertEq(m.entries[0].destination, 'dotenv', 'missing destination defaults to dotenv');
+  assertEq(m.entries[0].guidance.length, 1, 'guidance still parsed');
+}
+
+console.log('\n=== parseSecretsManifest: all three status values parse ===');
+{
+  for (const status of ['pending', 'collected', 'skipped'] as const) {
+    const content = `# Secrets Manifest
+
+**Milestone:** M005
+**Generated:** 2025-06-15T18:00:00Z
+
+### TEST_KEY
+
+**Service:** TestService
+**Status:** ${status}
+
+1. Do something
+`;
+
+    const m = parseSecretsManifest(content);
+    assertEq(m.entries[0].status, status, `status variant: ${status}`);
+  }
+}
+
+console.log('\n=== parseSecretsManifest: invalid status defaults to pending ===');
+{
+  const content = `# Secrets Manifest
+
+**Milestone:** M006
+**Generated:** 2025-06-15T20:00:00Z
+
+### BAD_STATUS_KEY
+
+**Service:** TestService
+**Status:** invalid_value
+
+1. Some step
+`;
+
+  const m = parseSecretsManifest(content);
+  assertEq(m.entries[0].status, 'pending', 'invalid status defaults to pending');
+}
+
+console.log('\n=== parseSecretsManifest + formatSecretsManifest: round-trip ===');
+{
+  const original = `# Secrets Manifest
+
+**Milestone:** M007
+**Generated:** 2025-06-16T10:00:00Z
+
+### OPENAI_API_KEY
+
+**Service:** OpenAI
+**Dashboard:** https://platform.openai.com/api-keys
+**Format hint:** starts with sk-
+**Status:** pending
+**Destination:** dotenv
+
+1. Go to the API keys page
+2. Create a new key
+3. Copy it
+
+### REDIS_URL
+
+**Service:** Upstash
+**Dashboard:** https://console.upstash.com
+**Format hint:** redis://...
+**Status:** collected
+**Destination:** vercel
+
+1. Open Upstash console
+2. Copy the Redis URL
+`;
+
+  const parsed1 = parseSecretsManifest(original);
+  const formatted = formatSecretsManifest(parsed1);
+  const parsed2 = parseSecretsManifest(formatted);
+
+  // Verify semantic equality after round-trip
+  assertEq(parsed2.milestone, parsed1.milestone, 'round-trip milestone');
+  assertEq(parsed2.generatedAt, parsed1.generatedAt, 'round-trip generatedAt');
+  assertEq(parsed2.entries.length, parsed1.entries.length, 'round-trip entry count');
+
+  for (let i = 0; i < parsed1.entries.length; i++) {
+    const e1 = parsed1.entries[i];
+    const e2 = parsed2.entries[i];
+    assertEq(e2.key, e1.key, `round-trip entry ${i} key`);
+    assertEq(e2.service, e1.service, `round-trip entry ${i} service`);
+    assertEq(e2.dashboardUrl, e1.dashboardUrl, `round-trip entry ${i} dashboardUrl`);
+    assertEq(e2.formatHint, e1.formatHint, `round-trip entry ${i} formatHint`);
+    assertEq(e2.status, e1.status, `round-trip entry ${i} status`);
+    assertEq(e2.destination, e1.destination, `round-trip entry ${i} destination`);
+    assertEq(e2.guidance.length, e1.guidance.length, `round-trip entry ${i} guidance length`);
+    for (let j = 0; j < e1.guidance.length; j++) {
+      assertEq(e2.guidance[j], e1.guidance[j], `round-trip entry ${i} guidance[${j}]`);
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LLM-style round-trip tests — realistic manifest variations
+// ═══════════════════════════════════════════════════════════════════════════
+
+console.log('\n=== LLM round-trip: extra whitespace ===');
+{
+  // LLMs often produce inconsistent indentation and trailing spaces
+  const messy = `# Secrets Manifest
+
+**Milestone:**   M010  
+**Generated:**   2025-07-01T12:00:00Z  
+
+###   OPENAI_API_KEY  
+
+**Service:**   OpenAI  
+**Dashboard:**   https://platform.openai.com/api-keys  
+**Format hint:**   starts with sk-  
+**Status:**   pending  
+**Destination:**   dotenv  
+
+1.   Go to the API keys page  
+2.   Create a new key  
+
+###   REDIS_URL  
+
+**Service:**   Upstash  
+**Status:**   collected  
+**Destination:**   vercel  
+
+1.   Open console  
+`;
+
+  const parsed1 = parseSecretsManifest(messy);
+  const formatted = formatSecretsManifest(parsed1);
+  const parsed2 = parseSecretsManifest(formatted);
+
+  assertEq(parsed2.milestone, parsed1.milestone, 'whitespace round-trip milestone');
+  assertEq(parsed2.generatedAt, parsed1.generatedAt, 'whitespace round-trip generatedAt');
+  assertEq(parsed2.entries.length, parsed1.entries.length, 'whitespace round-trip entry count');
+  assertEq(parsed2.entries.length, 2, 'whitespace: two entries parsed');
+
+  for (let i = 0; i < parsed1.entries.length; i++) {
+    const e1 = parsed1.entries[i];
+    const e2 = parsed2.entries[i];
+    assertEq(e2.key, e1.key, `whitespace round-trip entry ${i} key`);
+    assertEq(e2.service, e1.service, `whitespace round-trip entry ${i} service`);
+    assertEq(e2.dashboardUrl, e1.dashboardUrl, `whitespace round-trip entry ${i} dashboardUrl`);
+    assertEq(e2.formatHint, e1.formatHint, `whitespace round-trip entry ${i} formatHint`);
+    assertEq(e2.status, e1.status, `whitespace round-trip entry ${i} status`);
+    assertEq(e2.destination, e1.destination, `whitespace round-trip entry ${i} destination`);
+    assertEq(e2.guidance.length, e1.guidance.length, `whitespace round-trip entry ${i} guidance length`);
+    for (let j = 0; j < e1.guidance.length; j++) {
+      assertEq(e2.guidance[j], e1.guidance[j], `whitespace round-trip entry ${i} guidance[${j}]`);
+    }
+  }
+
+  // Verify the parser correctly stripped trailing whitespace
+  assertEq(parsed1.milestone, 'M010', 'whitespace: milestone trimmed');
+  assertEq(parsed1.entries[0].key, 'OPENAI_API_KEY', 'whitespace: key trimmed');
+  assertEq(parsed1.entries[0].service, 'OpenAI', 'whitespace: service trimmed');
+}
+
+console.log('\n=== LLM round-trip: missing optional fields ===');
+{
+  // LLMs may omit Dashboard and Format hint lines entirely
+  const minimal = `# Secrets Manifest
+
+**Milestone:** M011
+**Generated:** 2025-07-02T08:00:00Z
+
+### DATABASE_URL
+
+**Service:** Neon
+**Status:** pending
+**Destination:** dotenv
+
+1. Create a Neon project
+2. Copy connection string
+
+### WEBHOOK_SECRET
+
+**Service:** Stripe
+**Status:** collected
+**Destination:** dotenv
+
+1. Go to webhooks
+`;
+
+  const parsed1 = parseSecretsManifest(minimal);
+
+  // Verify missing optional fields get defaults
+  assertEq(parsed1.entries[0].dashboardUrl, '', 'missing-optional: no dashboard → empty string');
+  assertEq(parsed1.entries[0].formatHint, '', 'missing-optional: no format hint → empty string');
+  assertEq(parsed1.entries[1].dashboardUrl, '', 'missing-optional: entry 2 no dashboard → empty string');
+  assertEq(parsed1.entries[1].formatHint, '', 'missing-optional: entry 2 no format hint → empty string');
+
+  // Round-trip: formatter omits empty optional fields, re-parse preserves defaults
+  const formatted = formatSecretsManifest(parsed1);
+  const parsed2 = parseSecretsManifest(formatted);
+
+  assertEq(parsed2.entries.length, parsed1.entries.length, 'missing-optional round-trip entry count');
+
+  for (let i = 0; i < parsed1.entries.length; i++) {
+    const e1 = parsed1.entries[i];
+    const e2 = parsed2.entries[i];
+    assertEq(e2.key, e1.key, `missing-optional round-trip entry ${i} key`);
+    assertEq(e2.service, e1.service, `missing-optional round-trip entry ${i} service`);
+    assertEq(e2.dashboardUrl, e1.dashboardUrl, `missing-optional round-trip entry ${i} dashboardUrl`);
+    assertEq(e2.formatHint, e1.formatHint, `missing-optional round-trip entry ${i} formatHint`);
+    assertEq(e2.status, e1.status, `missing-optional round-trip entry ${i} status`);
+    assertEq(e2.destination, e1.destination, `missing-optional round-trip entry ${i} destination`);
+    assertEq(e2.guidance.length, e1.guidance.length, `missing-optional round-trip entry ${i} guidance length`);
+  }
+}
+
+console.log('\n=== LLM round-trip: extra blank lines ===');
+{
+  // LLMs sometimes insert excessive blank lines between sections
+  const blanky = `# Secrets Manifest
+
+
+**Milestone:** M012
+**Generated:** 2025-07-03T14:00:00Z
+
+
+
+### API_KEY_ONE
+
+
+**Service:** ServiceOne
+**Dashboard:** https://one.example.com
+
+
+**Format hint:** key_...
+**Status:** pending
+**Destination:** dotenv
+
+
+
+1. Go to settings
+
+
+2. Generate key
+
+
+
+### API_KEY_TWO
+
+
+
+**Service:** ServiceTwo
+**Status:** skipped
+**Destination:** dotenv
+
+
+1. Not needed
+`;
+
+  const parsed1 = parseSecretsManifest(blanky);
+
+  assertEq(parsed1.entries.length, 2, 'blank-lines: two entries parsed');
+  assertEq(parsed1.milestone, 'M012', 'blank-lines: milestone parsed');
+  assertEq(parsed1.entries[0].key, 'API_KEY_ONE', 'blank-lines: first key');
+  assertEq(parsed1.entries[0].guidance.length, 2, 'blank-lines: first entry guidance count');
+  assertEq(parsed1.entries[1].key, 'API_KEY_TWO', 'blank-lines: second key');
+  assertEq(parsed1.entries[1].status, 'skipped', 'blank-lines: second entry status');
+
+  // Round-trip produces clean output
+  const formatted = formatSecretsManifest(parsed1);
+  const parsed2 = parseSecretsManifest(formatted);
+
+  assertEq(parsed2.entries.length, parsed1.entries.length, 'blank-lines round-trip entry count');
+
+  for (let i = 0; i < parsed1.entries.length; i++) {
+    const e1 = parsed1.entries[i];
+    const e2 = parsed2.entries[i];
+    assertEq(e2.key, e1.key, `blank-lines round-trip entry ${i} key`);
+    assertEq(e2.service, e1.service, `blank-lines round-trip entry ${i} service`);
+    assertEq(e2.dashboardUrl, e1.dashboardUrl, `blank-lines round-trip entry ${i} dashboardUrl`);
+    assertEq(e2.formatHint, e1.formatHint, `blank-lines round-trip entry ${i} formatHint`);
+    assertEq(e2.status, e1.status, `blank-lines round-trip entry ${i} status`);
+    assertEq(e2.destination, e1.destination, `blank-lines round-trip entry ${i} destination`);
+    assertEq(e2.guidance.length, e1.guidance.length, `blank-lines round-trip entry ${i} guidance length`);
+  }
+
+  // Verify the formatted output is cleaner (fewer consecutive blank lines)
+  const consecutiveBlanks = formatted.match(/\n{4,}/g);
+  assert(consecutiveBlanks === null, 'blank-lines: formatted output has no 4+ consecutive newlines');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

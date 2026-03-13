@@ -12,7 +12,7 @@ Then:
 1. Read the template at `~/.gsd/agent/extensions/gsd/templates/roadmap.md`
 2. Read `.gsd/REQUIREMENTS.md` if it exists. Treat **Active** requirements as the capability contract for planning. If it does not exist, continue in legacy compatibility mode but explicitly note that requirement coverage is operating without a contract.
 3. If a `GSD Skill Preferences` block is present in system context, use it to decide which skills to load and follow during planning, without overriding required roadmap formatting
-4. Create the roadmap: decompose into demoable vertical slices — as many as the work needs, no more
+4. Create the roadmap: decompose into demoable vertical slices — as many as the work genuinely needs, no more. A simple feature might be 1 slice. Don't decompose for decomposition's sake.
 5. Order by risk (high-risk first)
 6. Write `{{outputPath}}` with checkboxes, risk, depends, demo sentences, proof strategy, verification classes, milestone definition of done, **requirement coverage**, and a boundary map. Write success criteria as observable truths, not implementation tasks. If the milestone crosses multiple runtime boundaries, include an explicit final integration slice that proves the assembled system works end-to-end in a real environment
 7. If planning produced structural decisions (e.g. slice ordering rationale, technology choices, scope exclusions), append them to `.gsd/DECISIONS.md` (read the template at `~/.gsd/agent/extensions/gsd/templates/decisions.md` if the file doesn't exist yet)
@@ -43,6 +43,38 @@ Apply these when decomposing and ordering slices:
 - **Don't invent risks.** If the project is straightforward, skip the proof strategy and just ship value in smart order. Not everything has major unknowns.
 - **Ship features, not proofs.** A completed slice should leave the product in a state where the new capability is actually usable through its real interface. A login flow slice ends with a working login page, not a middleware function. An API slice ends with endpoints that return real data from a real store, not hardcoded fixtures. A dashboard slice ends with a real dashboard rendering real data, not a component that renders mock props. If a slice can't ship the real thing yet because a dependency isn't built, it should ship with realistic stubs that are clearly marked for replacement — but the user-facing surface must be real.
 - **Ambition matches the milestone.** The number and depth of slices should match the milestone's ambition. A milestone promising "core platform with auth, data model, and primary user loop" should have enough slices to actually deliver all three as working features — not two proof-of-concept slices and a note that "the rest will come in the next milestone." If the milestone's context promises an outcome, the roadmap must deliver it.
+- **Right-size the decomposition.** Match slice count to actual complexity. If the work is small enough to build and verify in one pass, it's one slice — don't split it into three just because you can identify sub-steps. Multiple requirements can share a single slice. Conversely, don't cram genuinely independent capabilities into one slice just to keep the count low. Let the work dictate the structure.
+
+## Single-Slice Fast Path
+
+If the roadmap has only one slice, also write the slice plan and task plans inline during this unit — don't leave them for a separate planning session.
+
+1. Read the templates:
+   - `~/.gsd/agent/extensions/gsd/templates/plan.md`
+   - `~/.gsd/agent/extensions/gsd/templates/task-plan.md`
+2. `mkdir -p {{milestonePath}}/slices/S01/tasks`
+3. Write the S01 plan file at `{{milestonePath}}/slices/S01/S01-PLAN.md`
+4. Write individual task plans at `{{milestonePath}}/slices/S01/tasks/T01-PLAN.md`, etc.
+5. For simple slices, keep the plan lean — omit Proof Level, Integration Closure, and Observability sections if they would all be "none". Executable verification commands are sufficient.
+
+This eliminates a separate research-slice + plan-slice cycle when the work is straightforward.
+
+## Secret Forecasting
+
+After writing the roadmap, analyze the slices and their boundary maps for external service dependencies (third-party APIs, SaaS platforms, cloud providers, databases requiring credentials, OAuth providers, etc.).
+
+If this milestone requires any external API keys or secrets:
+
+1. Read the template at `~/.gsd/agent/extensions/gsd/templates/secrets-manifest.md` for the expected format
+2. Write `{{secretsOutputPath}}` listing every predicted secret as an H3 section with:
+   - **Service** — the external service name
+   - **Dashboard** — direct URL to the console/dashboard page where the key is created (not a generic homepage)
+   - **Format hint** — what the key looks like (e.g. `sk-...`, `ghp_...`, 40-char hex, UUID)
+   - **Status** — always `pending` during planning
+   - **Destination** — `dotenv`, `vercel`, or `convex` depending on where the key will be consumed
+   - Numbered step-by-step guidance for obtaining the key (navigate to dashboard → create project → generate key → copy)
+
+If this milestone does not require any external API keys or secrets, skip this step entirely — do not create an empty manifest.
 
 **You MUST write the file `{{outputAbsPath}}` before finishing.**
 

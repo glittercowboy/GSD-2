@@ -7,6 +7,7 @@ import {
   inferCommitType,
   GitServiceImpl,
   RUNTIME_EXCLUSION_PATHS,
+  VALID_BRANCH_NAME,
   runGit,
   type GitPreferences,
   type CommitOptions,
@@ -448,6 +449,49 @@ async function main(): Promise<void> {
     // Verify no new commit was created (should still be at init commit)
     const logCount = run("git rev-list --count HEAD", repo);
     assertEq(logCount, "1", "no new commit created when only runtime files changed");
+
+    rmSync(repo, { recursive: true, force: true });
+  }
+
+  // ─── GitServiceImpl: autoCommit with extraExclusions ───────────────────
+
+  console.log("\n=== GitServiceImpl: autoCommit with extraExclusions ===");
+
+  {
+    const repo = initTempRepo();
+    const svc = new GitServiceImpl(repo);
+
+    // Create both a .gsd/ planning file and a regular source file
+    createFile(repo, ".gsd/milestones/M001/M001-ROADMAP.md", "- [x] S01");
+    createFile(repo, "src/feature.ts", "export const y = 2;");
+
+    // Auto-commit with .gsd/ excluded (simulates pre-switch)
+    const msg = svc.autoCommit("pre-switch", "main", [".gsd/"]);
+    assertEq(msg, "chore(main): auto-commit after pre-switch", "pre-switch autoCommit with .gsd/ exclusion commits");
+
+    // Verify .gsd/ file was NOT committed
+    const show = run("git show --stat HEAD", repo);
+    assert(!show.includes("ROADMAP"), ".gsd/ files excluded from pre-switch auto-commit");
+    assert(show.includes("feature.ts"), "non-.gsd/ files included in pre-switch auto-commit");
+
+    rmSync(repo, { recursive: true, force: true });
+  }
+
+  // ─── GitServiceImpl: autoCommit extraExclusions — only .gsd/ dirty ────
+
+  console.log("\n=== GitServiceImpl: autoCommit extraExclusions — only .gsd/ dirty ===");
+
+  {
+    const repo = initTempRepo();
+    const svc = new GitServiceImpl(repo);
+
+    // Create only .gsd/ planning files
+    createFile(repo, ".gsd/milestones/M001/M001-ROADMAP.md", "- [x] S01");
+    createFile(repo, ".gsd/STATE.md", "state content");
+
+    // Auto-commit with .gsd/ excluded — nothing else to commit
+    const result = svc.autoCommit("pre-switch", "main", [".gsd/"]);
+    assertEq(result, null, "autoCommit returns null when only .gsd/ files are dirty and excluded");
 
     rmSync(repo, { recursive: true, force: true });
   }
@@ -1226,6 +1270,68 @@ async function main(): Promise<void> {
     // No snapshot ref should exist
     const refs = run("git for-each-ref refs/gsd/snapshots/", repo);
     assertEq(refs, "", "no snapshot ref when snapshots pref is not set");
+
+    rmSync(repo, { recursive: true, force: true });
+  }
+
+  // ─── VALID_BRANCH_NAME regex ──────────────────────────────────────────
+
+  console.log("\n=== VALID_BRANCH_NAME regex ===");
+
+  {
+    // Valid branch names
+    assert(VALID_BRANCH_NAME.test("main"), "VALID_BRANCH_NAME accepts 'main'");
+    assert(VALID_BRANCH_NAME.test("master"), "VALID_BRANCH_NAME accepts 'master'");
+    assert(VALID_BRANCH_NAME.test("develop"), "VALID_BRANCH_NAME accepts 'develop'");
+    assert(VALID_BRANCH_NAME.test("feature/foo"), "VALID_BRANCH_NAME accepts 'feature/foo'");
+    assert(VALID_BRANCH_NAME.test("release-1.0"), "VALID_BRANCH_NAME accepts 'release-1.0'");
+    assert(VALID_BRANCH_NAME.test("my_branch"), "VALID_BRANCH_NAME accepts 'my_branch'");
+    assert(VALID_BRANCH_NAME.test("v2.0.1"), "VALID_BRANCH_NAME accepts 'v2.0.1'");
+
+    // Invalid / injection attempts
+    assert(!VALID_BRANCH_NAME.test("main; rm -rf /"), "VALID_BRANCH_NAME rejects shell injection");
+    assert(!VALID_BRANCH_NAME.test("main && echo pwned"), "VALID_BRANCH_NAME rejects && injection");
+    assert(!VALID_BRANCH_NAME.test(""), "VALID_BRANCH_NAME rejects empty string");
+    assert(!VALID_BRANCH_NAME.test("branch name"), "VALID_BRANCH_NAME rejects spaces");
+    assert(!VALID_BRANCH_NAME.test("branch`cmd`"), "VALID_BRANCH_NAME rejects backticks");
+    assert(!VALID_BRANCH_NAME.test("branch$(cmd)"), "VALID_BRANCH_NAME rejects $() subshell");
+  }
+
+  // ─── getMainBranch: configured main_branch preference ──────────────────
+
+  console.log("\n=== getMainBranch: configured main_branch ===");
+
+  {
+    const repo = initBranchTestRepo();
+    const svc = new GitServiceImpl(repo, { main_branch: "trunk" });
+
+    assertEq(svc.getMainBranch(), "trunk", "getMainBranch returns configured main_branch preference");
+
+    rmSync(repo, { recursive: true, force: true });
+  }
+
+  // ─── getMainBranch: falls back to auto-detection when not set ──────────
+
+  console.log("\n=== getMainBranch: fallback to auto-detection ===");
+
+  {
+    const repo = initBranchTestRepo();
+    const svc = new GitServiceImpl(repo, {});
+
+    assertEq(svc.getMainBranch(), "main", "getMainBranch falls back to auto-detection when main_branch not set");
+
+    rmSync(repo, { recursive: true, force: true });
+  }
+
+  // ─── getMainBranch: ignores invalid branch names ───────────────────────
+
+  console.log("\n=== getMainBranch: ignores invalid branch name ===");
+
+  {
+    const repo = initBranchTestRepo();
+    const svc = new GitServiceImpl(repo, { main_branch: "main; rm -rf /" });
+
+    assertEq(svc.getMainBranch(), "main", "getMainBranch ignores invalid branch name and falls back to auto-detection");
 
     rmSync(repo, { recursive: true, force: true });
   }

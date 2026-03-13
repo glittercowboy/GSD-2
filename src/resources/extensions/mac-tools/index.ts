@@ -12,8 +12,8 @@
  *  - All Swift debug output goes to stderr; only JSON on stdout
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { StringEnum } from "@mariozechner/pi-ai";
+import type { ExtensionAPI } from "@gsd/pi-coding-agent";
+import { StringEnum } from "@gsd/pi-ai";
 import { Type } from "@sinclair/typebox";
 import { execFileSync } from "node:child_process";
 import { statSync, readdirSync } from "node:fs";

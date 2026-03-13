@@ -9,8 +9,8 @@
  * Based on: https://github.com/openai/codex (codex-rs/core/src/tools/handlers/ask_user_questions.rs)
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Text } from "@mariozechner/pi-tui";
+import type { ExtensionAPI } from "@gsd/pi-coding-agent";
+import { Text } from "@gsd/pi-tui";
 import { Type } from "@sinclair/typebox";
 import {
 	showInterviewRound,

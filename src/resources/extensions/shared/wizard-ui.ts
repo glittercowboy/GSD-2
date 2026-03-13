@@ -53,15 +53,15 @@
  *   const filePath  = result["file_path"]?.["path"];
  */
 
-import type { ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
-import { type Theme } from "@mariozechner/pi-coding-agent";
+import type { ExtensionCommandContext } from "@gsd/pi-coding-agent";
+import { type Theme } from "@gsd/pi-coding-agent";
 import {
 	Editor,
 	Key,
 	matchesKey,
 	truncateToWidth,
 	type TUI,
-} from "@mariozechner/pi-tui";
+} from "@gsd/pi-tui";
 import { makeUI } from "./ui.js";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
@@ -158,7 +158,7 @@ export async function showWizard(
 		// Editors keyed by fieldId — one per text field
 		// editorTheme is derived from the design system at first render
 		const editors = new Map<string, Editor>();
-		let resolvedEditorTheme: import("@mariozechner/pi-tui").EditorTheme | null = null;
+		let resolvedEditorTheme: import("@gsd/pi-tui").EditorTheme | null = null;
 
 		function getEditor(fieldId: string): Editor {
 			if (!resolvedEditorTheme) resolvedEditorTheme = makeUI(theme, 80).editorTheme;

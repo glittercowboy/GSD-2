@@ -1,0 +1,55 @@
+{
+  "name": "@gsd/pi-coding-agent",
+  "version": "0.57.1",
+  "description": "Coding agent CLI (vendored from pi-mono)",
+  "type": "module",
+  "piConfig": {
+    "name": "pi",
+    "configDir": ".pi"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./hooks": {
+      "types": "./dist/core/hooks/index.d.ts",
+      "import": "./dist/core/hooks/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && npm run copy-assets",
+    "copy-assets": "node -e \"const{mkdirSync,cpSync}=require('fs');mkdirSync('dist/modes/interactive/theme',{recursive:true});cpSync('src/modes/interactive/theme','dist/modes/interactive/theme',{recursive:true,filter:(s)=>!s.endsWith('.ts')});mkdirSync('dist/core/export-html/vendor',{recursive:true});cpSync('src/core/export-html/template.html','dist/core/export-html/template.html');cpSync('src/core/export-html/template.css','dist/core/export-html/template.css');cpSync('src/core/export-html/template.js','dist/core/export-html/template.js');cpSync('src/core/export-html/vendor','dist/core/export-html/vendor',{recursive:true,filter:(s)=>!s.endsWith('.ts')})\""
+  },
+  "dependencies": {
+    "@gsd/pi-agent-core": "*",
+    "@gsd/pi-ai": "*",
+    "@gsd/pi-tui": "*",
+    "@mariozechner/jiti": "^2.6.2",
+    "@silvia-odwyer/photon-node": "^0.3.4",
+    "chalk": "^5.5.0",
+    "cli-highlight": "^2.1.11",
+    "diff": "^8.0.2",
+    "extract-zip": "^2.0.1",
+    "file-type": "^21.1.1",
+    "glob": "^13.0.1",
+    "hosted-git-info": "^9.0.2",
+    "ignore": "^7.0.5",
+    "marked": "^15.0.12",
+    "minimatch": "^10.2.3",
+    "proper-lockfile": "^4.1.2",
+    "strip-ansi": "^7.1.0",
+    "undici": "^7.19.1",
+    "yaml": "^2.8.2"
+  },
+  "optionalDependencies": {
+    "@mariozechner/clipboard": "^0.3.2"
+  },
+  "devDependencies": {
+    "@types/diff": "^7.0.2",
+    "@types/hosted-git-info": "^3.0.5",
+    "@types/proper-lockfile": "^4.1.4"
+  }
+}

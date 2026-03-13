@@ -6,8 +6,8 @@
  * Toggled with Ctrl+Alt+G or opened from /gsd status.
  */
 
-import type { Theme } from "@mariozechner/pi-coding-agent";
-import { truncateToWidth, visibleWidth, matchesKey, Key } from "@mariozechner/pi-tui";
+import type { Theme } from "@gsd/pi-coding-agent";
+import { truncateToWidth, visibleWidth, matchesKey, Key } from "@gsd/pi-tui";
 import { deriveState } from "./state.js";
 import { loadFile, parseRoadmap, parsePlan } from "./files.js";
 import { resolveMilestoneFile, resolveSliceFile } from "./paths.js";

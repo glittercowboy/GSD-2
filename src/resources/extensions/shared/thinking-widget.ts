@@ -20,9 +20,9 @@
  * multiple widgets can safely coexist without key collisions.
  */
 
-import type { ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
-import { type Theme } from "@mariozechner/pi-coding-agent";
-import { truncateToWidth, type TUI } from "@mariozechner/pi-tui";
+import type { ExtensionCommandContext } from "@gsd/pi-coding-agent";
+import { type Theme } from "@gsd/pi-coding-agent";
+import { truncateToWidth, type TUI } from "@gsd/pi-tui";
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 

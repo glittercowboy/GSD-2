@@ -63,7 +63,6 @@ const banner =
   } catch {
     // Clack or picocolors unavailable — fall back to minimal output
     process.stderr.write(`  Run gsd to get started.\n\n`)
-    await run('npx patch-package')
     await run('npx playwright install chromium')
     return
   }
@@ -74,21 +73,7 @@ const banner =
   const results = []
   const s = p.spinner()
 
-  // --- Step 1: Apply patches -----------------------------------------------
-  s.start('Applying patches…')
-  const patchResult = await run('npx patch-package')
-  if (patchResult.ok) {
-    s.stop('Patches applied')
-    results.push({ label: 'Patches applied', ok: true })
-  } else {
-    s.stop(pc.yellow('Patches — skipped (non-fatal)'))
-    results.push({
-      label: 'Patches skipped — run ' + pc.cyan('npx patch-package') + ' manually',
-      ok: false,
-    })
-  }
-
-  // --- Step 2: Playwright browser ------------------------------------------
+  // --- Playwright browser --------------------------------------------------
   // Avoid --with-deps: install scripts should not block on interactive sudo
   // prompts. If Linux libs are missing, suggest the explicit follow-up.
   s.start('Setting up browser tools…')

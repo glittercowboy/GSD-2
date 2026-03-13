@@ -1,0 +1,14 @@
+{
+  "name": "@gsd/pi-agent-core",
+  "version": "0.57.1",
+  "description": "General-purpose agent core (vendored from pi-mono)",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@gsd/pi-ai": "*"
+  }
+}

@@ -9,7 +9,7 @@
  * @see S01-RESEARCH.md for the storage decision rationale (D002).
  */
 
-import { AuthStorage } from '@mariozechner/pi-coding-agent'
+import { AuthStorage } from '@gsd/pi-coding-agent'
 import { homedir } from 'os'
 import { join } from 'path'
 

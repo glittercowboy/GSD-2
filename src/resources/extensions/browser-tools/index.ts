@@ -20,14 +20,14 @@
  *  - Cleaned up on session_shutdown
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@gsd/pi-coding-agent";
 import {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
 	truncateHead,
-} from "@mariozechner/pi-coding-agent";
+} from "@gsd/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { StringEnum } from "@mariozechner/pi-ai";
+import { StringEnum } from "@gsd/pi-ai";
 import type { Browser, BrowserContext, Frame, Page } from "playwright";
 import { mkdir, stat, writeFile, copyFile } from "node:fs/promises";
 import path from "node:path";

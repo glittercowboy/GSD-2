@@ -41,9 +41,9 @@
  * Pressing Escape also resolves as "not_yet".
  */
 
-import type { ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
-import { type Theme } from "@mariozechner/pi-coding-agent";
-import { Key, matchesKey, type TUI } from "@mariozechner/pi-tui";
+import type { ExtensionCommandContext } from "@gsd/pi-coding-agent";
+import { type Theme } from "@gsd/pi-coding-agent";
+import { Key, matchesKey, type TUI } from "@gsd/pi-tui";
 import { makeUI } from "./ui.js";
 
 // ─── Public API ───────────────────────────────────────────────────────────────

@@ -10,6 +10,8 @@
 
 ## Proof Level
 
+<!-- Omit this section entirely for simple slices where the answer is trivially obvious. -->
+
 - This slice proves: {{contract | integration | operational | final-assembly}}
 - Real runtime required: {{yes/no}}
 - Human/UAT required: {{yes/no}}
@@ -41,17 +43,11 @@
 
 ## Observability / Diagnostics
 
-<!-- Required for non-trivial backend, integration, async, stateful, or UI slices.
-     Describe how a future agent will inspect current state, detect failure,
-     and localize the problem with minimal ambiguity.
+<!-- Include this section for non-trivial backend, integration, async, stateful, or UI slices.
+     OMIT ENTIRELY for simple slices where all fields would be "none".
 
-     Prefer:
-     - structured logs/events over ad hoc console strings
-     - stable error codes/types over vague failures
-     - health/readiness/status surfaces over hidden internal state
-     - persisted failure state when it materially improves retries or recovery
-
-     Keep this section concise and high-signal. Do not log secrets or sensitive raw payloads. -->
+     When included, describe how a future agent will inspect current state, detect failure,
+     and localize the problem with minimal ambiguity. Keep it concise and high-signal. -->
 
 - Runtime signals: {{structured log/event, state transition, metric, or none}}
 - Inspection surfaces: {{status endpoint, CLI command, script, UI state, DB table, or none}}
@@ -59,6 +55,8 @@
 - Redaction constraints: {{secret/PII boundary or none}}
 
 ## Integration Closure
+
+<!-- Omit this section entirely for simple slices with no meaningful integration concerns. -->
 
 - Upstream surfaces consumed: {{specific files / modules / contracts}}
 - New wiring introduced in this slice: {{entrypoint / composition / runtime hookup, or none}}

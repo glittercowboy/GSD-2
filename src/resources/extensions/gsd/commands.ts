@@ -4,7 +4,7 @@
  * One command, one wizard. Routes to smart entry or status.
  */
 
-import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@gsd/pi-coding-agent";
 import { existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -201,7 +201,7 @@ async function handleStatus(ctx: ExtensionCommandContext): Promise<void> {
 }
 
 export async function fireStatusViaCommand(
-  ctx: import("@mariozechner/pi-coding-agent").ExtensionContext,
+  ctx: import("@gsd/pi-coding-agent").ExtensionContext,
 ): Promise<void> {
   await handleStatus(ctx as ExtensionCommandContext);
 }

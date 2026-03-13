@@ -18,7 +18,7 @@
  * - Tool results: { role: "toolResult", toolCallId: "toolu_...", toolName: "bash", isError: bool, content: ... }
  */
 
-import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { basename, join } from "node:path";
 
@@ -62,8 +62,16 @@ export interface RecoveryBriefing {
 
 // ─── JSONL Parsing ────────────────────────────────────────────────────────────
 
+/** Max bytes to parse from a JSONL source. Prevents V8 OOM on bloated activity logs. */
+const MAX_JSONL_BYTES = 10 * 1024 * 1024; // 10 MB
+
 function parseJSONL(raw: string): unknown[] {
-  return raw.trim().split("\n").map(line => {
+  // If the file is enormous, only parse the tail (most recent entries).
+  // This prevents the OOM crash path: large file → split → map → parse → OOM.
+  const source = raw.length > MAX_JSONL_BYTES
+    ? raw.slice(-MAX_JSONL_BYTES)
+    : raw;
+  return source.trim().split("\n").map(line => {
     try { return JSON.parse(line); }
     catch { return null; }
   }).filter(Boolean) as unknown[];
@@ -239,10 +247,15 @@ export function synthesizeCrashRecovery(
 
     // Primary source: surviving pi session file
     if (sessionFile && existsSync(sessionFile)) {
-      const raw = readFileSync(sessionFile, "utf-8");
-      const allEntries = parseJSONL(raw);
-      const sessionEntries = extractLastSession(allEntries);
-      trace = extractTrace(sessionEntries);
+      const stat = statSync(sessionFile, { throwIfNoEntry: false });
+      const fileSize = stat?.size ?? 0;
+      // Skip files that would blow up memory; fall back to activity log
+      if (fileSize <= MAX_JSONL_BYTES * 2) {
+        const raw = readFileSync(sessionFile, "utf-8");
+        const allEntries = parseJSONL(raw);
+        const sessionEntries = extractLastSession(allEntries);
+        trace = extractTrace(sessionEntries);
+      }
     }
 
     // Fallback: last GSD activity log

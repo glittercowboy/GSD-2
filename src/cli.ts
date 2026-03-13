@@ -8,14 +8,14 @@ import {
   InteractiveMode,
   runPrintMode,
   runRpcMode,
-} from '@mariozechner/pi-coding-agent'
+} from '@gsd/pi-coding-agent'
 import { existsSync, readdirSync, renameSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { agentDir, sessionsDir, authFilePath } from './app-paths.js'
 import { initResources, buildResourceLoader } from './resource-loader.js'
 import { ensureManagedTools } from './tool-bootstrap.js'
 import { loadStoredEnvKeys } from './wizard.js'
-import { migratePiCredentials } from './pi-migration.js'
+import { getPiDefaultModelAndProvider, migratePiCredentials } from './pi-migration.js'
 import { shouldRunOnboarding, runOnboarding } from './onboarding.js'
 
 // ---------------------------------------------------------------------------
@@ -24,6 +24,7 @@ import { shouldRunOnboarding, runOnboarding } from './onboarding.js'
 interface CliFlags {
   mode?: 'text' | 'json' | 'rpc'
   print?: boolean
+  continue?: boolean
   noSession?: boolean
   model?: string
   extensions: string[]
@@ -42,6 +43,8 @@ function parseCliArgs(argv: string[]): CliFlags {
       if (m === 'text' || m === 'json' || m === 'rpc') flags.mode = m
     } else if (arg === '--print' || arg === '-p') {
       flags.print = true
+    } else if (arg === '--continue' || arg === '-c') {
+      flags.continue = true
     } else if (arg === '--no-session') {
       flags.noSession = true
     } else if (arg === '--model' && i + 1 < args.length) {
@@ -61,6 +64,7 @@ function parseCliArgs(argv: string[]): CliFlags {
       process.stdout.write('Options:\n')
       process.stdout.write('  --mode <text|json|rpc>   Output mode (default: interactive)\n')
       process.stdout.write('  --print, -p              Single-shot print mode\n')
+      process.stdout.write('  --continue, -c           Resume the most recent session\n')
       process.stdout.write('  --model <id>             Override model (e.g. claude-opus-4-6)\n')
       process.stdout.write('  --no-session             Disable session persistence\n')
       process.stdout.write('  --extension <path>       Load additional extension\n')
@@ -111,22 +115,30 @@ const settingsManager = SettingsManager.create(agentDir)
 const configuredProvider = settingsManager.getDefaultProvider()
 const configuredModel = settingsManager.getDefaultModel()
 const allModels = modelRegistry.getAll()
+const availableModels = modelRegistry.getAvailable()
 const configuredExists = configuredProvider && configuredModel &&
   allModels.some((m) => m.provider === configuredProvider && m.id === configuredModel)
+const configuredAvailable = configuredProvider && configuredModel &&
+  availableModels.some((m) => m.provider === configuredProvider && m.id === configuredModel)
 
-if (!configuredModel || !configuredExists) {
-  // Fallback: pick the best available Anthropic model
+if (!configuredModel || !configuredExists || !configuredAvailable) {
+  const piDefault = getPiDefaultModelAndProvider()
   const preferred =
-    allModels.find((m) => m.provider === 'anthropic' && m.id === 'claude-opus-4-6') ||
-    allModels.find((m) => m.provider === 'anthropic' && m.id.includes('opus')) ||
-    allModels.find((m) => m.provider === 'anthropic')
+    (piDefault
+      ? availableModels.find((m) => m.provider === piDefault.provider && m.id === piDefault.model)
+      : undefined) ||
+    availableModels.find((m) => m.provider === 'openai' && m.id === 'gpt-5.4') ||
+    availableModels.find((m) => m.provider === 'openai') ||
+    availableModels.find((m) => m.provider === 'anthropic' && m.id === 'claude-opus-4-6') ||
+    availableModels.find((m) => m.provider === 'anthropic' && m.id.includes('opus')) ||
+    availableModels.find((m) => m.provider === 'anthropic') ||
+    availableModels[0]
   if (preferred) {
     settingsManager.setDefaultModelAndProvider(preferred.provider, preferred.id)
   }
 }
 
-// Default thinking level: off (always reset if not explicitly set)
-if (settingsManager.getDefaultThinkingLevel() !== 'off' && !configuredExists) {
+if (settingsManager.getDefaultThinkingLevel() !== 'off' && (!configuredExists || !configuredAvailable)) {
   settingsManager.setDefaultThinkingLevel('off')
 }
 
@@ -239,7 +251,9 @@ if (existsSync(sessionsDir)) {
   }
 }
 
-const sessionManager = SessionManager.create(cwd, projectSessionsDir)
+const sessionManager = cliFlags.continue
+  ? SessionManager.continueRecent(cwd, projectSessionsDir)
+  : SessionManager.create(cwd, projectSessionsDir)
 
 initResources(agentDir)
 const resourceLoader = buildResourceLoader(agentDir)

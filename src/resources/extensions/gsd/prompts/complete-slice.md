@@ -6,17 +6,19 @@ All relevant context has been preloaded below — the slice plan, all task summa
 
 {{inlinedContext}}
 
+**Match effort to complexity.** A simple slice with 1-2 tasks needs a brief summary and lightweight verification. A complex slice with 5 tasks across multiple subsystems needs thorough verification and a detailed summary. Scale the work below accordingly.
+
 Then:
 1. Read the templates:
    - `~/.gsd/agent/extensions/gsd/templates/slice-summary.md`
    - `~/.gsd/agent/extensions/gsd/templates/uat.md`
 2. If a `GSD Skill Preferences` block is present in system context, use it to decide which skills to load and follow during completion, without relaxing required verification or artifact rules
 3. Run all slice-level verification checks defined in the slice plan. All must pass before marking the slice done. If any fail, fix them first.
-4. Confirm the slice's observability/diagnostic surfaces are real and useful where relevant: status inspection works, failure state is externally visible, structured errors/logs are actionable, and hidden failures are not being mistaken for success.
-5. If `.gsd/REQUIREMENTS.md` exists, update it based on what this slice actually proved. Move requirements between Active, Validated, Deferred, Blocked, or Out of Scope only when the evidence from execution supports that change. Surface any new candidate requirements discovered during execution instead of silently dropping them.
-6. Write `{{sliceSummaryAbsPath}}` (compress all task summaries). Fill the requirement-related sections explicitly.
-7. Write `{{sliceUatAbsPath}}`. Fill the new `UAT Type`, `Requirements Proved By This UAT`, and `Not Proven By This UAT` sections explicitly.
-8. Review task summaries for `key_decisions`. Ensure any significant architectural, pattern, or observability decisions are in `.gsd/DECISIONS.md`. If any are missing, append them now.
+4. If the slice plan includes observability/diagnostic surfaces, confirm they work. Skip this for simple slices that don't have observability sections.
+5. If `.gsd/REQUIREMENTS.md` exists, update it based on what this slice actually proved. Move requirements between Active, Validated, Deferred, Blocked, or Out of Scope only when the evidence from execution supports that change.
+6. Write `{{sliceSummaryAbsPath}}` (compress all task summaries).
+7. Write `{{sliceUatAbsPath}}`.
+8. Review task summaries for `key_decisions`. Append any significant decisions to `.gsd/DECISIONS.md` if missing.
 9. Mark {{sliceId}} done in `{{roadmapPath}}` (change `[ ]` to `[x]`)
 10. Do not commit or squash-merge manually — the system auto-commits your changes and handles the merge after this unit succeeds.
 11. Update `.gsd/PROJECT.md` if it exists — refresh current state if needed.
