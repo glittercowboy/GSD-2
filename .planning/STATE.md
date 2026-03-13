@@ -3,11 +3,27 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Native Desktop
 status: in_progress
+last_updated: "2026-03-13T18:19:06Z"
+last_activity: "2026-03-13 — Plan 16-03 complete: ProviderPickerScreen (2x2 card grid, OAuth/API-key flow), OAuthConnectFlow (amber spinner, 5-min timeout), ApiKeyForm (masked input + Eye toggle); App.tsx wired with useAuthGuard + useTokenRefresh; 691 tests pass"
+stopped_at: "Completed 16-03-PLAN.md"
+progress:
+  total_phases: 10
+  completed_phases: 4
+  total_plans: 33
+  completed_plans: 31
+  percent: 94
+---
+
+---
+gsd_state_version: 1.0
+milestone: v2.0
+milestone_name: Native Desktop
+status: in_progress
 last_updated: "2026-03-13T18:15:00Z"
 last_activity: "2026-03-13 — Plan 16-01 complete: Rust OAuth backend — PKCE S256, token exchange/refresh via reqwest, 7 IPC commands, gsd://oauth/callback handler emitting oauth-callback event; cargo check passes"
 stopped_at: "Completed 16-01-PLAN.md"
 progress:
-  [█████████░] 91%
+  [█████████░] 94%
   total_phases: 10
   completed_phases: 4
   total_plans: 33
@@ -310,12 +326,12 @@ See: .planning/PROJECT.md (updated 2026-03-12)
 
 ## Current Position
 
-Phase: 16 of 20 (OAuth + Keychain) — IN PROGRESS (plan 01 of 4 done)
-Plan: 1 of 4 complete (plan 01 done — Rust OAuth backend: PKCE, token exchange/refresh, 7 IPC commands, gsd:// callback)
-Status: Plan 16-01 complete. cargo check passes. Plans 16-02 through 16-04 remaining.
-Last activity: 2026-03-13 — Plan 16-01 complete: Rust OAuth backend — PKCE S256 generate_pkce, exchange_code, refresh_token, write_auth_json; 7 IPC commands in invoke_handler; gsd://oauth/callback emits oauth-callback event
+Phase: 16 of 20 (OAuth + Keychain) — IN PROGRESS (plan 03 of 4 done)
+Plan: 3 of 4 complete (plans 01-03 done — Rust OAuth backend, TS hooks, Provider Picker UI)
+Status: Plan 16-03 complete. Auth UI components built and wired into App.tsx. Plan 16-04 (e2e verification) remaining.
+Last activity: 2026-03-13 — Plan 16-03 complete: ProviderPickerScreen (2x2 grid), OAuthConnectFlow (amber spinner), ApiKeyForm (masked input + Eye toggle); App.tsx auth guard wired; 691 tests pass
 
-Progress: [██████████] 100% (29/29 plans complete)
+Progress: [█████████░] 94% (31/33 plans complete)
 
 ## Milestone Archive
 
@@ -417,6 +433,8 @@ Progress: [██████████] 100% (29/29 plans complete)
 - [Phase 16-oauth-keychain]: ISO 8601 parsing without chrono — pure arithmetic Euclidean calendar algorithm to minimize dependencies
 - [Phase 16-oauth-keychain]: UriSchemeContext requires app.app_handle().emit() — does not implement Emitter directly
 - [Phase 16-oauth-keychain]: pkce_verifier_{state} keychain key scoped by state to handle concurrent OAuth flows
+- [Phase 16]: Inline styles used for auth screen components — keeps GSD design tokens explicit, avoids Tailwind purging rgba values
+- [Phase 16]: OAuthConnectFlow CSS keyframes injected via style tag — self-contained component, no separate CSS file needed
 
 ### Blockers/Concerns
 
