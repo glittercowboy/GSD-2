@@ -3,6 +3,7 @@
  *
  * Modules:
  * - grep: ripgrep-backed regex search (content + filesystem)
+ * - ps: cross-platform process tree management
  */
 
 export { searchContent, grep } from "./grep/index.js";
@@ -15,3 +16,10 @@ export type {
   SearchOptions,
   SearchResult,
 } from "./grep/index.js";
+
+export {
+  killTree,
+  listDescendants,
+  processGroupId,
+  killProcessGroup,
+} from "./ps/index.js";

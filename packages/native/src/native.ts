@@ -43,4 +43,8 @@ function loadNative(): Record<string, unknown> {
 export const native = loadNative() as {
   search: (content: Buffer | Uint8Array, options: unknown) => unknown;
   grep: (options: unknown) => unknown;
+  killTree: (pid: number, signal: number) => number;
+  listDescendants: (pid: number) => number[];
+  processGroupId: (pid: number) => number | null;
+  killProcessGroup: (pgid: number, signal: number) => boolean;
 };

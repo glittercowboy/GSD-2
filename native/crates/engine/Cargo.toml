@@ -17,3 +17,6 @@ napi-derive = "2"
 
 [build-dependencies]
 napi-build = "2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
