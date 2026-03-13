@@ -162,15 +162,53 @@ fn handle_truncated_value(result: &mut String) {
         return;
     }
 
-    // Check for truncated boolean/null literals after a colon
-    // Find last colon not inside a string to see if we have a truncated value
     let bytes = trimmed.as_bytes();
     let len = bytes.len();
 
-    // Check if the trailing content is a truncated literal
+    // Check for truncated number: digits (possibly with leading minus, dot, or 'e')
+    // at the end after a value-position character
+    if len > 0 {
+        let last = bytes[len - 1];
+        if last.is_ascii_digit() || last == b'.' || last == b'-' || last == b'e' || last == b'E' || last == b'+' {
+            // Walk backwards to find the start of the number-like token
+            let mut start = len;
+            while start > 0 {
+                let b = bytes[start - 1];
+                if b.is_ascii_digit() || b == b'.' || b == b'-' || b == b'e' || b == b'E' || b == b'+' {
+                    start -= 1;
+                } else {
+                    break;
+                }
+            }
+            if start < len {
+                let before = trimmed[..start].trim_end();
+                if before.ends_with(':') || before.ends_with(',') || before.ends_with('[') {
+                    let token = &trimmed[start..];
+                    // If it doesn't parse as a valid number, truncate to the last valid portion
+                    if token.parse::<f64>().is_err() {
+                        // Strip trailing non-digit chars (e.g. "12." -> "12", "1e" -> "1")
+                        let mut valid_end = token.len();
+                        while valid_end > 0 && !token.as_bytes()[valid_end - 1].is_ascii_digit() {
+                            valid_end -= 1;
+                        }
+                        if valid_end > 0 {
+                            result.truncate(start + valid_end);
+                        } else {
+                            // Just a minus or dot with no digits — replace with 0
+                            result.truncate(start);
+                            result.push('0');
+                        }
+                    }
+                    // If it parses fine, leave it as-is
+                    return;
+                }
+            }
+        }
+    }
+
+    // Check for truncated boolean/null literals after a value-position character
     for prefix in &["tru", "tr", "t", "fals", "fal", "fa", "f", "nul", "nu", "n"] {
         if trimmed.ends_with(prefix) {
-            // Verify it's after a colon or comma (i.e., a value position)
             let before = trimmed[..len - prefix.len()].trim_end();
             if before.ends_with(':') || before.ends_with(',') || before.ends_with('[') {
                 let full = match prefix.as_bytes()[0] {
@@ -327,5 +365,46 @@ mod tests {
         let fixed = fix_partial_json(input);
         let v: serde_json::Value = serde_json::from_str(&fixed).unwrap();
         assert_eq!(v.as_array().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn test_fix_truncated_number() {
+        let input = r#"{"key": 12"#;
+        let fixed = fix_partial_json(input);
+        let v: serde_json::Value = serde_json::from_str(&fixed).unwrap();
+        assert_eq!(v["key"], 12);
+    }
+
+    #[test]
+    fn test_fix_truncated_decimal() {
+        let input = r#"{"key": 3."#;
+        let fixed = fix_partial_json(input);
+        let v: serde_json::Value = serde_json::from_str(&fixed).unwrap();
+        assert_eq!(v["key"], 3);
+    }
+
+    #[test]
+    fn test_fix_truncated_negative_number() {
+        let input = r#"{"key": -"#;
+        let fixed = fix_partial_json(input);
+        let v: serde_json::Value = serde_json::from_str(&fixed).unwrap();
+        assert_eq!(v["key"], 0);
+    }
+
+    #[test]
+    fn test_fix_truncated_exponent() {
+        let input = r#"{"key": 1e"#;
+        let fixed = fix_partial_json(input);
+        let v: serde_json::Value = serde_json::from_str(&fixed).unwrap();
+        assert_eq!(v["key"], 1);
+    }
+
+    #[test]
+    fn test_fix_truncated_number_in_array() {
+        let input = r#"[1, 42"#;
+        let fixed = fix_partial_json(input);
+        let v: serde_json::Value = serde_json::from_str(&fixed).unwrap();
+        assert_eq!(v[0], 1);
+        assert_eq!(v[1], 42);
     }
 }
