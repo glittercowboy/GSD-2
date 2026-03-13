@@ -204,6 +204,7 @@ export { ArtifactManager } from "./core/artifact-manager.js";
 export {
 	type CompactionSettings,
 	type ImageSettings,
+	type MemorySettings,
 	type PackageSource,
 	type RetrySettings,
 	SettingsManager,
