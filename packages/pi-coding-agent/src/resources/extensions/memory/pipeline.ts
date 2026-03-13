@@ -6,20 +6,36 @@
  * - Phase 2: Consolidate all extractions into MEMORY.md and memory_summary.md
  */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "fs";
+import { createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "fs";
 import { join } from "path";
+import { createInterface } from "readline";
 import type { MemoryStorage } from "./storage.js";
+
+/** Max session file size to process (50MB) — prevents OOM with concurrent workers */
+const MAX_SESSION_FILE_SIZE = 50 * 1024 * 1024;
 
 /** Secret patterns to redact from LLM output before storage */
 const SECRET_PATTERNS = [
-	// API keys and tokens
+	// API keys and tokens (sk_, pk_, api_key, etc.)
 	/(?:sk|pk|api[_-]?key|token|secret|password|credential|auth)[_-]?\w*[\s:=]+['"]?[\w\-./+=]{20,}['"]?/gi,
 	// AWS keys
 	/AKIA[0-9A-Z]{16}/g,
 	// GitHub tokens
 	/gh[pousr]_[A-Za-z0-9_]{36,}/g,
-	// Generic long hex/base64 tokens
+	// Stripe keys (rk_live_, sk_live_, pk_live_, etc.)
+	/[rsp]k_(?:live|test)_[A-Za-z0-9]{20,}/g,
+	// Supabase / generic JWTs (eyJ...)
+	/eyJ[A-Za-z0-9_-]{20,}\.eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]+/g,
+	// PEM private keys
+	/-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/g,
+	// Generic Bearer tokens
 	/(?:Bearer\s+)[A-Za-z0-9\-._~+/]+=*/gi,
+	// npm tokens
+	/npm_[A-Za-z0-9]{36,}/g,
+	// Anthropic API keys
+	/sk-ant-[A-Za-z0-9\-_]{20,}/g,
+	// OpenAI API keys
+	/sk-[A-Za-z0-9]{40,}/g,
 ];
 
 function redactSecrets(text: string): string {
@@ -54,9 +70,27 @@ interface SessionFileInfo {
 }
 
 /**
+ * Read only the first line of a file without loading the entire contents.
+ */
+async function readFirstLine(filePath: string): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const rl = createInterface({
+			input: createReadStream(filePath, { encoding: "utf-8" }),
+			crlfDelay: Infinity,
+		});
+		rl.on("line", (line) => {
+			rl.close();
+			resolve(line);
+		});
+		rl.on("error", reject);
+		rl.on("close", () => resolve(""));
+	});
+}
+
+/**
  * Scan sessions directory for .jsonl files belonging to this project (cwd).
  */
-function scanSessionFiles(sessionsDir: string, cwd: string): SessionFileInfo[] {
+async function scanSessionFiles(sessionsDir: string, cwd: string): Promise<SessionFileInfo[]> {
 	if (!existsSync(sessionsDir)) {
 		return [];
 	}
@@ -74,10 +108,8 @@ function scanSessionFiles(sessionsDir: string, cwd: string): SessionFileInfo[] {
 				for (const file of files) {
 					const filePath = join(dirPath, file);
 					try {
-						// Read just the first line (session header) to check cwd
-						const content = readFileSync(filePath, "utf-8");
-						const firstNewline = content.indexOf("\n");
-						const headerLine = firstNewline > 0 ? content.slice(0, firstNewline) : content;
+						const headerLine = await readFirstLine(filePath);
+						if (!headerLine) continue;
 						const header = JSON.parse(headerLine);
 
 						if (header.type === "session" && header.cwd === cwd) {
@@ -110,6 +142,10 @@ function scanSessionFiles(sessionsDir: string, cwd: string): SessionFileInfo[] {
  */
 function filterSessionContent(filePath: string): string {
 	try {
+		const st = statSync(filePath);
+		if (st.size > MAX_SESSION_FILE_SIZE) {
+			return "[]";
+		}
 		const content = readFileSync(filePath, "utf-8");
 		const lines = content.split("\n").filter((l) => l.trim());
 		const filtered: Array<{ role: string; content: string }> = [];
@@ -434,7 +470,7 @@ export async function runStartup(
 	const workerId = `worker-${Date.now()}`;
 
 	// Step 1: Scan sessions and upsert threads
-	const sessionFiles = scanSessionFiles(config.sessionsDir, config.cwd);
+	const sessionFiles = await scanSessionFiles(config.sessionsDir, config.cwd);
 
 	// Apply age and idle filters
 	const now = Date.now();
