@@ -124,10 +124,16 @@ export const native = loadNative() as {
   ttsrCompileRules: (rules: unknown[]) => number;
   ttsrCheckBuffer: (handle: number, buffer: string) => string[];
   ttsrFreeRules: (handle: number) => void;
+  processStreamChunk: (chunk: Buffer, state?: unknown) => unknown;
+  stripAnsiNative: (text: string) => string;
+  sanitizeBinaryOutputNative: (text: string) => string;
   parseFrontmatter: (content: string) => unknown;
   extractSection: (content: string, heading: string, level?: number) => unknown;
   extractAllSections: (content: string, level?: number) => string;
   batchParseGsdFiles: (directory: string) => unknown;
   parseRoadmapFile: (content: string) => unknown;
+  parseJson: (text: string) => unknown;
+  parsePartialJson: (text: string) => unknown;
+  parseStreamingJson: (text: string) => unknown;
   xxHash32: (input: string, seed: number) => number;
 };
