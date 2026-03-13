@@ -18,6 +18,53 @@ import {
   SLICE_BRANCH_RE,
 } from "./worktree.ts";
 
+// ─── Native Git Bindings (optional) ────────────────────────────────────────
+
+/**
+ * Lazy-loaded native libgit2 bindings. Loaded once on first access; if the
+ * native addon is unavailable the cache stays null and all call sites fall
+ * back to shelling out to the git CLI.
+ */
+interface NativeGit {
+  gitCurrentBranch: (repoPath: string) => string;
+  gitIsClean: (repoPath: string) => boolean;
+  gitDiff: (repoPath: string, staged?: boolean) => string;
+  gitStatus: (repoPath: string) => { staged: string[]; unstaged: string[]; untracked: string[] };
+  gitStageFiles: (repoPath: string, paths: string[]) => void;
+  gitLog: (repoPath: string, maxCount?: number) => Array<{
+    hash: string;
+    shortHash: string;
+    message: string;
+    authorName: string;
+    authorEmail: string;
+    timestamp: number;
+  }>;
+}
+
+let _nativeGit: NativeGit | null | undefined; // undefined = not yet attempted
+
+/**
+ * Eagerly attempt to load native git bindings on module init.
+ * The dynamic import is async but resolves quickly (native addon).
+ * Until it resolves, getNativeGit() returns null and callers use CLI fallback.
+ */
+import("@gsd/native")
+  .then((mod) => {
+    if (typeof mod.gitCurrentBranch === "function") {
+      _nativeGit = mod as unknown as NativeGit;
+    } else {
+      _nativeGit = null;
+    }
+  })
+  .catch(() => {
+    _nativeGit = null;
+  });
+
+function getNativeGit(): NativeGit | null {
+  // Returns null while the async import is in-flight (undefined) or if it failed (null).
+  return _nativeGit ?? null;
+}
+
 // ─── Types ─────────────────────────────────────────────────────────────────
 
 export interface GitPreferences {
@@ -219,6 +266,23 @@ export class GitServiceImpl {
   }
 
   /**
+   * Check whether the index has any staged changes.
+   * Uses native gitDiff when available, falls back to `git diff --cached --stat`.
+   */
+  private hasStagedChanges(): boolean {
+    const ng = getNativeGit();
+    if (ng) {
+      try {
+        return !!ng.gitDiff(this.basePath, true);
+      } catch {
+        // fall through to CLI
+      }
+    }
+    const diff = this.git(["diff", "--cached", "--stat"], { allowFailure: true });
+    return !!(diff && diff.trim());
+  }
+
+  /**
    * Smart staging: `git add -A` excluding GSD runtime paths via pathspec.
    * Falls back to plain `git add -A` if the exclusion pathspec fails.
    * @param extraExclusions Additional pathspec exclusions beyond RUNTIME_EXCLUSION_PATHS.
@@ -270,8 +334,7 @@ export class GitServiceImpl {
     this.smartStage();
 
     // Check if anything was actually staged
-    const staged = this.git(["diff", "--cached", "--stat"], { allowFailure: true });
-    if (!staged && !opts.allowEmpty) return null;
+    if (!this.hasStagedChanges() && !opts.allowEmpty) return null;
 
     this.git(
       ["commit", "-F", "-", ...(opts.allowEmpty ? ["--allow-empty"] : [])],
@@ -287,15 +350,25 @@ export class GitServiceImpl {
    */
   autoCommit(unitType: string, unitId: string, extraExclusions: readonly string[] = []): string | null {
     // Quick check: is there anything dirty at all?
-    const status = this.git(["status", "--short"], { allowFailure: true });
-    if (!status) return null;
+    const ng = getNativeGit();
+    if (ng) {
+      try {
+        if (ng.gitIsClean(this.basePath)) return null;
+      } catch {
+        // fall through to CLI check
+        const status = this.git(["status", "--short"], { allowFailure: true });
+        if (!status) return null;
+      }
+    } else {
+      const status = this.git(["status", "--short"], { allowFailure: true });
+      if (!status) return null;
+    }
 
     this.smartStage(extraExclusions);
 
     // After smart staging, check if anything was actually staged
     // (all changes might have been runtime files that got excluded)
-    const staged = this.git(["diff", "--cached", "--stat"], { allowFailure: true });
-    if (!staged) return null;
+    if (!this.hasStagedChanges()) return null;
 
     const message = `chore(${unitId}): auto-commit after ${unitType}`;
     this.git(["commit", "-F", "-"], { input: message });
@@ -339,7 +412,7 @@ export class GitServiceImpl {
       const wtBranch = `worktree/${wtName}`;
       const exists = this.git(["show-ref", "--verify", `refs/heads/${wtBranch}`], { allowFailure: true });
       if (exists) return wtBranch;
-      return this.git(["branch", "--show-current"]);
+      return this.getCurrentBranch();
     }
 
     const symbolic = this.git(["symbolic-ref", "refs/remotes/origin/HEAD"], { allowFailure: true });
@@ -354,11 +427,19 @@ export class GitServiceImpl {
     const masterExists = this.git(["show-ref", "--verify", "refs/heads/master"], { allowFailure: true });
     if (masterExists) return "master";
 
-    return this.git(["branch", "--show-current"]);
+    return this.getCurrentBranch();
   }
 
   /** Get the current branch name. */
   getCurrentBranch(): string {
+    const ng = getNativeGit();
+    if (ng) {
+      try {
+        return ng.gitCurrentBranch(this.basePath);
+      } catch {
+        // fall through to CLI
+      }
+    }
     return this.git(["branch", "--show-current"]);
   }
 
@@ -644,8 +725,8 @@ export class GitServiceImpl {
     for (const exclusion of RUNTIME_EXCLUSION_PATHS) {
       this.git(["rm", "--cached", "-r", "--ignore-unmatch", exclusion], { allowFailure: true });
     }
-    const untrackDiff = this.git(["diff", "--cached", "--stat"], { allowFailure: true });
-    if (untrackDiff && untrackDiff.trim()) {
+    const untrackDiff = this.hasStagedChanges();
+    if (untrackDiff) {
       this.git(["commit", "-m", "chore: untrack .gsd/ runtime files before merge"], { allowFailure: true });
     }
 
@@ -655,8 +736,8 @@ export class GitServiceImpl {
     for (const exclusion of RUNTIME_EXCLUSION_PATHS) {
       this.git(["rm", "--cached", "-r", "--ignore-unmatch", exclusion], { allowFailure: true });
     }
-    const branchUntrackDiff = this.git(["diff", "--cached", "--stat"], { allowFailure: true });
-    if (branchUntrackDiff?.trim()) {
+    const branchUntrackDiff = this.hasStagedChanges();
+    if (branchUntrackDiff) {
       this.git(["commit", "-m", "chore: untrack .gsd/ runtime files before merge"], { allowFailure: true });
     }
     this.git(["checkout", mainBranch]);
