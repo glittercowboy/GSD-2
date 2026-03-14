@@ -74,11 +74,11 @@ Requirements for the Native Desktop milestone. Each maps to roadmap phases 12–
 
 ### Project Workspace (WORKSPACE)
 
-- [ ] **WORKSPACE-01**: Managed workspace path for Builder users (`~/GSD Projects/` or `%USERPROFILE%\GSD Projects\`, configurable in Settings); new project auto-creates dir, runs `git init`, runs `gsd` setup, no file picker shown
-- [ ] **WORKSPACE-02**: Project home screen shown when no project open — grid of project cards; empty state differs by mode (Builder: brief-taking input; Developer: Open Folder)
-- [ ] **WORKSPACE-03**: Project card shows name, last active timestamp, active milestone, progress bar, Resume button; `···` menu offers Archive, Open in Finder/Explorer, Remove from list
-- [ ] **WORKSPACE-04**: Multi-session tabs surface from home screen — tab bar appears with 2+ open projects; each tab has own `gsd` process and WebSocket; tab shows project name + amber dot if executing
-- [ ] **WORKSPACE-05**: Project archiving — archive removes from main grid, restore returns it; no files deleted
+- [x] **WORKSPACE-01**: Managed workspace path for Builder users (`~/GSD Projects/` or `%USERPROFILE%\GSD Projects\`, configurable in Settings); new project auto-creates dir, runs `git init`, runs `gsd` setup, no file picker shown
+- [x] **WORKSPACE-02**: Project home screen shown when no project open — grid of project cards; empty state differs by mode (Builder: brief-taking input; Developer: Open Folder)
+- [x] **WORKSPACE-03**: Project card shows name, last active timestamp, active milestone, progress bar, Resume button; `···` menu offers Archive, Open in Finder/Explorer, Remove from list
+- [x] **WORKSPACE-04**: Multi-session tabs surface from home screen — tab bar appears with 2+ open projects; each tab has own `gsd` process and WebSocket; tab shows project name + amber dot if executing
+- [x] **WORKSPACE-05**: Project archiving — archive removes from main grid, restore returns it; no files deleted
 
 ### Distribution (DIST)
 
@@ -168,11 +168,11 @@ Deferred to future release.
 | BUILDER-05 | Phase 18 | Complete |
 | BUILDER-06 | Phase 18 | Complete |
 | BUILDER-07 | Phase 18 | Complete |
-| WORKSPACE-01 | Phase 19 | Pending |
-| WORKSPACE-02 | Phase 19 | Pending |
-| WORKSPACE-03 | Phase 19 | Pending |
-| WORKSPACE-04 | Phase 19 | Pending |
-| WORKSPACE-05 | Phase 19 | Pending |
+| WORKSPACE-01 | Phase 19 | Complete |
+| WORKSPACE-02 | Phase 19 | Complete |
+| WORKSPACE-03 | Phase 19 | Complete |
+| WORKSPACE-04 | Phase 19 | Complete |
+| WORKSPACE-05 | Phase 19 | Complete |
 | DIST-01 | Phase 20 | Pending |
 | DIST-02 | Phase 20 | Pending |
 | DIST-03 | Phase 20 | Pending |

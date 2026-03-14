@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Native Desktop
 status: in_progress
-stopped_at: Completed 18-04-PLAN.md — Phase 18 Builder Mode fully complete
-last_updated: "2026-03-14T12:33:19.945Z"
+stopped_at: Completed 19-01-PLAN.md
+last_updated: "2026-03-14T14:40:50.974Z"
 last_activity: "2026-03-14 — Plan 18-04 complete: human verification approved SC-1..SC-5 — all 7 BUILDER requirements satisfied; Phase 18 Builder Mode fully complete; 748 tests pass"
 progress:
   total_phases: 10
   completed_phases: 7
-  total_plans: 40
-  completed_plans: 39
+  total_plans: 45
+  completed_plans: 40
 ---
 
 ---
@@ -446,13 +446,13 @@ See: .planning/PROJECT.md (updated 2026-03-12)
 
 ## Current Position
 
-Phase: 18 of 20 (Builder Mode) — Complete (4 of 4 plans done)
-Plan: 4 of 4 complete (plan 04 done — human verification SC-1..SC-5 approved)
-Status: Phase 18 complete. Next: Phase 19 Project Workspace.
-Last activity: 2026-03-14 — Plan 18-04 complete: human verification approved SC-1..SC-5 — all 7 BUILDER requirements satisfied; Phase 18 Builder Mode fully complete; 748 tests pass
-Stopped at: Completed 18-04-PLAN.md — Phase 18 Builder Mode fully complete
+Phase: 19 of 20 (Project Workspace) — In Progress (1 of 5 plans done)
+Plan: 1 of 5 complete (plan 01 done — 4 Nyquist Wave 0 RED test stubs created)
+Status: Phase 19 in progress. Next: Phase 19-02 workspace-api implementation.
+Last activity: 2026-03-14 — Plan 19-01 complete: 4 RED test stub files created (workspace-api, project-archiving, project-home-screen, project-tab-bar); 747 passing tests unaffected; WORKSPACE-01..05 test coverage established
+Stopped at: Completed 19-01-PLAN.md
 
-Progress: [██████████] 100% (40/40 plans complete)
+Progress: [█████████░] 89% (40/45 plans complete)
 
 ## Milestone Archive
 
@@ -573,6 +573,9 @@ Progress: [██████████] 100% (40/40 plans complete)
 - [Phase 18-builder-mode]: RoutingBadge and PhaseGateCard rendered in SingleColumnView chat wrapper — collocated with chat UI, avoids z-index conflicts
 - [Phase 18]: All slice card Builder vocab changes prop-conditional via inline ternaries — no component duplication; SliceAccordion and useChatMode read useBuilderMode() internally and thread builderMode down
 - [Phase 18]: Human verification is the sole output of plan 18-04 — SC-1 through SC-5 approved; all 7 BUILDER requirements satisfied
+- [Phase 19]: workspace-api.test.ts uses _setWorkspaceFilePath test helper (mirrors _setRecentFilePath pattern from recent-projects.ts)
+- [Phase 19]: project-archiving.test.ts imports archiveProject/restoreProject/getArchivedProjects from existing recent-projects.ts — RED via named export not found
+- [Phase 19]: Wave 0 stubs: import from src/ that does not exist yet — module-not-found is correct RED signal for Nyquist compliance
 
 ### Blockers/Concerns
 
