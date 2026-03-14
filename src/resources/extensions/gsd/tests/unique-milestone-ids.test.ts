@@ -5,7 +5,7 @@
 //   (b) extractMilestoneSeq: old/new/invalid → number
 //   (c) parseMilestoneId: old/new/invalid → structured result
 //   (d) milestoneIdSort: ordering of mixed arrays
-//   (e) generateMilestonePrefix: format, length, uniqueness
+//   (e) generateMilestoneSuffix: format, length, uniqueness
 //   (f) nextMilestoneId: uniqueEnabled true/false, mixed arrays
 //   (g) maxMilestoneNum: empty, old, new, mixed, non-matching
 //   (h) Preferences round-trip: validate, merge behavior via renderPreferencesForSystemPrompt
@@ -15,46 +15,17 @@ import {
   extractMilestoneSeq,
   parseMilestoneId,
   milestoneIdSort,
-  generateMilestonePrefix,
+  generateMilestoneSuffix,
   nextMilestoneId,
   maxMilestoneNum,
 } from '../guided-flow.ts';
 
 import { renderPreferencesForSystemPrompt } from '../preferences.ts';
 import type { GSDPreferences } from '../preferences.ts';
+import { createTestContext } from './test-helpers.ts';
 
-// ─── Assertion helpers ─────────────────────────────────────────────────────
 
-let passed = 0;
-let failed = 0;
-
-function assertEq<T>(actual: T, expected: T, message: string): void {
-  if (JSON.stringify(actual) === JSON.stringify(expected)) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message} — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-  }
-}
-
-function assertTrue(condition: boolean, message: string): void {
-  if (condition) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message}`);
-  }
-}
-
-function assertMatch(value: string, pattern: RegExp, message: string): void {
-  if (pattern.test(value)) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message} — "${value}" did not match ${pattern}`);
-  }
-}
-
+const { assertEq, assertTrue, assertMatch, report } = createTestContext();
 // ─── Tests ─────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -104,18 +75,18 @@ async function main(): Promise<void> {
   // (c) parseMilestoneId
   {
     console.log('  (c) parseMilestoneId');
-    // Old format — no prefix
+    // Old format — no suffix
     assertEq(parseMilestoneId('M001'), { num: 1 }, 'M001 → { num: 1 }');
     assertEq(parseMilestoneId('M042'), { num: 42 }, 'M042 → { num: 42 }');
 
-    // Unique format — with prefix
-    assertEq(parseMilestoneId('M001-abc123'), { prefix: 'abc123', num: 1 }, 'M001-abc123 → { prefix, num }');
-    assertEq(parseMilestoneId('M042-z9a8b7'), { prefix: 'z9a8b7', num: 42 }, 'M042-z9a8b7 → { prefix, num }');
+    // Unique format — with suffix
+    assertEq(parseMilestoneId('M001-abc123'), { suffix: 'abc123', num: 1 }, 'M001-abc123 → { suffix, num }');
+    assertEq(parseMilestoneId('M042-z9a8b7'), { suffix: 'z9a8b7', num: 42 }, 'M042-z9a8b7 → { suffix, num }');
 
     // Invalid → { num: 0 }
     assertEq(parseMilestoneId(''), { num: 0 }, 'empty → { num: 0 }');
     assertEq(parseMilestoneId('notes'), { num: 0 }, 'notes → { num: 0 }');
-    assertEq(parseMilestoneId('M001-ABCDEF'), { num: 0 }, 'uppercase prefix → { num: 0 }');
+    assertEq(parseMilestoneId('M001-ABCDEF'), { num: 0 }, 'uppercase suffix → { num: 0 }');
     assertEq(parseMilestoneId('M1'), { num: 0 }, 'M1 → { num: 0 }');
   }
 
@@ -135,19 +106,19 @@ async function main(): Promise<void> {
     assertEq([...withInvalid].sort(milestoneIdSort), ['notes', 'M001', 'M002'], 'invalid entries (seq 0) sort first');
   }
 
-  // (e) generateMilestonePrefix
+  // (e) generateMilestoneSuffix
   {
-    console.log('  (e) generateMilestonePrefix');
-    const prefix1 = generateMilestonePrefix();
-    assertEq(prefix1.length, 6, 'prefix length is 6');
-    assertMatch(prefix1, /^[a-z0-9]{6}$/, 'prefix matches [a-z0-9]{6}');
+    console.log('  (e) generateMilestoneSuffix');
+    const suffix1 = generateMilestoneSuffix();
+    assertEq(suffix1.length, 6, 'suffix length is 6');
+    assertMatch(suffix1, /^[a-z0-9]{6}$/, 'suffix matches [a-z0-9]{6}');
 
-    const prefix2 = generateMilestonePrefix();
-    assertEq(prefix2.length, 6, 'second prefix length is 6');
-    assertMatch(prefix2, /^[a-z0-9]{6}$/, 'second prefix matches [a-z0-9]{6}');
+    const suffix2 = generateMilestoneSuffix();
+    assertEq(suffix2.length, 6, 'second suffix length is 6');
+    assertMatch(suffix2, /^[a-z0-9]{6}$/, 'second suffix matches [a-z0-9]{6}');
 
     // Two calls should produce different results (36^6 = ~2.2B possibilities)
-    assertTrue(prefix1 !== prefix2, 'two calls produce different prefixes');
+    assertTrue(suffix1 !== suffix2, 'two calls produce different suffixes');
   }
 
   // (f) nextMilestoneId
@@ -230,17 +201,7 @@ async function main(): Promise<void> {
     assertTrue(prefs.unique_milestone_ids === true, 'GSDPreferences interface accepts unique_milestone_ids');
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // Results
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  console.log(`\n${'='.repeat(40)}`);
-  console.log(`Results: ${passed} passed, ${failed} failed`);
-  if (failed > 0) {
-    process.exit(1);
-  } else {
-    console.log('All tests passed');
-  }
+  report();
 }
 
 // When run via vitest, wrap in test(); when run via tsx, call directly.

@@ -368,7 +368,7 @@ Three specialized subagents for delegated work:
 
 ## Working in teams
 
-The best practice for working in teams is to ensure unique milestone names across all branches (by using `unique_milestone_ids`) and checking in the right `.gsd/` artifacts to share valueable context between teammates.
+The best practice for working in teams is to ensure unique milestone names across all branches (by using `unique_milestone_ids`) and checking in the right `.gsd/` artifacts to share valuable context between teammates.
 
 ### Suggested .gitignore setup
 ```bash

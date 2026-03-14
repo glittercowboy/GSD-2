@@ -37,26 +37,9 @@ import {
 } from "../worktree.ts";
 
 import { deriveState } from "../state.ts";
+import { createTestContext } from './test-helpers.ts';
 
-let passed = 0;
-let failed = 0;
-
-function assert(condition: boolean, message: string): void {
-  if (condition) passed++;
-  else {
-    failed++;
-    console.error(`  FAIL: ${message}`);
-  }
-}
-
-function assertEq<T>(actual: T, expected: T, message: string): void {
-  if (JSON.stringify(actual) === JSON.stringify(expected)) passed++;
-  else {
-    failed++;
-    console.error(`  FAIL: ${message} — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-  }
-}
-
+const { assertEq, assertTrue, report } = createTestContext();
 function run(command: string, cwd: string): string {
   return execSync(command, { cwd, stdio: ["ignore", "pipe", "pipe"], encoding: "utf-8" }).trim();
 }
@@ -109,7 +92,7 @@ async function main(): Promise<void> {
 
   console.log("\n=== Create worktree ===");
   const wt = createWorktree(base, "alpha");
-  assert(existsSync(wt.path), "worktree created on disk");
+  assertTrue(existsSync(wt.path), "worktree created on disk");
   assertEq(wt.branch, "worktree/alpha", "worktree branch name");
 
   console.log("\n=== Worktree detection ===");
@@ -125,9 +108,9 @@ async function main(): Promise<void> {
 
   console.log("\n=== ensureSliceBranch in worktree ===");
   const created = ensureSliceBranch(wt.path, "M001", "S01");
-  assert(created, "slice branch created");
+  assertTrue(created, "slice branch created");
   assertEq(getCurrentBranch(wt.path), "gsd/alpha/M001/S01", "worktree-namespaced slice branch");
-  assert(isOnSliceBranch(wt.path), "isOnSliceBranch returns true");
+  assertTrue(isOnSliceBranch(wt.path), "isOnSliceBranch returns true");
   assertEq(getActiveSliceBranch(wt.path), "gsd/alpha/M001/S01", "getActiveSliceBranch returns namespaced branch");
 
   // ── Verify branch name helper ──────────────────────────────────────────────
@@ -150,19 +133,19 @@ async function main(): Promise<void> {
   // mergeSliceToMain should merge into worktree/alpha
   const merge = mergeSliceToMain(wt.path, "M001", "S01", "First");
   assertEq(merge.branch, "gsd/alpha/M001/S01", "merged the namespaced branch");
-  assert(merge.deletedBranch, "slice branch deleted after merge");
+  assertTrue(merge.deletedBranch, "slice branch deleted after merge");
   assertEq(getCurrentBranch(wt.path), "worktree/alpha", "still on worktree branch after merge");
-  assert(readFileSync(join(wt.path, "feature.txt"), "utf-8").includes("new feature"), "merge brought feature to worktree branch");
+  assertTrue(readFileSync(join(wt.path, "feature.txt"), "utf-8").includes("new feature"), "merge brought feature to worktree branch");
 
   // Verify slice branch is gone
   const branches = run("git branch", base);
-  assert(!branches.includes("gsd/alpha/M001/S01"), "slice branch cleaned up");
+  assertTrue(!branches.includes("gsd/alpha/M001/S01"), "slice branch cleaned up");
 
   // ── Second slice in same worktree ──────────────────────────────────────────
 
   console.log("\n=== Second slice in worktree ===");
   const created2 = ensureSliceBranch(wt.path, "M001", "S02");
-  assert(created2, "S02 branch created");
+  assertTrue(created2, "S02 branch created");
   assertEq(getCurrentBranch(wt.path), "gsd/alpha/M001/S02", "on S02 namespaced branch");
 
   writeFileSync(join(wt.path, "feature2.txt"), "second feature\n", "utf-8");
@@ -179,7 +162,7 @@ async function main(): Promise<void> {
   console.log("\n=== Main tree independent slice work ===");
   assertEq(getCurrentBranch(base), "main", "main tree still on main");
   const mainCreated = ensureSliceBranch(base, "M001", "S01");
-  assert(mainCreated, "main tree can create S01 branch (no conflict with worktree)");
+  assertTrue(mainCreated, "main tree can create S01 branch (no conflict with worktree)");
   assertEq(getCurrentBranch(base), "gsd/M001/S01", "main tree on plain branch name");
 
   writeFileSync(join(base, "main-feature.txt"), "main work\n", "utf-8");
@@ -199,18 +182,18 @@ async function main(): Promise<void> {
 
   // Both worktrees can create S01 branches without conflict
   const betaCreated = ensureSliceBranch(wt2.path, "M001", "S01");
-  assert(betaCreated, "beta worktree can create S01");
+  assertTrue(betaCreated, "beta worktree can create S01");
   assertEq(getCurrentBranch(wt2.path), "gsd/beta/M001/S01", "beta has its own namespaced branch");
 
   // Alpha worktree can re-create S01 too (it was already merged+deleted earlier)
   const alphaReCreated = ensureSliceBranch(wt.path, "M001", "S01");
-  assert(alphaReCreated, "alpha worktree can re-create S01");
+  assertTrue(alphaReCreated, "alpha worktree can re-create S01");
   assertEq(getCurrentBranch(wt.path), "gsd/alpha/M001/S01", "alpha re-created S01");
 
   // Both exist simultaneously
   const allBranches = run("git branch", base);
-  assert(allBranches.includes("gsd/alpha/M001/S01"), "alpha S01 branch exists");
-  assert(allBranches.includes("gsd/beta/M001/S01"), "beta S01 branch exists");
+  assertTrue(allBranches.includes("gsd/alpha/M001/S01"), "alpha S01 branch exists");
+  assertTrue(allBranches.includes("gsd/beta/M001/S01"), "beta S01 branch exists");
 
   // ── State derivation in worktree ───────────────────────────────────────────
 
@@ -218,7 +201,7 @@ async function main(): Promise<void> {
   // Switch alpha back to its base so deriveState sees milestone files
   switchToMain(wt.path);
   const state = await deriveState(wt.path);
-  assert(state.activeMilestone !== null, "worktree has active milestone");
+  assertTrue(state.activeMilestone !== null, "worktree has active milestone");
   assertEq(state.activeMilestone?.id, "M001", "correct milestone");
 
   // ── autoCommitCurrentBranch in worktree ────────────────────────────────────
@@ -227,7 +210,7 @@ async function main(): Promise<void> {
   ensureSliceBranch(wt2.path, "M001", "S01"); // re-checkout if needed
   writeFileSync(join(wt2.path, "dirty.txt"), "uncommitted\n", "utf-8");
   const commitMsg = autoCommitCurrentBranch(wt2.path, "execute-task", "M001/S01/T01");
-  assert(commitMsg !== null, "auto-commit works in worktree");
+  assertTrue(commitMsg !== null, "auto-commit works in worktree");
   assertEq(run("git status --short", wt2.path), "", "worktree clean after auto-commit");
 
   // ── Cleanup ────────────────────────────────────────────────────────────────
@@ -242,9 +225,7 @@ async function main(): Promise<void> {
 
   rmSync(base, { recursive: true, force: true });
 
-  console.log(`\nResults: ${passed} passed, ${failed} failed`);
-  if (failed > 0) process.exit(1);
-  console.log("All tests passed ✓");
+  report();
 }
 
 main().catch((error) => {

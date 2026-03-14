@@ -11,6 +11,7 @@ import {
   type SliceAggregate,
   formatCostProjection,
 } from "../metrics.js";
+import { createTestContext } from './test-helpers.ts';
 
 // ─── Test helpers ─────────────────────────────────────────────────────────────
 
@@ -24,27 +25,7 @@ function makeSliceAggregate(sliceId: string, cost: number): SliceAggregate {
   };
 }
 
-let passed = 0;
-let failed = 0;
-
-function assert(condition: boolean, message: string): void {
-  if (condition) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message}`);
-  }
-}
-
-function assertEq<T>(actual: T, expected: T, message: string): void {
-  if (actual === expected) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message} — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-  }
-}
-
+const { assertEq, assertTrue, report } = createTestContext();
 // ─── formatCostProjection ─────────────────────────────────────────────────────
 
 console.log("\n=== formatCostProjection ===");
@@ -68,7 +49,7 @@ console.log("\n=== formatCostProjection ===");
     makeSliceAggregate("M001/S02", 0.10),
   ];
   const result = formatCostProjection(slices, 5);
-  assert(result.length > 0, "two slices → projection shown");
+  assertTrue(result.length > 0, "two slices → projection shown");
 }
 
 // 4. Two-slice result: result[0] contains "$" (cost is formatted)
@@ -78,7 +59,7 @@ console.log("\n=== formatCostProjection ===");
     makeSliceAggregate("M001/S02", 0.10),
   ];
   const result = formatCostProjection(slices, 5);
-  assert(result.length > 0 && result[0].includes("$"), "projection line contains \"$\"");
+  assertTrue(result.length > 0 && result[0].includes("$"), "projection line contains \"$\"");
 }
 
 // 5. Budget ceiling hit: total $0.20 >= ceiling $0.05 → line contains "ceiling"
@@ -91,7 +72,7 @@ console.log("\n=== formatCostProjection ===");
   const hasCeilingLine = result.some(
     line => line.toLowerCase().includes("ceiling")
   );
-  assert(hasCeilingLine, "ceiling warning appears when total ($0.20) >= ceiling ($0.05)");
+  assertTrue(hasCeilingLine, "ceiling warning appears when total ($0.20) >= ceiling ($0.05)");
 }
 
 // 6. Budget ceiling not hit: total $0.20 < ceiling $100.00 → no ceiling line
@@ -104,7 +85,7 @@ console.log("\n=== formatCostProjection ===");
   const hasCeilingLine = result.some(
     line => line.toLowerCase().includes("ceiling")
   );
-  assert(!hasCeilingLine, "no ceiling warning when total ($0.20) < ceiling ($100.00)");
+  assertTrue(!hasCeilingLine, "no ceiling warning when total ($0.20) < ceiling ($100.00)");
 }
 
 // 7. No ceiling arg → no ceiling line
@@ -117,7 +98,7 @@ console.log("\n=== formatCostProjection ===");
   const hasCeilingLine = result.some(
     line => line.toLowerCase().includes("ceiling")
   );
-  assert(!hasCeilingLine, "no ceiling warning when no ceiling is set");
+  assertTrue(!hasCeilingLine, "no ceiling warning when no ceiling is set");
 }
 
 // 8. Rounding: avg $0.10 × 5 remaining = $0.50 → result[0] contains "$0.50"
@@ -128,7 +109,7 @@ console.log("\n=== formatCostProjection ===");
   ];
   const result = formatCostProjection(slices, 5);
   const hasRoundedCost = result.some(line => line.includes("$0.50"));
-  assert(hasRoundedCost, "projected cost $0.50 (avg $0.10 × 5 remaining) appears in output");
+  assertTrue(hasRoundedCost, "projected cost $0.50 (avg $0.10 × 5 remaining) appears in output");
 }
 
 // 9. Bare milestone entries excluded from average:
@@ -142,7 +123,7 @@ console.log("\n=== formatCostProjection ===");
   ];
   const result = formatCostProjection(slices, 3);
   const hasCorrectProjection = result.some(line => line.includes("$0.30"));
-  assert(
+  assertTrue(
     hasCorrectProjection,
     "bare milestone entry excluded from avg: projection shows $0.30 (avg $0.10 × 3), not $1.83 (including $5.00 entry)"
   );
@@ -150,11 +131,4 @@ console.log("\n=== formatCostProjection ===");
 
 // ─── Summary ──────────────────────────────────────────────────────────────────
 
-console.log(`\n${"=".repeat(40)}`);
-console.log(`Results: ${passed} passed, ${failed} failed`);
-if (failed > 0) {
-  console.error(`${failed} test(s) failed`);
-  process.exit(1);
-} else {
-  console.log("All tests passed ✓");
-}
+report();

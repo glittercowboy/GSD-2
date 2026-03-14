@@ -13,28 +13,9 @@ import {
   snapshotUnitMetrics,
   type MetricsLedger,
 } from "../metrics.js";
+import { createTestContext } from './test-helpers.ts';
 
-let passed = 0;
-let failed = 0;
-
-function assert(condition: boolean, message: string): void {
-  if (condition) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message}`);
-  }
-}
-
-function assertEq<T>(actual: T, expected: T, message: string): void {
-  if (JSON.stringify(actual) === JSON.stringify(expected)) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message} — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-  }
-}
-
+const { assertEq, assertTrue, report } = createTestContext();
 // ─── Setup ────────────────────────────────────────────────────────────────────
 
 const tmpBase = mkdtempSync(join(tmpdir(), "gsd-metrics-test-"));
@@ -63,11 +44,11 @@ console.log("\n=== initMetrics / getLedger ===");
 
 {
   resetMetrics();
-  assert(getLedger() === null, "ledger null before init");
+  assertTrue(getLedger() === null, "ledger null before init");
 
   initMetrics(tmpBase);
   const ledger = getLedger();
-  assert(ledger !== null, "ledger not null after init");
+  assertTrue(ledger !== null, "ledger not null after init");
   assertEq(ledger!.version, 1, "version is 1");
   assertEq(ledger!.units.length, 0, "no units initially");
 }
@@ -113,14 +94,14 @@ console.log("\n=== snapshotUnitMetrics ===");
 
   const unit = snapshotUnitMetrics(ctx, "execute-task", "M001/S01/T01", Date.now() - 5000, "claude-sonnet-4-20250514");
 
-  assert(unit !== null, "unit returned");
+  assertTrue(unit !== null, "unit returned");
   assertEq(unit!.type, "execute-task", "type");
   assertEq(unit!.id, "M001/S01/T01", "id");
   assertEq(unit!.tokens.input, 13000, "input tokens (5000+8000)");
   assertEq(unit!.tokens.output, 3000, "output tokens (2000+1000)");
   assertEq(unit!.tokens.cacheRead, 9000, "cacheRead (3000+6000)");
   assertEq(unit!.tokens.total, 25700, "total tokens (10500+15200)");
-  assert(Math.abs(unit!.cost - 0.096) < 0.001, `cost ~0.096 (got ${unit!.cost})`);
+  assertTrue(Math.abs(unit!.cost - 0.096) < 0.001, `cost ~0.096 (got ${unit!.cost})`);
   assertEq(unit!.toolCalls, 1, "1 tool call");
   assertEq(unit!.assistantMessages, 2, "2 assistant messages");
   assertEq(unit!.userMessages, 1, "1 user message");
@@ -169,7 +150,7 @@ console.log("\n=== File content verification ===");
   const parsed: MetricsLedger = JSON.parse(raw);
   assertEq(parsed.version, 1, "file version is 1");
   assertEq(parsed.units.length, 2, "file has 2 units");
-  assert(parsed.projectStartedAt > 0, "projectStartedAt is set");
+  assertTrue(parsed.projectStartedAt > 0, "projectStartedAt is set");
 }
 
 console.log("\n=== Empty session handling ===");
@@ -181,7 +162,7 @@ console.log("\n=== Empty session handling ===");
   // Empty session — no messages
   const ctx = mockCtx([]);
   const unit = snapshotUnitMetrics(ctx, "plan-slice", "M001/S01", Date.now(), "test-model");
-  assert(unit === null, "returns null for empty session");
+  assertTrue(unit === null, "returns null for empty session");
 
   // Ledger shouldn't have grown
   assertEq(getLedger()!.units.length, 2, "still 2 units (empty session not added)");
@@ -192,10 +173,4 @@ console.log("\n=== Empty session handling ===");
 resetMetrics();
 rmSync(tmpBase, { recursive: true, force: true });
 
-console.log(`\n${"=".repeat(40)}`);
-console.log(`Results: ${passed} passed, ${failed} failed`);
-if (failed > 0) {
-  process.exit(1);
-} else {
-  console.log("All tests passed ✓");
-}
+report();

@@ -98,7 +98,7 @@ function buildDiscussPrompt(nextId: string, preamble: string, _basePath: string)
   });
 }
 
-function findMilestoneIds(basePath: string): string[] {
+export function findMilestoneIds(basePath: string): string[] {
   const dir = milestonesDir(basePath);
   try {
     return readdirSync(dir, { withFileTypes: true })
@@ -124,12 +124,12 @@ export function extractMilestoneSeq(id: string): number {
   return m ? parseInt(m[1], 10) : 0;
 }
 
-/** Structured parse of a milestone ID into optional prefix and sequence number. */
-export function parseMilestoneId(id: string): { prefix?: string; num: number } {
+/** Structured parse of a milestone ID into optional suffix and sequence number. */
+export function parseMilestoneId(id: string): { suffix?: string; num: number } {
   const m = id.match(/^M(\d{3})(?:-([a-z0-9]{6}))?$/);
   if (!m) return { num: 0 };
   return {
-    ...(m[2] ? { prefix: m[2] } : {}),
+    ...(m[2] ? { suffix: m[2] } : {}),
     num: parseInt(m[1], 10),
   };
 }
@@ -139,8 +139,8 @@ export function milestoneIdSort(a: string, b: string): number {
   return extractMilestoneSeq(a) - extractMilestoneSeq(b);
 }
 
-/** Generate a 6-char lowercase `[a-z0-9]` prefix using crypto.randomInt(). */
-export function generateMilestonePrefix(): string {
+/** Generate a 6-char lowercase `[a-z0-9]` suffix using crypto.randomInt(). */
+export function generateMilestoneSuffix(): string {
   const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
   let result = "";
   for (let i = 0; i < 6; i++) {
@@ -161,7 +161,7 @@ export function maxMilestoneNum(milestoneIds: string[]): number {
 export function nextMilestoneId(milestoneIds: string[], uniqueEnabled?: boolean): string {
   const seq = String(maxMilestoneNum(milestoneIds) + 1).padStart(3, "0");
   if (uniqueEnabled) {
-    return `M${seq}-${generateMilestonePrefix()}`;
+    return `M${seq}-${generateMilestoneSuffix()}`;
   }
   return `M${seq}`;
 }

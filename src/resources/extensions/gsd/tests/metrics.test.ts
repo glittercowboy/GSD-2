@@ -14,6 +14,7 @@ import {
   formatCost,
   formatTokenCount,
 } from "../metrics.js";
+import { createTestContext } from './test-helpers.ts';
 
 // ─── Test helpers ─────────────────────────────────────────────────────────────
 
@@ -33,34 +34,10 @@ function makeUnit(overrides: Partial<UnitMetrics> = {}): UnitMetrics {
   };
 }
 
-let passed = 0;
-let failed = 0;
-
-function assert(condition: boolean, message: string): void {
-  if (condition) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message}`);
-  }
-}
-
-function assertEq<T>(actual: T, expected: T, message: string): void {
-  if (actual === expected) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message} — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-  }
-}
+const { assertEq, assertTrue, report } = createTestContext();
 
 function assertClose(actual: number, expected: number, tolerance: number, message: string): void {
-  if (Math.abs(actual - expected) <= tolerance) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message} — expected ~${expected}, got ${actual}`);
-  }
+  assertTrue(Math.abs(actual - expected) <= tolerance, `${message} — expected ~${expected}, got ${actual}`);
 }
 
 // ─── Phase classification ─────────────────────────────────────────────────────
@@ -154,16 +131,16 @@ console.log("\n=== aggregateBySlice ===");
   assertEq(slices.length, 3, "3 slice groups");
 
   const s01 = slices.find(s => s.sliceId === "M001/S01");
-  assert(!!s01, "M001/S01 exists");
+  assertTrue(!!s01, "M001/S01 exists");
   assertEq(s01!.units, 2, "M001/S01 has 2 units");
   assertClose(s01!.cost, 0.09, 0.001, "M001/S01 cost");
 
   const s02 = slices.find(s => s.sliceId === "M001/S02");
-  assert(!!s02, "M001/S02 exists");
+  assertTrue(!!s02, "M001/S02 exists");
   assertEq(s02!.units, 1, "M001/S02 has 1 unit");
 
   const mLevel = slices.find(s => s.sliceId === "M001");
-  assert(!!mLevel, "M001 (milestone-level) exists");
+  assertTrue(!!mLevel, "M001 (milestone-level) exists");
 }
 
 // ─── aggregateByModel ─────────────────────────────────────────────────────────
@@ -208,10 +185,4 @@ assertEq(formatTokenCount(1500000), "1.50M", "1.5M");
 
 // ─── Summary ──────────────────────────────────────────────────────────────────
 
-console.log(`\n${"=".repeat(40)}`);
-console.log(`Results: ${passed} passed, ${failed} failed`);
-if (failed > 0) {
-  process.exit(1);
-} else {
-  console.log("All tests passed ✓");
-}
+report();

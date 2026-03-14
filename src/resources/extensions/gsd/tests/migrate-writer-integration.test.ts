@@ -18,28 +18,9 @@ import type {
   GSDTask,
   GSDRequirement,
 } from '../migrate/types.ts';
+import { createTestContext } from './test-helpers.ts';
 
-let passed = 0;
-let failed = 0;
-
-function assert(condition: boolean, message: string): void {
-  if (condition) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message}`);
-  }
-}
-
-function assertEq<T>(actual: T, expected: T, message: string): void {
-  if (JSON.stringify(actual) === JSON.stringify(expected)) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message} — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-  }
-}
-
+const { assertEq, assertTrue, report } = createTestContext();
 // ─── Fixture Builders ──────────────────────────────────────────────────────
 
 function makeTask(id: string, title: string, done: boolean, hasSummary: boolean): GSDTask {
@@ -162,25 +143,25 @@ async function main(): Promise<void> {
       const gsd = join(base, '.gsd');
       const m = join(gsd, 'milestones', 'M001');
 
-      assert(existsSync(join(m, 'M001-ROADMAP.md')), 'incomplete: M001-ROADMAP.md exists');
-      assert(existsSync(join(m, 'M001-CONTEXT.md')), 'incomplete: M001-CONTEXT.md exists');
-      assert(existsSync(join(m, 'M001-RESEARCH.md')), 'incomplete: M001-RESEARCH.md exists');
-      assert(existsSync(join(m, 'slices', 'S01', 'S01-PLAN.md')), 'incomplete: S01-PLAN.md exists');
-      assert(existsSync(join(m, 'slices', 'S02', 'S02-PLAN.md')), 'incomplete: S02-PLAN.md exists');
-      assert(existsSync(join(m, 'slices', 'S01', 'S01-SUMMARY.md')), 'incomplete: S01-SUMMARY.md exists');
-      assert(!existsSync(join(m, 'slices', 'S02', 'S02-SUMMARY.md')), 'incomplete: S02-SUMMARY.md NOT written (null)');
-      assert(existsSync(join(gsd, 'REQUIREMENTS.md')), 'incomplete: REQUIREMENTS.md exists');
-      assert(existsSync(join(gsd, 'PROJECT.md')), 'incomplete: PROJECT.md exists');
-      assert(existsSync(join(gsd, 'DECISIONS.md')), 'incomplete: DECISIONS.md exists');
-      assert(existsSync(join(gsd, 'STATE.md')), 'incomplete: STATE.md exists');
+      assertTrue(existsSync(join(m, 'M001-ROADMAP.md')), 'incomplete: M001-ROADMAP.md exists');
+      assertTrue(existsSync(join(m, 'M001-CONTEXT.md')), 'incomplete: M001-CONTEXT.md exists');
+      assertTrue(existsSync(join(m, 'M001-RESEARCH.md')), 'incomplete: M001-RESEARCH.md exists');
+      assertTrue(existsSync(join(m, 'slices', 'S01', 'S01-PLAN.md')), 'incomplete: S01-PLAN.md exists');
+      assertTrue(existsSync(join(m, 'slices', 'S02', 'S02-PLAN.md')), 'incomplete: S02-PLAN.md exists');
+      assertTrue(existsSync(join(m, 'slices', 'S01', 'S01-SUMMARY.md')), 'incomplete: S01-SUMMARY.md exists');
+      assertTrue(!existsSync(join(m, 'slices', 'S02', 'S02-SUMMARY.md')), 'incomplete: S02-SUMMARY.md NOT written (null)');
+      assertTrue(existsSync(join(gsd, 'REQUIREMENTS.md')), 'incomplete: REQUIREMENTS.md exists');
+      assertTrue(existsSync(join(gsd, 'PROJECT.md')), 'incomplete: PROJECT.md exists');
+      assertTrue(existsSync(join(gsd, 'DECISIONS.md')), 'incomplete: DECISIONS.md exists');
+      assertTrue(existsSync(join(gsd, 'STATE.md')), 'incomplete: STATE.md exists');
 
       // Task files
-      assert(existsSync(join(m, 'slices', 'S01', 'tasks', 'T01-PLAN.md')), 'incomplete: T01-PLAN.md exists');
-      assert(existsSync(join(m, 'slices', 'S01', 'tasks', 'T01-SUMMARY.md')), 'incomplete: T01-SUMMARY.md exists');
-      assert(existsSync(join(m, 'slices', 'S01', 'tasks', 'T02-PLAN.md')), 'incomplete: T02-PLAN.md exists (auth task)');
-      assert(existsSync(join(m, 'slices', 'S01', 'tasks', 'T02-SUMMARY.md')), 'incomplete: T02-SUMMARY.md exists (auth task)');
-      assert(existsSync(join(m, 'slices', 'S02', 'tasks', 'T03-PLAN.md')), 'incomplete: T03-PLAN.md exists');
-      assert(!existsSync(join(m, 'slices', 'S02', 'tasks', 'T03-SUMMARY.md')), 'incomplete: T03-SUMMARY.md NOT written (null)');
+      assertTrue(existsSync(join(m, 'slices', 'S01', 'tasks', 'T01-PLAN.md')), 'incomplete: T01-PLAN.md exists');
+      assertTrue(existsSync(join(m, 'slices', 'S01', 'tasks', 'T01-SUMMARY.md')), 'incomplete: T01-SUMMARY.md exists');
+      assertTrue(existsSync(join(m, 'slices', 'S01', 'tasks', 'T02-PLAN.md')), 'incomplete: T02-PLAN.md exists (auth task)');
+      assertTrue(existsSync(join(m, 'slices', 'S01', 'tasks', 'T02-SUMMARY.md')), 'incomplete: T02-SUMMARY.md exists (auth task)');
+      assertTrue(existsSync(join(m, 'slices', 'S02', 'tasks', 'T03-PLAN.md')), 'incomplete: T03-PLAN.md exists');
+      assertTrue(!existsSync(join(m, 'slices', 'S02', 'tasks', 'T03-SUMMARY.md')), 'incomplete: T03-SUMMARY.md NOT written (null)');
 
       // WrittenFiles counts
       console.log('  --- WrittenFiles counts ---');
@@ -198,8 +179,8 @@ async function main(): Promise<void> {
       const roadmapContent = readFileSync(join(m, 'M001-ROADMAP.md'), 'utf-8');
       const roadmap = parseRoadmap(roadmapContent);
       assertEq(roadmap.slices.length, 2, 'incomplete: roadmap has 2 slices');
-      assert(roadmap.slices[0].done === true, 'incomplete: roadmap S01 is done');
-      assert(roadmap.slices[1].done === false, 'incomplete: roadmap S02 is not done');
+      assertTrue(roadmap.slices[0].done === true, 'incomplete: roadmap S01 is done');
+      assertTrue(roadmap.slices[1].done === false, 'incomplete: roadmap S02 is not done');
       assertEq(roadmap.slices[0].id, 'S01', 'incomplete: roadmap slice 0 id');
       assertEq(roadmap.slices[1].id, 'S02', 'incomplete: roadmap slice 1 id');
 
@@ -208,18 +189,18 @@ async function main(): Promise<void> {
       const s01PlanContent = readFileSync(join(m, 'slices', 'S01', 'S01-PLAN.md'), 'utf-8');
       const s01Plan = parsePlan(s01PlanContent);
       assertEq(s01Plan.tasks.length, 2, 'incomplete: S01 plan has 2 tasks');
-      assert(s01Plan.tasks[0].done === true, 'incomplete: S01 T01 is done');
-      assert(s01Plan.tasks[1].done === true, 'incomplete: S01 T02 is done');
+      assertTrue(s01Plan.tasks[0].done === true, 'incomplete: S01 T01 is done');
+      assertTrue(s01Plan.tasks[1].done === true, 'incomplete: S01 T02 is done');
 
       // (d) parseSummary on S01 summary
       console.log('  --- parseSummary S01 ---');
       const s01SummaryContent = readFileSync(join(m, 'slices', 'S01', 'S01-SUMMARY.md'), 'utf-8');
       const s01Summary = parseSummary(s01SummaryContent);
-      assert(
+      assertTrue(
         (s01Summary.frontmatter.key_files as string[]).length > 0,
         'incomplete: S01 summary has key_files',
       );
-      assert(
+      assertTrue(
         (s01Summary.frontmatter.provides as string[]).length > 0,
         'incomplete: S01 summary has provides',
       );
@@ -228,16 +209,16 @@ async function main(): Promise<void> {
       console.log('  --- deriveState ---');
       const state = await deriveState(base);
       assertEq(state.phase, 'executing', 'incomplete: deriveState phase is executing');
-      assert(state.activeMilestone !== null, 'incomplete: deriveState has activeMilestone');
+      assertTrue(state.activeMilestone !== null, 'incomplete: deriveState has activeMilestone');
       assertEq(state.activeMilestone!.id, 'M001', 'incomplete: deriveState activeMilestone is M001');
-      assert(state.activeSlice !== null, 'incomplete: deriveState has activeSlice');
+      assertTrue(state.activeSlice !== null, 'incomplete: deriveState has activeSlice');
       assertEq(state.activeSlice!.id, 'S02', 'incomplete: deriveState activeSlice is S02');
-      assert(state.activeTask !== null, 'incomplete: deriveState has activeTask');
+      assertTrue(state.activeTask !== null, 'incomplete: deriveState has activeTask');
       assertEq(state.activeTask!.id, 'T03', 'incomplete: deriveState activeTask is T03');
-      assert(state.progress!.slices !== undefined, 'incomplete: deriveState has slices progress');
+      assertTrue(state.progress!.slices !== undefined, 'incomplete: deriveState has slices progress');
       assertEq(state.progress!.slices!.done, 1, 'incomplete: deriveState slices done count');
       assertEq(state.progress!.slices!.total, 2, 'incomplete: deriveState slices total count');
-      assert(state.progress!.tasks !== undefined, 'incomplete: deriveState has tasks progress');
+      assertTrue(state.progress!.tasks !== undefined, 'incomplete: deriveState has tasks progress');
       // S02 has 1 task, 0 done (only active slice tasks counted)
       assertEq(state.progress!.tasks!.done, 0, 'incomplete: deriveState tasks done (in active slice)');
       assertEq(state.progress!.tasks!.total, 1, 'incomplete: deriveState tasks total (in active slice)');
@@ -278,9 +259,9 @@ async function main(): Promise<void> {
 
       // Null research should NOT produce a file
       const m = join(base, '.gsd', 'milestones', 'M001');
-      assert(!existsSync(join(m, 'M001-RESEARCH.md')), 'complete: M001-RESEARCH.md NOT written (null)');
+      assertTrue(!existsSync(join(m, 'M001-RESEARCH.md')), 'complete: M001-RESEARCH.md NOT written (null)');
       // No REQUIREMENTS.md since empty requirements
-      assert(!existsSync(join(base, '.gsd', 'REQUIREMENTS.md')), 'complete: REQUIREMENTS.md NOT written (empty)');
+      assertTrue(!existsSync(join(base, '.gsd', 'REQUIREMENTS.md')), 'complete: REQUIREMENTS.md NOT written (empty)');
 
       // deriveState: all slices done, all tasks done — needs milestone summary for 'complete'
       // Without milestone summary, it should be 'completing-milestone' or 'summarizing'
@@ -288,7 +269,7 @@ async function main(): Promise<void> {
       // All slices are done in roadmap. Milestone summary doesn't exist.
       // deriveState should return 'completing-milestone' since all slices done but no milestone summary.
       assertEq(state.phase, 'completing-milestone', 'complete: deriveState phase is completing-milestone');
-      assert(state.activeMilestone !== null, 'complete: deriveState has activeMilestone');
+      assertTrue(state.activeMilestone !== null, 'complete: deriveState has activeMilestone');
       assertEq(state.activeMilestone!.id, 'M001', 'complete: deriveState activeMilestone is M001');
 
       // generatePreview for complete project
@@ -307,9 +288,7 @@ async function main(): Promise<void> {
     }
   }
 
-  // ─── Results ─────────────────────────────────────────────────────────────
-  console.log(`\n${passed + failed} assertions: ${passed} passed, ${failed} failed`);
-  if (failed > 0) process.exit(1);
+  report();
 }
 
 main().catch((err) => {

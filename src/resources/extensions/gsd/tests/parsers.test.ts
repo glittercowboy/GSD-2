@@ -1,24 +1,7 @@
 import { parseRoadmap, parsePlan, parseSummary, parseContinue, parseRequirementCounts, parseSecretsManifest, formatSecretsManifest } from '../files.ts';
+import { createTestContext } from './test-helpers.ts';
 
-let passed = 0;
-let failed = 0;
-
-function assert(condition: boolean, message: string): void {
-  if (condition) passed++;
-  else {
-    failed++;
-    console.error(`  FAIL: ${message}`);
-  }
-}
-
-function assertEq<T>(actual: T, expected: T, message: string): void {
-  if (JSON.stringify(actual) === JSON.stringify(expected)) passed++;
-  else {
-    failed++;
-    console.error(`  FAIL: ${message} — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-  }
-}
-
+const { assertEq, assertTrue, report } = createTestContext();
 // ═══════════════════════════════════════════════════════════════════════════
 // parseRoadmap tests
 // ═══════════════════════════════════════════════════════════════════════════
@@ -104,7 +87,7 @@ Consumes from S03:
   assertEq(r.boundaryMap.length, 2, 'boundary map entry count');
   assertEq(r.boundaryMap[0].fromSlice, 'S01', 'bm[0] from');
   assertEq(r.boundaryMap[0].toSlice, 'S02', 'bm[0] to');
-  assert(r.boundaryMap[0].produces.includes('types.ts'), 'bm[0] produces mentions types.ts');
+  assertTrue(r.boundaryMap[0].produces.includes('types.ts'), 'bm[0] produces mentions types.ts');
   assertEq(r.boundaryMap[1].fromSlice, 'S02', 'bm[1] from');
   assertEq(r.boundaryMap[1].toSlice, 'S03', 'bm[1] to');
 }
@@ -301,7 +284,7 @@ console.log('\n=== parsePlan: full plan ===');
   assertEq(p.tasks[0].id, 'T01', 'T01 id');
   assertEq(p.tasks[0].title, 'Test parseRoadmap and parsePlan', 'T01 title');
   assertEq(p.tasks[0].done, false, 'T01 not done');
-  assert(p.tasks[0].description.includes('comprehensive tests'), 'T01 description content');
+  assertTrue(p.tasks[0].description.includes('comprehensive tests'), 'T01 description content');
 
   assertEq(p.tasks[1].id, 'T02', 'T02 id');
   assertEq(p.tasks[1].title, 'Test parseSummary and parseContinue', 'T02 title');
@@ -309,7 +292,7 @@ console.log('\n=== parsePlan: full plan ===');
 
   // Files likely touched
   assertEq(p.filesLikelyTouched.length, 3, 'files likely touched count');
-  assert(p.filesLikelyTouched[0].includes('tests/parsers.test.ts'), 'first file');
+  assertTrue(p.filesLikelyTouched[0].includes('tests/parsers.test.ts'), 'first file');
 }
 
 console.log('\n=== parsePlan: multi-line task description concatenation ===');
@@ -342,11 +325,11 @@ console.log('\n=== parsePlan: multi-line task description concatenation ===');
 
   assertEq(p.tasks.length, 2, 'two tasks');
   // Multi-line descriptions should be concatenated with spaces
-  assert(p.tasks[0].description.includes('First line'), 'T01 desc has first line');
-  assert(p.tasks[0].description.includes('Second line'), 'T01 desc has second line');
-  assert(p.tasks[0].description.includes('Third line'), 'T01 desc has third line');
+  assertTrue(p.tasks[0].description.includes('First line'), 'T01 desc has first line');
+  assertTrue(p.tasks[0].description.includes('Second line'), 'T01 desc has second line');
+  assertTrue(p.tasks[0].description.includes('Third line'), 'T01 desc has third line');
   // Verify concatenation with space separator
-  assert(p.tasks[0].description.includes('description. Second'), 'lines joined with space');
+  assertTrue(p.tasks[0].description.includes('description. Second'), 'lines joined with space');
 
   assertEq(p.tasks[1].description, 'Just one line.', 'T02 single-line desc');
 }
@@ -445,7 +428,7 @@ console.log('\n=== parsePlan: task estimate backtick in description ===');
   // The `est:45m` backtick text after ** is not part of the title or description
   // It's on the same line after the regex match captures, so it's in the remainder
   // The description should be the continuation lines
-  assert(p.tasks[0].description.includes('Main description'), 'description from continuation line');
+  assertTrue(p.tasks[0].description.includes('Main description'), 'description from continuation line');
 }
 
 console.log('\n=== parsePlan: uppercase X for done ===');
@@ -544,12 +527,12 @@ console.log('\n=== parsePlan: new-format task entries with Files and Verify subl
   const p = parsePlan(content);
   assertEq(p.tasks.length, 1, 'one task parsed');
   assertEq(p.tasks[0].id, 'T01', 'task id');
-  assert(Array.isArray(p.tasks[0].files), 'files is an array');
+  assertTrue(Array.isArray(p.tasks[0].files), 'files is an array');
   assertEq(p.tasks[0].files!.length, 2, 'files array has two entries');
   assertEq(p.tasks[0].files![0], 'types.ts', 'first file is types.ts');
   assertEq(p.tasks[0].files![1], 'files.ts', 'second file is files.ts');
   assertEq(p.tasks[0].verify, 'run the test suite', 'verify string extracted correctly');
-  assert(p.tasks[0].description.includes('Why: because we need typed plan entries'), 'Why line accumulates into description');
+  assertTrue(p.tasks[0].description.includes('Why: because we need typed plan entries'), 'Why line accumulates into description');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -645,13 +628,13 @@ None.
   // Body fields
   assertEq(s.title, 'T01: Test parseRoadmap and parsePlan', 'summary title');
   assertEq(s.oneLiner, 'Created parsers.test.ts with 98 assertions across 16 test groups.', 'one-liner');
-  assert(s.whatHappened.includes('comprehensive tests'), 'whatHappened content');
+  assertTrue(s.whatHappened.includes('comprehensive tests'), 'whatHappened content');
   assertEq(s.deviations, 'None.', 'deviations');
 
   // Files modified
   assertEq(s.filesModified.length, 3, 'filesModified count');
   assertEq(s.filesModified[0].path, 'tests/parsers.test.ts', 'first file path');
-  assert(s.filesModified[0].description.includes('98 assertions'), 'first file description');
+  assertTrue(s.filesModified[0].description.includes('98 assertions'), 'first file description');
   assertEq(s.filesModified[1].path, 'types.ts', 'second file path');
   assertEq(s.filesModified[2].path, 'files.ts', 'third file path');
 }
@@ -850,11 +833,11 @@ Run the full test suite with node --test.
   assertEq(c.frontmatter.savedAt, '2025-03-10T08:30:00Z', 'continue savedAt');
 
   // Body sections
-  assert(c.completedWork.includes('Steps 1-3 are done'), 'completedWork content');
-  assert(c.remainingWork.includes('Steps 4-5'), 'remainingWork content');
-  assert(c.decisions.includes('manual assert pattern'), 'decisions content');
-  assert(c.context.includes('gsd-s01 worktree'), 'context content');
-  assert(c.nextAction.includes('node --test'), 'nextAction content');
+  assertTrue(c.completedWork.includes('Steps 1-3 are done'), 'completedWork content');
+  assertTrue(c.remainingWork.includes('Steps 4-5'), 'remainingWork content');
+  assertTrue(c.decisions.includes('manual assert pattern'), 'decisions content');
+  assertTrue(c.context.includes('gsd-s01 worktree'), 'context content');
+  assertTrue(c.nextAction.includes('node --test'), 'nextAction content');
 }
 
 console.log('\n=== parseContinue: string step/totalSteps parsed as integers ===');
@@ -940,8 +923,8 @@ Do things.
   const totalIsNaN = Number.isNaN(c.frontmatter.totalSteps);
   // The parser does parseInt which returns NaN for non-numeric strings
   // There's no || 0 fallback on the parseInt path, so NaN is expected
-  assert(stepIsNaN, 'NaN step when non-numeric string');
-  assert(totalIsNaN, 'NaN totalSteps when non-numeric string');
+  assertTrue(stepIsNaN, 'NaN step when non-numeric string');
+  assertTrue(totalIsNaN, 'NaN totalSteps when non-numeric string');
 }
 
 console.log('\n=== parseContinue: all three status variants ===');
@@ -1000,11 +983,11 @@ Next thing.
   assertEq(c.frontmatter.savedAt, '', 'default savedAt empty');
 
   // Body sections still parse
-  assert(c.completedWork.includes('Some work done'), 'completedWork without frontmatter');
-  assert(c.remainingWork.includes('More to do'), 'remainingWork without frontmatter');
-  assert(c.decisions.includes('A decision'), 'decisions without frontmatter');
-  assert(c.context.includes('Some context'), 'context without frontmatter');
-  assert(c.nextAction.includes('Next thing'), 'nextAction without frontmatter');
+  assertTrue(c.completedWork.includes('Some work done'), 'completedWork without frontmatter');
+  assertTrue(c.remainingWork.includes('More to do'), 'remainingWork without frontmatter');
+  assertTrue(c.decisions.includes('A decision'), 'decisions without frontmatter');
+  assertTrue(c.context.includes('Some context'), 'context without frontmatter');
+  assertTrue(c.nextAction.includes('Next thing'), 'nextAction without frontmatter');
 }
 
 console.log('\n=== parseContinue: body section extraction ===');
@@ -1042,12 +1025,12 @@ Pick up at step 3: run the integration tests.
 `;
 
   const c = parseContinue(content);
-  assert(c.completedWork.includes('First paragraph'), 'completedWork first paragraph');
-  assert(c.completedWork.includes('Second paragraph'), 'completedWork second paragraph');
-  assert(c.remainingWork.includes('step 3 and step 4'), 'remainingWork detail');
-  assert(c.decisions.includes('approach A over approach B'), 'decisions detail');
-  assert(c.context.includes('Node 22 required'), 'context detail');
-  assert(c.nextAction.includes('step 3: run the integration tests'), 'nextAction detail');
+  assertTrue(c.completedWork.includes('First paragraph'), 'completedWork first paragraph');
+  assertTrue(c.completedWork.includes('Second paragraph'), 'completedWork second paragraph');
+  assertTrue(c.remainingWork.includes('step 3 and step 4'), 'remainingWork detail');
+  assertTrue(c.decisions.includes('approach A over approach B'), 'decisions detail');
+  assertTrue(c.context.includes('Node 22 required'), 'context detail');
+  assertTrue(c.nextAction.includes('step 3: run the integration tests'), 'nextAction detail');
 }
 
 console.log('\n=== parseContinue: total_steps vs totalSteps key support ===');
@@ -1675,13 +1658,7 @@ console.log('\n=== LLM round-trip: extra blank lines ===');
 
   // Verify the formatted output is cleaner (fewer consecutive blank lines)
   const consecutiveBlanks = formatted.match(/\n{4,}/g);
-  assert(consecutiveBlanks === null, 'blank-lines: formatted output has no 4+ consecutive newlines');
+  assertTrue(consecutiveBlanks === null, 'blank-lines: formatted output has no 4+ consecutive newlines');
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Results
-// ═══════════════════════════════════════════════════════════════════════════
-
-console.log(`\nResults: ${passed} passed, ${failed} failed`);
-if (failed > 0) process.exit(1);
-console.log('All tests passed ✓');
+report();

@@ -8,26 +8,9 @@ import {
   readUnitRuntimeRecord,
   writeUnitRuntimeRecord,
 } from "../unit-runtime.ts";
+import { createTestContext } from './test-helpers.ts';
 
-let passed = 0;
-let failed = 0;
-
-function assert(condition: boolean, message: string): void {
-  if (condition) passed++;
-  else {
-    failed++;
-    console.error(`  FAIL: ${message}`);
-  }
-}
-
-function assertEq<T>(actual: T, expected: T, message: string): void {
-  if (JSON.stringify(actual) === JSON.stringify(expected)) passed++;
-  else {
-    failed++;
-    console.error(`  FAIL: ${message} — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-  }
-}
-
+const { assertEq, assertTrue, report } = createTestContext();
 const base = mkdtempSync(join(tmpdir(), "gsd-unit-runtime-test-"));
 const tasksDir = join(base, ".gsd", "milestones", "M100", "slices", "S02", "tasks");
 mkdirSync(tasksDir, { recursive: true });
@@ -45,18 +28,18 @@ console.log("\n=== runtime record write/read/update ===");
   const second = writeUnitRuntimeRecord(base, "execute-task", "M100/S02/T09", 1000, { phase: "wrapup-warning-sent", wrapupWarningSent: true });
   assertEq(second.wrapupWarningSent, true, "warning persisted");
   const loaded = readUnitRuntimeRecord(base, "execute-task", "M100/S02/T09");
-  assert(loaded !== null, "record readable");
+  assertTrue(loaded !== null, "record readable");
   assertEq(loaded!.phase, "wrapup-warning-sent", "updated phase readable");
 }
 
 console.log("\n=== execute-task durability inspection ===");
 {
   let status = await inspectExecuteTaskDurability(base, "M100/S02/T09");
-  assert(status !== null, "status exists");
+  assertTrue(status !== null, "status exists");
   assertEq(status!.summaryExists, false, "summary initially missing");
   assertEq(status!.taskChecked, false, "task initially unchecked");
   assertEq(status!.nextActionAdvanced, false, "next action initially stale");
-  assert(/summary missing/i.test(formatExecuteTaskRecoveryStatus(status!)), "diagnostic mentions summary");
+  assertTrue(/summary missing/i.test(formatExecuteTaskRecoveryStatus(status!)), "diagnostic mentions summary");
 
   writeFileSync(join(tasksDir, "T09-SUMMARY.md"), "# done\n", "utf-8");
   writeFileSync(
@@ -112,7 +95,7 @@ console.log("\n=== must-haves: all mentioned in summary ===");
   writeFileSync(join(mhBase, ".gsd", "STATE.md"), "## Next Action\nExecute T02 for S01: next thing\n", "utf-8");
 
   const status = await inspectExecuteTaskDurability(mhBase, "M200/S01/T01");
-  assert(status !== null, "mh-all: status exists");
+  assertTrue(status !== null, "mh-all: status exists");
   assertEq(status!.mustHaveCount, 3, "mh-all: mustHaveCount is 3");
   assertEq(status!.mustHavesMentionedInSummary, 3, "mh-all: all 3 must-haves mentioned");
   assertEq(status!.summaryExists, true, "mh-all: summary exists");
@@ -146,12 +129,12 @@ console.log("\n=== must-haves: partially mentioned in summary ===");
   writeFileSync(join(mhBase, ".gsd", "STATE.md"), "## Next Action\nExecute T02 for S02: next thing\n", "utf-8");
 
   const status = await inspectExecuteTaskDurability(mhBase, "M200/S02/T01");
-  assert(status !== null, "mh-partial: status exists");
+  assertTrue(status !== null, "mh-partial: status exists");
   assertEq(status!.mustHaveCount, 3, "mh-partial: mustHaveCount is 3");
   assertEq(status!.mustHavesMentionedInSummary, 1, "mh-partial: only 1 must-have mentioned");
   const diag = formatExecuteTaskRecoveryStatus(status!);
-  assert(diag.includes("must-have gap"), "mh-partial: diagnostic includes 'must-have gap'");
-  assert(diag.includes("1 of 3"), "mh-partial: diagnostic includes '1 of 3'");
+  assertTrue(diag.includes("must-have gap"), "mh-partial: diagnostic includes 'must-have gap'");
+  assertTrue(diag.includes("1 of 3"), "mh-partial: diagnostic includes '1 of 3'");
 }
 
 console.log("\n=== must-haves: no task plan file ===");
@@ -173,7 +156,7 @@ console.log("\n=== must-haves: no task plan file ===");
   writeFileSync(join(mhBase, ".gsd", "STATE.md"), "## Next Action\nExecute T02 for S03: next thing\n", "utf-8");
 
   const status = await inspectExecuteTaskDurability(mhBase, "M200/S03/T01");
-  assert(status !== null, "mh-noplan: status exists");
+  assertTrue(status !== null, "mh-noplan: status exists");
   assertEq(status!.mustHaveCount, 0, "mh-noplan: mustHaveCount is 0 when no task plan");
   assertEq(status!.mustHavesMentionedInSummary, 0, "mh-noplan: mustHavesMentionedInSummary is 0");
 }
@@ -197,7 +180,7 @@ console.log("\n=== must-haves: present but no summary file ===");
   writeFileSync(join(mhBase, ".gsd", "STATE.md"), "## Next Action\nExecute T01 for S04: build parser\n", "utf-8");
 
   const status = await inspectExecuteTaskDurability(mhBase, "M200/S04/T01");
-  assert(status !== null, "mh-nosummary: status exists");
+  assertTrue(status !== null, "mh-nosummary: status exists");
   assertEq(status!.mustHaveCount, 2, "mh-nosummary: mustHaveCount is 2");
   assertEq(status!.mustHavesMentionedInSummary, 0, "mh-nosummary: mustHavesMentionedInSummary is 0 with no summary");
   assertEq(status!.summaryExists, false, "mh-nosummary: summary doesn't exist");
@@ -228,7 +211,7 @@ console.log("\n=== must-haves: substring matching (no backtick tokens) ===");
   writeFileSync(join(mhBase, ".gsd", "STATE.md"), "## Next Action\nExecute T02 for S05: next thing\n", "utf-8");
 
   const status = await inspectExecuteTaskDurability(mhBase, "M200/S05/T01");
-  assert(status !== null, "mh-substr: status exists");
+  assertTrue(status !== null, "mh-substr: status exists");
   assertEq(status!.mustHaveCount, 3, "mh-substr: mustHaveCount is 3");
   // "heuristic" appears in summary for item 1, "diagnostic" for item 2, 
   // "assertions" appears in summary? No — let's check
@@ -236,12 +219,10 @@ console.log("\n=== must-haves: substring matching (no backtick tokens) ===");
   // summary doesn't contain "assertions" → not matched
   assertEq(status!.mustHavesMentionedInSummary, 2, "mh-substr: 2 of 3 matched via substring");
   const diag = formatExecuteTaskRecoveryStatus(status!);
-  assert(diag.includes("must-have gap"), "mh-substr: diagnostic includes gap info");
-  assert(diag.includes("2 of 3"), "mh-substr: diagnostic includes '2 of 3'");
+  assertTrue(diag.includes("must-have gap"), "mh-substr: diagnostic includes gap info");
+  assertTrue(diag.includes("2 of 3"), "mh-substr: diagnostic includes '2 of 3'");
 }
 
 rmSync(mhBase, { recursive: true, force: true });
 rmSync(base, { recursive: true, force: true });
-console.log(`\nResults: ${passed} passed, ${failed} failed`);
-if (failed > 0) process.exit(1);
-console.log("All tests passed ✓");
+report();

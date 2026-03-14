@@ -3,28 +3,9 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { deriveState } from '../state.ts';
+import { createTestContext } from './test-helpers.ts';
 
-let passed = 0;
-let failed = 0;
-
-function assert(condition: boolean, message: string): void {
-  if (condition) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message}`);
-  }
-}
-
-function assertEq<T>(actual: T, expected: T, message: string): void {
-  if (JSON.stringify(actual) === JSON.stringify(expected)) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message} — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-  }
-}
-
+const { assertEq, assertTrue, report } = createTestContext();
 // ─── Fixture Helpers ───────────────────────────────────────────────────────
 
 function createFixtureBase(): string {
@@ -158,7 +139,7 @@ async function main(): Promise<void> {
       assertEq(state.registry[0]?.status, 'complete', 'unblocked-deps: M001 is complete');
       assertEq(state.registry[1]?.status, 'active', 'unblocked-deps: M002 is active');
       assertEq(state.activeMilestone?.id, 'M002', 'unblocked-deps: activeMilestone is M002');
-      assert(state.phase !== 'blocked', 'unblocked-deps: phase is not blocked');
+      assertTrue(state.phase !== 'blocked', 'unblocked-deps: phase is not blocked');
     } finally {
       cleanup(base);
     }
@@ -197,8 +178,8 @@ async function main(): Promise<void> {
       const state = await deriveState(base);
 
       assertEq(state.phase, 'blocked', 'all-blocked: phase is blocked');
-      assert(state.activeMilestone === null || state.activeMilestone !== null, 'all-blocked: state is consistent');
-      assert(state.blockers.length > 0, 'all-blocked: blockers array is non-empty');
+      assertTrue(state.activeMilestone === null || state.activeMilestone !== null, 'all-blocked: state is consistent');
+      assertTrue(state.blockers.length > 0, 'all-blocked: blockers array is non-empty');
     } finally {
       cleanup(base);
     }
@@ -237,7 +218,7 @@ async function main(): Promise<void> {
       assertEq(state.registry[0]?.status, 'active', 'absent-context: M001 is active');
       assertEq(state.registry[1]?.status, 'pending', 'absent-context: M002 is pending');
       assertEq(state.activeMilestone?.id, 'M001', 'absent-context: activeMilestone is M001');
-      assert(state.phase !== 'blocked', 'absent-context: phase is not blocked');
+      assertTrue(state.phase !== 'blocked', 'absent-context: phase is not blocked');
     } finally {
       cleanup(base);
     }
@@ -277,7 +258,7 @@ async function main(): Promise<void> {
 
       assertEq(state.activeMilestone?.id, 'M001', 'forward-dep: activeMilestone is M001');
       assertEq(state.registry[1]?.status, 'complete', 'forward-dep: M002 is complete');
-      assert(state.phase !== 'blocked', 'forward-dep: phase is not blocked');
+      assertTrue(state.phase !== 'blocked', 'forward-dep: phase is not blocked');
     } finally {
       cleanup(base);
     }
@@ -316,23 +297,13 @@ async function main(): Promise<void> {
 
       assertEq(state.registry[0]?.status, 'active', 'empty-deps-list: M001 is active');
       assertEq(state.registry[1]?.status, 'pending', 'empty-deps-list: M002 is pending (M001 not done yet)');
-      assert(state.phase !== 'blocked', 'empty-deps-list: phase is not blocked');
+      assertTrue(state.phase !== 'blocked', 'empty-deps-list: phase is not blocked');
     } finally {
       cleanup(base);
     }
   }
 
-  // ═════════════════════════════════════════════════════════════════════════
-  // Results
-  // ═════════════════════════════════════════════════════════════════════════
-
-  console.log(`\n${'='.repeat(40)}`);
-  console.log(`Results: ${passed} passed, ${failed} failed`);
-  if (failed > 0) {
-    process.exit(1);
-  } else {
-    console.log('All tests passed ✓');
-  }
+  report();
 }
 
 main().catch((error) => {

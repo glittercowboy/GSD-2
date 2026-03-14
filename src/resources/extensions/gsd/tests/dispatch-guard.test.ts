@@ -3,19 +3,9 @@ import { execSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { getPriorSliceCompletionBlocker } from "../dispatch-guard.ts";
+import { createTestContext } from './test-helpers.ts';
 
-let passed = 0;
-let failed = 0;
-
-function assertEq<T>(actual: T, expected: T, message: string): void {
-  if (JSON.stringify(actual) === JSON.stringify(expected)) {
-    passed += 1;
-    return;
-  }
-  failed += 1;
-  console.error(`FAIL: ${message} — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-}
-
+const { assertEq, report } = createTestContext();
 function run(command: string, cwd: string): void {
   execSync(command, { cwd, stdio: ["ignore", "pipe", "pipe"] });
 }
@@ -98,5 +88,4 @@ try {
   rmSync(repo, { recursive: true, force: true });
 }
 
-console.log(`Passed: ${passed}, Failed: ${failed}`);
-if (failed > 0) process.exit(1);
+report();

@@ -1,24 +1,7 @@
 import { validateTaskPlanContent, validateSlicePlanContent } from '../observability-validator.ts';
+import { createTestContext } from './test-helpers.ts';
 
-let passed = 0;
-let failed = 0;
-
-function assert(condition: boolean, message: string): void {
-  if (condition) passed++;
-  else {
-    failed++;
-    console.error(`  FAIL: ${message}`);
-  }
-}
-
-function assertEq<T>(actual: T, expected: T, message: string): void {
-  if (JSON.stringify(actual) === JSON.stringify(expected)) passed++;
-  else {
-    failed++;
-    console.error(`  FAIL: ${message} — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-  }
-}
-
+const { assertEq, assertTrue, report } = createTestContext();
 // ═══════════════════════════════════════════════════════════════════════════
 // validateTaskPlanContent — empty/missing Steps section
 // ═══════════════════════════════════════════════════════════════════════════
@@ -40,7 +23,7 @@ Do something useful.
 
   const issues = validateTaskPlanContent('T01-PLAN.md', content);
   const stepsIssues = issues.filter(i => i.ruleId === 'empty_steps_section');
-  assert(stepsIssues.length >= 1, 'empty Steps section produces empty_steps_section issue');
+  assertTrue(stepsIssues.length >= 1, 'empty Steps section produces empty_steps_section issue');
   if (stepsIssues.length > 0) {
     assertEq(stepsIssues[0].severity, 'warning', 'empty_steps_section severity is warning');
     assertEq(stepsIssues[0].scope, 'task-plan', 'empty_steps_section scope is task-plan');
@@ -62,7 +45,7 @@ Do something useful.
 
   const issues = validateTaskPlanContent('T01-PLAN.md', content);
   const stepsIssues = issues.filter(i => i.ruleId === 'empty_steps_section');
-  assert(stepsIssues.length >= 1, 'missing Steps section produces empty_steps_section issue');
+  assertTrue(stepsIssues.length >= 1, 'missing Steps section produces empty_steps_section issue');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -86,7 +69,7 @@ console.log('\n=== validateTaskPlanContent: placeholder-only Verification ===');
 
   const issues = validateTaskPlanContent('T01-PLAN.md', content);
   const verifyIssues = issues.filter(i => i.ruleId === 'placeholder_verification');
-  assert(verifyIssues.length >= 1, 'placeholder-only Verification produces placeholder_verification issue');
+  assertTrue(verifyIssues.length >= 1, 'placeholder-only Verification produces placeholder_verification issue');
   if (verifyIssues.length > 0) {
     assertEq(verifyIssues[0].severity, 'warning', 'placeholder_verification severity is warning');
     assertEq(verifyIssues[0].scope, 'task-plan', 'placeholder_verification scope is task-plan');
@@ -108,7 +91,7 @@ console.log('\n=== validateTaskPlanContent: Verification with only template text
 
   const issues = validateTaskPlanContent('T01-PLAN.md', content);
   const verifyIssues = issues.filter(i => i.ruleId === 'placeholder_verification');
-  assert(verifyIssues.length >= 1, 'template-text-only Verification produces placeholder_verification issue');
+  assertTrue(verifyIssues.length >= 1, 'template-text-only Verification produces placeholder_verification issue');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -135,7 +118,7 @@ console.log('\n=== validateSlicePlanContent: empty inline task entries ===');
 
   const issues = validateSlicePlanContent('S01-PLAN.md', content);
   const emptyTaskIssues = issues.filter(i => i.ruleId === 'empty_task_entry');
-  assert(emptyTaskIssues.length >= 1, 'task entries with no description produce empty_task_entry issue');
+  assertTrue(emptyTaskIssues.length >= 1, 'task entries with no description produce empty_task_entry issue');
   if (emptyTaskIssues.length > 0) {
     assertEq(emptyTaskIssues[0].severity, 'warning', 'empty_task_entry severity is warning');
     assertEq(emptyTaskIssues[0].scope, 'slice-plan', 'empty_task_entry scope is slice-plan');
@@ -197,8 +180,8 @@ estimated_files: 15
   const issues = validateTaskPlanContent('T01-PLAN.md', content);
   const stepsOverIssues = issues.filter(i => i.ruleId === 'scope_estimate_steps_high');
   const filesOverIssues = issues.filter(i => i.ruleId === 'scope_estimate_files_high');
-  assert(stepsOverIssues.length >= 1, 'estimated_steps=12 (>=10) produces scope_estimate_steps_high issue');
-  assert(filesOverIssues.length >= 1, 'estimated_files=15 (>=12) produces scope_estimate_files_high issue');
+  assertTrue(stepsOverIssues.length >= 1, 'estimated_steps=12 (>=10) produces scope_estimate_steps_high issue');
+  assertTrue(filesOverIssues.length >= 1, 'estimated_files=15 (>=12) produces scope_estimate_files_high issue');
   if (stepsOverIssues.length > 0) {
     assertEq(stepsOverIssues[0].severity, 'warning', 'scope_estimate_steps_high severity is warning');
     assertEq(stepsOverIssues[0].scope, 'task-plan', 'scope_estimate_steps_high scope is task-plan');
@@ -377,10 +360,4 @@ console.log('\n=== Clean slice plan: no plan-quality issues ===');
   assertEq(planQualityIssues.length, 0, 'clean slice plan produces no empty_task_entry issues');
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Results
-// ═══════════════════════════════════════════════════════════════════════════
-
-console.log(`\nResults: ${passed} passed, ${failed} failed`);
-if (failed > 0) process.exit(1);
-console.log('All tests passed ✓');
+report();

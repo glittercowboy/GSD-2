@@ -22,26 +22,9 @@ import {
 import { readIntegrationBranch } from "../git-service.ts";
 import { deriveState } from "../state.ts";
 import { indexWorkspace } from "../workspace-index.ts";
+import { createTestContext } from './test-helpers.ts';
 
-let passed = 0;
-let failed = 0;
-
-function assert(condition: boolean, message: string): void {
-  if (condition) passed++;
-  else {
-    failed++;
-    console.error(`  FAIL: ${message}`);
-  }
-}
-
-function assertEq<T>(actual: T, expected: T, message: string): void {
-  if (JSON.stringify(actual) === JSON.stringify(expected)) passed++;
-  else {
-    failed++;
-    console.error(`  FAIL: ${message} — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-  }
-}
-
+const { assertEq, assertTrue, report } = createTestContext();
 function run(command: string, cwd: string): string {
   return execSync(command, { cwd, stdio: ["ignore", "pipe", "pipe"], encoding: "utf-8" }).trim();
 }
@@ -60,7 +43,7 @@ run("git commit -m 'chore: init'", base);
 async function main(): Promise<void> {
   console.log("\n=== ensureSliceBranch ===");
   const created = ensureSliceBranch(base, "M001", "S01");
-  assert(created, "branch created on first ensure");
+  assertTrue(created, "branch created on first ensure");
   assertEq(getCurrentBranch(base), "gsd/M001/S01", "switched to slice branch");
 
   console.log("\n=== idempotent ensure ===");
@@ -88,8 +71,8 @@ async function main(): Promise<void> {
   // Make dirty
   writeFileSync(join(base, "dirty.txt"), "uncommitted\n", "utf-8");
   const dirtyResult = autoCommitCurrentBranch(base, "execute-task", "M001/S01/T01");
-  assert(dirtyResult !== null, "returns commit message for dirty repo");
-  assert(dirtyResult!.includes("M001/S01/T01"), "commit message includes unit id");
+  assertTrue(dirtyResult !== null, "returns commit message for dirty repo");
+  assertTrue(dirtyResult!.includes("M001/S01/T01"), "commit message includes unit id");
   assertEq(run("git status --short", base), "", "repo is clean after auto-commit");
 
   console.log("\n=== switchToMain ===");
@@ -108,12 +91,12 @@ async function main(): Promise<void> {
   const merge = mergeSliceToMain(base, "M001", "S01", "Slice One");
   assertEq(merge.branch, "gsd/M001/S01", "merge reports branch");
   assertEq(getCurrentBranch(base), "main", "still on main after merge");
-  assert(readFileSync(join(base, "README.md"), "utf-8").includes("slice"), "main got squashed content");
-  assert(merge.deletedBranch, "branch was deleted");
+  assertTrue(readFileSync(join(base, "README.md"), "utf-8").includes("slice"), "main got squashed content");
+  assertTrue(merge.deletedBranch, "branch was deleted");
 
   // Verify branch is actually gone
   const branches = run("git branch", base);
-  assert(!branches.includes("gsd/M001/S01"), "slice branch no longer exists");
+  assertTrue(!branches.includes("gsd/M001/S01"), "slice branch no longer exists");
 
   console.log("\n=== switchToMain auto-commits dirty files ===");
   // Set up S02
@@ -134,12 +117,12 @@ async function main(): Promise<void> {
 
   // Verify the commit happened on the slice branch
   ensureSliceBranch(base, "M001", "S02");
-  assert(readFileSync(join(base, "feature.txt"), "utf-8").includes("new feature"), "dirty file was committed on slice branch");
+  assertTrue(readFileSync(join(base, "feature.txt"), "utf-8").includes("new feature"), "dirty file was committed on slice branch");
   switchToMain(base);
 
   // Now merge S02
   const mergeS02 = mergeSliceToMain(base, "M001", "S02", "Slice Two");
-  assert(readFileSync(join(base, "feature.txt"), "utf-8").includes("new feature"), "main got feature from auto-committed branch");
+  assertTrue(readFileSync(join(base, "feature.txt"), "utf-8").includes("new feature"), "main got feature from auto-committed branch");
   assertEq(mergeS02.deletedBranch, true, "S02 branch deleted");
 
   console.log("\n=== getSliceBranchName ===");
@@ -149,13 +132,13 @@ async function main(): Promise<void> {
 
   console.log("\n=== parseSliceBranch ===");
   const plain = parseSliceBranch("gsd/M001/S01");
-  assert(plain !== null, "parses plain branch");
+  assertTrue(plain !== null, "parses plain branch");
   assertEq(plain!.worktreeName, null, "plain branch has no worktree name");
   assertEq(plain!.milestoneId, "M001", "plain branch milestone");
   assertEq(plain!.sliceId, "S01", "plain branch slice");
 
   const namespaced = parseSliceBranch("gsd/feature-auth/M001/S01");
-  assert(namespaced !== null, "parses worktree-namespaced branch");
+  assertTrue(namespaced !== null, "parses worktree-namespaced branch");
   assertEq(namespaced!.worktreeName, "feature-auth", "worktree name extracted");
   assertEq(namespaced!.milestoneId, "M001", "namespaced branch milestone");
   assertEq(namespaced!.sliceId, "S01", "namespaced branch slice");
@@ -167,11 +150,11 @@ async function main(): Promise<void> {
   assertEq(worktreeBranch, null, "worktree/ prefix is not a slice branch");
 
   console.log("\n=== SLICE_BRANCH_RE ===");
-  assert(SLICE_BRANCH_RE.test("gsd/M001/S01"), "regex matches plain branch");
-  assert(SLICE_BRANCH_RE.test("gsd/my-wt/M001/S01"), "regex matches worktree branch");
-  assert(!SLICE_BRANCH_RE.test("main"), "regex rejects main");
-  assert(!SLICE_BRANCH_RE.test("gsd/"), "regex rejects bare gsd/");
-  assert(!SLICE_BRANCH_RE.test("worktree/foo"), "regex rejects worktree/foo");
+  assertTrue(SLICE_BRANCH_RE.test("gsd/M001/S01"), "regex matches plain branch");
+  assertTrue(SLICE_BRANCH_RE.test("gsd/my-wt/M001/S01"), "regex matches worktree branch");
+  assertTrue(!SLICE_BRANCH_RE.test("main"), "regex rejects main");
+  assertTrue(!SLICE_BRANCH_RE.test("gsd/"), "regex rejects bare gsd/");
+  assertTrue(!SLICE_BRANCH_RE.test("worktree/foo"), "regex rejects worktree/foo");
 
   console.log("\n=== detectWorktreeName ===");
   assertEq(detectWorktreeName("/projects/myapp"), null, "no worktree in plain path");
@@ -204,22 +187,22 @@ async function main(): Promise<void> {
 
   // Verify main does NOT have the artifacts
   const mainRoadmap = run("git show main:.gsd/milestones/M001/M001-ROADMAP.md 2>&1 || echo MISSING", base2);
-  assert(mainRoadmap.includes("MISSING") || mainRoadmap.includes("does not exist"), "main branch lacks roadmap");
+  assertTrue(mainRoadmap.includes("MISSING") || mainRoadmap.includes("does not exist"), "main branch lacks roadmap");
 
   // Now create slice branch from developer — should inherit artifacts
   assertEq(getCurrentBranch(base2), "developer", "on developer branch before ensure");
   const created3 = ensureSliceBranch(base2, "M001", "S01");
-  assert(created3, "slice branch created from developer");
+  assertTrue(created3, "slice branch created from developer");
   assertEq(getCurrentBranch(base2), "gsd/M001/S01", "switched to slice branch");
 
   // The critical assertion: planning artifacts must exist on the slice branch
-  assert(existsSync(join(base2, ".gsd", "milestones", "M001", "M001-ROADMAP.md")), "roadmap exists on slice branch");
-  assert(existsSync(join(base2, ".gsd", "milestones", "M001", "M001-CONTEXT.md")), "context exists on slice branch");
+  assertTrue(existsSync(join(base2, ".gsd", "milestones", "M001", "M001-ROADMAP.md")), "roadmap exists on slice branch");
+  assertTrue(existsSync(join(base2, ".gsd", "milestones", "M001", "M001-CONTEXT.md")), "context exists on slice branch");
 
   // Verify deriveState sees the correct phase (not pre-planning)
   const state2 = await deriveState(base2);
   assertEq(state2.phase, "planning", "deriveState sees planning phase on slice branch");
-  assert(state2.activeSlice !== null, "active slice found");
+  assertTrue(state2.activeSlice !== null, "active slice found");
   assertEq(state2.activeSlice!.id, "S01", "active slice is S01");
 
   rmSync(base2, { recursive: true, force: true });
@@ -246,7 +229,7 @@ async function main(): Promise<void> {
 
   // Creating S02 while on S01 should NOT chain from S01 — should use main
   const created4 = ensureSliceBranch(base3, "M001", "S02");
-  assert(created4, "S02 branch created");
+  assertTrue(created4, "S02 branch created");
   assertEq(getCurrentBranch(base3), "gsd/M001/S02", "switched to S02");
 
   // S02 should be based on main, not on gsd/M001/S01
@@ -285,7 +268,7 @@ async function main(): Promise<void> {
 
     // Verify it was committed (not just written to disk)
     const logOut = run("git log --oneline -1", repo);
-    assert(logOut.includes("integration branch"), "metadata committed to git");
+    assertTrue(logOut.includes("integration branch"), "metadata committed to git");
 
     rmSync(repo, { recursive: true, force: true });
   }
@@ -410,7 +393,7 @@ async function main(): Promise<void> {
     assertEq(getCurrentBranch(repo), "gsd/M001/S01", "multi: on S01");
 
     // Verify S01 has feature branch content
-    assert(existsSync(join(repo, "setup.txt")),
+    assertTrue(existsSync(join(repo, "setup.txt")),
       "multi: S01 inherited feature branch content");
 
     writeFileSync(join(repo, "s01-work.txt"), "s01 output\n");
@@ -423,14 +406,14 @@ async function main(): Promise<void> {
     const s01merge = mergeSliceToMain(repo, "M001", "S01", "First slice");
     assertEq(getCurrentBranch(repo), "feature/big-change",
       "multi: after S01 merge, on feature branch");
-    assert(existsSync(join(repo, "s01-work.txt")),
+    assertTrue(existsSync(join(repo, "s01-work.txt")),
       "multi: S01 work merged to feature branch");
-    assert(s01merge.deletedBranch, "multi: S01 branch deleted");
+    assertTrue(s01merge.deletedBranch, "multi: S01 branch deleted");
 
     // Main should NOT have S01 work
     run("git stash", repo); // stash any .gsd changes
     run("git checkout main", repo);
-    assert(!existsSync(join(repo, "s01-work.txt")),
+    assertTrue(!existsSync(join(repo, "s01-work.txt")),
       "multi: main does NOT have S01 work");
     run("git checkout feature/big-change", repo);
     run("git stash pop || true", repo);
@@ -441,7 +424,7 @@ async function main(): Promise<void> {
     assertEq(getCurrentBranch(repo), "gsd/M001/S02", "multi: on S02");
 
     // S02 should have S01's merged output (branched from feature branch)
-    assert(existsSync(join(repo, "s01-work.txt")),
+    assertTrue(existsSync(join(repo, "s01-work.txt")),
       "multi: S02 has S01 output (inherited via feature branch)");
 
     writeFileSync(join(repo, "s02-work.txt"), "s02 output\n");
@@ -454,18 +437,18 @@ async function main(): Promise<void> {
     const s02merge = mergeSliceToMain(repo, "M001", "S02", "Second slice");
     assertEq(getCurrentBranch(repo), "feature/big-change",
       "multi: after S02 merge, on feature branch");
-    assert(existsSync(join(repo, "s02-work.txt")),
+    assertTrue(existsSync(join(repo, "s02-work.txt")),
       "multi: S02 work merged to feature branch");
-    assert(existsSync(join(repo, "s01-work.txt")),
+    assertTrue(existsSync(join(repo, "s01-work.txt")),
       "multi: S01 work still on feature branch after S02 merge");
-    assert(s02merge.deletedBranch, "multi: S02 branch deleted");
+    assertTrue(s02merge.deletedBranch, "multi: S02 branch deleted");
 
     // Final check: main still untouched
     run("git stash", repo);
     run("git checkout main", repo);
-    assert(!existsSync(join(repo, "s01-work.txt")),
+    assertTrue(!existsSync(join(repo, "s01-work.txt")),
       "multi: main still lacks S01 work at end");
-    assert(!existsSync(join(repo, "s02-work.txt")),
+    assertTrue(!existsSync(join(repo, "s02-work.txt")),
       "multi: main still lacks S02 work at end");
     assertEq(readFileSync(join(repo, "README.md"), "utf-8").trim(), "base",
       "multi: main README unchanged");
@@ -516,7 +499,7 @@ async function main(): Promise<void> {
     const result = mergeSliceToMain(repo, "M001", "S01", "Resume slice");
     assertEq(getCurrentBranch(repo), "my-feature",
       "resume: merge lands on feature branch after re-set");
-    assert(existsSync(join(repo, "work.txt")),
+    assertTrue(existsSync(join(repo, "work.txt")),
       "resume: merged work exists on feature branch");
 
     rmSync(repo, { recursive: true, force: true });
@@ -556,9 +539,9 @@ async function main(): Promise<void> {
     const result = mergeSliceToMain(repo, "M001", "S01", "Compat slice");
     assertEq(getCurrentBranch(repo), "main",
       "compat: merge lands on main");
-    assert(existsSync(join(repo, "feature.txt")),
+    assertTrue(existsSync(join(repo, "feature.txt")),
       "compat: merged work exists on main");
-    assert(result.deletedBranch, "compat: branch deleted");
+    assertTrue(result.deletedBranch, "compat: branch deleted");
 
     rmSync(repo, { recursive: true, force: true });
   }
@@ -596,18 +579,16 @@ async function main(): Promise<void> {
     assertEq(getCurrentBranch(repo), "gsd/M001/S02", "chain: on S02");
 
     // S02 should be based on dev-branch (the integration branch)
-    assert(existsSync(join(repo, "dev-only.txt")),
+    assertTrue(existsSync(join(repo, "dev-only.txt")),
       "chain: S02 has dev-branch content");
-    assert(!existsSync(join(repo, "s01.txt")),
+    assertTrue(!existsSync(join(repo, "s01.txt")),
       "chain: S02 does NOT have S01 content (not chained from S01)");
 
     rmSync(repo, { recursive: true, force: true });
   }
 
   rmSync(base, { recursive: true, force: true });
-  console.log(`\nResults: ${passed} passed, ${failed} failed`);
-  if (failed > 0) process.exit(1);
-  console.log("All tests passed ✓");
+  report();
 }
 
 main().catch((error) => {

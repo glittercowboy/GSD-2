@@ -3,28 +3,9 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { deriveState, isSliceComplete, isMilestoneComplete } from '../state.ts';
+import { createTestContext } from './test-helpers.ts';
 
-let passed = 0;
-let failed = 0;
-
-function assert(condition: boolean, message: string): void {
-  if (condition) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message}`);
-  }
-}
-
-function assertEq<T>(actual: T, expected: T, message: string): void {
-  if (JSON.stringify(actual) === JSON.stringify(expected)) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message} — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-  }
-}
-
+const { assertEq, assertTrue, report } = createTestContext();
 // ─── Fixture Helpers ───────────────────────────────────────────────────────
 
 function createFixtureBase(): string {
@@ -101,7 +82,7 @@ async function main(): Promise<void> {
       const state = await deriveState(base);
 
       assertEq(state.phase, 'pre-planning', 'phase is pre-planning');
-      assert(state.activeMilestone !== null, 'activeMilestone is not null');
+      assertTrue(state.activeMilestone !== null, 'activeMilestone is not null');
       assertEq(state.activeMilestone?.id, 'M001', 'activeMilestone id is M001');
       assertEq(state.activeSlice, null, 'activeSlice is null');
       assertEq(state.activeTask, null, 'activeTask is null');
@@ -130,7 +111,7 @@ async function main(): Promise<void> {
       const state = await deriveState(base);
 
       assertEq(state.phase, 'planning', 'phase is planning');
-      assert(state.activeSlice !== null, 'activeSlice is not null');
+      assertTrue(state.activeSlice !== null, 'activeSlice is not null');
       assertEq(state.activeSlice?.id, 'S01', 'activeSlice id is S01');
       assertEq(state.activeTask, null, 'activeTask is null');
       assertEq(state.progress?.slices?.done, 0, 'slices done = 0');
@@ -172,7 +153,7 @@ async function main(): Promise<void> {
       const state = await deriveState(base);
 
       assertEq(state.phase, 'executing', 'phase is executing');
-      assert(state.activeTask !== null, 'activeTask is not null');
+      assertTrue(state.activeTask !== null, 'activeTask is not null');
       assertEq(state.activeTask?.id, 'T01', 'activeTask id is T01');
       assertEq(state.progress?.tasks?.done, 0, 'tasks done = 0');
       assertEq(state.progress?.tasks?.total, 2, 'tasks total = 2');
@@ -232,9 +213,9 @@ Continue from step 2.
       const state = await deriveState(base);
 
       assertEq(state.phase, 'executing', 'interrupted: phase is executing');
-      assert(state.activeTask !== null, 'interrupted: activeTask is not null');
+      assertTrue(state.activeTask !== null, 'interrupted: activeTask is not null');
       assertEq(state.activeTask?.id, 'T01', 'interrupted: activeTask id is T01');
-      assert(
+      assertTrue(
         state.nextAction.includes('Resume') || state.nextAction.includes('resume') || state.nextAction.includes('continue.md'),
         'interrupted: nextAction mentions Resume/resume/continue.md'
       );
@@ -275,10 +256,10 @@ Continue from step 2.
       const state = await deriveState(base);
 
       assertEq(state.phase, 'summarizing', 'summarizing: phase is summarizing');
-      assert(state.activeSlice !== null, 'summarizing: activeSlice is not null');
+      assertTrue(state.activeSlice !== null, 'summarizing: activeSlice is not null');
       assertEq(state.activeSlice?.id, 'S01', 'summarizing: activeSlice id is S01');
       assertEq(state.activeTask, null, 'summarizing: activeTask is null');
-      assert(
+      assertTrue(
         state.nextAction.toLowerCase().includes('summary') || state.nextAction.toLowerCase().includes('complete'),
         'summarizing: nextAction mentions summary or complete'
       );
@@ -311,7 +292,7 @@ Continue from step 2.
       assertEq(state.phase, 'complete', 'complete: phase is complete');
       assertEq(state.activeSlice, null, 'complete: activeSlice is null');
       assertEq(state.activeTask, null, 'complete: activeTask is null');
-      assert(
+      assertTrue(
         state.nextAction.toLowerCase().includes('complete'),
         'complete: nextAction mentions complete'
       );
@@ -378,7 +359,7 @@ Continue from step 2.
 
       assertEq(state2.phase, 'blocked', 'blocked-B: phase is blocked');
       assertEq(state2.activeSlice, null, 'blocked-B: activeSlice is null');
-      assert(state2.blockers.length > 0, 'blocked-B: blockers array is non-empty');
+      assertTrue(state2.blockers.length > 0, 'blocked-B: blockers array is non-empty');
     } finally {
       cleanup(base2);
     }
@@ -476,7 +457,7 @@ Continue from step 2.
       // Need at least an empty milestones dir for deriveState
       const state = await deriveState(base);
 
-      assert(state.requirements !== undefined, 'requirements: requirements object exists');
+      assertTrue(state.requirements !== undefined, 'requirements: requirements object exists');
       assertEq(state.requirements?.active, 2, 'requirements: active = 2');
       assertEq(state.requirements?.validated, 1, 'requirements: validated = 1');
       assertEq(state.requirements?.deferred, 2, 'requirements: deferred = 2');
@@ -508,7 +489,7 @@ Continue from step 2.
       const state = await deriveState(base);
 
       assertEq(state.phase, 'completing-milestone', 'completing-ms: phase is completing-milestone');
-      assert(state.activeMilestone !== null, 'completing-ms: activeMilestone is not null');
+      assertTrue(state.activeMilestone !== null, 'completing-ms: activeMilestone is not null');
       assertEq(state.activeMilestone?.id, 'M001', 'completing-ms: activeMilestone id is M001');
       assertEq(state.activeSlice, null, 'completing-ms: activeSlice is null');
       assertEq(state.activeTask, null, 'completing-ms: activeTask is null');
@@ -516,7 +497,7 @@ Continue from step 2.
       assertEq(state.registry[0]?.status, 'active', 'completing-ms: registry[0] status is active (not complete)');
       assertEq(state.progress?.slices?.done, 2, 'completing-ms: slices done = 2');
       assertEq(state.progress?.slices?.total, 2, 'completing-ms: slices total = 2');
-      assert(
+      assertTrue(
         state.nextAction.toLowerCase().includes('summary') || state.nextAction.toLowerCase().includes('complete'),
         'completing-ms: nextAction mentions summary or complete'
       );
@@ -670,17 +651,7 @@ Continue from step 2.
     }
   }
 
-  // ═════════════════════════════════════════════════════════════════════════
-  // Results
-  // ═════════════════════════════════════════════════════════════════════════
-
-  console.log(`\n${'='.repeat(40)}`);
-  console.log(`Results: ${passed} passed, ${failed} failed`);
-  if (failed > 0) {
-    process.exit(1);
-  } else {
-    console.log('All tests passed ✓');
-  }
+  report();
 }
 
 main().catch((error) => {

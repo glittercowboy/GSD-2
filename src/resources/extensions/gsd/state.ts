@@ -21,7 +21,6 @@ import {
 } from './files.ts';
 
 import {
-  milestonesDir,
   resolveMilestonePath,
   resolveMilestoneFile,
   resolveSlicePath,
@@ -30,9 +29,8 @@ import {
   resolveGsdRootFile,
 } from './paths.ts';
 import { getActiveSliceBranch } from './worktree.ts';
-import { milestoneIdSort } from './guided-flow.js';
+import { milestoneIdSort, findMilestoneIds } from './guided-flow.js';
 
-import { readdirSync } from 'fs';
 import { join } from 'path';
 
 // ─── Query Functions ───────────────────────────────────────────────────────
@@ -53,24 +51,6 @@ export function isMilestoneComplete(roadmap: Roadmap): boolean {
 
 // ─── State Derivation ──────────────────────────────────────────────────────
 
-/**
- * Find all milestone directory IDs by scanning .gsd/milestones/.
- * Extracts the ID prefix (e.g. "M001") from directory names like "M001-PAYMENT-INTEGRATIONS".
- */
-function findMilestoneIds(basePath: string): string[] {
-  const dir = milestonesDir(basePath);
-  try {
-    return readdirSync(dir, { withFileTypes: true })
-      .filter(d => d.isDirectory())
-      .map(d => {
-        const match = d.name.match(/^(M\d+(?:-[a-z0-9]{6})?)/);
-        return match ? match[1] : d.name;
-      })
-      .sort(milestoneIdSort);
-  } catch {
-    return [];
-  }
-}
 
 /**
  * Returns the ID of the first incomplete milestone, or null if all are complete.

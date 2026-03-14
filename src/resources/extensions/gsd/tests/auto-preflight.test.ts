@@ -3,19 +3,9 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { runGSDDoctor, selectDoctorScope, filterDoctorIssues } from "../doctor.js";
+import { createTestContext } from './test-helpers.ts';
 
-let passed = 0;
-let failed = 0;
-
-function assert(condition: boolean, message: string): void {
-  if (condition) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message}`);
-  }
-}
-
+const { assertTrue, report } = createTestContext();
 const tmpBase = mkdtempSync(join(tmpdir(), "gsd-auto-preflight-test-"));
 const gsd = join(tmpBase, ".gsd");
 
@@ -34,20 +24,19 @@ writeFileSync(join(gsd, "milestones", "M009", "slices", "S01", "S01-PLAN.md"), `
 
 async function main(): Promise<void> {
   const scope = await selectDoctorScope(tmpBase);
-  assert(scope === "M009/S01", "active scope selected instead of historical milestone");
+  assertTrue(scope === "M009/S01", "active scope selected instead of historical milestone");
 
   const scopedReport = await runGSDDoctor(tmpBase, { fix: false, scope });
   const scopedBlocking = filterDoctorIssues(scopedReport.issues, { scope, includeWarnings: false });
-  assert(scopedBlocking.length === 0, "no blocking issues in active scope");
+  assertTrue(scopedBlocking.length === 0, "no blocking issues in active scope");
 
   const historicalReport = await runGSDDoctor(tmpBase, { fix: false });
   const historicalWarnings = historicalReport.issues.filter(issue => issue.unitId.startsWith("M001/S01") && issue.severity === "warning");
-  assert(historicalWarnings.length > 0, "full repo still contains historical warning drift");
+  assertTrue(historicalWarnings.length > 0, "full repo still contains historical warning drift");
 
   rmSync(tmpBase, { recursive: true, force: true });
 
-  console.log(`Results: ${passed} passed, ${failed} failed`);
-  if (failed > 0) process.exit(1);
+  report();
 }
 
 main().catch((error) => {

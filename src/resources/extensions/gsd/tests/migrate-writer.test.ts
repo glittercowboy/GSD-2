@@ -29,30 +29,9 @@ import type {
   GSDSliceSummaryData,
   GSDTaskSummaryData,
 } from '../migrate/types.ts';
+import { createTestContext } from './test-helpers.ts';
 
-let passed = 0;
-let failed = 0;
-
-function assert(condition: boolean, message: string): void {
-  if (condition) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`FAIL: ${message}`);
-  }
-}
-
-function assertEq(actual: unknown, expected: unknown, message: string): void {
-  const a = JSON.stringify(actual);
-  const e = JSON.stringify(expected);
-  if (a === e) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`FAIL: ${message} — expected ${e}, got ${a}`);
-  }
-}
-
+const { assertEq, assertTrue, report } = createTestContext();
 // ─── Test Data Builders ────────────────────────────────────────────────────
 
 function makeTask(overrides: Partial<GSDTask> = {}): GSDTask {
@@ -243,7 +222,7 @@ function makeTaskSummary(overrides: Partial<GSDTaskSummaryData> = {}): GSDTaskSu
   assertEq(parsed.frontmatter.completed_at, '2026-03-10', 'sliceSummary: completed_at');
   assertEq(parsed.frontmatter.verification_result, 'passed', 'sliceSummary: verification_result');
   assertEq(parsed.frontmatter.blocker_discovered, false, 'sliceSummary: blocker_discovered');
-  assert(parsed.whatHappened.includes('Implemented full auth system'), 'sliceSummary: whatHappened content');
+  assertTrue(parsed.whatHappened.includes('Implemented full auth system'), 'sliceSummary: whatHappened content');
   assertEq(parsed.title, 'S01: Auth System', 'sliceSummary: title');
 }
 
@@ -269,7 +248,7 @@ function makeTaskSummary(overrides: Partial<GSDTaskSummaryData> = {}): GSDTaskSu
   assertEq(parsed.frontmatter.key_files, ['src/auth.ts'], 'taskSummary: key_files');
   assertEq(parsed.frontmatter.duration, '45m', 'taskSummary: duration');
   assertEq(parsed.frontmatter.completed_at, '2026-03-09', 'taskSummary: completed_at');
-  assert(parsed.whatHappened.includes('Built the auth endpoint'), 'taskSummary: whatHappened content');
+  assertTrue(parsed.whatHappened.includes('Built the auth endpoint'), 'taskSummary: whatHappened content');
   assertEq(parsed.title, 'T01: Setup Auth', 'taskSummary: title');
 }
 
@@ -368,8 +347,8 @@ function makeTaskSummary(overrides: Partial<GSDTaskSummaryData> = {}): GSDTaskSu
 // F9: formatProject with empty content → produces valid stub
 {
   const output = formatProject('');
-  assert(output.includes('# Project'), 'edge: empty project has heading');
-  assert(output.length > 10, 'edge: empty project not blank');
+  assertTrue(output.includes('# Project'), 'edge: empty project has heading');
+  assertTrue(output.length > 10, 'edge: empty project not blank');
 }
 
 // F10: formatProject with existing content → passes through
@@ -382,13 +361,13 @@ function makeTaskSummary(overrides: Partial<GSDTaskSummaryData> = {}): GSDTaskSu
 // F11: formatDecisions with empty content → produces valid stub
 {
   const output = formatDecisions('');
-  assert(output.includes('# Decisions'), 'edge: empty decisions has heading');
+  assertTrue(output.includes('# Decisions'), 'edge: empty decisions has heading');
 }
 
 // F12: formatContext produces valid content
 {
   const output = formatContext('M001');
-  assert(output.includes('M001'), 'edge: context mentions milestone');
+  assertTrue(output.includes('M001'), 'edge: context mentions milestone');
 }
 
 // F13: formatState produces valid content
@@ -400,7 +379,7 @@ function makeTaskSummary(overrides: Partial<GSDTaskSummaryData> = {}): GSDTaskSu
     ],
   })];
   const output = formatState(milestones);
-  assert(output.includes('1/2'), 'edge: state shows slice progress');
+  assertTrue(output.includes('1/2'), 'edge: state shows slice progress');
 }
 
 // F14: Task with no estimate → no est backtick in plan
@@ -416,5 +395,4 @@ function makeTaskSummary(overrides: Partial<GSDTaskSummaryData> = {}): GSDTaskSu
 
 // ═══════════════════════════════════════════════════════════════════════════
 
-console.log(`\nResults: ${passed} passed, ${failed} failed`);
-if (failed > 0) process.exit(1);
+report();

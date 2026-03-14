@@ -8,26 +8,9 @@ import {
   skipExecuteTask,
   verifyExpectedArtifact,
 } from "../auto.ts";
+import { createTestContext } from './test-helpers.ts';
 
-let passed = 0;
-let failed = 0;
-
-function assert(condition: boolean, message: string): void {
-  if (condition) passed++;
-  else {
-    failed++;
-    console.error(`  FAIL: ${message}`);
-  }
-}
-
-function assertEq<T>(actual: T, expected: T, message: string): void {
-  if (JSON.stringify(actual) === JSON.stringify(expected)) passed++;
-  else {
-    failed++;
-    console.error(`  FAIL: ${message} — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-  }
-}
-
+const { assertEq, assertTrue, report } = createTestContext();
 function createFixtureBase(): string {
   const base = mkdtempSync(join(tmpdir(), "gsd-idle-recovery-test-"));
   mkdirSync(join(base, ".gsd", "milestones", "M001", "slices", "S01", "tasks"), { recursive: true });
@@ -45,8 +28,8 @@ function cleanup(base: string): void {
   const base = createFixtureBase();
   try {
     const result = resolveExpectedArtifactPath("research-milestone", "M001", base);
-    assert(result !== null, "should resolve a path");
-    assert(result!.endsWith("M001-RESEARCH.md"), `path should end with M001-RESEARCH.md, got ${result}`);
+    assertTrue(result !== null, "should resolve a path");
+    assertTrue(result!.endsWith("M001-RESEARCH.md"), `path should end with M001-RESEARCH.md, got ${result}`);
   } finally {
     cleanup(base);
   }
@@ -57,8 +40,8 @@ function cleanup(base: string): void {
   const base = createFixtureBase();
   try {
     const result = resolveExpectedArtifactPath("plan-milestone", "M001", base);
-    assert(result !== null, "should resolve a path");
-    assert(result!.endsWith("M001-ROADMAP.md"), `path should end with M001-ROADMAP.md, got ${result}`);
+    assertTrue(result !== null, "should resolve a path");
+    assertTrue(result!.endsWith("M001-ROADMAP.md"), `path should end with M001-ROADMAP.md, got ${result}`);
   } finally {
     cleanup(base);
   }
@@ -69,8 +52,8 @@ function cleanup(base: string): void {
   const base = createFixtureBase();
   try {
     const result = resolveExpectedArtifactPath("research-slice", "M001/S01", base);
-    assert(result !== null, "should resolve a path");
-    assert(result!.endsWith("S01-RESEARCH.md"), `path should end with S01-RESEARCH.md, got ${result}`);
+    assertTrue(result !== null, "should resolve a path");
+    assertTrue(result!.endsWith("S01-RESEARCH.md"), `path should end with S01-RESEARCH.md, got ${result}`);
   } finally {
     cleanup(base);
   }
@@ -81,8 +64,8 @@ function cleanup(base: string): void {
   const base = createFixtureBase();
   try {
     const result = resolveExpectedArtifactPath("plan-slice", "M001/S01", base);
-    assert(result !== null, "should resolve a path");
-    assert(result!.endsWith("S01-PLAN.md"), `path should end with S01-PLAN.md, got ${result}`);
+    assertTrue(result !== null, "should resolve a path");
+    assertTrue(result!.endsWith("S01-PLAN.md"), `path should end with S01-PLAN.md, got ${result}`);
   } finally {
     cleanup(base);
   }
@@ -93,8 +76,8 @@ function cleanup(base: string): void {
   const base = createFixtureBase();
   try {
     const result = resolveExpectedArtifactPath("complete-milestone", "M001", base);
-    assert(result !== null, "should resolve a path");
-    assert(result!.endsWith("M001-SUMMARY.md"), `path should end with M001-SUMMARY.md, got ${result}`);
+    assertTrue(result !== null, "should resolve a path");
+    assertTrue(result!.endsWith("M001-SUMMARY.md"), `path should end with M001-SUMMARY.md, got ${result}`);
   } finally {
     cleanup(base);
   }
@@ -118,14 +101,14 @@ function cleanup(base: string): void {
   const base = createFixtureBase();
   try {
     const result = writeBlockerPlaceholder("research-slice", "M001/S01", base, "idle recovery exhausted 2 attempts");
-    assert(result !== null, "should return relative path");
+    assertTrue(result !== null, "should return relative path");
     const absPath = resolveExpectedArtifactPath("research-slice", "M001/S01", base)!;
-    assert(existsSync(absPath), "file should exist on disk");
+    assertTrue(existsSync(absPath), "file should exist on disk");
     const content = readFileSync(absPath, "utf-8");
-    assert(content.includes("BLOCKER"), "should contain BLOCKER heading");
-    assert(content.includes("idle recovery exhausted 2 attempts"), "should contain the reason");
-    assert(content.includes("research-slice"), "should mention the unit type");
-    assert(content.includes("M001/S01"), "should mention the unit ID");
+    assertTrue(content.includes("BLOCKER"), "should contain BLOCKER heading");
+    assertTrue(content.includes("idle recovery exhausted 2 attempts"), "should contain the reason");
+    assertTrue(content.includes("research-slice"), "should mention the unit type");
+    assertTrue(content.includes("M001/S01"), "should mention the unit ID");
   } finally {
     cleanup(base);
   }
@@ -151,12 +134,12 @@ function cleanup(base: string): void {
   const base = createFixtureBase();
   try {
     const result = writeBlockerPlaceholder("research-milestone", "M001", base, "hard timeout");
-    assert(result !== null, "should return relative path");
+    assertTrue(result !== null, "should return relative path");
     const absPath = resolveExpectedArtifactPath("research-milestone", "M001", base)!;
-    assert(existsSync(absPath), "file should exist on disk");
+    assertTrue(existsSync(absPath), "file should exist on disk");
     const content = readFileSync(absPath, "utf-8");
-    assert(content.includes("BLOCKER"), "should contain BLOCKER heading");
-    assert(content.includes("hard timeout"), "should contain the reason");
+    assertTrue(content.includes("BLOCKER"), "should contain BLOCKER heading");
+    assertTrue(content.includes("hard timeout"), "should contain the reason");
   } finally {
     cleanup(base);
   }
@@ -197,19 +180,19 @@ function cleanup(base: string): void {
       "idle", 2,
     );
 
-    assert(result === true, "should return true");
+    assertTrue(result === true, "should return true");
 
     // Check summary was written
     const summaryPath = join(base, ".gsd", "milestones", "M001", "slices", "S01", "tasks", "T01-SUMMARY.md");
-    assert(existsSync(summaryPath), "task summary should exist");
+    assertTrue(existsSync(summaryPath), "task summary should exist");
     const summaryContent = readFileSync(summaryPath, "utf-8");
-    assert(summaryContent.includes("BLOCKER"), "summary should contain BLOCKER");
-    assert(summaryContent.includes("T01"), "summary should mention task ID");
+    assertTrue(summaryContent.includes("BLOCKER"), "summary should contain BLOCKER");
+    assertTrue(summaryContent.includes("T01"), "summary should mention task ID");
 
     // Check plan checkbox was marked
     const planContent = readFileSync(planPath, "utf-8");
-    assert(planContent.includes("- [x] **T01:"), "T01 should be checked");
-    assert(planContent.includes("- [ ] **T02:"), "T02 should remain unchecked");
+    assertTrue(planContent.includes("- [x] **T01:"), "T01 should be checked");
+    assertTrue(planContent.includes("- [ ] **T02:"), "T02 should remain unchecked");
   } finally {
     cleanup(base);
   }
@@ -232,16 +215,16 @@ function cleanup(base: string): void {
       "idle", 2,
     );
 
-    assert(result === true, "should return true");
+    assertTrue(result === true, "should return true");
 
     // Summary should be untouched (not overwritten with blocker)
     const content = readFileSync(summaryPath, "utf-8");
-    assert(content.includes("Real summary"), "original summary should be preserved");
-    assert(!content.includes("BLOCKER"), "should not contain BLOCKER");
+    assertTrue(content.includes("Real summary"), "original summary should be preserved");
+    assertTrue(!content.includes("BLOCKER"), "should not contain BLOCKER");
 
     // Plan checkbox should still be marked
     const planContent = readFileSync(planPath, "utf-8");
-    assert(planContent.includes("- [x] **T01:"), "T01 should be checked");
+    assertTrue(planContent.includes("- [x] **T01:"), "T01 should be checked");
   } finally {
     cleanup(base);
   }
@@ -260,15 +243,15 @@ function cleanup(base: string): void {
       "idle", 2,
     );
 
-    assert(result === true, "should return true");
+    assertTrue(result === true, "should return true");
 
     // Summary should be written (since summaryExists was false)
     const summaryPath = join(base, ".gsd", "milestones", "M001", "slices", "S01", "tasks", "T01-SUMMARY.md");
-    assert(existsSync(summaryPath), "task summary should exist");
+    assertTrue(existsSync(summaryPath), "task summary should exist");
 
     // Plan checkbox should be untouched
     const planContent = readFileSync(planPath, "utf-8");
-    assert(planContent.includes("- [x] **T01:"), "T01 should remain checked");
+    assertTrue(planContent.includes("- [x] **T01:"), "T01 should remain checked");
   } finally {
     cleanup(base);
   }
@@ -287,10 +270,10 @@ function cleanup(base: string): void {
       "idle", 2,
     );
 
-    assert(result === true, "should return true");
+    assertTrue(result === true, "should return true");
 
     const planContent = readFileSync(planPath, "utf-8");
-    assert(planContent.includes("- [x] **T01.1:"), "T01.1 should be checked (regex chars escaped)");
+    assertTrue(planContent.includes("- [x] **T01.1:"), "T01.1 should be checked (regex chars escaped)");
   } finally {
     cleanup(base);
   }
@@ -316,7 +299,7 @@ function createGitBase(): string {
   const base = createGitBase();
   try {
     const result = verifyExpectedArtifact("fix-merge", "M001/S01", base);
-    assert(result === true, "clean repo should verify as true");
+    assertTrue(result === true, "clean repo should verify as true");
   } finally {
     cleanup(base);
   }
@@ -328,7 +311,7 @@ function createGitBase(): string {
   try {
     writeFileSync(join(base, ".git", "MERGE_HEAD"), "abc123\n", "utf-8");
     const result = verifyExpectedArtifact("fix-merge", "M001/S01", base);
-    assert(result === false, "MERGE_HEAD present should return false");
+    assertTrue(result === false, "MERGE_HEAD present should return false");
   } finally {
     cleanup(base);
   }
@@ -340,7 +323,7 @@ function createGitBase(): string {
   try {
     writeFileSync(join(base, ".git", "SQUASH_MSG"), "squash msg\n", "utf-8");
     const result = verifyExpectedArtifact("fix-merge", "M001/S01", base);
-    assert(result === false, "SQUASH_MSG present should return false");
+    assertTrue(result === false, "SQUASH_MSG present should return false");
   } finally {
     cleanup(base);
   }
@@ -361,7 +344,7 @@ function createGitBase(): string {
     execSync("git add -A && git commit -m 'diverge'", { cwd: base, stdio: "ignore" });
     try { execSync("git merge feature", { cwd: base, stdio: "ignore" }); } catch { /* expected conflict */ }
     const result = verifyExpectedArtifact("fix-merge", "M001/S01", base);
-    assert(result === false, "UU conflict should return false");
+    assertTrue(result === false, "UU conflict should return false");
   } finally {
     execSync("git reset --hard HEAD", { cwd: base, stdio: "ignore" });
     cleanup(base);
@@ -382,7 +365,7 @@ function createGitBase(): string {
     execSync("git commit -m 'delete on main'", { cwd: base, stdio: "ignore" });
     try { execSync("git merge feature2", { cwd: base, stdio: "ignore" }); } catch { /* expected conflict */ }
     const result = verifyExpectedArtifact("fix-merge", "M001/S01", base);
-    assert(result === false, "DU conflict should return false");
+    assertTrue(result === false, "DU conflict should return false");
   } finally {
     execSync("git reset --hard HEAD", { cwd: base, stdio: "ignore" });
     cleanup(base);
@@ -402,7 +385,7 @@ function createGitBase(): string {
     execSync("git add -A && git commit -m 'add on branch-b'", { cwd: base, stdio: "ignore" });
     try { execSync("git merge branch-a", { cwd: base, stdio: "ignore" }); } catch { /* expected conflict */ }
     const result = verifyExpectedArtifact("fix-merge", "M001/S01", base);
-    assert(result === false, "AA conflict should return false");
+    assertTrue(result === false, "AA conflict should return false");
   } finally {
     execSync("git reset --hard HEAD", { cwd: base, stdio: "ignore" });
     cleanup(base);
@@ -439,7 +422,7 @@ const ROADMAP_COMPLETE = `# M001: Test Milestone
     writeFileSync(join(sliceDir, "S01-UAT.md"), "# UAT\n", "utf-8");
     writeFileSync(join(base, ".gsd", "milestones", "M001", "M001-ROADMAP.md"), ROADMAP_COMPLETE, "utf-8");
     const result = verifyExpectedArtifact("complete-slice", "M001/S01", base);
-    assert(result === true, "SUMMARY + UAT + roadmap [x] should verify as true");
+    assertTrue(result === true, "SUMMARY + UAT + roadmap [x] should verify as true");
   } finally {
     cleanup(base);
   }
@@ -454,7 +437,7 @@ const ROADMAP_COMPLETE = `# M001: Test Milestone
     writeFileSync(join(sliceDir, "S01-UAT.md"), "# UAT\n", "utf-8");
     writeFileSync(join(base, ".gsd", "milestones", "M001", "M001-ROADMAP.md"), ROADMAP_INCOMPLETE, "utf-8");
     const result = verifyExpectedArtifact("complete-slice", "M001/S01", base);
-    assert(result === false, "roadmap not marked [x] should return false (crash recovery scenario)");
+    assertTrue(result === false, "roadmap not marked [x] should return false (crash recovery scenario)");
   } finally {
     cleanup(base);
   }
@@ -469,7 +452,7 @@ const ROADMAP_COMPLETE = `# M001: Test Milestone
     // no UAT file
     writeFileSync(join(base, ".gsd", "milestones", "M001", "M001-ROADMAP.md"), ROADMAP_COMPLETE, "utf-8");
     const result = verifyExpectedArtifact("complete-slice", "M001/S01", base);
-    assert(result === false, "missing UAT should return false");
+    assertTrue(result === false, "missing UAT should return false");
   } finally {
     cleanup(base);
   }
@@ -484,21 +467,10 @@ const ROADMAP_COMPLETE = `# M001: Test Milestone
     writeFileSync(join(sliceDir, "S01-UAT.md"), "# UAT\n", "utf-8");
     // no roadmap file
     const result = verifyExpectedArtifact("complete-slice", "M001/S01", base);
-    assert(result === true, "missing roadmap file should be lenient and return true");
+    assertTrue(result === true, "missing roadmap file should be lenient and return true");
   } finally {
     cleanup(base);
   }
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-// Results
-// ═════════════════════════════════════════════════════════════════════════════
-
-console.log(`\n${"=".repeat(40)}`);
-if (failed > 0) {
-  console.log(`Results: ${passed} passed, ${failed} failed`);
-  process.exit(1);
-} else {
-  console.log(`Results: ${passed} passed, ${failed} failed`);
-  console.log("All tests passed ✓");
-}
+report();

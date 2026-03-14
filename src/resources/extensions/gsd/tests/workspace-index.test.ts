@@ -3,26 +3,9 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { getSuggestedNextCommands, indexWorkspace, listDoctorScopeSuggestions } from "../workspace-index.ts";
+import { createTestContext } from './test-helpers.ts';
 
-let passed = 0;
-let failed = 0;
-
-function assert(condition: boolean, message: string): void {
-  if (condition) passed++;
-  else {
-    failed++;
-    console.error(`  FAIL: ${message}`);
-  }
-}
-
-function assertEq<T>(actual: T, expected: T, message: string): void {
-  if (JSON.stringify(actual) === JSON.stringify(expected)) passed++;
-  else {
-    failed++;
-    console.error(`  FAIL: ${message} — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-  }
-}
-
+const { assertEq, assertTrue, report } = createTestContext();
 const base = mkdtempSync(join(tmpdir(), "gsd-workspace-index-test-"));
 const gsd = join(base, ".gsd");
 const mDir = join(gsd, "milestones", "M001");
@@ -63,29 +46,27 @@ async function main(): Promise<void> {
     assertEq(index.active.milestoneId, "M001", "active milestone indexed");
     assertEq(index.active.sliceId, "S01", "active slice indexed");
     assertEq(index.active.taskId, "T01", "active task indexed");
-    assert(index.scopes.some(scope => scope.scope === "M001/S01"), "slice scope listed");
-    assert(index.scopes.some(scope => scope.scope === "M001/S01/T01"), "task scope listed");
+    assertTrue(index.scopes.some(scope => scope.scope === "M001/S01"), "slice scope listed");
+    assertTrue(index.scopes.some(scope => scope.scope === "M001/S01/T01"), "task scope listed");
   }
 
   console.log("\n=== doctor scope suggestions ===");
   {
     const suggestions = await listDoctorScopeSuggestions(base);
     assertEq(suggestions[0].value, "M001/S01", "active slice suggested first");
-    assert(suggestions.some(item => item.value === "M001/S01/T01"), "task scope suggested");
+    assertTrue(suggestions.some(item => item.value === "M001/S01/T01"), "task scope suggested");
   }
 
   console.log("\n=== next command suggestions ===");
   {
     const commands = await getSuggestedNextCommands(base);
-    assert(commands.includes("/gsd auto"), "suggests auto during execution");
-    assert(commands.includes("/gsd doctor M001/S01"), "suggests scoped doctor");
-    assert(commands.includes("/gsd status"), "suggests status");
+    assertTrue(commands.includes("/gsd auto"), "suggests auto during execution");
+    assertTrue(commands.includes("/gsd doctor M001/S01"), "suggests scoped doctor");
+    assertTrue(commands.includes("/gsd status"), "suggests status");
   }
 
   rmSync(base, { recursive: true, force: true });
-  console.log(`\nResults: ${passed} passed, ${failed} failed`);
-  if (failed > 0) process.exit(1);
-  console.log("All tests passed ✓");
+  report();
 }
 
 main().catch((error) => {
