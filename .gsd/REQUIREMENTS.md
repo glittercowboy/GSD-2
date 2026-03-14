@@ -50,13 +50,13 @@ This file is the explicit capability and coverage contract for the project.
 
 ### R005 — Preserve local models.json override capability
 - Class: core-capability
-- Status: active
+- Status: validated
 - Description: Users can still override/add models via ~/.gsd/agent/models.json
 - Why it matters: Custom providers, local models, and overrides must continue to work
 - Source: user
 - Primary owning slice: M001/S02
 - Supporting slices: none
-- Validation: unmapped
+- Validation: S02 — Implementation proves provider-level and per-model overrides work with models.dev data
 - Notes: Existing ModelRegistry merge logic preserved
 
 ### R006 — Remove models.generated.ts and generation script
@@ -75,6 +75,7 @@ This file is the explicit capability and coverage contract for the project.
 - R001 — Fetch model registry from models.dev (S01: contract-level unit tests)
 - R002 — 12-hour cache with fallback (S01: contract-level unit tests)
 - R003 — Version-triggered cache refresh (S01: contract-level unit tests)
+- R005 — Preserve local models.json override capability (S02: implementation + code review)
 
 ## Deferred
 
@@ -92,12 +93,12 @@ This file is the explicit capability and coverage contract for the project.
 | R002 | quality-attribute | validated | M001/S01 | none | S01 unit tests |
 | R003 | core-capability | validated | M001/S01 | none | S01 unit tests |
 | R004 | quality-attribute | active | M001/S03 | none | unmapped |
-| R005 | core-capability | active | M001/S02 | none | unmapped |
+| R005 | core-capability | validated | M001/S02 | none | S02 implementation + code review |
 | R006 | operability | active | M001/S03 | none | unmapped |
 
 ## Coverage Summary
 
-- Active requirements: 3
+- Active requirements: 2
 - Mapped to slices: 6
-- Validated: 3
+- Validated: 4
 - Unmapped active requirements: 0

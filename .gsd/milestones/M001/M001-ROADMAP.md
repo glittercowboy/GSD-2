@@ -50,7 +50,7 @@ This milestone is complete only when all are true:
 - [x] **S01: models.dev fetching with caching** `risk:medium` `depends:[]`
   > After this: Unit tests prove fetch → cache → fallback chain works, version change triggers refresh
 
-- [ ] **S02: Integrate into ModelRegistry** `risk:low` `depends:[S01]`
+- [x] **S02: Integrate into ModelRegistry** `risk:low` `depends:[S01]`
   > After this: `pi` starts with models from models.dev, local models.json still overrides
 
 - [ ] **S03: Build-time snapshot + cleanup** `risk:low` `depends:[S01,S02]`

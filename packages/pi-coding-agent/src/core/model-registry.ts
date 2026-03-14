@@ -16,6 +16,9 @@ import {
 	registerApiProvider,
 	resetApiProviders,
 	type SimpleStreamOptions,
+	getModelsDev,
+	getCachedModelsDev,
+	mapToModelRegistry,
 } from "@gsd/pi-ai";
 import { registerOAuthProvider, resetOAuthProviders } from "@gsd/pi-ai/oauth";
 import { type Static, Type } from "@sinclair/typebox";
@@ -224,11 +227,16 @@ export class ModelRegistry {
 	private customProviderApiKeys: Map<string, string> = new Map();
 	private registeredProviders: Map<string, ProviderConfigInput> = new Map();
 	private loadError: string | undefined = undefined;
+	authStorage: AuthStorage;
+	private modelsJsonPath: string | undefined;
 
 	constructor(
-		readonly authStorage: AuthStorage,
-		private modelsJsonPath: string | undefined = join(getAgentDir(), "models.json"),
+		authStorage: AuthStorage,
+		modelsJsonPath?: string,
 	) {
+		this.authStorage = authStorage;
+		this.modelsJsonPath = modelsJsonPath ?? join(getAgentDir(), "models.json");
+
 		// Set up fallback resolver for custom provider API keys
 		this.authStorage.setFallbackResolver((provider) => {
 			const keyConfig = this.customProviderApiKeys.get(provider);
@@ -238,8 +246,11 @@ export class ModelRegistry {
 			return undefined;
 		});
 
-		// Load models
+		// Load models synchronously (cache or static fallback)
 		this.loadModels();
+
+		// Fire async refresh to keep cache fresh (fire-and-forget)
+		this.refreshFromModelsDev();
 	}
 
 	/**
@@ -300,33 +311,143 @@ export class ModelRegistry {
 		overrides: Map<string, ProviderOverride>,
 		modelOverrides: Map<string, Map<string, ModelOverride>>,
 	): Model<Api>[] {
-		return getProviders().flatMap((provider) => {
-			const models = getModels(provider as KnownProvider) as Model<Api>[];
-			const providerOverride = overrides.get(provider);
-			const perModelOverrides = modelOverrides.get(provider);
+		// Try cached models.dev data first (sync)
+		const cache = getCachedModelsDev();
+		if (cache) {
+			// Cache hit - use models.dev data with overrides applied
+			return this.applyOverridesToModels(mapToModelRegistry(cache.data), overrides, modelOverrides);
+		}
 
-			return models.map((m) => {
-				let model = m;
+		// Cache miss - fall back to static MODELS
+		return this.applyOverridesToModels(
+			getProviders().flatMap((provider) => {
+				const models = getModels(provider as KnownProvider) as Model<Api>[];
+				const providerOverride = overrides.get(provider);
+				const perModelOverrides = modelOverrides.get(provider);
 
-				// Apply provider-level baseUrl/headers override
-				if (providerOverride) {
-					const resolvedHeaders = resolveHeaders(providerOverride.headers);
-					model = {
-						...model,
-						baseUrl: providerOverride.baseUrl ?? model.baseUrl,
-						headers: resolvedHeaders ? { ...model.headers, ...resolvedHeaders } : model.headers,
-					};
-				}
+				return models.map((m) => {
+					let model = m;
 
-				// Apply per-model override
-				const modelOverride = perModelOverrides?.get(m.id);
-				if (modelOverride) {
-					model = applyModelOverride(model, modelOverride);
-				}
+					// Apply provider-level baseUrl/headers override
+					if (providerOverride) {
+						const resolvedHeaders = resolveHeaders(providerOverride.headers);
+						model = {
+							...model,
+							baseUrl: providerOverride.baseUrl ?? model.baseUrl,
+							headers: resolvedHeaders ? { ...model.headers, ...resolvedHeaders } : model.headers,
+						};
+					}
 
-				return model;
-			});
+					// Apply per-model override
+					const modelOverride = perModelOverrides?.get(m.id);
+					if (modelOverride) {
+						model = applyModelOverride(model, modelOverride);
+					}
+
+					return model;
+				});
+			}),
+			overrides,
+			modelOverrides,
+		);
+	}
+
+	/** Apply provider and model overrides to a list of models */
+	private applyOverridesToModels(
+		models: Model<Api>[],
+		overrides: Map<string, ProviderOverride>,
+		modelOverrides: Map<string, Map<string, ModelOverride>>,
+	): Model<Api>[] {
+		return models.map((m) => {
+			let model = m;
+			const providerOverride = overrides.get(m.provider);
+			const perModelOverrides = modelOverrides.get(m.provider);
+
+			// Apply provider-level baseUrl/headers override
+			if (providerOverride) {
+				const resolvedHeaders = resolveHeaders(providerOverride.headers);
+				model = {
+					...model,
+					baseUrl: providerOverride.baseUrl ?? model.baseUrl,
+					headers: resolvedHeaders ? { ...model.headers, ...resolvedHeaders } : model.headers,
+				};
+			}
+
+			// Apply per-model override
+			const modelOverride = perModelOverrides?.get(m.id);
+			if (modelOverride) {
+				model = applyModelOverride(model, modelOverride);
+			}
+
+			return model;
 		});
+	}
+
+	/**
+	 * Async refresh from models.dev - fetches latest data and updates models.
+	 * Called fire-and-forget from constructor to keep cache fresh.
+	 */
+	private async refreshFromModelsDev(): Promise<void> {
+		try {
+			const data = await getModelsDev();
+			if (data) {
+				// Remap and re-apply overrides
+				const refreshedModels = mapToModelRegistry(data);
+				// Re-apply all overrides using the same logic as loadBuiltInModels
+				this.models = this.applyOverridesToModels(
+					refreshedModels,
+					this.loadOverridesFromModelsJson(),
+					this.loadModelOverridesFromModelsJson(),
+				);
+			}
+		} catch {
+			// Network errors are silently ignored - static fallback already loaded
+			// The cache file can be inspected to diagnose issues
+		}
+	}
+
+	/** Extract provider overrides from models.json for use in refresh */
+	private loadOverridesFromModelsJson(): Map<string, ProviderOverride> {
+		const overrides = new Map<string, ProviderOverride>();
+		if (!this.modelsJsonPath || !existsSync(this.modelsJsonPath)) {
+			return overrides;
+		}
+		try {
+			const content = readFileSync(this.modelsJsonPath, "utf-8");
+			const config: ModelsConfig = JSON.parse(content);
+			for (const [providerName, providerConfig] of Object.entries(config.providers)) {
+				if (providerConfig.baseUrl || providerConfig.headers || providerConfig.apiKey) {
+					overrides.set(providerName, {
+						baseUrl: providerConfig.baseUrl,
+						headers: providerConfig.headers,
+						apiKey: providerConfig.apiKey,
+					});
+				}
+			}
+		} catch {
+			// Ignore errors - refresh will use existing overrides
+		}
+		return overrides;
+	}
+
+	/** Extract per-model overrides from models.json for use in refresh */
+	private loadModelOverridesFromModelsJson(): Map<string, Map<string, ModelOverride>> {
+		const modelOverrides = new Map<string, Map<string, ModelOverride>>();
+		if (!this.modelsJsonPath || !existsSync(this.modelsJsonPath)) {
+			return modelOverrides;
+		}
+		try {
+			const content = readFileSync(this.modelsJsonPath, "utf-8");
+			const config: ModelsConfig = JSON.parse(content);
+			for (const [providerName, providerConfig] of Object.entries(config.providers)) {
+				if (providerConfig.modelOverrides) {
+					modelOverrides.set(providerName, new Map(Object.entries(providerConfig.modelOverrides)));
+				}
+			}
+		} catch {
+			// Ignore errors - refresh will use existing overrides
+		}
+		return modelOverrides;
 	}
 
 	/** Merge custom models into built-in list by provider+id (custom wins on conflicts). */

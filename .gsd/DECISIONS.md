@@ -16,3 +16,6 @@
 | D008 | M001 | impl | Lazy config resolution | require() for VERSION/getAgentDir at call time | Avoids build dependency during tests | No |
 | D009 | M001 | impl | Network error handling | Return null instead of throwing | Enables graceful fallback chain without try/catch at call sites | No |
 | D010 | M001 | impl | API type inference | Provider ID substring matching | Simple heuristic works for known providers, defaults to openai | Yes — may need explicit mapping for new providers |
+| D011 | M001/S02 | impl | Cache read timing | Sync cache check in constructor | Avoids blocking startup; async refresh is fire-and-forget | No |
+| D012 | M001/S02 | impl | Override application | Shared helper function for sync/async paths | Dedupes logic, ensures consistency between cache hit and refresh | No |
+| D013 | M001/S02 | impl | Constructor parameter properties | Regular class properties (not parameter properties) | Node's strip-only TypeScript doesn't support parameter properties | No |
