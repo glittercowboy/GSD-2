@@ -17,6 +17,14 @@ import {
   getSliceBranchName,
   SLICE_BRANCH_RE,
 } from "./worktree.js";
+import {
+  nativeGetCurrentBranch,
+  nativeDetectMainBranch,
+  nativeBranchExists,
+  nativeHasMergeConflicts,
+  nativeHasChanges,
+  nativeCommitCountBetween,
+} from "./native-git-bridge.js";
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -356,8 +364,8 @@ export class GitServiceImpl {
    */
   autoCommit(unitType: string, unitId: string, extraExclusions: readonly string[] = []): string | null {
     // Quick check: is there anything dirty at all?
-    const status = this.git(["status", "--short"], { allowFailure: true });
-    if (!status) return null;
+    // Native path uses libgit2 (single syscall), fallback spawns git.
+    if (!nativeHasChanges(this.basePath)) return null;
 
     this.smartStage(extraExclusions);
 
@@ -400,37 +408,25 @@ export class GitServiceImpl {
       const integrationBranch = readIntegrationBranch(this.basePath, this._milestoneId);
       if (integrationBranch) {
         // Verify the branch still exists locally (could have been deleted)
-        const exists = this.git(["show-ref", "--verify", `refs/heads/${integrationBranch}`], { allowFailure: true });
-        if (exists) return integrationBranch;
+        if (nativeBranchExists(this.basePath, integrationBranch)) return integrationBranch;
       }
     }
 
     const wtName = detectWorktreeName(this.basePath);
     if (wtName) {
       const wtBranch = `worktree/${wtName}`;
-      const exists = this.git(["show-ref", "--verify", `refs/heads/${wtBranch}`], { allowFailure: true });
-      if (exists) return wtBranch;
-      return this.git(["branch", "--show-current"]);
+      if (nativeBranchExists(this.basePath, wtBranch)) return wtBranch;
+      return nativeGetCurrentBranch(this.basePath);
     }
 
-    const symbolic = this.git(["symbolic-ref", "refs/remotes/origin/HEAD"], { allowFailure: true });
-    if (symbolic) {
-      const match = symbolic.match(/refs\/remotes\/origin\/(.+)$/);
-      if (match) return match[1]!;
-    }
-
-    const mainExists = this.git(["show-ref", "--verify", "refs/heads/main"], { allowFailure: true });
-    if (mainExists) return "main";
-
-    const masterExists = this.git(["show-ref", "--verify", "refs/heads/master"], { allowFailure: true });
-    if (masterExists) return "master";
-
-    return this.git(["branch", "--show-current"]);
+    // Repo-level default detection: origin/HEAD → main → master → current branch.
+    // Native path uses libgit2 (single call), fallback spawns multiple git processes.
+    return nativeDetectMainBranch(this.basePath);
   }
 
-  /** Get the current branch name. */
+  /** Get the current branch name. Native libgit2 when available, execSync fallback. */
   getCurrentBranch(): string {
-    return this.git(["branch", "--show-current"]);
+    return nativeGetCurrentBranch(this.basePath);
   }
 
   /** True if currently on a GSD slice branch. */
@@ -452,15 +448,10 @@ export class GitServiceImpl {
   // ─── Branch Lifecycle ──────────────────────────────────────────────────
 
   /**
-   * Check if a local branch exists.
+   * Check if a local branch exists. Native libgit2 when available, execSync fallback.
    */
   private branchExists(branch: string): boolean {
-    try {
-      this.git(["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]);
-      return true;
-    } catch {
-      return false;
-    }
+    return nativeBranchExists(this.basePath, branch);
   }
 
   /**
@@ -715,9 +706,9 @@ export class GitServiceImpl {
       );
     }
 
-    // Check commits ahead
-    const aheadCount = this.git(["rev-list", "--count", `${mainBranch}..${branch}`]);
-    if (aheadCount === "0") {
+    // Check commits ahead — native libgit2 revwalk when available
+    const aheadCount = nativeCommitCountBetween(this.basePath, mainBranch, branch);
+    if (aheadCount === 0) {
       throw new Error(
         `Slice branch "${branch}" has no commits ahead of "${mainBranch}". Nothing to merge.`,
       );

@@ -71,6 +71,7 @@ import {
   mergeSliceToMain,
 } from "./worktree.js";
 import { GitServiceImpl, runGit } from "./git-service.js";
+import { nativeCommitCountBetween } from "./native-git-bridge.js";
 import { getPriorSliceCompletionBlocker } from "./dispatch-guard.js";
 import type { GitPreferences } from "./git-service.js";
 import { truncateToWidth, visibleWidth } from "@gsd/pi-tui";
@@ -473,12 +474,8 @@ async function mergeOrphanedSliceBranches(
 
     // Skip if already merged (no commits ahead of main)
     const mainBranch = getMainBranch(base);
-    const aheadCount = runGit(
-      base,
-      ["rev-list", "--count", `${mainBranch}..${branch}`],
-      { allowFailure: true },
-    );
-    if (!aheadCount || aheadCount === "0") continue;
+    const aheadCount = nativeCommitCountBetween(base, mainBranch, branch);
+    if (aheadCount === 0) continue;
 
     // Read the roadmap from the slice branch to check if the slice is done.
     // relMilestoneFile resolves the actual directory name on disk (handles

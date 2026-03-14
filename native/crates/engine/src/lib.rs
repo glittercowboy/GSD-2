@@ -27,3 +27,4 @@ mod truncate;
 mod json_parse;
 mod stream_process;
 mod xxhash;
+mod git;

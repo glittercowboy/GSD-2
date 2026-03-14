@@ -35,6 +35,7 @@ syntect = { version = "5", default-features = false, features = ["default-syntax
 unicode-segmentation = "1"
 unicode-width = "0.2"
 xxhash-rust = { version = "0.8", features = ["xxh32"] }
+git2 = { version = "0.20", default-features = false, features = ["vendored-libgit2"] }
 
 [build-dependencies]
 napi-build = "2"
