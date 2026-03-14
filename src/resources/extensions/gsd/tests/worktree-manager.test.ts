@@ -40,8 +40,8 @@ function run(command: string, cwd: string): string {
 // Set up a test repo
 const base = mkdtempSync(join(tmpdir(), "gsd-worktree-mgr-test-"));
 run("git init -b main", base);
-run("git config user.name 'Pi Test'", base);
-run("git config user.email 'pi@example.com'", base);
+run('git config user.name "Pi Test"', base);
+run('git config user.email "pi@example.com"', base);
 
 // Create initial project structure
 mkdirSync(join(base, ".gsd", "milestones", "M001"), { recursive: true });

@@ -48,8 +48,8 @@ function run(command: string, cwd: string): string {
 
 const base = mkdtempSync(join(tmpdir(), "gsd-branch-test-"));
 run("git init -b main", base);
-run("git config user.name 'Pi Test'", base);
-run("git config user.email 'pi@example.com'", base);
+run('git config user.name "Pi Test"', base);
+run('git config user.email "pi@example.com"', base);
 mkdirSync(join(base, ".gsd", "milestones", "M001", "slices", "S01", "tasks"), { recursive: true });
 writeFileSync(join(base, "README.md"), "hello\n", "utf-8");
 writeFileSync(join(base, ".gsd", "milestones", "M001", "M001-ROADMAP.md"), `# M001: Demo\n\n## Slices\n- [ ] **S01: Slice One** \`risk:low\` \`depends:[]\`\n  > After this: demo works\n`, "utf-8");
@@ -185,8 +185,8 @@ async function main(): Promise<void> {
   console.log("\n=== ensureSliceBranch from non-main working branch ===");
   const base2 = mkdtempSync(join(tmpdir(), "gsd-branch-base-test-"));
   run("git init -b main", base2);
-  run("git config user.name 'Pi Test'", base2);
-  run("git config user.email 'pi@example.com'", base2);
+  run('git config user.name "Pi Test"', base2);
+  run('git config user.email "pi@example.com"', base2);
   writeFileSync(join(base2, "README.md"), "hello\n", "utf-8");
   run("git add .", base2);
   run('git commit -m "chore: init"', base2);
@@ -228,8 +228,8 @@ async function main(): Promise<void> {
   console.log("\n=== ensureSliceBranch from slice branch falls back to main ===");
   const base3 = mkdtempSync(join(tmpdir(), "gsd-branch-chain-test-"));
   run("git init -b main", base3);
-  run("git config user.name 'Pi Test'", base3);
-  run("git config user.email 'pi@example.com'", base3);
+  run('git config user.name "Pi Test"', base3);
+  run('git config user.email "pi@example.com"', base3);
   mkdirSync(join(base3, ".gsd", "milestones", "M001", "slices", "S01", "tasks"), { recursive: true });
   mkdirSync(join(base3, ".gsd", "milestones", "M001", "slices", "S02", "tasks"), { recursive: true });
   writeFileSync(join(base3, "README.md"), "hello\n", "utf-8");

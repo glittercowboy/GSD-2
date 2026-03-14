@@ -297,12 +297,12 @@ async function main(): Promise<void> {
   function initTempRepo(): string {
     const dir = mkdtempSync(join(tmpdir(), "gsd-git-t02-"));
     run("git init -b main", dir);
-    run("git config user.name 'Pi Test'", dir);
-    run("git config user.email 'pi@example.com'", dir);
+    run('git config user.name "Pi Test"', dir);
+    run('git config user.email "pi@example.com"', dir);
     // Need an initial commit so HEAD exists
     createFile(dir, ".gitkeep", "");
     run("git add -A", dir);
-    run("git commit -m 'init'", dir);
+    run('git commit -m "init"', dir);
     return dir;
   }
 
@@ -330,7 +330,7 @@ async function main(): Promise<void> {
     assertEq(result, "test: smart staging", "commit returns the commit message");
 
     // Verify only src/code.ts is in the commit
-    const showStat = run("git show --stat --format='' HEAD", repo);
+    const showStat = run("git show --stat --format= HEAD", repo);
     assert(showStat.includes("src/code.ts"), "src/code.ts is in the commit");
     assert(!showStat.includes(".gsd/activity"), ".gsd/activity/ excluded from commit");
     assert(!showStat.includes(".gsd/runtime"), ".gsd/runtime/ excluded from commit");

@@ -72,11 +72,12 @@ export function captureIntegrationBranch(basePath: string, milestoneId: string):
  * Returns null if not inside a GSD worktree (.gsd/worktrees/<name>/).
  */
 export function detectWorktreeName(basePath: string): string | null {
-  const marker = `${sep}.gsd${sep}worktrees${sep}`;
-  const idx = basePath.indexOf(marker);
+  const normalizedPath = basePath.replaceAll("\\", "/");
+  const marker = "/.gsd/worktrees/";
+  const idx = normalizedPath.indexOf(marker);
   if (idx === -1) return null;
-  const afterMarker = basePath.slice(idx + marker.length);
-  const name = afterMarker.split(sep)[0] ?? afterMarker.split("/")[0];
+  const afterMarker = normalizedPath.slice(idx + marker.length);
+  const name = afterMarker.split("/")[0];
   return name || null;
 }
 
