@@ -345,6 +345,107 @@ async function selfHealRuntimeRecords(base: string, ctx: ExtensionContext): Prom
   }
 }
 
+/**
+ * Startup check: scan for orphaned completed slice branches and merge them.
+ *
+ * An orphaned completed slice branch is a `gsd/MID/SID` branch where the slice
+ * is marked done in the roadmap (on that branch) but hasn't been squash-merged
+ * to main yet. This happens when `complete-slice` succeeds and commits on the
+ * slice branch, but the subsequent merge to main is interrupted (crash, timeout,
+ * Ctrl+C, merge conflict that wasn't auto-resolved).
+ *
+ * Without this check, GSD gets stuck in an infinite loop: `deriveState()` on
+ * main sees no slice artifacts → wants research-slice → idempotency key removed
+ * (artifact not on main) → ensurePreconditions switches branch → merge guard
+ * merges → re-derives → repeats.
+ */
+async function mergeOrphanedSliceBranches(
+  base: string,
+  ctx: Pick<ExtensionContext, "ui">,
+): Promise<void> {
+  // List all local gsd/<MID>/<SID> branches (non-worktree pattern).
+  // Use execFileSync (not runGit/execSync) to avoid shell glob-expanding gsd/*/*
+  // and to avoid shell syntax errors from %(refname:short) on /bin/sh.
+  let branchListRaw = "";
+  try {
+    branchListRaw = execFileSync(
+      "git",
+      ["branch", "--list", "gsd/*/*", "--format=%(refname:short)"],
+      { cwd: base, stdio: ["ignore", "pipe", "pipe"], encoding: "utf-8" },
+    ).trim();
+  } catch {
+    return; // no slice branches or git unavailable
+  }
+  if (!branchListRaw) return;
+
+  const branches = branchListRaw.split("\n").map(b => b.trim()).filter(Boolean);
+  for (const branch of branches) {
+    const parsed = parseSliceBranch(branch);
+    // Skip worktree-namespaced branches — those are managed by the worktree
+    // manager and should not be merged by the main-tree auto-mode.
+    if (!parsed || parsed.worktreeName) continue;
+
+    const { milestoneId, sliceId } = parsed;
+
+    // Skip if already merged (no commits ahead of main)
+    const mainBranch = getMainBranch(base);
+    const aheadCount = runGit(
+      base,
+      ["rev-list", "--count", `${mainBranch}..${branch}`],
+      { allowFailure: true },
+    );
+    if (!aheadCount || aheadCount === "0") continue;
+
+    // Read the roadmap from the slice branch to check if the slice is done.
+    // relMilestoneFile resolves the actual directory name on disk (handles
+    // milestone directories with title suffixes like "M007 Payment System").
+    const roadmapRelPath = relMilestoneFile(base, milestoneId, "ROADMAP");
+    const roadmapContent = runGit(
+      base,
+      ["show", `${branch}:${roadmapRelPath}`],
+      { allowFailure: true },
+    );
+    if (!roadmapContent) continue;
+
+    const roadmap = parseRoadmap(roadmapContent);
+    const sliceEntry = roadmap.slices.find(s => s.id === sliceId);
+    if (!sliceEntry?.done) continue;
+
+    // Orphaned completed branch detected — merge it to main now.
+    ctx.ui.notify(
+      `Orphaned completed slice branch detected: ${branch}. Merging to main before dispatch...`,
+      "info",
+    );
+    try {
+      switchToMain(base);
+      const mergeResult = mergeSliceToMain(
+        base, milestoneId, sliceId, sliceEntry.title || sliceId,
+      );
+      ctx.ui.notify(
+        `Merged orphaned branch ${mergeResult.branch} → ${mainBranch}.`,
+        "info",
+      );
+    } catch (error) {
+      if (error instanceof MergeConflictError) {
+        // Reset the incomplete merge so auto-mode can still start cleanly.
+        runGit(base, ["reset", "--hard", "HEAD"], { allowFailure: true });
+        ctx.ui.notify(
+          `Orphaned branch ${branch} has merge conflicts — resolve manually and restart.\nConflicts in: ${error.conflictedFiles.join(", ")}`,
+          "error",
+        );
+        // Stop processing further branches after a conflict to avoid
+        // leaving the repo in a partially-merged state.
+        return;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.ui.notify(
+        `Failed to merge orphaned branch ${branch}: ${message}`,
+        "warning",
+      );
+    }
+  }
+}
+
 export async function startAuto(
   ctx: ExtensionCommandContext,
   pi: ExtensionAPI,
@@ -523,6 +624,12 @@ export async function startAuto(
       "warning",
     );
   }
+
+  // Merge any orphaned completed slice branches before dispatching.
+  // Orphaned branches arise when complete-slice commits on the slice branch
+  // but the merge to main is interrupted (crash, timeout, Ctrl+C).
+  // Without this check, GSD enters an infinite "Skipping ... Advancing" loop.
+  await mergeOrphanedSliceBranches(base, ctx);
 
   // Self-heal: clear stale runtime records where artifacts already exist
   await selfHealRuntimeRecords(base, ctx);
