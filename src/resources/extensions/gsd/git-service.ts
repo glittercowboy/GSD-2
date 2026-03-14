@@ -151,6 +151,13 @@ export function writeIntegrationBranch(basePath: string, milestoneId: string, br
 
 // ─── Git Helper ────────────────────────────────────────────────────────────
 
+/** Env overlay that suppresses all interactive git credential prompts. */
+const GIT_NO_PROMPT_ENV = {
+  ...process.env,
+  GIT_TERMINAL_PROMPT: "0",
+  GIT_ASKPASS: "",
+};
+
 /**
  * Run a git command in the given directory.
  * Returns trimmed stdout. Throws on non-zero exit unless allowFailure is set.
@@ -162,6 +169,7 @@ export function runGit(basePath: string, args: string[], options: { allowFailure
       cwd: basePath,
       stdio: [options.input != null ? "pipe" : "ignore", "pipe", "pipe"],
       encoding: "utf-8",
+      env: GIT_NO_PROMPT_ENV,
       ...(options.input != null ? { input: options.input } : {}),
     }).trim();
   } catch (error) {
