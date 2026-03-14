@@ -19,6 +19,10 @@ import {
 	getModelsDev,
 	getCachedModelsDev,
 	mapToModelRegistry,
+<<<<<<< HEAD
+=======
+	SNAPSHOT,
+>>>>>>> gsd/M001/S03
 } from "@gsd/pi-ai";
 import { registerOAuthProvider, resetOAuthProviders } from "@gsd/pi-ai/oauth";
 import { type Static, Type } from "@sinclair/typebox";
@@ -318,6 +322,7 @@ export class ModelRegistry {
 			return this.applyOverridesToModels(mapToModelRegistry(cache.data), overrides, modelOverrides);
 		}
 
+<<<<<<< HEAD
 		// Cache miss - fall back to static MODELS
 		return this.applyOverridesToModels(
 			getProviders().flatMap((provider) => {
@@ -338,6 +343,34 @@ export class ModelRegistry {
 						};
 					}
 
+=======
+		// Cache miss - try snapshot as intermediate fallback
+		if (SNAPSHOT && Object.keys(SNAPSHOT).length > 0) {
+			// Snapshot available - use it with overrides applied
+			return this.applyOverridesToModels(mapToModelRegistry(SNAPSHOT), overrides, modelOverrides);
+		}
+
+		// Snapshot unavailable - fall back to static MODELS
+		return this.applyOverridesToModels(
+			getProviders().flatMap((provider) => {
+				const models = getModels(provider as KnownProvider) as Model<Api>[];
+				const providerOverride = overrides.get(provider);
+				const perModelOverrides = modelOverrides.get(provider);
+
+				return models.map((m) => {
+					let model = m;
+
+					// Apply provider-level baseUrl/headers override
+					if (providerOverride) {
+						const resolvedHeaders = resolveHeaders(providerOverride.headers);
+						model = {
+							...model,
+							baseUrl: providerOverride.baseUrl ?? model.baseUrl,
+							headers: resolvedHeaders ? { ...model.headers, ...resolvedHeaders } : model.headers,
+						};
+					}
+
+>>>>>>> gsd/M001/S03
 					// Apply per-model override
 					const modelOverride = perModelOverrides?.get(m.id);
 					if (modelOverride) {

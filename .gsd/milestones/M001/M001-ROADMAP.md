@@ -53,7 +53,7 @@ This milestone is complete only when all are true:
 - [x] **S02: Integrate into ModelRegistry** `risk:low` `depends:[S01]`
   > After this: `pi` starts with models from models.dev, local models.json still overrides
 
-- [ ] **S03: Build-time snapshot + cleanup** `risk:low` `depends:[S01,S02]`
+- [x] **S03: Build-time snapshot + cleanup** `risk:low` `depends:[S01,S02]`
   > After this: Fresh install works offline (uses snapshot), models.generated.ts deleted
 
 ## Boundary Map

@@ -19,3 +19,6 @@
 | D011 | M001/S02 | impl | Cache read timing | Sync cache check in constructor | Avoids blocking startup; async refresh is fire-and-forget | No |
 | D012 | M001/S02 | impl | Override application | Shared helper function for sync/async paths | Dedupes logic, ensures consistency between cache hit and refresh | No |
 | D013 | M001/S02 | impl | Constructor parameter properties | Regular class properties (not parameter properties) | Node's strip-only TypeScript doesn't support parameter properties | No |
+| D014 | M001/S03 | impl | Snapshot generation schemas | Inline Zod schemas in generation script | Avoids circular dependency with built pi-ai package | No |
+| D015 | M001/S03 | impl | Snapshot fetch timeout | 30 seconds (longer than runtime 10s) | Generation happens at build time, can afford longer timeout | Yes |
+| D016 | M001/S03 | impl | Snapshot validation | Defensive check for non-empty object | Guards against corrupted/empty snapshot file | No |

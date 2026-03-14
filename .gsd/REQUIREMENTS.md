@@ -39,14 +39,14 @@ This file is the explicit capability and coverage contract for the project.
 
 ### R004 — Bundled snapshot for offline-first cold start
 - Class: quality-attribute
-- Status: active
+- Status: validated
 - Description: A snapshot of models.dev data is bundled at build time for offline/fresh-install use
 - Why it matters: Fresh installs work without network; faster cold start
 - Source: user
 - Primary owning slice: M001/S03
 - Supporting slices: none
-- Validation: unmapped
-- Notes: Generated at build time from models.dev
+- Validation: S03 — Snapshot file committed, generation script works, fallback verified
+- Notes: Generated via `npm run generate-snapshot`
 
 ### R005 — Preserve local models.json override capability
 - Class: core-capability
@@ -61,21 +61,23 @@ This file is the explicit capability and coverage contract for the project.
 
 ### R006 — Remove models.generated.ts and generation script
 - Class: operability
-- Status: active
+- Status: validated
 - Description: The static models.generated.ts file and any generation scripts are removed
 - Why it matters: Eliminates stale generated code, simplifies build
 - Source: user
 - Primary owning slice: M001/S03
 - Supporting slices: none
-- Validation: unmapped
-- Notes: Verify no references remain
+- Validation: S03 — File deleted, grep shows no source references
+- Notes: Replaced by models-dev-snapshot.ts with different generation script
 
 ## Validated
 
 - R001 — Fetch model registry from models.dev (S01: contract-level unit tests)
 - R002 — 12-hour cache with fallback (S01: contract-level unit tests)
 - R003 — Version-triggered cache refresh (S01: contract-level unit tests)
+- R004 — Bundled snapshot for offline-first cold start (S03: snapshot file + generation script + fallback verified)
 - R005 — Preserve local models.json override capability (S02: implementation + code review)
+- R006 — Remove models.generated.ts and generation script (S03: file deleted, no source references)
 
 ## Deferred
 
@@ -92,13 +94,13 @@ This file is the explicit capability and coverage contract for the project.
 | R001 | core-capability | validated | M001/S01 | M001/S02 | S01 unit tests |
 | R002 | quality-attribute | validated | M001/S01 | none | S01 unit tests |
 | R003 | core-capability | validated | M001/S01 | none | S01 unit tests |
-| R004 | quality-attribute | active | M001/S03 | none | unmapped |
+| R004 | quality-attribute | validated | M001/S03 | none | S03 snapshot + generation script |
 | R005 | core-capability | validated | M001/S02 | none | S02 implementation + code review |
-| R006 | operability | active | M001/S03 | none | unmapped |
+| R006 | operability | validated | M001/S03 | none | S03 file deletion + grep verification |
 
 ## Coverage Summary
 
-- Active requirements: 2
+- Active requirements: 0
 - Mapped to slices: 6
-- Validated: 4
+- Validated: 6
 - Unmapped active requirements: 0
