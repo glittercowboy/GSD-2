@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { fileURLToPath } from 'url'
 import { dirname, resolve, join } from 'path'
-import { existsSync, readFileSync } from 'fs'
+import { existsSync, readFileSync, mkdirSync, symlinkSync, lstatSync } from 'fs'
 import { agentDir, appRoot } from './app-paths.js'
 import { renderLogo } from './logo.js'
 
@@ -100,6 +100,22 @@ process.env.GSD_BUNDLED_EXTENSION_PATHS = [
 // must set it here before any SDK clients are created.
 import { EnvHttpProxyAgent, setGlobalDispatcher } from 'undici'
 setGlobalDispatcher(new EnvHttpProxyAgent())
+
+// Ensure workspace packages are linked before importing cli.js (which imports @gsd/*).
+// npm postinstall handles this normally, but npx --ignore-scripts skips postinstall.
+const gsdScopeDir = join(gsdNodeModules, '@gsd')
+const packagesDir = join(gsdRoot, 'packages')
+const wsPackages = ['native', 'pi-agent-core', 'pi-ai', 'pi-coding-agent', 'pi-tui']
+try {
+  if (!existsSync(gsdScopeDir)) mkdirSync(gsdScopeDir, { recursive: true })
+  for (const pkg of wsPackages) {
+    const target = join(gsdScopeDir, pkg)
+    const source = join(packagesDir, pkg)
+    if (existsSync(source) && !existsSync(target)) {
+      try { symlinkSync(source, target, 'junction') } catch { /* non-fatal */ }
+    }
+  }
+} catch { /* non-fatal */ }
 
 // Dynamic import defers ESM evaluation — config.js will see PI_PACKAGE_DIR above
 await import('./cli.js')

@@ -12,6 +12,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Fallback `--backend=local` for offline faster-whisper on CPU
 - Venv-aware Python detection (`~/.gsd/voice-venv/bin/python3`)
 
+## [2.10.12] - 2026-03-14
+
+### Fixed
+- Fix `npx gsd-pi@latest` failing with `ERR_MODULE_NOT_FOUND: Cannot find package '@gsd/pi-coding-agent'`. The loader now creates workspace package symlinks at runtime before importing, so it works even when `npx` skips postinstall scripts.
+
 ## [2.10.11] - 2026-03-14
 
 ### Fixed
@@ -496,7 +501,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 - License updated to MIT
 
-[Unreleased]: https://github.com/gsd-build/gsd-2/compare/v2.10.11...HEAD
+[Unreleased]: https://github.com/gsd-build/gsd-2/compare/v2.10.12...HEAD
+[2.10.12]: https://github.com/gsd-build/gsd-2/compare/v2.10.11...v2.10.12
 [2.10.11]: https://github.com/gsd-build/gsd-2/compare/v2.10.10...v2.10.11
 [2.10.10]: https://github.com/gsd-build/gsd-2/compare/v2.10.9...v2.10.10
 [2.10.9]: https://github.com/gsd-build/gsd-2/compare/v2.10.8...v2.10.9
