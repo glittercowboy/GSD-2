@@ -25,22 +25,23 @@ if (!existsSync(join(projectRoot, "dist"))) {
 }
 
 function packTarball(): string {
-  const out = execFileSync("npm", ["pack", "--json"], {
-    cwd: projectRoot,
-    encoding: "utf-8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  return join(projectRoot, JSON.parse(out)[0].filename);
+  const pkg = JSON.parse(readFileSync(join(projectRoot, "package.json"), "utf-8"));
+  const safeName = pkg.name.replace(/^@[^/]+\//, "").replace(/\//g, "-");
+  const tarball = `${safeName}-${pkg.version}.tgz`;
+  execFileSync("npm", ["pack"], { cwd: projectRoot, stdio: ["ignore", "ignore", "pipe"] });
+  return join(projectRoot, tarball);
 }
 
 /** List file paths inside a .tgz using Node built-ins only (no tar CLI or npm package). */
 function listTarEntries(tarballPath: string): Promise<string[]> {
   return new Promise((resolve, reject) => {
     const files: string[] = [];
-    let buf = Buffer.alloc(0);
+    const chunks: Buffer[] = [];
     const gunzip = createGunzip();
-    gunzip.on("data", (chunk: Buffer) => { buf = Buffer.concat([buf, chunk]); });
+    const input = createReadStream(tarballPath);
+    gunzip.on("data", (chunk: Buffer) => { chunks.push(chunk); });
     gunzip.on("end", () => {
+      const buf = Buffer.concat(chunks);
       let offset = 0;
       while (offset + 512 <= buf.length) {
         const header = buf.subarray(offset, offset + 512);
@@ -54,8 +55,9 @@ function listTarEntries(tarballPath: string): Promise<string[]> {
       }
       resolve(files);
     });
+    input.on("error", reject);
     gunzip.on("error", reject);
-    createReadStream(tarballPath).pipe(gunzip);
+    input.pipe(gunzip);
   });
 }
 
@@ -104,7 +106,7 @@ test("tarball installs and gsd binary resolves", async () => {
     // Install from tarball into a temp prefix
     execFileSync("npm", ["install", "--prefix", tmp, tarballPath, "--no-save"], {
       env: { ...process.env, PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1" },
-      stdio: "ignore",
+      stdio: ["ignore", "ignore", "pipe"],
     });
 
     // Verify the gsd bin exists in the installed package
