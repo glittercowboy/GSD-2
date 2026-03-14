@@ -23,4 +23,12 @@ export interface RecentProject {
   lastOpened: number;
   /** Whether the project has .gsd/ */
   isGsdProject: boolean;
+  /** WORKSPACE-05: true = hidden from main grid */
+  archived?: boolean;
+  /** e.g. "v2.0 Native Desktop" — from STATE.md last_activity */
+  activeMilestone?: string;
+  /** 0-100 — from STATE.md progress block */
+  progressPercent?: number;
+  /** raw last_activity string from STATE.md */
+  lastActivity?: string;
 }

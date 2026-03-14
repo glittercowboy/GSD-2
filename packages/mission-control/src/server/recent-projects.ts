@@ -55,6 +55,37 @@ export async function addRecentProject(project: RecentProject): Promise<void> {
 }
 
 /**
+ * Archive a project by setting archived: true on the matching entry.
+ */
+export async function archiveProject(path: string): Promise<void> {
+  const existing = await getRecentProjects();
+  const updated = existing.map((p) =>
+    p.path === path ? { ...p, archived: true } : p
+  );
+  await mkdir(dirname(recentFilePath), { recursive: true });
+  await writeFile(recentFilePath, JSON.stringify(updated, null, 2));
+}
+
+/**
+ * Restore a project by setting archived: false on the matching entry.
+ */
+export async function restoreProject(path: string): Promise<void> {
+  const existing = await getRecentProjects();
+  const updated = existing.map((p) =>
+    p.path === path ? { ...p, archived: false } : p
+  );
+  await mkdir(dirname(recentFilePath), { recursive: true });
+  await writeFile(recentFilePath, JSON.stringify(updated, null, 2));
+}
+
+/**
+ * Return only entries where archived === true.
+ */
+export async function getArchivedProjects(): Promise<RecentProject[]> {
+  return (await getRecentProjects()).filter((p) => p.archived === true);
+}
+
+/**
  * HTTP request handler for /api/projects/* routes.
  * Returns Response or null if route not matched.
  */
@@ -91,6 +122,50 @@ export async function handleRecentProjectsRequest(
     };
 
     await addRecentProject(project);
+    return Response.json({ success: true });
+  }
+
+  // PATCH /api/projects/recent/archive — archive or restore a project
+  if (pathname === "/api/projects/recent/archive" && req.method === "PATCH") {
+    let body: any;
+    try {
+      body = await req.json();
+    } catch {
+      return Response.json({ error: "Invalid JSON body" }, { status: 400 });
+    }
+
+    if (!body.path || body.archived === undefined) {
+      return Response.json(
+        { error: "path and archived fields required" },
+        { status: 400 }
+      );
+    }
+
+    if (body.archived) {
+      await archiveProject(body.path);
+    } else {
+      await restoreProject(body.path);
+    }
+    return Response.json({ success: true });
+  }
+
+  // DELETE /api/projects/recent — remove a project entirely
+  if (pathname === "/api/projects/recent" && req.method === "DELETE") {
+    let body: any;
+    try {
+      body = await req.json();
+    } catch {
+      return Response.json({ error: "Invalid JSON body" }, { status: 400 });
+    }
+
+    if (!body.path) {
+      return Response.json({ error: "path field required" }, { status: 400 });
+    }
+
+    const existing = await getRecentProjects();
+    const filtered = existing.filter((p) => p.path !== body.path);
+    await mkdir(dirname(recentFilePath), { recursive: true });
+    await writeFile(recentFilePath, JSON.stringify(filtered, null, 2));
     return Response.json({ success: true });
   }
 
