@@ -2206,7 +2206,10 @@ async function inlineDependencySummaries(
   if (!sliceEntry || sliceEntry.depends.length === 0) return "- (no dependencies)";
 
   const sections: string[] = [];
+  const seen = new Set<string>();
   for (const dep of sliceEntry.depends) {
+    if (seen.has(dep)) continue;
+    seen.add(dep);
     const summaryFile = resolveSliceFile(base, mid, dep, "SUMMARY");
     const summaryContent = summaryFile ? await loadFile(summaryFile) : null;
     const relPath = relSliceFile(base, mid, dep, "SUMMARY");
@@ -2482,11 +2485,14 @@ async function buildCompleteMilestonePrompt(
   const inlined: string[] = [];
   inlined.push(await inlineFile(roadmapPath, roadmapRel, "Milestone Roadmap"));
 
-  // Inline all slice summaries
+  // Inline all slice summaries (deduplicated by slice ID)
   const roadmapContent = roadmapPath ? await loadFile(roadmapPath) : null;
   if (roadmapContent) {
     const roadmap = parseRoadmap(roadmapContent);
+    const seenSlices = new Set<string>();
     for (const slice of roadmap.slices) {
+      if (seenSlices.has(slice.id)) continue;
+      seenSlices.add(slice.id);
       const summaryPath = resolveSliceFile(base, mid, slice.id, "SUMMARY");
       const summaryRel = relSliceFile(base, mid, slice.id, "SUMMARY");
       inlined.push(await inlineFile(summaryPath, summaryRel, `${slice.id} Summary`));
