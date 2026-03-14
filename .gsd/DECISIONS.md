@@ -28,3 +28,6 @@
 | D020 | M002 | impl | Slice ordering | Build repair first, then scenario tests, then live verification | Build failures block all downstream verification; live tests depend on working infrastructure | No |
 | D021 | M002/S02 | impl | Registry cache path injection | Optional cachePath parameter in ModelRegistry constructor | Enables production-like scenario tests with tmpdir() isolation without mocking or mutating user directories | No |
 | D022 | M002/S03 | impl | Live test env var gate | LIVE_MODELS_DEV_TEST env var skips test when set to "false" or "0" | Allows CI/offline environments to disable network-dependent test without code changes | Yes — could add more granular control if needed |
+| D023 | M003/S01 | process | Merge strategy | Merge over rebase | Preserves milestone branch history and makes reconciliation explicit; rebase would rewrite commit history and obscure the merge boundary | No |
+| D024 | M003/S01 | process | Conflict resolution approach | Favor models.dev architecture | When conflicts occurred in architecture files, preserved the M001/M002 models.dev design over upstream changes to maintain architectural consistency | No |
+| D025 | M003/S01 | process | Merge commit traceability | Record merge commit hash ded3ac3b in decisions | Provides git-level traceability for the upstream reconciliation point in S01 | No |

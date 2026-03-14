@@ -12,6 +12,7 @@ The model registry must stay current with available models, pricing, and capabil
 
 - **M001 complete:** Model registry fetches from models.dev with 12h cache, fallback to bundled snapshot, local overrides preserved
 - **M002 complete:** Build/test infrastructure repaired; production-like scenario tests prove real ModelRegistry startup behavior; live verification in main suite
+- **M003 complete:** Upstream reconciliation with origin/main complete; clean merge, all 41 tests pass, branch PR-ready
 - Models loaded at runtime from models.dev API or bundled snapshot (2311KB, 102 providers)
 - Legacy `packages/pi-ai/src/models.generated.ts` deleted
 - Users can override/add models via `~/.gsd/agent/models.json`
@@ -37,4 +38,5 @@ See `.gsd/REQUIREMENTS.md` for the explicit capability contract, requirement sta
   - [x] S01: Build/Test Infrastructure Repair
   - [x] S02: Production-Like Scenario Testing
   - [x] S03: Live models.dev Verification
-- [ ] M003: Upstream Reconciliation and PR Preparation — Queued
+- [x] M003: Upstream Reconciliation and PR Preparation — Complete
+  - [x] S01: Upstream Merge and Verification
