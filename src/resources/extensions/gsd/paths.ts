@@ -9,8 +9,39 @@
  * via prefix matching, so existing projects work without migration.
  */
 
-import { readdirSync, existsSync } from "node:fs";
+import { readdirSync, existsSync, Dirent } from "node:fs";
 import { join } from "node:path";
+
+// ─── Directory Listing Cache ──────────────────────────────────────────────────
+
+const dirEntryCache = new Map<string, Dirent[]>();
+const dirListCache = new Map<string, string[]>();
+
+function cachedReaddirWithTypes(dirPath: string): Dirent[] {
+  const cached = dirEntryCache.get(dirPath);
+  if (cached) return cached;
+  const entries = readdirSync(dirPath, { withFileTypes: true });
+  dirEntryCache.set(dirPath, entries);
+  return entries;
+}
+
+function cachedReaddir(dirPath: string): string[] {
+  const cached = dirListCache.get(dirPath);
+  if (cached) return cached;
+  const entries = readdirSync(dirPath);
+  dirListCache.set(dirPath, entries);
+  return entries;
+}
+
+/**
+ * Clear the directory listing cache.
+ * Call after milestone transitions, file creation in planning directories,
+ * or at the start/end of a dispatch cycle.
+ */
+export function clearPathCache(): void {
+  dirEntryCache.clear();
+  dirListCache.clear();
+}
 
 // ─── Name Builders ─────────────────────────────────────────────────────────
 
@@ -58,7 +89,7 @@ export function buildTaskFileName(taskId: string, suffix: string): string {
 export function resolveDir(parentDir: string, idPrefix: string): string | null {
   if (!existsSync(parentDir)) return null;
   try {
-    const entries = readdirSync(parentDir, { withFileTypes: true });
+    const entries = cachedReaddirWithTypes(parentDir);
     // Exact match first (current convention: bare ID)
     const exact = entries.find(e => e.isDirectory() && e.name === idPrefix);
     if (exact) return exact.name;
@@ -83,7 +114,7 @@ export function resolveFile(dir: string, idPrefix: string, suffix: string): stri
   if (!existsSync(dir)) return null;
   const target = `${idPrefix}-${suffix}.md`.toUpperCase();
   try {
-    const entries = readdirSync(dir);
+    const entries = cachedReaddir(dir);
     // Direct match: ID-SUFFIX.md
     const direct = entries.find(e => e.toUpperCase() === target);
     if (direct) return direct;
@@ -113,7 +144,7 @@ export function resolveTaskFiles(tasksDir: string, suffix: string): string[] {
     const currentPattern = new RegExp(`^T\\d+-${suffix}\\.md$`, "i");
     // Legacy convention: T01-INSTALL-PACKAGES-PLAN.md
     const legacyPattern = new RegExp(`^T\\d+-.*-${suffix}\\.md$`, "i");
-    return readdirSync(tasksDir)
+    return cachedReaddir(tasksDir)
       .filter(f => currentPattern.test(f) || legacyPattern.test(f))
       .sort();
   } catch {
