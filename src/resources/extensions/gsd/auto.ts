@@ -387,6 +387,9 @@ async function mergeOrphanedSliceBranches(
 
     const { milestoneId, sliceId } = parsed;
 
+    // Ensure Git operations for this branch use the correct milestone context.
+    setActiveMilestoneId(base, milestoneId);
+
     // Skip if already merged (no commits ahead of main)
     const mainBranch = getMainBranch(base);
     const aheadCount = runGit(
