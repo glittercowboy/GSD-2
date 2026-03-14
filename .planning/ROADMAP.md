@@ -183,7 +183,13 @@ Plans:
   3. Sending a natural language message in Builder mode shows a routing badge; the user can override the routing decision before it executes
   4. Discuss cards in Builder mode use plain-language labels and "Question N of N" progress with no GSD terminology; the decision log appears as "Your decisions so far"
   5. Slice cards in Builder mode show state labels (Ready to build / Building now / Ready for your review / Done) and action labels (See what will be built / Build this feature / Give direction / Ship it)
-**Plans**: TBD
+**Plans**: 4 plans
+
+Plans:
+- [ ] 18-01-PLAN.md — Wave 1: InterfaceModeContext + vocab map + Settings toggle + ChatInput Builder mode (BUILDER-01, 02, 03)
+- [ ] 18-02-PLAN.md — Wave 2a: classify-intent API route + RoutingBadge + PhaseGateCard + AppShell interception (BUILDER-04, 07)
+- [ ] 18-03-PLAN.md — Wave 2b: Builder vocabulary on slice cards + discuss cards (BUILDER-05, 06)
+- [ ] 18-04-PLAN.md — Wave 3: Full suite gate + human verification SC-1..SC-5 (BUILDER-01..07)
 
 ### Phase 19: Project Workspace
 **Goal**: Users have a managed project home screen — a grid of project cards, multi-session tabs, and an auto-created workspace path for Builder users — so Mission Control feels like an app that owns its projects rather than a file-picker tool
@@ -238,7 +244,7 @@ Plans:
 | 14. Slice Integration | 6/6 | Complete    | 2026-03-13 | — |
 | 15. Tauri Shell | 5/5 | Complete   | 2026-03-13 | — |
 | 16. OAuth + Keychain | 4/4 | Complete    | 2026-03-14 | — |
-| 17. Permission Model | 3/3 | Complete   | 2026-03-14 | — |
-| 18. Builder Mode | v2.0 | 0/TBD | Not started | — |
+| 17. Permission Model | 3/3 | Complete    | 2026-03-14 | — |
+| 18. Builder Mode | v2.0 | 0/4 | Not started | — |
 | 19. Project Workspace | v2.0 | 0/TBD | Not started | — |
 | 20. Installer + Distribution | v2.0 | 0/TBD | Not started | — |
