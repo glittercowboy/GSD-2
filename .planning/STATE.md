@@ -3,10 +3,26 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Native Desktop
 status: in_progress
+last_updated: "2026-03-14T09:45:00.000Z"
+last_activity: "2026-03-14 — Plan 17-03 complete: human verification approved SC-1..SC-4 — Phase 17 Permission Model fully complete; 35/36 plans done"
+stopped_at: "Completed 17-03-PLAN.md — Phase 17 Permission Model fully complete"
+progress:
+  total_phases: 10
+  completed_phases: 6
+  total_plans: 36
+  completed_plans: 35
+  percent: 97
+---
+
+---
+gsd_state_version: 1.0
+milestone: v2.0
+milestone_name: Native Desktop
+status: in_progress
 last_updated: "2026-03-14T09:35:02.666Z"
 last_activity: "2026-03-14 — Plan 17-01 complete: trust-api.ts (isTrusted/writeTrustFlag/REST routes), TrustDialog, AdvancedPermissionsPanel, SettingsView Build Permissions section; 17 tests pass"
 progress:
-  total_phases: 10
+  [██████████] 97%
   completed_phases: 5
   total_plans: 36
   completed_plans: 34
@@ -385,12 +401,12 @@ See: .planning/PROJECT.md (updated 2026-03-12)
 
 ## Current Position
 
-Phase: 17 of 20 (Permission Model) — IN PROGRESS (plan 02 of 3 done)
-Plan: 2 of 3 complete (plan 02 done — boundary-enforcer.ts, pipeline interrupt, AppShell banner, App.tsx trust flow, /api/trust-status route)
-Status: Plan 17-02 complete. Next: Plan 17-03 (final plan in phase 17).
-Last activity: 2026-03-14 — Plan 17-02 complete: detectBoundaryViolation (7 tests), pipeline interrupt on violation, AppShell boundary banner, App.tsx TrustDialog flow, /api/trust-status + POST /api/trust routes
+Phase: 17 of 20 (Permission Model) — COMPLETE (all 3 plans done)
+Plan: 3 of 3 complete (plan 03 done — human verification SC-1..SC-4 approved; Phase 17 closed)
+Status: Phase 17 complete. Next: Phase 18 Integration.
+Last activity: 2026-03-14 — Plan 17-03 complete: human verification approved SC-1..SC-4 — all PERM requirements satisfied
 
-Progress: [█████████░] 94% (34/36 plans complete)
+Progress: [██████████] 97% (35/36 plans complete)
 
 ## Milestone Archive
 
@@ -502,6 +518,7 @@ Progress: [█████████░] 94% (34/36 plans complete)
 - [Phase 17-permission-model]: AdvancedPermissionsPanel renders inline in SettingsView Build Permissions section (not modal) — simpler UX, avoids z-index conflicts
 - [Phase 17-permission-model]: boundary_violation piggybacked on existing useSessionManager WebSocket — no second WS connection
 - [Phase 17-permission-model]: detectBoundaryViolation regex uses negative lookbehind for dot/slash to prevent matching ./relative paths
+- [Phase 17-permission-model]: Human approved SC-1 through SC-4 — all four PERM requirements verified visually and functionally on 2026-03-14
 
 ### Blockers/Concerns
 
