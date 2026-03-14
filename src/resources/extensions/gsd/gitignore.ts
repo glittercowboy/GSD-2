@@ -1,8 +1,8 @@
 /**
- * GSD bootstrappers for .gitignore and PREFERENCES.md
+ * GSD bootstrappers for .gitignore and preferences.md
  *
  * Ensures baseline .gitignore exists with universally-correct patterns.
- * Creates an empty PREFERENCES.md template if it doesn't exist.
+ * Creates an empty preferences.md template if it doesn't exist.
  * Both idempotent — non-destructive if already present.
  */
 
@@ -134,14 +134,18 @@ export function untrackRuntimeFiles(basePath: string): void {
 }
 
 /**
- * Ensure basePath/.gsd/PREFERENCES.md exists as an empty template.
+ * Ensure basePath/.gsd/preferences.md exists as an empty template.
  * Creates the file with frontmatter only if it doesn't exist.
  * Returns true if created, false if already exists.
+ *
+ * Checks both lowercase (canonical) and uppercase (legacy) to avoid
+ * creating a duplicate when an uppercase file already exists.
  */
 export function ensurePreferences(basePath: string): boolean {
-  const preferencesPath = join(basePath, ".gsd", "PREFERENCES.md");
+  const preferencesPath = join(basePath, ".gsd", "preferences.md");
+  const legacyPath = join(basePath, ".gsd", "PREFERENCES.md");
 
-  if (existsSync(preferencesPath)) {
+  if (existsSync(preferencesPath) || existsSync(legacyPath)) {
     return false;
   }
 
