@@ -1,6 +1,7 @@
 import { AppShell } from "./components/layout/AppShell";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ProviderPickerScreen } from "./components/auth/ProviderPickerScreen";
+import { TrustDialog } from "./components/permissions/TrustDialog";
 import { useAuthGuard } from "./auth";
 import { useTokenRefresh } from "./auth";
 

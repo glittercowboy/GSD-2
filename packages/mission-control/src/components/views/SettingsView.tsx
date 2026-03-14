@@ -27,6 +27,11 @@ import { cn } from "@/lib/utils";
 import { useSettings } from "@/hooks/useSettings";
 import { getProviderStatus, changeProvider } from "@/auth/auth-api";
 import type { ProviderStatus } from "@/auth/auth-api";
+import {
+  AdvancedPermissionsPanel,
+  DEFAULT_PERMISSION_SETTINGS,
+} from "@/components/permissions/AdvancedPermissionsPanel";
+import type { PermissionSettings } from "@/components/permissions/AdvancedPermissionsPanel";
 
 interface SectionProps {
   title: string;
@@ -206,6 +211,7 @@ export function SettingsView() {
   const { settings, loading, error, dirty, update, save } = useSettings();
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
     provider: true,
+    buildPerms: true,
     claude: true,
     skills: true,
     agents: true,
@@ -219,6 +225,9 @@ export function SettingsView() {
   const [providerStatus, setProviderStatus] = useState<ProviderStatus | null>(null);
   const [changingProvider, setChangingProvider] = useState(false);
   const [confirmChange, setConfirmChange] = useState(false);
+  // Build Permissions state
+  const [showAdvancedPerms, setShowAdvancedPerms] = useState(false);
+  const [permSettings, setPermSettings] = useState<PermissionSettings>(DEFAULT_PERMISSION_SETTINGS);
 
   const toggleSection = useCallback((key: string) => {
     setOpenSections((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -396,7 +405,36 @@ export function SettingsView() {
           )}
         </Section>
 
-        {/* 1. AI Model Settings */}
+        {/* 1. Build Permissions */}
+        <Section
+          title="Build Permissions"
+          icon={<Shield className="h-4 w-4 text-cyan-accent" />}
+          open={openSections.buildPerms ?? true}
+          onToggle={() => toggleSection("buildPerms")}
+        >
+          <p className="text-sm text-slate-400">
+            The AI works inside your project only. Files outside are never touched.
+          </p>
+          <div>
+            <button
+              type="button"
+              onClick={() => setShowAdvancedPerms((prev) => !prev)}
+              className="text-sm text-cyan-accent hover:underline"
+            >
+              Manage build permissions →
+            </button>
+            {showAdvancedPerms && (
+              <div className="mt-3">
+                <AdvancedPermissionsPanel
+                  settings={permSettings}
+                  onChange={setPermSettings}
+                />
+              </div>
+            )}
+          </div>
+        </Section>
+
+        {/* 2. AI Model Settings */}
         <Section
           title="AI Model Settings"
           icon={<Shield className="h-4 w-4 text-cyan-accent" />}
@@ -450,7 +488,7 @@ export function SettingsView() {
           />
         </Section>
 
-        {/* 2. Skills & Commands */}
+        {/* 3. Skills & Commands */}
         <Section
           title="Skills & Commands"
           icon={<Terminal className="h-4 w-4 text-cyan-accent" />}
@@ -497,7 +535,7 @@ export function SettingsView() {
           </div>
         </Section>
 
-        {/* 3. Sub-agents & Profiles */}
+        {/* 4. Sub-agents & Profiles */}
         <Section
           title="Sub-agents & Profiles"
           icon={<Users className="h-4 w-4 text-cyan-accent" />}
@@ -549,7 +587,7 @@ export function SettingsView() {
           </div>
         </Section>
 
-        {/* 4. Worktree Isolation */}
+        {/* 5. Worktree Isolation */}
         <Section
           title="Worktree Isolation"
           icon={<GitBranch className="h-4 w-4 text-cyan-accent" />}
@@ -567,7 +605,7 @@ export function SettingsView() {
           </p>
         </Section>
 
-        {/* 5. Plugins & Marketplace */}
+        {/* 6. Plugins & Marketplace */}
         <Section
           title="Plugins & Marketplace"
           icon={<Package className="h-4 w-4 text-cyan-accent" />}
