@@ -201,7 +201,14 @@ Plans:
   3. Archiving a project removes it from the main grid; restoring it returns it; no files are deleted at any point
   4. With two or more projects open a tab bar appears — each tab shows project name and an amber dot when executing; switching tabs swaps the active `gsd` process and WebSocket
   5. In Builder mode, creating a new project auto-creates a directory under `~/GSD Projects/`, runs `git init`, and runs `gsd` setup — no file picker is shown
-**Plans**: TBD
+**Plans**: 5 plans
+
+Plans:
+- [ ] 19-01-PLAN.md — Wave 1: Test stubs for all WORKSPACE requirements
+- [ ] 19-02-PLAN.md — Wave 2: workspace-api.ts + RecentProject extension + archive ops + reveal_path Tauri IPC
+- [ ] 19-03-PLAN.md — Wave 2: ProjectHomeScreen + ProjectCard + ProjectCardMenu components
+- [ ] 19-04-PLAN.md — Wave 3: ProjectTabBar + useSessionFlow home mode + AppShell wiring
+- [ ] 19-05-PLAN.md — Wave 4: Full suite gate + human verification SC-1..SC-5
 
 ### Phase 20: Installer + Distribution
 **Goal**: Mission Control ships as a signed, auto-updating native installer for macOS and Windows with a public landing page — reproducible via GitHub Actions CI from a single `release/*` push
@@ -246,5 +253,5 @@ Plans:
 | 16. OAuth + Keychain | 4/4 | Complete    | 2026-03-14 | — |
 | 17. Permission Model | 3/3 | Complete    | 2026-03-14 | — |
 | 18. Builder Mode | 4/4 | Complete    | 2026-03-14 | — |
-| 19. Project Workspace | v2.0 | 0/TBD | Not started | — |
+| 19. Project Workspace | v2.0 | 0/5 | Not started | — |
 | 20. Installer + Distribution | v2.0 | 0/TBD | Not started | — |
