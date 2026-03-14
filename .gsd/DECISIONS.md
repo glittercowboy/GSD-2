@@ -22,3 +22,7 @@
 | D014 | M001/S03 | impl | Snapshot generation schemas | Inline Zod schemas in generation script | Avoids circular dependency with built pi-ai package | No |
 | D015 | M001/S03 | impl | Snapshot fetch timeout | 30 seconds (longer than runtime 10s) | Generation happens at build time, can afford longer timeout | Yes |
 | D016 | M001/S03 | impl | Snapshot validation | Defensive check for non-empty object | Guards against corrupted/empty snapshot file | No |
+| D017 | M002 | impl | Test imports (supersedes D007) | Use .js extension in import specifiers | Node16 module resolution with allowImportingTsExtensions:false requires .js specifiers even for .ts sources; custom resolver rewrites at runtime | No |
+| D018 | M002 | impl | Test isolation | Use tmpdir() instead of homedir() for registry tests | Prevents test pollution of actual ~/.gsd/agent/ config and cache | No |
+| D019 | M002 | impl | Live test scope | Live models.dev verification in main suite | User explicitly chose this tradeoff for upstream compatibility checking | No |
+| D020 | M002 | impl | Slice ordering | Build repair first, then scenario tests, then live verification | Build failures block all downstream verification; live tests depend on working infrastructure | No |
