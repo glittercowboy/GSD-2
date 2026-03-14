@@ -248,6 +248,13 @@ export class AuthStorage {
 	 */
 	private credentialBackoff: Map<string, Map<number, number>> = new Map();
 
+	/**
+	 * Provider-level backoff tracking.
+	 * Set when all credentials for a provider are backed off.
+	 * Map<provider, backoffExpiresAt>
+	 */
+	private providerBackoff: Map<string, number> = new Map();
+
 	private constructor(private storage: AuthStorageBackend) {
 		this.reload();
 	}
@@ -398,6 +405,7 @@ export class AuthStorage {
 		delete this.data[provider];
 		this.providerRoundRobinIndex.delete(provider);
 		this.credentialBackoff.delete(provider);
+		this.providerBackoff.delete(provider);
 		this.persistProviderChange(provider, undefined);
 	}
 
@@ -482,6 +490,43 @@ export class AuthStorage {
 			if (!this.isCredentialBackedOff(provider, i)) return false;
 		}
 		return true;
+	}
+
+	/**
+	 * Mark an entire provider as exhausted.
+	 * Called when all credentials for a provider are backed off.
+	 */
+	markProviderExhausted(provider: string, errorType: UsageLimitErrorType): void {
+		const backoffMs = getBackoffDuration(errorType);
+		this.providerBackoff.set(provider, Date.now() + backoffMs);
+	}
+
+	/**
+	 * Check if a provider is currently available (not backed off at provider level).
+	 */
+	isProviderAvailable(provider: string): boolean {
+		const expiresAt = this.providerBackoff.get(provider);
+		if (expiresAt === undefined) return true;
+		if (Date.now() >= expiresAt) {
+			this.providerBackoff.delete(provider);
+			return true;
+		}
+		return false;
+	}
+
+	/**
+	 * Get milliseconds remaining until provider backoff expires.
+	 * Returns 0 if provider is available.
+	 */
+	getProviderBackoffRemaining(provider: string): number {
+		const expiresAt = this.providerBackoff.get(provider);
+		if (expiresAt === undefined) return 0;
+		const remaining = expiresAt - Date.now();
+		if (remaining <= 0) {
+			this.providerBackoff.delete(provider);
+			return 0;
+		}
+		return remaining;
 	}
 
 	/**

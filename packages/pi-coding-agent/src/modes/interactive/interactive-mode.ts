@@ -2382,6 +2382,24 @@ export class InteractiveMode {
 				this.ui.requestRender();
 				break;
 			}
+
+			case "fallback_provider_switch": {
+				this.showStatus(`Switched from ${event.from} → ${event.to} (${event.reason})`);
+				this.ui.requestRender();
+				break;
+			}
+
+			case "fallback_provider_restored": {
+				this.showStatus(`Restored to ${event.provider}`);
+				this.ui.requestRender();
+				break;
+			}
+
+			case "fallback_chain_exhausted": {
+				this.showError(event.reason);
+				this.ui.requestRender();
+				break;
+			}
 		}
 	}
 

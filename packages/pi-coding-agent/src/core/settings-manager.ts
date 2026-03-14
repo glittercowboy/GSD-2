@@ -68,6 +68,17 @@ export interface TaskIsolationSettings {
 	merge?: "patch" | "branch"; // default: "patch"
 }
 
+export interface FallbackChainEntry {
+	provider: string;
+	model: string;
+	priority: number;
+}
+
+export interface FallbackSettings {
+	enabled?: boolean; // default: false
+	chains?: Record<string, FallbackChainEntry[]>; // keyed by chain name
+}
+
 export type TransportSetting = Transport;
 
 /**
@@ -122,6 +133,7 @@ export interface Settings {
 	async?: AsyncSettings;
 	bashInterceptor?: BashInterceptorSettings;
 	taskIsolation?: TaskIsolationSettings;
+	fallback?: FallbackSettings;
 }
 
 /** Deep merge settings: project/overrides take precedence, nested objects merge recursively */
@@ -1009,5 +1021,59 @@ export class SettingsManager {
 
 	getTaskIsolationMerge(): "patch" | "branch" {
 		return this.settings.taskIsolation?.merge ?? "patch";
+	}
+
+	getFallbackEnabled(): boolean {
+		return this.settings.fallback?.enabled ?? false;
+	}
+
+	setFallbackEnabled(enabled: boolean): void {
+		if (!this.globalSettings.fallback) {
+			this.globalSettings.fallback = {};
+		}
+		this.globalSettings.fallback.enabled = enabled;
+		this.markModified("fallback", "enabled");
+		this.save();
+	}
+
+	getFallbackChains(): Record<string, FallbackChainEntry[]> {
+		return this.settings.fallback?.chains ?? {};
+	}
+
+	getFallbackChain(name: string): FallbackChainEntry[] | undefined {
+		return this.settings.fallback?.chains?.[name];
+	}
+
+	setFallbackChain(name: string, entries: FallbackChainEntry[]): void {
+		if (!this.globalSettings.fallback) {
+			this.globalSettings.fallback = {};
+		}
+		if (!this.globalSettings.fallback.chains) {
+			this.globalSettings.fallback.chains = {};
+		}
+		// Sort by priority
+		this.globalSettings.fallback.chains[name] = [...entries].sort((a, b) => a.priority - b.priority);
+		this.markModified("fallback");
+		this.save();
+	}
+
+	removeFallbackChain(name: string): boolean {
+		if (!this.globalSettings.fallback?.chains?.[name]) {
+			return false;
+		}
+		delete this.globalSettings.fallback.chains[name];
+		if (Object.keys(this.globalSettings.fallback.chains).length === 0) {
+			delete this.globalSettings.fallback.chains;
+		}
+		this.markModified("fallback");
+		this.save();
+		return true;
+	}
+
+	getFallbackSettings(): { enabled: boolean; chains: Record<string, FallbackChainEntry[]> } {
+		return {
+			enabled: this.getFallbackEnabled(),
+			chains: this.getFallbackChains(),
+		};
 	}
 }
