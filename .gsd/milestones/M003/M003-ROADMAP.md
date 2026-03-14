@@ -46,7 +46,7 @@ This milestone is complete only when all are true:
 
 ## Slices
 
-- [ ] **S01: PR Quality Audit** `risk:low` `depends:[]`
+- [x] **S01: PR Quality Audit** `risk:low` `depends:[]`
   > After this: all 4 PR fixes verified correct with evidence, full test suite passes, PR is ready for upstream submission.
 
 ## Boundary Map

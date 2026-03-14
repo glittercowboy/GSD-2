@@ -12,7 +12,7 @@ Structured, agent-executable project management with milestone/slice/task decomp
 
 - M001 delivered collision-resistant unique milestone IDs with an opt-in preference toggle and regex hardening across 12+ code sites.
 - M002 swapped the unreleased unique ID format from `M-{rand6}-{seq}` to `M{seq}-{rand6}` (e.g. `M001-abc123`). Clean replacement — all production code, tests, and docs updated. 206 assertions pass across 3 test files. Zero old-format traces remain.
-- M003 in progress: verifying PR quality fixes (deduplication, naming, test helpers, typo) across 43 changed files before upstream submission.
+- M003 complete: all 4 PR feedback fixes verified correct — no duplicate definitions, correct field naming, shared test helpers, no typos. 268 tests pass. PR ready for upstream submission.
 
 ## Architecture / Key Patterns
 
@@ -32,4 +32,4 @@ See `.gsd/REQUIREMENTS.md` for the explicit capability contract, requirement sta
 
 - [x] M001: Unique Milestone IDs — collision-resistant ID generation with opt-in preference and regex hardening
 - [x] M002: Unique Milestone ID Format Swap — changed unreleased format from `M-{rand6}-{seq}` to `M{seq}-{rand6}`
-- [ ] M003: PR Quality Audit — verify PR feedback fixes across 43 files before upstream submission
+- [x] M003: PR Quality Audit — verified all 4 PR feedback fixes across 43 files, 268 tests passing
