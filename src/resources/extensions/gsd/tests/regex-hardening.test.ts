@@ -20,48 +20,10 @@ import {
 } from '../guided-flow.ts';
 
 import { SLICE_BRANCH_RE } from '../worktree.ts';
+import { createTestContext } from './test-helpers.ts';
 
-// ─── Assertion helpers ─────────────────────────────────────────────────────
 
-let passed = 0;
-let failed = 0;
-
-function assertEq<T>(actual: T, expected: T, message: string): void {
-  if (JSON.stringify(actual) === JSON.stringify(expected)) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message} — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-  }
-}
-
-function assertTrue(condition: boolean, message: string): void {
-  if (condition) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message}`);
-  }
-}
-
-function assertMatch(value: string, pattern: RegExp, message: string): void {
-  if (pattern.test(value)) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message} — "${value}" did not match ${pattern}`);
-  }
-}
-
-function assertNoMatch(value: string, pattern: RegExp, message: string): void {
-  if (!pattern.test(value)) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message} — "${value}" should NOT match ${pattern}`);
-  }
-}
-
+const { assertEq, assertTrue, report } = createTestContext();
 // ─── Tests ─────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -299,17 +261,7 @@ async function main(): Promise<void> {
     assertTrue(!Number.isNaN(extractMilestoneSeq('M001-ABCDEF')), 'invalid format does not return NaN');
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // Results
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  console.log(`\n${'='.repeat(40)}`);
-  console.log(`Results: ${passed} passed, ${failed} failed`);
-  if (failed > 0) {
-    process.exit(1);
-  } else {
-    console.log('All tests passed');
-  }
+  report();
 }
 
 test('regex-hardening: all 12 sites accept both formats', async () => {

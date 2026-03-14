@@ -1,9 +1,7 @@
-import { readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { loadFile, parsePlan, parseRoadmap } from "./files.js";
 import {
-  milestonesDir,
   resolveMilestoneFile,
   resolveSliceFile,
   resolveSlicePath,
@@ -11,7 +9,7 @@ import {
   resolveTasksDir,
 } from "./paths.js";
 import { deriveState } from "./state.js";
-import { milestoneIdSort } from "./guided-flow.js";
+import { milestoneIdSort, findMilestoneIds } from "./guided-flow.js";
 import { type ValidationIssue, validateCompleteBoundary, validatePlanBoundary } from "./observability-validator.js";
 import { getSliceBranchName, detectWorktreeName } from "./worktree.js";
 
@@ -60,19 +58,6 @@ export interface GSDWorkspaceIndex {
   validationIssues: ValidationIssue[];
 }
 
-function findMilestoneIds(basePath: string): string[] {
-  try {
-    return readdirSync(milestonesDir(basePath), { withFileTypes: true })
-      .filter(entry => entry.isDirectory())
-      .map(entry => {
-        const match = entry.name.match(/^(M\d+(?:-[a-z0-9]{6})?)/);
-        return match ? match[1] : entry.name;
-      })
-      .sort(milestoneIdSort);
-  } catch {
-    return [];
-  }
-}
 
 function titleFromRoadmapHeader(content: string, fallbackId: string): string {
   const roadmap = parseRoadmap(content);

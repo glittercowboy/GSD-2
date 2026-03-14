@@ -6,6 +6,28 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- Linux voice mode: Groq Whisper API backend for fast, accurate speech-to-text (Ctrl+Alt+V toggle)
+- Auto-reads `GROQ_API_KEY` from project `.env` file
+- Fallback `--backend=local` for offline faster-whisper on CPU
+- Venv-aware Python detection (`~/.gsd/voice-venv/bin/python3`)
+
+## [2.10.12] - 2026-03-14
+
+### Fixed
+- Fix `npx gsd-pi@latest` failing with `ERR_MODULE_NOT_FOUND: Cannot find package '@gsd/pi-coding-agent'`. The loader now creates workspace package symlinks at runtime before importing, so it works even when `npx` skips postinstall scripts.
+
+## [2.10.11] - 2026-03-14
+
+### Fixed
+- Hoist workspace package dependencies (undici, anthropic SDK, openai, chalk, etc.) into root `dependencies` so they install for end users. v2.10.10 removed `bundleDependencies` but didn't promote the transitive deps.
+
+## [2.10.10] - 2026-03-14
+
+### Fixed
+- Fix broken `npm install` / `npx gsd-pi@latest` caused by unpublished `@gsd/*` workspace packages leaking into npm dependencies. Workspace cross-references removed from published package metadata; packages resolve via bundled `node_modules/` at runtime.
+- Add pre-publish tarball install validation (`validate-pack`) to CI and publish pipeline, preventing broken packages from reaching npm.
+
 ## [2.10.9] - 2026-03-14
 
 ### Added
@@ -479,7 +501,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 - License updated to MIT
 
-[Unreleased]: https://github.com/gsd-build/gsd-2/compare/v2.10.9...HEAD
+[Unreleased]: https://github.com/gsd-build/gsd-2/compare/v2.10.12...HEAD
+[2.10.12]: https://github.com/gsd-build/gsd-2/compare/v2.10.11...v2.10.12
+[2.10.11]: https://github.com/gsd-build/gsd-2/compare/v2.10.10...v2.10.11
+[2.10.10]: https://github.com/gsd-build/gsd-2/compare/v2.10.9...v2.10.10
 [2.10.9]: https://github.com/gsd-build/gsd-2/compare/v2.10.8...v2.10.9
 [2.10.8]: https://github.com/gsd-build/gsd-2/compare/v2.10.7...v2.10.8
 [2.10.7]: https://github.com/gsd-build/gsd-2/compare/v2.10.6...v2.10.7

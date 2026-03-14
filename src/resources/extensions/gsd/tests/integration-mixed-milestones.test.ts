@@ -23,39 +23,11 @@ import {
   parseSliceBranch,
   switchToMain,
 } from '../worktree.ts';
+import { createTestContext } from './test-helpers.ts';
 
 // ─── Assertion Helpers ────────────────────────────────────────────────────
 
-let passed = 0;
-let failed = 0;
-
-function assert(condition: boolean, message: string): void {
-  if (condition) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message}`);
-  }
-}
-
-function assertEq<T>(actual: T, expected: T, message: string): void {
-  if (JSON.stringify(actual) === JSON.stringify(expected)) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message} — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-  }
-}
-
-function assertMatch(actual: string, pattern: RegExp, message: string): void {
-  if (pattern.test(actual)) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message} — expected match for ${pattern}, got ${JSON.stringify(actual)}`);
-  }
-}
-
+const { assertEq, assertTrue, assertMatch, report } = createTestContext();
 // ─── Fixture Helpers ──────────────────────────────────────────────────────
 
 function createFixtureBase(): string {
@@ -150,7 +122,7 @@ async function main(): Promise<void> {
 
       // Phase should be executing (active milestone with incomplete slice + plan + tasks)
       assertEq(state.phase, 'executing', 'G1: phase is executing');
-      assert(state.activeMilestone !== null, 'G1: activeMilestone is not null');
+      assertTrue(state.activeMilestone !== null, 'G1: activeMilestone is not null');
       assertEq(state.activeMilestone?.id, 'M001-abc123', 'G1: activeMilestone id is M001-abc123');
       assertEq(state.activeMilestone?.title, 'Test Feature', 'G1: title stripped to Test Feature');
 
@@ -161,7 +133,7 @@ async function main(): Promise<void> {
       assertEq(state.registry[0]?.title, 'Test Feature', 'G1: registry title stripped');
 
       // Active slice
-      assert(state.activeSlice !== null, 'G1: activeSlice is not null');
+      assertTrue(state.activeSlice !== null, 'G1: activeSlice is not null');
       assertEq(state.activeSlice?.id, 'S02', 'G1: activeSlice is S02');
 
       // Progress
@@ -253,7 +225,7 @@ Everything worked.
       assertEq(state.registry[1]?.title, 'New Feature', 'G2: M002-abc123 title stripped');
 
       // Active milestone
-      assert(state.activeMilestone !== null, 'G2: activeMilestone is not null');
+      assertTrue(state.activeMilestone !== null, 'G2: activeMilestone is not null');
       assertEq(state.activeMilestone?.id, 'M002-abc123', 'G2: activeMilestone is M002-abc123');
       assertEq(state.activeMilestone?.title, 'New Feature', 'G2: activeMilestone title stripped');
 
@@ -339,15 +311,15 @@ Everything worked.
       assertEq(index.active.sliceId, 'S01', 'G3: active slice is S01');
 
       // Scopes include new-format paths
-      assert(
+      assertTrue(
         index.scopes.some(s => s.scope === 'M002-abc123'),
         'G3: scope includes M002-abc123 milestone',
       );
-      assert(
+      assertTrue(
         index.scopes.some(s => s.scope === 'M002-abc123/S01'),
         'G3: scope includes M002-abc123/S01 slice',
       );
-      assert(
+      assertTrue(
         index.scopes.some(s => s.scope === 'M002-abc123/S01/T01'),
         'G3: scope includes M002-abc123/S01/T01 task',
       );
@@ -380,13 +352,13 @@ Built the legacy feature successfully.
       const result = await inlinePriorMilestoneSummary('M002-abc123', base);
 
       // Result should be non-null (M001 is before M002-abc123)
-      assert(result !== null, 'G4: result is non-null');
-      assert(typeof result === 'string', 'G4: result is a string');
+      assertTrue(result !== null, 'G4: result is non-null');
+      assertTrue(typeof result === 'string', 'G4: result is a string');
 
       // Should contain the M001 summary content
-      assert(result!.includes('Prior Milestone Summary'), 'G4: contains Prior Milestone Summary header');
-      assert(result!.includes('Built the legacy feature successfully'), 'G4: contains M001 summary content');
-      assert(result!.includes('Used old format for milestone IDs'), 'G4: contains M001 key decisions');
+      assertTrue(result!.includes('Prior Milestone Summary'), 'G4: contains Prior Milestone Summary header');
+      assertTrue(result!.includes('Built the legacy feature successfully'), 'G4: contains M001 summary content');
+      assertTrue(result!.includes('Used old format for milestone IDs'), 'G4: contains M001 key decisions');
     } finally {
       cleanup(base);
     }
@@ -542,14 +514,14 @@ Built the legacy feature successfully.
 
       // Test parseSliceBranch with new-format branch name
       const parsed = parseSliceBranch('gsd/M001-abc123/S01');
-      assert(parsed !== null, 'G6: parseSliceBranch returns non-null for new-format');
+      assertTrue(parsed !== null, 'G6: parseSliceBranch returns non-null for new-format');
       assertEq(parsed?.milestoneId, 'M001-abc123', 'G6: parsed milestoneId is M001-abc123');
       assertEq(parsed?.sliceId, 'S01', 'G6: parsed sliceId is S01');
       assertEq(parsed?.worktreeName, null, 'G6: parsed worktreeName is null (no worktree)');
 
       // Test ensureSliceBranch creates the branch
       const created = ensureSliceBranch(base, 'M001-abc123', 'S01');
-      assert(created, 'G6: ensureSliceBranch returns true (branch created)');
+      assertTrue(created, 'G6: ensureSliceBranch returns true (branch created)');
       assertEq(
         getCurrentBranch(base),
         'gsd/M001-abc123/S01',
@@ -572,24 +544,22 @@ Built the legacy feature successfully.
       const merge = mergeSliceToMain(base, 'M001-abc123', 'S01', 'Slice One');
       assertEq(merge.branch, 'gsd/M001-abc123/S01', 'G6: merge reports correct branch');
       assertEq(getCurrentBranch(base), 'main', 'G6: still on main after merge');
-      assert(merge.deletedBranch, 'G6: merge deleted the slice branch');
+      assertTrue(merge.deletedBranch, 'G6: merge deleted the slice branch');
 
       // Verify the merged content exists on main
       const content = readFileSync(join(base, 'feature.txt'), 'utf-8');
-      assert(content.includes('new feature from slice'), 'G6: merged content on main');
+      assertTrue(content.includes('new feature from slice'), 'G6: merged content on main');
 
       // Verify branch is gone
       const branches = run('git branch', base);
-      assert(!branches.includes('gsd/M001-abc123/S01'), 'G6: slice branch deleted after merge');
+      assertTrue(!branches.includes('gsd/M001-abc123/S01'), 'G6: slice branch deleted after merge');
     } finally {
       cleanup(base);
     }
   }
 
   // ─── Summary ──────────────────────────────────────────────────────────
-  console.log(`\nResults: ${passed} passed, ${failed} failed`);
-  if (failed > 0) process.exit(1);
-  console.log('All tests passed ✓');
+  report();
 }
 
 // When run via vitest, wrap in test(); when run via tsx, call directly.

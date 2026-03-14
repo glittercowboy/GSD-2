@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { fileURLToPath } from 'url'
 import { dirname, resolve, join, delimiter } from 'path'
-import { existsSync, readFileSync } from 'fs'
+import { existsSync, readFileSync, mkdirSync, symlinkSync } from 'fs'
 import { agentDir, appRoot } from './app-paths.js'
 import { serializeBundledExtensionPaths } from './bundled-extension-paths.js'
 import { renderLogo } from './logo.js'
@@ -70,8 +70,12 @@ try {
 process.env.GSD_BIN_PATH = process.argv[1]
 
 // GSD_WORKFLOW_PATH — absolute path to bundled GSD-WORKFLOW.md, used by patched gsd extension
-// when dispatching workflow prompts (dist/loader.js → ../src/resources/GSD-WORKFLOW.md)
-const resourcesDir = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'resources')
+// when dispatching workflow prompts. Prefers dist/resources/ (stable, set at build time)
+// over src/resources/ (live working tree) — see resource-loader.ts for rationale.
+const loaderPackageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const distRes = join(loaderPackageRoot, 'dist', 'resources')
+const srcRes = join(loaderPackageRoot, 'src', 'resources')
+const resourcesDir = existsSync(distRes) ? distRes : srcRes
 process.env.GSD_WORKFLOW_PATH = join(resourcesDir, 'GSD-WORKFLOW.md')
 
 // GSD_BUNDLED_EXTENSION_PATHS — platform-delimited list of bundled extension entry point absolute
@@ -101,6 +105,22 @@ process.env.GSD_BUNDLED_EXTENSION_PATHS = serializeBundledExtensionPaths([
 // must set it here before any SDK clients are created.
 import { EnvHttpProxyAgent, setGlobalDispatcher } from 'undici'
 setGlobalDispatcher(new EnvHttpProxyAgent())
+
+// Ensure workspace packages are linked before importing cli.js (which imports @gsd/*).
+// npm postinstall handles this normally, but npx --ignore-scripts skips postinstall.
+const gsdScopeDir = join(gsdNodeModules, '@gsd')
+const packagesDir = join(gsdRoot, 'packages')
+const wsPackages = ['native', 'pi-agent-core', 'pi-ai', 'pi-coding-agent', 'pi-tui']
+try {
+  if (!existsSync(gsdScopeDir)) mkdirSync(gsdScopeDir, { recursive: true })
+  for (const pkg of wsPackages) {
+    const target = join(gsdScopeDir, pkg)
+    const source = join(packagesDir, pkg)
+    if (existsSync(source) && !existsSync(target)) {
+      try { symlinkSync(source, target, 'junction') } catch { /* non-fatal */ }
+    }
+  }
+} catch { /* non-fatal */ }
 
 // Dynamic import defers ESM evaluation — config.js will see PI_PACKAGE_DIR above
 await import('./cli.js')

@@ -1,25 +1,8 @@
 import { parseRoadmap } from "../files.ts";
 import { parseRoadmapSlices } from "../roadmap-slices.ts";
+import { createTestContext } from './test-helpers.ts';
 
-let passed = 0;
-let failed = 0;
-
-function assert(condition: boolean, message: string): void {
-  if (condition) passed += 1;
-  else {
-    failed += 1;
-    console.error(`FAIL: ${message}`);
-  }
-}
-
-function assertEq<T>(actual: T, expected: T, message: string): void {
-  if (JSON.stringify(actual) === JSON.stringify(expected)) passed += 1;
-  else {
-    failed += 1;
-    console.error(`FAIL: ${message} — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-  }
-}
-
+const { assertEq, assertTrue, report } = createTestContext();
 const content = `# M003: Current
 
 **Vision:** Build the thing.
@@ -53,7 +36,6 @@ const roadmap = parseRoadmap(content);
 assertEq(roadmap.slices, slices, "parseRoadmap uses extracted slice parser");
 assertEq(roadmap.title, "M003: Current", "roadmap title preserved");
 assertEq(roadmap.vision, "Build the thing.", "roadmap vision preserved");
-assert(roadmap.boundaryMap.length === 1, "boundary map still parsed");
+assertTrue(roadmap.boundaryMap.length === 1, "boundary map still parsed");
 
-console.log(`Passed: ${passed}, Failed: ${failed}`);
-if (failed > 0) process.exit(1);
+report();

@@ -1,24 +1,7 @@
 import { parseTaskPlanMustHaves } from '../files.ts';
+import { createTestContext } from './test-helpers.ts';
 
-let passed = 0;
-let failed = 0;
-
-function assert(condition: boolean, message: string): void {
-  if (condition) passed++;
-  else {
-    failed++;
-    console.error(`  FAIL: ${message}`);
-  }
-}
-
-function assertEq<T>(actual: T, expected: T, message: string): void {
-  if (JSON.stringify(actual) === JSON.stringify(expected)) passed++;
-  else {
-    failed++;
-    console.error(`  FAIL: ${message} — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-  }
-}
-
+const { assertEq, assertTrue, report } = createTestContext();
 // ═══════════════════════════════════════════════════════════════════════════
 // (a) Standard unchecked format: - [ ] text
 // ═══════════════════════════════════════════════════════════════════════════
@@ -140,7 +123,7 @@ Some description here.
 `;
   const result = parseTaskPlanMustHaves(content);
   assertEq(result.length, 0, 'returns empty array when section missing');
-  assert(Array.isArray(result), 'result is an array');
+  assertTrue(Array.isArray(result), 'result is an array');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -257,11 +240,11 @@ Add the \`completing-milestone\` phase to the GSD state machine.
 `;
   const result = parseTaskPlanMustHaves(content);
   assertEq(result.length, 5, 'real plan has 5 must-haves');
-  assert(result[0].text.includes('`Phase` type includes'), 'first must-have text matches');
-  assert(result[1].text.includes('`deriveState` returns'), 'second must-have text matches');
+  assertTrue(result[0].text.includes('`Phase` type includes'), 'first must-have text matches');
+  assertTrue(result[1].text.includes('`deriveState` returns'), 'second must-have text matches');
   assertEq(result[0].checked, false, 'all real must-haves are unchecked');
   assertEq(result[4].checked, false, 'last real must-have is unchecked');
-  assert(result[4].text.includes('multi-milestone'), 'last must-have references multi-milestone');
+  assertTrue(result[4].text.includes('multi-milestone'), 'last must-have references multi-milestone');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -283,7 +266,7 @@ console.log('\n=== parseTaskPlanMustHaves: must-haves with inline code and backt
 `;
   const result = parseTaskPlanMustHaves(content);
   assertEq(result.length, 2, 'handles backtick content');
-  assert(result[0].text.includes('`functionName`'), 'preserves backticks in text');
+  assertTrue(result[0].text.includes('`functionName`'), 'preserves backticks in text');
   assertEq(result[0].checked, false, 'backtick item unchecked');
   assertEq(result[1].checked, true, 'backtick item checked');
 }
@@ -305,5 +288,4 @@ console.log('\n=== parseTaskPlanMustHaves: asterisk bullets ===');
 
 // ═══════════════════════════════════════════════════════════════════════════
 
-console.log(`\n=== Results: ${passed} passed, ${failed} failed ===\n`);
-process.exit(failed > 0 ? 1 : 0);
+report();

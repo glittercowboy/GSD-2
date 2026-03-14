@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 
 import { extractUatType } from '../files.ts';
 import { resolveSliceFile } from '../paths.ts';
+import { createTestContext } from './test-helpers.ts';
 
 // ─── Worktree-aware prompt loader ──────────────────────────────────────────
 // Resolves prompts relative to this test file so the worktree copy is used
@@ -31,29 +32,8 @@ function loadPromptFromWorktree(name: string, vars: Record<string, string> = {})
   return content.trim();
 }
 
-// ─── Assertion helpers ─────────────────────────────────────────────────────
 
-let passed = 0;
-let failed = 0;
-
-function assert(condition: boolean, message: string): void {
-  if (condition) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message}`);
-  }
-}
-
-function assertEq<T>(actual: T, expected: T, message: string): void {
-  if (JSON.stringify(actual) === JSON.stringify(expected)) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message} — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-  }
-}
-
+const { assertEq, assertTrue, report } = createTestContext();
 // ─── Fixture helpers ───────────────────────────────────────────────────────
 
 function createFixtureBase(): string {
@@ -245,32 +225,32 @@ async function main(): Promise<void> {
     promptThrew = true;
   }
 
-  assert(!promptThrew, 'loadPromptFromWorktree("run-uat", vars) does not throw');
-  assert(
+  assertTrue(!promptThrew, 'loadPromptFromWorktree("run-uat", vars) does not throw');
+  assertTrue(
     typeof promptResult === 'string' && promptResult.length > 0,
     'run-uat prompt result is a non-empty string',
   );
-  assert(
+  assertTrue(
     promptResult?.includes(milestoneId) ?? false,
     `prompt contains milestoneId value "${milestoneId}" after substitution`,
   );
-  assert(
+  assertTrue(
     promptResult?.includes(sliceId) ?? false,
     `prompt contains sliceId value "${sliceId}" after substitution`,
   );
-  assert(
+  assertTrue(
     promptResult?.includes(uatResultPath) ?? false,
     `prompt contains uatResultPath value after substitution`,
   );
-  assert(
+  assertTrue(
     !/\{\{[^}]+\}\}/.test(promptResult ?? ''),
     'no unreplaced {{...}} tokens remain after variable substitution',
   );
-  assert(
+  assertTrue(
     /artifact|execute|run/i.test(promptResult ?? ''),
     'prompt contains artifact-driven execution language (artifact/execute/run)',
   );
-  assert(
+  assertTrue(
     /surfaced for human review/i.test(promptResult ?? ''),
     'prompt contains "surfaced for human review" text for non-artifact-driven path',
   );
@@ -286,7 +266,7 @@ async function main(): Promise<void> {
       writeSliceFile(base, 'M001', 'S01', 'UAT', uatContent);
 
       const uatFilePath = resolveSliceFile(base, 'M001', 'S01', 'UAT');
-      assert(
+      assertTrue(
         uatFilePath !== null,
         'resolveSliceFile(..., "UAT") returns non-null when UAT file exists (dispatch trigger state)',
       );
@@ -318,7 +298,7 @@ async function main(): Promise<void> {
       writeSliceFile(base, 'M001', 'S01', 'UAT-RESULT', '# UAT Result\n\nverdict: PASS\n');
 
       const uatResultFilePath = resolveSliceFile(base, 'M001', 'S01', 'UAT-RESULT');
-      assert(
+      assertTrue(
         uatResultFilePath !== null,
         'resolveSliceFile(..., "UAT-RESULT") returns non-null when result file exists (idempotent skip state)',
       );
@@ -327,17 +307,7 @@ async function main(): Promise<void> {
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // Results
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  console.log(`\n${'='.repeat(40)}`);
-  console.log(`Results: ${passed} passed, ${failed} failed`);
-  if (failed > 0) {
-    process.exit(1);
-  } else {
-    console.log('All tests passed ✓');
-  }
+  report();
 }
 
 main().catch((error) => {

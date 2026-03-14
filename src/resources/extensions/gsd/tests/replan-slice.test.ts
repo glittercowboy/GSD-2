@@ -22,27 +22,7 @@ function loadPromptFromWorktree(name: string, vars: Record<string, string> = {})
   return content.trim();
 }
 
-let passed = 0;
-let failed = 0;
-
-function assert(condition: boolean, message: string): void {
-  if (condition) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message}`);
-  }
-}
-
-function assertEq<T>(actual: T, expected: T, message: string): void {
-  if (JSON.stringify(actual) === JSON.stringify(expected)) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message} — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-  }
-}
-
+const { assertEq, assertTrue, report } = createTestContext();
 // ─── Fixture Helpers ───────────────────────────────────────────────────────
 
 function createFixtureBase(): string {
@@ -308,10 +288,10 @@ console.log('\n=== deriveState: blocker found, no REPLAN → replanning-slice ==
 
   const state = await deriveState(base);
   assertEq(state.phase, 'replanning-slice', 'phase is replanning-slice when blocker found and no REPLAN.md');
-  assert(state.nextAction.includes('T01'), 'nextAction mentions blocker task T01');
-  assert(state.nextAction.includes('blocker_discovered'), 'nextAction mentions blocker_discovered');
+  assertTrue(state.nextAction.includes('T01'), 'nextAction mentions blocker task T01');
+  assertTrue(state.nextAction.includes('blocker_discovered'), 'nextAction mentions blocker_discovered');
   assertEq(state.activeTask?.id, 'T02', 'activeTask is still T02 (the next incomplete task)');
-  assert(state.blockers.length > 0, 'blockers array is non-empty');
+  assertTrue(state.blockers.length > 0, 'blockers array is non-empty');
   rmSync(base, { recursive: true, force: true });
 }
 
@@ -355,7 +335,7 @@ console.log('\n=== deriveState: multiple completed tasks, one blocker → replan
 
   const state = await deriveState(base);
   assertEq(state.phase, 'replanning-slice', 'phase is replanning-slice when T02 has blocker');
-  assert(state.nextAction.includes('T02'), 'nextAction mentions blocker task T02');
+  assertTrue(state.nextAction.includes('T02'), 'nextAction mentions blocker task T02');
   assertEq(state.activeTask?.id, 'T03', 'activeTask is T03 (next incomplete)');
   rmSync(base, { recursive: true, force: true });
 }
@@ -388,11 +368,11 @@ console.log('\n=== prompt: replan-slice template loads and substitutes variables
     inlinedContext: '## Inlined Context\n\nTest context here.',
   });
 
-  assert(prompt.includes('M001'), 'prompt contains milestoneId');
-  assert(prompt.includes('S01'), 'prompt contains sliceId');
-  assert(prompt.includes('Test Slice'), 'prompt contains sliceTitle');
-  assert(prompt.includes('.gsd/milestones/M001/slices/S01/S01-PLAN.md'), 'prompt contains planPath');
-  assert(prompt.includes('Test context here'), 'prompt contains inlined context');
+  assertTrue(prompt.includes('M001'), 'prompt contains milestoneId');
+  assertTrue(prompt.includes('S01'), 'prompt contains sliceId');
+  assertTrue(prompt.includes('Test Slice'), 'prompt contains sliceTitle');
+  assertTrue(prompt.includes('.gsd/milestones/M001/slices/S01/S01-PLAN.md'), 'prompt contains planPath');
+  assertTrue(prompt.includes('Test context here'), 'prompt contains inlined context');
 }
 
 console.log('\n=== prompt: replan-slice contains preserve-completed-tasks instruction ===');
@@ -408,10 +388,10 @@ console.log('\n=== prompt: replan-slice contains preserve-completed-tasks instru
     inlinedContext: '',
   });
 
-  assert(prompt.includes('Do NOT renumber or remove completed tasks'), 'prompt contains preserve-completed-tasks instruction');
-  assert(prompt.includes('[x]'), 'prompt mentions [x] checkmarks');
-  assert(prompt.includes('REPLAN'), 'prompt references replan output path');
-  assert(prompt.includes('blocker_discovered'), 'prompt mentions blocker_discovered');
+  assertTrue(prompt.includes('Do NOT renumber or remove completed tasks'), 'prompt contains preserve-completed-tasks instruction');
+  assertTrue(prompt.includes('[x]'), 'prompt mentions [x] checkmarks');
+  assertTrue(prompt.includes('REPLAN'), 'prompt references replan output path');
+  assertTrue(prompt.includes('blocker_discovered'), 'prompt mentions blocker_discovered');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -433,7 +413,7 @@ console.log('\n=== dispatch: diagnoseExpectedArtifact returns REPLAN.md path ===
 
   const state = await deriveState(base);
   assertEq(state.phase, 'replanning-slice', 'dispatch: state routes to replanning-slice when blocker found');
-  assert(state.activeSlice?.id === 'S01', 'dispatch: activeSlice is S01');
+  assertTrue(state.activeSlice?.id === 'S01', 'dispatch: activeSlice is S01');
   rmSync(base, { recursive: true, force: true });
 }
 
@@ -453,8 +433,8 @@ console.log('\n=== display: replan-slice prompt template has correct unit header
     inlinedContext: '',
   });
 
-  assert(prompt.includes('UNIT: Replan Slice'), 'prompt has Replan Slice unit header');
-  assert(prompt.includes('Slice S01 replanned'), 'prompt has completion message');
+  assertTrue(prompt.includes('UNIT: Replan Slice'), 'prompt has Replan Slice unit header');
+  assertTrue(prompt.includes('Slice S01 replanned'), 'prompt has completion message');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -462,6 +442,7 @@ console.log('\n=== display: replan-slice prompt template has correct unit header
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { runGSDDoctor } from '../doctor.ts';
+import { createTestContext } from './test-helpers.ts';
 
 // (a) blocker + no REPLAN.md → issue emitted
 console.log('\n=== doctor: blocker + no REPLAN.md → blocker_discovered_no_replan issue ===');
@@ -473,8 +454,8 @@ console.log('\n=== doctor: blocker + no REPLAN.md → blocker_discovered_no_repl
 
   const report = await runGSDDoctor(base, { fix: false, scope: 'M001/S01' });
   const blockerIssues = report.issues.filter(i => i.code === 'blocker_discovered_no_replan');
-  assert(blockerIssues.length > 0, 'doctor emits blocker_discovered_no_replan when blocker + no REPLAN');
-  assert(blockerIssues[0]?.message.includes('T01'), 'issue message mentions the blocker task T01');
+  assertTrue(blockerIssues.length > 0, 'doctor emits blocker_discovered_no_replan when blocker + no REPLAN');
+  assertTrue(blockerIssues[0]?.message.includes('T01'), 'issue message mentions the blocker task T01');
   assertEq(blockerIssues[0]?.severity, 'warning', 'blocker_discovered_no_replan is warning severity');
   assertEq(blockerIssues[0]?.scope, 'slice', 'blocker_discovered_no_replan has slice scope');
   rmSync(base, { recursive: true, force: true });
@@ -509,14 +490,4 @@ console.log('\n=== doctor: no blocker → no blocker_discovered_no_replan issue 
   rmSync(base, { recursive: true, force: true });
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Results
-// ═══════════════════════════════════════════════════════════════════════════
-
-console.log(`\n${'='.repeat(40)}`);
-console.log(`Results: ${passed} passed, ${failed} failed`);
-if (failed > 0) {
-  process.exit(1);
-} else {
-  console.log('All tests passed ✓');
-}
+report();

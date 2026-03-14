@@ -43,8 +43,10 @@ export async function listModels(modelRegistry: ModelRegistry, searchPattern?: s
 		return;
 	}
 
-	// Sort by provider, then by model id
+	// Sort by model name descending (newest first), then provider, then id
 	filteredModels.sort((a, b) => {
+		const nameCmp = b.name.localeCompare(a.name);
+		if (nameCmp !== 0) return nameCmp;
 		const providerCmp = a.provider.localeCompare(b.provider);
 		if (providerCmp !== 0) return providerCmp;
 		return a.id.localeCompare(b.id);
@@ -54,6 +56,7 @@ export async function listModels(modelRegistry: ModelRegistry, searchPattern?: s
 	const rows = filteredModels.map((m) => ({
 		provider: m.provider,
 		model: m.id,
+		name: m.name,
 		context: formatTokenCount(m.contextWindow),
 		maxOut: formatTokenCount(m.maxTokens),
 		thinking: m.reasoning ? "yes" : "no",
@@ -63,6 +66,7 @@ export async function listModels(modelRegistry: ModelRegistry, searchPattern?: s
 	const headers = {
 		provider: "provider",
 		model: "model",
+		name: "name",
 		context: "context",
 		maxOut: "max-out",
 		thinking: "thinking",
@@ -72,6 +76,7 @@ export async function listModels(modelRegistry: ModelRegistry, searchPattern?: s
 	const widths = {
 		provider: Math.max(headers.provider.length, ...rows.map((r) => r.provider.length)),
 		model: Math.max(headers.model.length, ...rows.map((r) => r.model.length)),
+		name: Math.max(headers.name.length, ...rows.map((r) => r.name.length)),
 		context: Math.max(headers.context.length, ...rows.map((r) => r.context.length)),
 		maxOut: Math.max(headers.maxOut.length, ...rows.map((r) => r.maxOut.length)),
 		thinking: Math.max(headers.thinking.length, ...rows.map((r) => r.thinking.length)),
@@ -82,6 +87,7 @@ export async function listModels(modelRegistry: ModelRegistry, searchPattern?: s
 	const headerLine = [
 		headers.provider.padEnd(widths.provider),
 		headers.model.padEnd(widths.model),
+		headers.name.padEnd(widths.name),
 		headers.context.padEnd(widths.context),
 		headers.maxOut.padEnd(widths.maxOut),
 		headers.thinking.padEnd(widths.thinking),
@@ -94,6 +100,7 @@ export async function listModels(modelRegistry: ModelRegistry, searchPattern?: s
 		const line = [
 			row.provider.padEnd(widths.provider),
 			row.model.padEnd(widths.model),
+			row.name.padEnd(widths.name),
 			row.context.padEnd(widths.context),
 			row.maxOut.padEnd(widths.maxOut),
 			row.thinking.padEnd(widths.thinking),

@@ -19,32 +19,12 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 import { pruneActivityLogs } from '../activity-log.ts';
+import { createTestContext } from './test-helpers.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// ─── Assertion helpers ─────────────────────────────────────────────────────
 
-let passed = 0;
-let failed = 0;
-
-function assert(condition: boolean, message: string): void {
-  if (condition) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message}`);
-  }
-}
-
-function assertEq<T>(actual: T, expected: T, message: string): void {
-  if (JSON.stringify(actual) === JSON.stringify(expected)) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message} — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-  }
-}
-
+const { assertEq, assertTrue, report } = createTestContext();
 // ─── Fixture helpers ───────────────────────────────────────────────────────
 
 let tmpDirs: string[] = [];
@@ -104,15 +84,15 @@ async function main(): Promise<void> {
     pruneActivityLogs(dir, 30);
 
     const remaining = listFiles(dir);
-    assert(
+    assertTrue(
       !remaining.includes('001-execute-task-M001-S01-T01.jsonl'),
       '(a) file 001 deleted (40 days old, past 30-day threshold)',
     );
-    assert(
+    assertTrue(
       remaining.includes('002-execute-task-M001-S01-T02.jsonl'),
       '(a) file 002 survives (recent)',
     );
-    assert(
+    assertTrue(
       remaining.includes('003-execute-task-M001-S01-T03.jsonl'),
       '(a) file 003 survives (recent, also highest-seq)',
     );
@@ -135,7 +115,7 @@ async function main(): Promise<void> {
 
     const remaining = listFiles(dir);
     assertEq(remaining.length, 1, '(b) exactly 1 file survives when all are old');
-    assert(
+    assertTrue(
       remaining.includes('003-execute-task-M001-S01-T03.jsonl'),
       '(b) highest-seq file (003) is the survivor',
     );
@@ -155,7 +135,7 @@ async function main(): Promise<void> {
 
     const remaining = listFiles(dir);
     assertEq(remaining.length, 1, '(c) retentionDays=0: exactly 1 file survives');
-    assert(
+    assertTrue(
       remaining.includes('003-execute-task-M002-S01-T03.jsonl'),
       '(c) retentionDays=0: only highest-seq (003) survives',
     );
@@ -191,8 +171,8 @@ async function main(): Promise<void> {
       threw = true;
     }
 
-    assert(!threw, '(e) pruneActivityLogs does not throw on empty directory');
-    assert(
+    assertTrue(!threw, '(e) pruneActivityLogs does not throw on empty directory');
+    assertTrue(
       readdirSync(dir).length === 0,
       '(e) directory still exists and is still empty after no-op',
     );
@@ -215,7 +195,7 @@ async function main(): Promise<void> {
 
     const remaining = listFiles(dir);
     assertEq(remaining.length, 1, '(f) exactly 1 file survives when all are old');
-    assert(
+    assertTrue(
       remaining[0].startsWith('006-'),
       '(f) the surviving file starts with 006 (highest-seq)',
     );
@@ -233,7 +213,7 @@ async function main(): Promise<void> {
 
     const remaining = listFiles(dir);
     assertEq(remaining.length, 1, '(g) single file survives even when very old (it is the highest-seq)');
-    assert(
+    assertTrue(
       remaining.includes('001-execute-task-M005-S01-T01.jsonl'),
       '(g) the single file (001) is preserved',
     );
@@ -254,7 +234,7 @@ async function main(): Promise<void> {
 
     const remaining = listFiles(dir);
     assertEq(remaining.length, 1, '(h) exactly 1 file survives');
-    assert(
+    assertTrue(
       remaining.includes('010-execute-task-M006-S01-T10.jsonl'),
       '(h) seq 010 (numeric 10) survives over seq 001 (numeric 1)',
     );
@@ -279,16 +259,16 @@ async function main(): Promise<void> {
       threw = true;
     }
 
-    assert(!threw, '(i) no crash when non-matching file is present');
+    assertTrue(!threw, '(i) no crash when non-matching file is present');
 
     const remaining = listFiles(dir);
-    assert(
+    assertTrue(
       remaining.includes('notes.txt'),
       '(i) notes.txt (non-matching filename) survives pruning unchanged',
     );
     // 001 is deleted (old, and notes.txt is not counted as seq-bearing so 001 is not "highest")
     // But wait — 001 IS the only seq file, making it highest-seq → it survives
-    assert(
+    assertTrue(
       remaining.includes('001-execute-task-M007-S01-T01.jsonl'),
       '(i) seq 001 survives (it is the highest-seq among seq files)',
     );
@@ -302,23 +282,13 @@ async function main(): Promise<void> {
     const promptPath = join(__dirname, '..', 'prompts', 'complete-slice.md');
     const content = readFileSync(promptPath, 'utf-8');
 
-    assert(
+    assertTrue(
       content.includes('refresh current state if needed'),
       '(j) complete-slice.md step 11 contains "refresh current state if needed"',
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // Results
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  console.log(`\n${'='.repeat(40)}`);
-  console.log(`Results: ${passed} passed, ${failed} failed`);
-  if (failed > 0) {
-    process.exit(1);
-  } else {
-    console.log('All tests passed ✓');
-  }
+  report();
 }
 
 main().catch((error) => {

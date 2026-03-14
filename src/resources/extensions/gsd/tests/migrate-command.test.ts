@@ -15,28 +15,9 @@ import {
   writeGSDDirectory,
 } from '../migrate/index.ts';
 import { deriveState } from '../state.ts';
+import { createTestContext } from './test-helpers.ts';
 
-let passed = 0;
-let failed = 0;
-
-function assert(condition: boolean, message: string): void {
-  if (condition) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message}`);
-  }
-}
-
-function assertEq<T>(actual: T, expected: T, message: string): void {
-  if (JSON.stringify(actual) === JSON.stringify(expected)) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message} — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-  }
-}
-
+const { assertEq, assertTrue, report } = createTestContext();
 // ─── Fixture Helpers ───────────────────────────────────────────────────────
 
 const SAMPLE_PROJECT = `# Integration Test Project
@@ -226,8 +207,8 @@ async function main(): Promise<void> {
       if (!sourcePath.endsWith('.planning')) {
         sourcePath = join(sourcePath, '.planning');
       }
-      assert(sourcePath.endsWith('.planning'), 'path-resolution: .planning appended');
-      assert(existsSync(sourcePath), 'path-resolution: appended path exists');
+      assertTrue(sourcePath.endsWith('.planning'), 'path-resolution: .planning appended');
+      assertTrue(existsSync(sourcePath), 'path-resolution: appended path exists');
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
@@ -244,7 +225,7 @@ async function main(): Promise<void> {
         sourcePath = join(sourcePath, '.planning');
       }
       assertEq(sourcePath, resolve(planningPath), 'path-resolution: .planning not double-appended');
-      assert(existsSync(sourcePath), 'path-resolution: direct path exists');
+      assertTrue(existsSync(sourcePath), 'path-resolution: direct path exists');
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
@@ -256,9 +237,9 @@ async function main(): Promise<void> {
     const fakePath = join(tmpdir(), 'gsd-cmd-nonexistent-' + Date.now(), '.planning');
     const result = await validatePlanningDirectory(fakePath);
     assertEq(result.valid, false, 'validation: non-existent path is invalid');
-    assert(result.issues.length > 0, 'validation: has issues for non-existent path');
+    assertTrue(result.issues.length > 0, 'validation: has issues for non-existent path');
     const hasFatal = result.issues.some(i => i.severity === 'fatal');
-    assert(hasFatal, 'validation: non-existent path has fatal issue');
+    assertTrue(hasFatal, 'validation: non-existent path has fatal issue');
   }
 
   // ─── Test 4: Validation gating — valid fixture passes ──────────────────
@@ -267,7 +248,7 @@ async function main(): Promise<void> {
     const base = createCompleteFixture();
     try {
       const result = await validatePlanningDirectory(join(base, '.planning'));
-      assert(result.valid === true, 'validation: valid fixture passes');
+      assertTrue(result.valid === true, 'validation: valid fixture passes');
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
@@ -283,17 +264,17 @@ async function main(): Promise<void> {
 
       // (a) Validate
       const validation = await validatePlanningDirectory(planningPath);
-      assert(validation.valid === true, 'pipeline: validation passes');
+      assertTrue(validation.valid === true, 'pipeline: validation passes');
 
       // (b) Parse
       const parsed = await parsePlanningDirectory(planningPath);
-      assert(parsed.roadmap !== null, 'pipeline: roadmap parsed');
-      assert(Object.keys(parsed.phases).length >= 2, 'pipeline: phases parsed');
+      assertTrue(parsed.roadmap !== null, 'pipeline: roadmap parsed');
+      assertTrue(Object.keys(parsed.phases).length >= 2, 'pipeline: phases parsed');
 
       // (c) Transform
       const project = transformToGSD(parsed);
-      assert(project.milestones.length >= 1, 'pipeline: has milestones');
-      assert(project.milestones[0].slices.length >= 1, 'pipeline: has slices');
+      assertTrue(project.milestones.length >= 1, 'pipeline: has milestones');
+      assertTrue(project.milestones[0].slices.length >= 1, 'pipeline: has slices');
 
       // Count totals for preview verification
       let totalTasks = 0;
@@ -332,30 +313,30 @@ async function main(): Promise<void> {
 
       // (e) Write
       const result = await writeGSDDirectory(project, writeTarget);
-      assert(result.paths.length > 0, 'pipeline: files written');
+      assertTrue(result.paths.length > 0, 'pipeline: files written');
 
       // Key files exist
       const gsd = join(writeTarget, '.gsd');
-      assert(existsSync(join(gsd, 'PROJECT.md')), 'pipeline: PROJECT.md written');
-      assert(existsSync(join(gsd, 'STATE.md')), 'pipeline: STATE.md written');
-      assert(existsSync(join(gsd, 'REQUIREMENTS.md')), 'pipeline: REQUIREMENTS.md written');
+      assertTrue(existsSync(join(gsd, 'PROJECT.md')), 'pipeline: PROJECT.md written');
+      assertTrue(existsSync(join(gsd, 'STATE.md')), 'pipeline: STATE.md written');
+      assertTrue(existsSync(join(gsd, 'REQUIREMENTS.md')), 'pipeline: REQUIREMENTS.md written');
 
       const m001 = join(gsd, 'milestones', 'M001');
-      assert(existsSync(join(m001, 'M001-ROADMAP.md')), 'pipeline: M001-ROADMAP.md written');
-      assert(existsSync(join(m001, 'M001-CONTEXT.md')), 'pipeline: M001-CONTEXT.md written');
+      assertTrue(existsSync(join(m001, 'M001-ROADMAP.md')), 'pipeline: M001-ROADMAP.md written');
+      assertTrue(existsSync(join(m001, 'M001-CONTEXT.md')), 'pipeline: M001-CONTEXT.md written');
 
       // At least one slice plan exists
       const s01Plan = join(m001, 'slices', 'S01', 'S01-PLAN.md');
-      assert(existsSync(s01Plan), 'pipeline: S01-PLAN.md written');
+      assertTrue(existsSync(s01Plan), 'pipeline: S01-PLAN.md written');
 
       // (f) deriveState — coherent state from written output
       console.log('  --- deriveState ---');
       const state = await deriveState(writeTarget);
-      assert(state.phase !== undefined, 'pipeline: deriveState returns phase');
-      assert(state.activeMilestone !== null, 'pipeline: deriveState has activeMilestone');
+      assertTrue(state.phase !== undefined, 'pipeline: deriveState returns phase');
+      assertTrue(state.activeMilestone !== null, 'pipeline: deriveState has activeMilestone');
       assertEq(state.activeMilestone!.id, 'M001', 'pipeline: deriveState activeMilestone is M001');
-      assert(state.progress!.slices !== undefined, 'pipeline: deriveState has slices progress');
-      assert(state.progress!.tasks !== undefined, 'pipeline: deriveState has tasks progress');
+      assertTrue(state.progress!.slices !== undefined, 'pipeline: deriveState has slices progress');
+      assertTrue(state.progress!.tasks !== undefined, 'pipeline: deriveState has tasks progress');
 
     } finally {
       rmSync(base, { recursive: true, force: true });
@@ -369,19 +350,17 @@ async function main(): Promise<void> {
     const base = mkdtempSync(join(tmpdir(), 'gsd-cmd-exists-'));
     try {
       // No .gsd/ yet
-      assert(!existsSync(join(base, '.gsd')), 'exists-detection: .gsd absent initially');
+      assertTrue(!existsSync(join(base, '.gsd')), 'exists-detection: .gsd absent initially');
 
       // Create .gsd/
       mkdirSync(join(base, '.gsd'), { recursive: true });
-      assert(existsSync(join(base, '.gsd')), 'exists-detection: .gsd detected after creation');
+      assertTrue(existsSync(join(base, '.gsd')), 'exists-detection: .gsd detected after creation');
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
   }
 
-  // ─── Results ─────────────────────────────────────────────────────────────
-  console.log(`\n${passed + failed} assertions: ${passed} passed, ${failed} failed`);
-  if (failed > 0) process.exit(1);
+  report();
 }
 
 main().catch((err) => {

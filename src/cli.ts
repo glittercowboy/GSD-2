@@ -28,6 +28,7 @@ interface CliFlags {
   continue?: boolean
   noSession?: boolean
   model?: string
+  listModels?: string | true
   extensions: string[]
   appendSystemPrompt?: string
   tools?: string[]
@@ -56,6 +57,8 @@ function parseCliArgs(argv: string[]): CliFlags {
       flags.appendSystemPrompt = args[++i]
     } else if (arg === '--tools' && i + 1 < args.length) {
       flags.tools = args[++i].split(',')
+    } else if (arg === '--list-models') {
+      flags.listModels = (i + 1 < args.length && !args[i + 1].startsWith('-')) ? args[++i] : true
     } else if (arg === '--version' || arg === '-v') {
       process.stdout.write((process.env.GSD_VERSION || '0.0.0') + '\n')
       process.exit(0)
@@ -70,6 +73,7 @@ function parseCliArgs(argv: string[]): CliFlags {
       process.stdout.write('  --no-session             Disable session persistence\n')
       process.stdout.write('  --extension <path>       Load additional extension\n')
       process.stdout.write('  --tools <a,b,c>          Restrict available tools\n')
+      process.stdout.write('  --list-models [search]   List available models and exit\n')
       process.stdout.write('  --version, -v            Print version and exit\n')
       process.stdout.write('  --help, -h               Print this help and exit\n')
       process.stdout.write('\nSubcommands:\n')
@@ -121,6 +125,49 @@ if (!isPrintMode) {
 
 const modelRegistry = new ModelRegistry(authStorage)
 const settingsManager = SettingsManager.create(agentDir)
+
+// --list-models: print available models and exit (no TTY needed)
+if (cliFlags.listModels !== undefined) {
+  const models = modelRegistry.getAvailable()
+  if (models.length === 0) {
+    console.log('No models available. Set API keys in environment variables.')
+    process.exit(0)
+  }
+
+  const searchPattern = typeof cliFlags.listModels === 'string' ? cliFlags.listModels : undefined
+  let filtered = models
+  if (searchPattern) {
+    const q = searchPattern.toLowerCase()
+    filtered = models.filter((m) => `${m.provider} ${m.id} ${m.name}`.toLowerCase().includes(q))
+  }
+
+  // Sort by name descending (newest first), then provider, then id
+  filtered.sort((a, b) => {
+    const nameCmp = b.name.localeCompare(a.name)
+    if (nameCmp !== 0) return nameCmp
+    const provCmp = a.provider.localeCompare(b.provider)
+    if (provCmp !== 0) return provCmp
+    return a.id.localeCompare(b.id)
+  })
+
+  const fmt = (n: number) => n >= 1_000_000 ? `${n / 1_000_000}M` : n >= 1_000 ? `${n / 1_000}K` : `${n}`
+  const rows = filtered.map((m) => [
+    m.provider,
+    m.id,
+    m.name,
+    fmt(m.contextWindow),
+    fmt(m.maxTokens),
+    m.reasoning ? 'yes' : 'no',
+  ])
+  const hdrs = ['provider', 'model', 'name', 'context', 'max-out', 'thinking']
+  const widths = hdrs.map((h, i) => Math.max(h.length, ...rows.map((r) => r[i].length)))
+  const pad = (s: string, w: number) => s.padEnd(w)
+  console.log(hdrs.map((h, i) => pad(h, widths[i])).join('  '))
+  for (const row of rows) {
+    console.log(row.map((c, i) => pad(c, widths[i])).join('  '))
+  }
+  process.exit(0)
+}
 
 // Validate configured model on startup — catches stale settings from prior installs
 // (e.g. grok-2 which no longer exists) and fresh installs with no settings.

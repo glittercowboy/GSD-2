@@ -4,26 +4,9 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { deriveState } from "../state.ts";
 import { runGSDDoctor } from "../doctor.ts";
+import { createTestContext } from './test-helpers.ts';
 
-let passed = 0;
-let failed = 0;
-
-function assert(condition: boolean, message: string): void {
-  if (condition) passed++;
-  else {
-    failed++;
-    console.error(`  FAIL: ${message}`);
-  }
-}
-
-function assertEq<T>(actual: T, expected: T, message: string): void {
-  if (JSON.stringify(actual) === JSON.stringify(expected)) passed++;
-  else {
-    failed++;
-    console.error(`  FAIL: ${message} — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-  }
-}
-
+const { assertEq, assertTrue, report } = createTestContext();
 console.log("\n=== requirement counts parser ===");
 {
   const counts = parseRequirementCounts(`# Requirements
@@ -109,17 +92,15 @@ writeFileSync(join(sDir, "S01-PLAN.md"), `# S01: Demo Slice
 console.log("\n=== deriveState includes requirements counts ===");
 {
   const state = await deriveState(base);
-  assert(state.requirements !== undefined, "state includes requirements summary");
+  assertTrue(state.requirements !== undefined, "state includes requirements summary");
   assertEq(state.requirements?.active, 1, "state reports active requirement count");
 }
 
 console.log("\n=== doctor flags orphaned active requirement ===");
 {
   const report = await runGSDDoctor(base);
-  assert(report.issues.some(issue => issue.code === "active_requirement_missing_owner"), "doctor flags missing owner");
+  assertTrue(report.issues.some(issue => issue.code === "active_requirement_missing_owner"), "doctor flags missing owner");
 }
 
 rmSync(base, { recursive: true, force: true });
-console.log(`\nResults: ${passed} passed, ${failed} failed`);
-if (failed > 0) process.exit(1);
-console.log("All tests passed ✓");
+report();

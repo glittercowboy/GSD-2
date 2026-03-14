@@ -2,6 +2,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { createTestContext } from './test-helpers.ts';
 
 // loadPrompt reads from ~/.gsd/agent/extensions/gsd/prompts/ (main checkout).
 // In a worktree the file may not exist there yet, so we resolve prompts
@@ -9,27 +10,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const worktreePromptsDir = join(__dirname, "..", "prompts");
 
-let passed = 0;
-let failed = 0;
-
-function assert(condition: boolean, message: string): void {
-  if (condition) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message}`);
-  }
-}
-
-function assertEq<T>(actual: T, expected: T, message: string): void {
-  if (JSON.stringify(actual) === JSON.stringify(expected)) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message} — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-  }
-}
-
+const { assertEq, assertTrue, report } = createTestContext();
 /**
  * Load a prompt template from the worktree prompts directory
  * and apply variable substitution (mirrors loadPrompt logic).
@@ -91,8 +72,8 @@ async function main(): Promise<void> {
       console.error(`  ERROR: loadPrompt threw: ${err}`);
     }
 
-    assert(!threw, "loadPrompt does not throw for complete-milestone");
-    assert(typeof result === "string" && result.length > 0, "loadPrompt returns a non-empty string");
+    assertTrue(!threw, "loadPrompt does not throw for complete-milestone");
+    assertTrue(typeof result === "string" && result.length > 0, "loadPrompt returns a non-empty string");
   }
 
   // ─── Variable Substitution ─────────────────────────────────────────────
@@ -105,14 +86,14 @@ async function main(): Promise<void> {
       inlinedContext: "--- inlined slice summaries and context ---",
     });
 
-    assert(prompt.includes("M001"), "prompt contains milestoneId 'M001'");
-    assert(prompt.includes("Integration Feature"), "prompt contains milestoneTitle");
-    assert(prompt.includes(".gsd/milestones/M001/M001-ROADMAP.md"), "prompt contains roadmapPath");
-    assert(prompt.includes("--- inlined slice summaries and context ---"), "prompt contains inlinedContext");
-    assert(!prompt.includes("{{milestoneId}}"), "no un-substituted {{milestoneId}}");
-    assert(!prompt.includes("{{milestoneTitle}}"), "no un-substituted {{milestoneTitle}}");
-    assert(!prompt.includes("{{roadmapPath}}"), "no un-substituted {{roadmapPath}}");
-    assert(!prompt.includes("{{inlinedContext}}"), "no un-substituted {{inlinedContext}}");
+    assertTrue(prompt.includes("M001"), "prompt contains milestoneId 'M001'");
+    assertTrue(prompt.includes("Integration Feature"), "prompt contains milestoneTitle");
+    assertTrue(prompt.includes(".gsd/milestones/M001/M001-ROADMAP.md"), "prompt contains roadmapPath");
+    assertTrue(prompt.includes("--- inlined slice summaries and context ---"), "prompt contains inlinedContext");
+    assertTrue(!prompt.includes("{{milestoneId}}"), "no un-substituted {{milestoneId}}");
+    assertTrue(!prompt.includes("{{milestoneTitle}}"), "no un-substituted {{milestoneTitle}}");
+    assertTrue(!prompt.includes("{{roadmapPath}}"), "no un-substituted {{roadmapPath}}");
+    assertTrue(!prompt.includes("{{inlinedContext}}"), "no un-substituted {{inlinedContext}}");
   }
 
   // ─── Prompt Content Integrity ──────────────────────────────────────────
@@ -125,10 +106,10 @@ async function main(): Promise<void> {
       inlinedContext: "context",
     });
 
-    assert(prompt.includes("Complete Milestone"), "prompt contains 'Complete Milestone' heading");
-    assert(prompt.includes("success criter") || prompt.includes("success criteria"), "prompt mentions success criteria verification");
-    assert(prompt.includes("milestone-summary") || prompt.includes("milestoneSummary"), "prompt references milestone summary artifact");
-    assert(prompt.includes("Milestone M002 complete"), "prompt contains completion sentinel for M002");
+    assertTrue(prompt.includes("Complete Milestone"), "prompt contains 'Complete Milestone' heading");
+    assertTrue(prompt.includes("success criter") || prompt.includes("success criteria"), "prompt mentions success criteria verification");
+    assertTrue(prompt.includes("milestone-summary") || prompt.includes("milestoneSummary"), "prompt references milestone summary artifact");
+    assertTrue(prompt.includes("Milestone M002 complete"), "prompt contains completion sentinel for M002");
   }
 
   // ─── diagnoseExpectedArtifact behavior ─────────────────────────────────
@@ -153,10 +134,10 @@ async function main(): Promise<void> {
       // This is the exact logic from diagnoseExpectedArtifact for "complete-milestone"
       const result = `${relMilestoneFile(base, mid, "SUMMARY")} (milestone summary)`;
 
-      assert(typeof result === "string", "diagnose returns a string");
-      assert(result.includes("SUMMARY"), "diagnose result mentions SUMMARY");
-      assert(result.includes("milestone"), "diagnose result mentions milestone");
-      assert(result.includes("M001"), "diagnose result includes the milestone ID");
+      assertTrue(typeof result === "string", "diagnose returns a string");
+      assertTrue(result.includes("SUMMARY"), "diagnose result mentions SUMMARY");
+      assertTrue(result.includes("milestone"), "diagnose result mentions milestone");
+      assertTrue(result.includes("M001"), "diagnose result includes the milestone ID");
     } finally {
       cleanup(base);
     }
@@ -188,7 +169,7 @@ async function main(): Promise<void> {
       const roadmapPath = join(base, ".gsd", "milestones", "M001", "M001-ROADMAP.md");
       const roadmapContent = await loadFile(roadmapPath);
       const roadmap = parseRoadmap(roadmapContent!);
-      assert(isMilestoneComplete(roadmap), "isMilestoneComplete returns true when all slices are [x]");
+      assertTrue(isMilestoneComplete(roadmap), "isMilestoneComplete returns true when all slices are [x]");
 
       // Verify deriveState returns completing-milestone phase
       const state = await deriveState(base);
@@ -206,17 +187,7 @@ async function main(): Promise<void> {
     }
   }
 
-  // ═════════════════════════════════════════════════════════════════════════
-  // Results
-  // ═════════════════════════════════════════════════════════════════════════
-
-  console.log(`\n${"=".repeat(40)}`);
-  console.log(`Results: ${passed} passed, ${failed} failed`);
-  if (failed > 0) {
-    process.exit(1);
-  } else {
-    console.log("All tests passed ✓");
-  }
+  report();
 }
 
 main().catch((error) => {

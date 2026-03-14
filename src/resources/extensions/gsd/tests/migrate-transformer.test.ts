@@ -19,28 +19,9 @@ import type {
   GSDSlice,
   GSDTask,
 } from '../migrate/types.ts';
+import { createTestContext } from './test-helpers.ts';
 
-let passed = 0;
-let failed = 0;
-
-function assert(condition: boolean, message: string): void {
-  if (condition) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message}`);
-  }
-}
-
-function assertEq<T>(actual: T, expected: T, message: string): void {
-  if (JSON.stringify(actual) === JSON.stringify(expected)) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message} — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-  }
-}
-
+const { assertEq, assertTrue, report } = createTestContext();
 // ─── Fixture Helpers ───────────────────────────────────────────────────────
 
 function emptyProject(overrides: Partial<PlanningProject> = {}): PlanningProject {
@@ -179,18 +160,18 @@ function makeResearch(fileName: string, content: string): PlanningResearch {
   const result = transformToGSD(project);
 
   assertEq(result.milestones.length, 1, 'flat: produces 1 milestone');
-  assert(result.milestones[0]?.id === 'M001', 'flat: milestone ID is M001');
+  assertTrue(result.milestones[0]?.id === 'M001', 'flat: milestone ID is M001');
   assertEq(result.milestones[0]?.slices.length, 3, 'flat: 3 slices');
   assertEq(result.milestones[0]?.slices[0]?.id, 'S01', 'flat: first slice is S01');
   assertEq(result.milestones[0]?.slices[1]?.id, 'S02', 'flat: second slice is S02');
   assertEq(result.milestones[0]?.slices[2]?.id, 'S03', 'flat: third slice is S03');
-  assert(result.milestones[0]?.slices[0]?.title.length > 0, 'flat: slice title not empty');
+  assertTrue(result.milestones[0]?.slices[0]?.title.length > 0, 'flat: slice title not empty');
   assertEq(result.milestones[0]?.slices[0]?.tasks.length, 1, 'flat: S01 has 1 task');
   assertEq(result.milestones[0]?.slices[1]?.tasks.length, 2, 'flat: S02 has 2 tasks');
   assertEq(result.milestones[0]?.slices[2]?.tasks.length, 1, 'flat: S03 has 1 task');
   assertEq(result.milestones[0]?.slices[0]?.tasks[0]?.id, 'T01', 'flat: first task is T01');
   assertEq(result.milestones[0]?.slices[1]?.tasks[1]?.id, 'T02', 'flat: second task in S02 is T02');
-  assert(result.projectContent.includes('My Project'), 'flat: projectContent preserved');
+  assertTrue(result.projectContent.includes('My Project'), 'flat: projectContent preserved');
   assertEq(result.milestones[0]?.boundaryMap, [], 'flat: boundaryMap defaults to empty');
 }
 
@@ -234,8 +215,8 @@ function makeResearch(fileName: string, content: string): PlanningResearch {
   assertEq(result.milestones[0]?.slices[0]?.id, 'S01', 'multi: M001 starts at S01');
   assertEq(result.milestones[1]?.slices[0]?.id, 'S01', 'multi: M002 starts at S01');
   assertEq(result.milestones[1]?.slices[2]?.id, 'S03', 'multi: M002 third slice is S03');
-  assert(result.milestones[0]?.title.length > 0, 'multi: M001 has title');
-  assert(result.milestones[1]?.title.length > 0, 'multi: M002 has title');
+  assertTrue(result.milestones[0]?.title.length > 0, 'multi: M001 has title');
+  assertTrue(result.milestones[1]?.title.length > 0, 'multi: M002 has title');
 }
 
 // ─── Scenario 3: Decimal Phase Ordering (1, 2, 2.1, 2.2, 3 → S01–S05) ──
@@ -269,11 +250,11 @@ function makeResearch(fileName: string, content: string): PlanningResearch {
   assertEq(result.milestones[0]?.slices[3]?.id, 'S04', 'decimal: fourth is S04');
   assertEq(result.milestones[0]?.slices[4]?.id, 'S05', 'decimal: fifth is S05');
   // Order must be by float value: 1, 2, 2.1, 2.2, 3
-  assert(
+  assertTrue(
     result.milestones[0]?.slices[0]?.title.toLowerCase().includes('foundation'),
     'decimal: S01 is foundation (phase 1)',
   );
-  assert(
+  assertTrue(
     result.milestones[0]?.slices[4]?.title.toLowerCase().includes('finalize'),
     'decimal: S05 is finalize (phase 3)',
   );
@@ -307,19 +288,19 @@ function makeResearch(fileName: string, content: string): PlanningResearch {
   const doneSlice = result.milestones[0]?.slices[0];
   const activeSlice = result.milestones[0]?.slices[1];
 
-  assert(doneSlice?.done === true, 'completion: done phase → done slice');
-  assert(activeSlice?.done === false, 'completion: active phase → not-done slice');
-  assert(doneSlice?.tasks[0]?.done === true, 'completion: plan with summary → done task');
-  assert(doneSlice?.tasks[1]?.done === false, 'completion: plan without summary → not-done task');
-  assert(doneSlice?.tasks[0]?.summary !== null, 'completion: done task has summary data');
-  assert(doneSlice?.tasks[1]?.summary === null, 'completion: not-done task has null summary');
+  assertTrue(doneSlice?.done === true, 'completion: done phase → done slice');
+  assertTrue(activeSlice?.done === false, 'completion: active phase → not-done slice');
+  assertTrue(doneSlice?.tasks[0]?.done === true, 'completion: plan with summary → done task');
+  assertTrue(doneSlice?.tasks[1]?.done === false, 'completion: plan without summary → not-done task');
+  assertTrue(doneSlice?.tasks[0]?.summary !== null, 'completion: done task has summary data');
+  assertTrue(doneSlice?.tasks[1]?.summary === null, 'completion: not-done task has null summary');
   assertEq(doneSlice?.tasks[0]?.summary?.completedAt, '2026-01-15', 'completion: summary completedAt from frontmatter');
   assertEq(doneSlice?.tasks[0]?.summary?.duration, '2h', 'completion: summary duration from frontmatter');
   assertEq(doneSlice?.tasks[0]?.summary?.provides, ['feature-01'], 'completion: summary provides from frontmatter');
   assertEq(doneSlice?.tasks[0]?.summary?.keyFiles, ['file-01.ts'], 'completion: summary keyFiles from frontmatter');
-  assert(doneSlice?.tasks[0]?.summary?.whatHappened?.includes('Summary body') ?? false, 'completion: summary whatHappened from body');
-  assert(doneSlice?.summary !== null, 'completion: done slice has slice summary');
-  assert(activeSlice?.summary === null, 'completion: active slice has null summary');
+  assertTrue(doneSlice?.tasks[0]?.summary?.whatHappened?.includes('Summary body') ?? false, 'completion: summary whatHappened from body');
+  assertTrue(doneSlice?.summary !== null, 'completion: done slice has slice summary');
+  assertTrue(activeSlice?.summary === null, 'completion: active slice has null summary');
   assertEq(doneSlice?.tasks[0]?.estimate, '2h', 'completion: task estimate from summary duration');
 }
 
@@ -347,22 +328,22 @@ function makeResearch(fileName: string, content: string): PlanningResearch {
   const result = transformToGSD(project);
 
   // Project-level research → milestone research
-  assert(result.milestones[0]?.research !== null, 'research: milestone has consolidated research');
-  assert(result.milestones[0]?.research!.includes('Project Summary'), 'research: includes SUMMARY content');
-  assert(result.milestones[0]?.research!.includes('Architecture'), 'research: includes ARCHITECTURE content');
-  assert(result.milestones[0]?.research!.includes('Pitfalls'), 'research: includes PITFALLS content');
+  assertTrue(result.milestones[0]?.research !== null, 'research: milestone has consolidated research');
+  assertTrue(result.milestones[0]?.research!.includes('Project Summary'), 'research: includes SUMMARY content');
+  assertTrue(result.milestones[0]?.research!.includes('Architecture'), 'research: includes ARCHITECTURE content');
+  assertTrue(result.milestones[0]?.research!.includes('Pitfalls'), 'research: includes PITFALLS content');
 
   // Fixed ordering: SUMMARY before ARCHITECTURE before PITFALLS
   const summaryIdx = result.milestones[0]?.research!.indexOf('Project Summary') ?? -1;
   const archIdx = result.milestones[0]?.research!.indexOf('Architecture') ?? -1;
   const pitfallIdx = result.milestones[0]?.research!.indexOf('Pitfalls') ?? -1;
-  assert(summaryIdx < archIdx, 'research: SUMMARY before ARCHITECTURE in consolidated');
-  assert(archIdx < pitfallIdx, 'research: ARCHITECTURE before PITFALLS in consolidated');
+  assertTrue(summaryIdx < archIdx, 'research: SUMMARY before ARCHITECTURE in consolidated');
+  assertTrue(archIdx < pitfallIdx, 'research: ARCHITECTURE before PITFALLS in consolidated');
 
   // Phase-level research → slice research
   const slice = result.milestones[0]?.slices[0];
-  assert(slice?.research !== null, 'research: slice has phase research');
-  assert(slice?.research!.includes('Phase Features'), 'research: slice research includes phase content');
+  assertTrue(slice?.research !== null, 'research: slice has phase research');
+  assertTrue(slice?.research!.includes('Phase Features'), 'research: slice research includes phase content');
 }
 
 // ─── Scenario 6: Requirements Classification ──────────────────────────────
@@ -389,8 +370,8 @@ function makeResearch(fileName: string, content: string): PlanningResearch {
   assertEq(result.requirements[0]?.status, 'active', 'requirements: R001 status active');
   assertEq(result.requirements[1]?.status, 'validated', 'requirements: R002 status validated');
   assertEq(result.requirements[2]?.status, 'deferred', 'requirements: R003 status deferred');
-  assert(result.requirements[0]?.title === 'Core Feature', 'requirements: R001 title preserved');
-  assert(result.requirements[0]?.description.includes('Description for R001'), 'requirements: R001 description preserved');
+  assertTrue(result.requirements[0]?.title === 'Core Feature', 'requirements: R001 title preserved');
+  assertTrue(result.requirements[0]?.description.includes('Description for R001'), 'requirements: R001 description preserved');
   assertEq(result.requirements[0]?.class, 'core-capability', 'requirements: default class');
   assertEq(result.requirements[0]?.source, 'inferred', 'requirements: default source');
   assertEq(result.requirements[0]?.primarySlice, 'none yet', 'requirements: default primarySlice');
@@ -418,7 +399,7 @@ function makeResearch(fileName: string, content: string): PlanningResearch {
 
   assertEq(result.milestones[0]?.slices[0]?.tasks.length, 0, 'empty: empty phase → 0 tasks');
   assertEq(result.milestones[0]?.slices[1]?.tasks.length, 1, 'empty: non-empty phase → 1 task');
-  assert(result.milestones[0]?.slices[0]?.id === 'S01', 'empty: empty slice still gets ID');
+  assertTrue(result.milestones[0]?.slices[0]?.id === 'S01', 'empty: empty slice still gets ID');
 }
 
 // ─── Scenario 8: Demo Derivation from Plan Objective ───────────────────────
@@ -439,13 +420,13 @@ function makeResearch(fileName: string, content: string): PlanningResearch {
 
   const result = transformToGSD(project);
 
-  assert(result.milestones[0]?.slices[0]?.demo.length > 0, 'demo: slice demo is not empty');
-  assert(
+  assertTrue(result.milestones[0]?.slices[0]?.demo.length > 0, 'demo: slice demo is not empty');
+  assertTrue(
     result.milestones[0]?.slices[0]?.demo.includes('authentication') ||
     result.milestones[0]?.slices[0]?.demo.includes('Build'),
     'demo: slice demo derived from first plan objective',
   );
-  assert(result.milestones[0]?.slices[0]?.goal.length > 0, 'demo: slice goal is not empty');
+  assertTrue(result.milestones[0]?.slices[0]?.goal.length > 0, 'demo: slice goal is not empty');
 }
 
 // ─── Scenario 9: Field Defaults and Type Safety ────────────────────────────
@@ -481,12 +462,12 @@ function makeResearch(fileName: string, content: string): PlanningResearch {
 
   assertEq(slice?.risk, 'medium', 'defaults: slice risk defaults to medium');
   assertEq(slice?.depends, [], 'defaults: S01 has no depends');
-  assert(task?.description.length > 0, 'defaults: task description not empty');
+  assertTrue(task?.description.length > 0, 'defaults: task description not empty');
   assertEq(task?.files, ['src/auth.ts', 'src/db.ts'], 'defaults: task files from frontmatter');
   assertEq(task?.mustHaves, ['Auth works', 'DB connected'], 'defaults: task mustHaves from frontmatter');
   assertEq(task?.done, false, 'defaults: task without summary is not done');
   assertEq(task?.estimate, '', 'defaults: task without summary has empty estimate');
-  assert(task?.summary === null, 'defaults: task without summary has null summary');
+  assertTrue(task?.summary === null, 'defaults: task without summary has null summary');
 }
 
 // ─── Scenario 10: Sequential Depends ──────────────────────────────────────
@@ -555,7 +536,7 @@ function makeResearch(fileName: string, content: string): PlanningResearch {
   });
 
   const result1 = transformToGSD(project1);
-  assert(result1.milestones[0]?.vision.includes('revolutionary'), 'vision: derived from project first line');
+  assertTrue(result1.milestones[0]?.vision.includes('revolutionary'), 'vision: derived from project first line');
 
   // Vision fallback when no project
   const project2 = emptyProject({
@@ -564,7 +545,7 @@ function makeResearch(fileName: string, content: string): PlanningResearch {
   });
 
   const result2 = transformToGSD(project2);
-  assert(result2.milestones[0]?.vision.length > 0, 'vision: fallback is non-empty');
+  assertTrue(result2.milestones[0]?.vision.length > 0, 'vision: fallback is non-empty');
 }
 
 // ─── Scenario 13: Decisions content from summaries ─────────────────────────
@@ -584,7 +565,7 @@ function makeResearch(fileName: string, content: string): PlanningResearch {
 
   const result = transformToGSD(project);
 
-  assert(result.decisionsContent.includes('decision-01'), 'decisions: extracts key-decisions from summaries');
+  assertTrue(result.decisionsContent.includes('decision-01'), 'decisions: extracts key-decisions from summaries');
 }
 
 // ─── Scenario 14: No undefined values in output ───────────────────────────
@@ -615,7 +596,7 @@ function makeResearch(fileName: string, content: string): PlanningResearch {
   // Deep check for undefined values
   function checkNoUndefined(obj: unknown, path: string): void {
     if (obj === undefined) {
-      assert(false, `no-undefined: ${path} is undefined`);
+      assertTrue(false, `no-undefined: ${path} is undefined`);
       return;
     }
     if (obj === null) return; // null is allowed (e.g. research, summary)
@@ -631,7 +612,7 @@ function makeResearch(fileName: string, content: string): PlanningResearch {
   }
 
   checkNoUndefined(result, 'result');
-  assert(true, 'no-undefined: deep check completed without finding undefined values');
+  assertTrue(true, 'no-undefined: deep check completed without finding undefined values');
 }
 
 // ─── Scenario 15: Research with no files ───────────────────────────────────
@@ -645,13 +626,10 @@ function makeResearch(fileName: string, content: string): PlanningResearch {
   });
 
   const result = transformToGSD(project);
-  assert(result.milestones[0]?.research === null, 'empty-research: milestone research is null');
-  assert(result.milestones[0]?.slices[0]?.research === null, 'empty-research: slice research is null');
+  assertTrue(result.milestones[0]?.research === null, 'empty-research: milestone research is null');
+  assertTrue(result.milestones[0]?.slices[0]?.research === null, 'empty-research: slice research is null');
 }
 
 // ─── Results ───────────────────────────────────────────────────────────────
 
-console.log(`\n${passed + failed} assertions: ${passed} passed, ${failed} failed`);
-if (failed > 0) {
-  process.exit(1);
-}
+report();

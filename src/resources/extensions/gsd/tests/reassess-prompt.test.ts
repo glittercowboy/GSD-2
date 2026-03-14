@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createTestContext } from './test-helpers.ts';
 
 // loadPrompt reads from ~/.gsd/agent/extensions/gsd/prompts/ (main checkout).
 // In a worktree the file may not exist there yet, so we resolve prompts
@@ -8,27 +9,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const worktreePromptsDir = join(__dirname, "..", "prompts");
 
-let passed = 0;
-let failed = 0;
-
-function assert(condition: boolean, message: string): void {
-  if (condition) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message}`);
-  }
-}
-
-function assertEq<T>(actual: T, expected: T, message: string): void {
-  if (JSON.stringify(actual) === JSON.stringify(expected)) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message} — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-  }
-}
-
+const { assertTrue, report } = createTestContext();
 /**
  * Load a prompt template from the worktree prompts directory
  * and apply variable substitution (mirrors loadPrompt logic).
@@ -69,22 +50,22 @@ async function main(): Promise<void> {
       console.error(`  ERROR: loadPrompt threw: ${err}`);
     }
 
-    assert(!threw, "loadPrompt does not throw for reassess-roadmap");
-    assert(typeof result === "string" && result.length > 0, "loadPrompt returns a non-empty string");
+    assertTrue(!threw, "loadPrompt does not throw for reassess-roadmap");
+    assertTrue(typeof result === "string" && result.length > 0, "loadPrompt returns a non-empty string");
 
     // Verify all test variables were substituted into the output
-    assert(result.includes("M099"), "prompt contains milestoneId 'M099'");
-    assert(result.includes("S03"), "prompt contains completedSliceId 'S03'");
-    assert(result.includes(".gsd/milestones/M099/slices/S03/S03-ASSESSMENT.md"), "prompt contains assessmentPath");
-    assert(result.includes(".gsd/milestones/M099/M099-ROADMAP.md"), "prompt contains roadmapPath");
-    assert(result.includes("--- test inlined context block ---"), "prompt contains inlinedContext");
+    assertTrue(result.includes("M099"), "prompt contains milestoneId 'M099'");
+    assertTrue(result.includes("S03"), "prompt contains completedSliceId 'S03'");
+    assertTrue(result.includes(".gsd/milestones/M099/slices/S03/S03-ASSESSMENT.md"), "prompt contains assessmentPath");
+    assertTrue(result.includes(".gsd/milestones/M099/M099-ROADMAP.md"), "prompt contains roadmapPath");
+    assertTrue(result.includes("--- test inlined context block ---"), "prompt contains inlinedContext");
 
     // Verify no un-substituted variables remain
-    assert(!result.includes("{{milestoneId}}"), "no un-substituted {{milestoneId}}");
-    assert(!result.includes("{{completedSliceId}}"), "no un-substituted {{completedSliceId}}");
-    assert(!result.includes("{{assessmentPath}}"), "no un-substituted {{assessmentPath}}");
-    assert(!result.includes("{{roadmapPath}}"), "no un-substituted {{roadmapPath}}");
-    assert(!result.includes("{{inlinedContext}}"), "no un-substituted {{inlinedContext}}");
+    assertTrue(!result.includes("{{milestoneId}}"), "no un-substituted {{milestoneId}}");
+    assertTrue(!result.includes("{{completedSliceId}}"), "no un-substituted {{completedSliceId}}");
+    assertTrue(!result.includes("{{assessmentPath}}"), "no un-substituted {{assessmentPath}}");
+    assertTrue(!result.includes("{{roadmapPath}}"), "no un-substituted {{roadmapPath}}");
+    assertTrue(!result.includes("{{inlinedContext}}"), "no un-substituted {{inlinedContext}}");
   }
 
   // ─── reassess-roadmap contains coverage-check instruction ─────────────
@@ -102,25 +83,25 @@ async function main(): Promise<void> {
     const lower = prompt.toLowerCase();
 
     // The prompt must mention "each success criterion" or "every success criterion"
-    assert(
+    assertTrue(
       lower.includes("each success criterion") || lower.includes("every success criterion"),
       "prompt contains 'each success criterion' or 'every success criterion'"
     );
 
     // The prompt must mention "owning slice" or "remaining slice"
-    assert(
+    assertTrue(
       lower.includes("owning slice") || lower.includes("remaining slice"),
       "prompt contains 'owning slice' or 'remaining slice'"
     );
 
     // The prompt must mention "no remaining owner" or "no owner" or "no slice"
-    assert(
+    assertTrue(
       lower.includes("no remaining owner") || lower.includes("no owner") || lower.includes("no slice"),
       "prompt contains 'no remaining owner', 'no owner', or 'no slice'"
     );
 
     // The prompt must mention "blocking issue" or "blocking"
-    assert(
+    assertTrue(
       lower.includes("blocking issue") || lower.includes("blocking"),
       "prompt contains 'blocking issue' or 'blocking'"
     );
@@ -140,29 +121,19 @@ async function main(): Promise<void> {
     const lower = prompt.toLowerCase();
 
     // The instruction must use "at least one" or equivalent inclusive language
-    assert(
+    assertTrue(
       lower.includes("at least one") || lower.includes("at-least-one") || lower.includes("one or more"),
       "prompt uses 'at least one' or equivalent inclusive language for slice ownership"
     );
 
     // The instruction must NOT require "exactly one" — that would be too rigid
-    assert(
+    assertTrue(
       !lower.includes("exactly one owner") && !lower.includes("exactly one slice"),
       "prompt does NOT use 'exactly one' for slice ownership (would be too rigid)"
     );
   }
 
-  // ═════════════════════════════════════════════════════════════════════════
-  // Results
-  // ═════════════════════════════════════════════════════════════════════════
-
-  console.log(`\n${"=".repeat(40)}`);
-  console.log(`Results: ${passed} passed, ${failed} failed`);
-  if (failed > 0) {
-    process.exit(1);
-  } else {
-    console.log("All tests passed ✓");
-  }
+  report();
 }
 
 main().catch((error) => {

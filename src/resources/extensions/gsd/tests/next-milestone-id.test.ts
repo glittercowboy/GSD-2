@@ -8,21 +8,10 @@
 //   (d) Non-numeric directory names mixed in are ignored
 
 import { nextMilestoneId, maxMilestoneNum } from '../guided-flow.ts';
+import { createTestContext } from './test-helpers.ts';
 
-// ─── Assertion helpers ─────────────────────────────────────────────────────
 
-let passed = 0;
-let failed = 0;
-
-function assertEq<T>(actual: T, expected: T, message: string): void {
-  if (JSON.stringify(actual) === JSON.stringify(expected)) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message} — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-  }
-}
-
+const { assertEq, report } = createTestContext();
 // ─── Tests ─────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -68,17 +57,7 @@ async function main(): Promise<void> {
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // Results
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  console.log(`\n${'='.repeat(40)}`);
-  console.log(`Results: ${passed} passed, ${failed} failed`);
-  if (failed > 0) {
-    process.exit(1);
-  } else {
-    console.log('All tests passed');
-  }
+  report();
 }
 
 main().catch((error) => {

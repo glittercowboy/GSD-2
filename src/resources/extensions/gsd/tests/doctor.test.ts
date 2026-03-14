@@ -3,28 +3,9 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { formatDoctorReport, runGSDDoctor, summarizeDoctorIssues, filterDoctorIssues, selectDoctorScope } from "../doctor.js";
+import { createTestContext } from './test-helpers.ts';
 
-let passed = 0;
-let failed = 0;
-
-function assert(condition: boolean, message: string): void {
-  if (condition) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message}`);
-  }
-}
-
-function assertEq<T>(actual: T, expected: T, message: string): void {
-  if (JSON.stringify(actual) === JSON.stringify(expected)) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message} — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-  }
-}
-
+const { assertEq, assertTrue, report } = createTestContext();
 const tmpBase = mkdtempSync(join(tmpdir(), "gsd-doctor-test-"));
 const gsd = join(tmpBase, ".gsd");
 const mDir = join(gsd, "milestones", "M001");
@@ -84,9 +65,9 @@ async function main(): Promise<void> {
   console.log("\n=== doctor diagnose ===");
   {
     const report = await runGSDDoctor(tmpBase, { fix: false });
-    assert(!report.ok, "report is not ok when completion artifacts are missing");
-    assert(report.issues.some(issue => issue.code === "all_tasks_done_missing_slice_summary"), "detects missing slice summary");
-    assert(report.issues.some(issue => issue.code === "all_tasks_done_missing_slice_uat"), "detects missing slice UAT");
+    assertTrue(!report.ok, "report is not ok when completion artifacts are missing");
+    assertTrue(report.issues.some(issue => issue.code === "all_tasks_done_missing_slice_summary"), "detects missing slice summary");
+    assertTrue(report.issues.some(issue => issue.code === "all_tasks_done_missing_slice_uat"), "detects missing slice UAT");
   }
 
   console.log("\n=== doctor formatting ===");
@@ -95,10 +76,10 @@ async function main(): Promise<void> {
     const summary = summarizeDoctorIssues(report.issues);
     assertEq(summary.errors, 2, "two blocking errors in summary");
     const scoped = filterDoctorIssues(report.issues, { scope: "M001/S01", includeWarnings: true });
-    assert(scoped.length >= 2, "scope filter keeps slice issues");
+    assertTrue(scoped.length >= 2, "scope filter keeps slice issues");
     const text = formatDoctorReport(report, { scope: "M001/S01", includeWarnings: true, maxIssues: 5 });
-    assert(text.includes("Scope: M001/S01"), "formatted report shows scope");
-    assert(text.includes("Top issue types:"), "formatted report shows grouped issue types");
+    assertTrue(text.includes("Scope: M001/S01"), "formatted report shows scope");
+    assertTrue(text.includes("Top issue types:"), "formatted report shows grouped issue types");
   }
 
   console.log("\n=== doctor default scope ===");
@@ -111,18 +92,18 @@ async function main(): Promise<void> {
   {
     const report = await runGSDDoctor(tmpBase, { fix: true });
     if (report.fixesApplied.length < 3) console.error(report);
-    assert(report.fixesApplied.length >= 3, "applies multiple fixes");
-    assert(existsSync(join(sDir, "S01-SUMMARY.md")), "creates placeholder slice summary");
-    assert(existsSync(join(sDir, "S01-UAT.md")), "creates placeholder UAT");
+    assertTrue(report.fixesApplied.length >= 3, "applies multiple fixes");
+    assertTrue(existsSync(join(sDir, "S01-SUMMARY.md")), "creates placeholder slice summary");
+    assertTrue(existsSync(join(sDir, "S01-UAT.md")), "creates placeholder UAT");
 
     const plan = readFileSync(join(sDir, "S01-PLAN.md"), "utf-8");
-    assert(plan.includes("- [x] **T01:"), "marks task checkbox done");
+    assertTrue(plan.includes("- [x] **T01:"), "marks task checkbox done");
 
     const roadmap = readFileSync(join(mDir, "M001-ROADMAP.md"), "utf-8");
-    assert(roadmap.includes("- [x] **S01:"), "marks slice checkbox done");
+    assertTrue(roadmap.includes("- [x] **S01:"), "marks slice checkbox done");
 
     const state = readFileSync(join(gsd, "STATE.md"), "utf-8");
-    assert(state.includes("# GSD State"), "writes state file");
+    assertTrue(state.includes("# GSD State"), "writes state file");
   }
 
   rmSync(tmpBase, { recursive: true, force: true });
@@ -182,7 +163,7 @@ parent: M001
     // NO milestone summary — this is the condition we're detecting
 
     const report = await runGSDDoctor(msBase, { fix: false });
-    assert(
+    assertTrue(
       report.issues.some(issue => issue.code === "all_slices_done_missing_milestone_summary"),
       "detects missing milestone summary when all slices are done"
     );
@@ -190,7 +171,7 @@ parent: M001
     assertEq(msIssue?.scope, "milestone", "milestone summary issue has scope 'milestone'");
     assertEq(msIssue?.severity, "warning", "milestone summary issue has severity 'warning'");
     assertEq(msIssue?.unitId, "M001", "milestone summary issue unitId is 'M001'");
-    assert(msIssue?.message?.includes("SUMMARY") ?? false, "milestone summary issue message mentions SUMMARY");
+    assertTrue(msIssue?.message?.includes("SUMMARY") ?? false, "milestone summary issue message mentions SUMMARY");
 
     rmSync(msBase, { recursive: true, force: true });
   }
@@ -247,7 +228,7 @@ parent: M001
     writeFileSync(join(msMDir, "M001-SUMMARY.md"), `# M001 Summary\n\nMilestone complete.`);
 
     const report = await runGSDDoctor(msBase, { fix: false });
-    assert(
+    assertTrue(
       !report.issues.some(issue => issue.code === "all_slices_done_missing_milestone_summary"),
       "does NOT report missing milestone summary when summary exists"
     );
@@ -313,11 +294,11 @@ Discovered an issue.
     // No REPLAN.md — should trigger the issue
     const report = await runGSDDoctor(bBase, { fix: false });
     const blockerIssues = report.issues.filter(i => i.code === "blocker_discovered_no_replan");
-    assert(blockerIssues.length > 0, "detects blocker_discovered_no_replan");
+    assertTrue(blockerIssues.length > 0, "detects blocker_discovered_no_replan");
     assertEq(blockerIssues[0]?.severity, "warning", "blocker issue has warning severity");
     assertEq(blockerIssues[0]?.scope, "slice", "blocker issue has slice scope");
-    assert(blockerIssues[0]?.message?.includes("T01") ?? false, "blocker issue message mentions T01");
-    assert(blockerIssues[0]?.message?.includes("S01") ?? false, "blocker issue message mentions S01");
+    assertTrue(blockerIssues[0]?.message?.includes("T01") ?? false, "blocker issue message mentions T01");
+    assertTrue(blockerIssues[0]?.message?.includes("S01") ?? false, "blocker issue message mentions S01");
 
     rmSync(bBase, { recursive: true, force: true });
   }
@@ -399,7 +380,7 @@ Discovered an issue.
     writeFileSync(join(mhTDir, "T01-SUMMARY.md"), `---\nid: T01\nparent: S01\nmilestone: M001\n---\n# T01: Implement\n\n## What Happened\nAdded parseWidgets function. Unit tests pass with zero failures.\n`);
 
     const report = await runGSDDoctor(mhBase, { fix: false });
-    assert(
+    assertTrue(
       !report.issues.some(i => i.code === "task_done_must_haves_not_verified"),
       "no must-have issue when all must-haves are addressed"
     );
@@ -428,11 +409,11 @@ Discovered an issue.
 
     const report = await runGSDDoctor(mhBase, { fix: false });
     const mhIssue = report.issues.find(i => i.code === "task_done_must_haves_not_verified");
-    assert(!!mhIssue, "must-have issue is fired when summary doesn't address all must-haves");
+    assertTrue(!!mhIssue, "must-have issue is fired when summary doesn't address all must-haves");
     assertEq(mhIssue?.severity, "warning", "must-have issue is warning severity");
     assertEq(mhIssue?.scope, "task", "must-have issue scope is task");
-    assert(mhIssue?.message?.includes("3 must-haves") ?? false, "message mentions total must-have count");
-    assert(mhIssue?.message?.includes("only 1") ?? false, "message mentions addressed count");
+    assertTrue(mhIssue?.message?.includes("3 must-haves") ?? false, "message mentions total must-have count");
+    assertTrue(mhIssue?.message?.includes("only 1") ?? false, "message mentions addressed count");
     assertEq(mhIssue?.fixable, false, "must-have issue is not fixable");
 
     rmSync(mhBase, { recursive: true, force: true });
@@ -455,7 +436,7 @@ Discovered an issue.
     writeFileSync(join(mhTDir, "T01-SUMMARY.md"), `---\nid: T01\nparent: S01\nmilestone: M001\n---\n# T01: Implement\n\n## What Happened\nDone.\n`);
 
     const report = await runGSDDoctor(mhBase, { fix: false });
-    assert(
+    assertTrue(
       !report.issues.some(i => i.code === "task_done_must_haves_not_verified"),
       "no must-have issue when task plan file doesn't exist"
     );
@@ -482,7 +463,7 @@ Discovered an issue.
     writeFileSync(join(mhTDir, "T01-SUMMARY.md"), `---\nid: T01\nparent: S01\nmilestone: M001\n---\n# T01: Implement\n\n## What Happened\nDone.\n`);
 
     const report = await runGSDDoctor(mhBase, { fix: false });
-    assert(
+    assertTrue(
       !report.issues.some(i => i.code === "task_done_must_haves_not_verified"),
       "no must-have issue when task plan has no Must-Haves section"
     );
@@ -490,13 +471,7 @@ Discovered an issue.
     rmSync(mhBase, { recursive: true, force: true });
   }
 
-  console.log(`\n${"=".repeat(40)}`);
-  console.log(`Results: ${passed} passed, ${failed} failed`);
-  if (failed > 0) {
-    process.exit(1);
-  } else {
-    console.log("All tests passed ✓");
-  }
+  report();
 }
 
 main().catch((error) => {
