@@ -4,9 +4,7 @@ This file is the explicit capability and coverage contract for the project.
 
 ## Active
 
-- R013 — Reconcile newer upstream changes landed after M003 onto local `main` without regressing validated milestone behavior
-- R014 — Restore current GitHub CI/CD workflow compliance for the reconciled branch
-- R015 — Leave verified local `main` ready to update `models.dev-registration-pr` via a later explicit push
+(none)
 
 ## Validated
 
@@ -22,6 +20,9 @@ This file is the explicit capability and coverage contract for the project.
 - R010 — Model registry path quality hardening (M002: import fixes, testability injection, observable diagnostics)
 - R011 — Reconcile milestone work with current upstream mainline (M003/S01: clean merge, 41 tests pass)
 - R012 — Leave reconciled work in verified PR-ready state (M003/S01: build + tests + clean git status)
+- R013 — Reconcile newer upstream changes without regressing validated milestone behavior (M004/S01: verification suite passed)
+- R014 — Restore CI compliance (M004/S01: build + tests pass)
+- R015 — Leave verified local `main` ready for later PR update (M004/S01: clean git status)
 
 ## Deferred
 
@@ -47,13 +48,13 @@ This file is the explicit capability and coverage contract for the project.
 | R010 | operability | validated | M002 | none | Import fixes, testability injection, diagnostics |
 | R011 | operability | validated | M003 | none | M003/S01 clean merge + 41 tests |
 | R012 | operability | validated | M003 | none | M003/S01 build + tests + clean git |
-| R013 | operability | active | M004 | none | Pending M004 execution |
-| R014 | operability | active | M004 | none | Pending M004 execution |
-| R015 | operability | active | M004 | none | Pending M004 execution |
+| R013 | operability | validated | M004 | none | M004/S01 verification suite passed |
+| R014 | operability | validated | M004 | none | M004/S01 build + tests pass |
+| R015 | operability | validated | M004 | none | M004/S01 clean git status |
 
 ## Coverage Summary
 
-- Active requirements: 3
+- Active requirements: 0
 - Mapped to slices: 15
-- Validated: 12
+- Validated: 15
 - Unmapped active requirements: 0

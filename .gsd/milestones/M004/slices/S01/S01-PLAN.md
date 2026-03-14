@@ -21,21 +21,21 @@
 
 ## Tasks
 
-- [ ] **T01: Populate pi-ai model registry from snapshot** `est:20m`
+- [x] **T01: Populate pi-ai model registry from snapshot** `est:20m`
   - Why: The `pi-ai` model registry is currently empty, causing the TypeScript error when `agent.ts` assigns the default model. Populating it from the snapshot satisfies the type system while preserving the models.dev architecture.
   - Files: `packages/pi-ai/src/models.ts`, `packages/pi-ai/src/models-dev-snapshot.ts`, `packages/pi-ai/src/models-dev-mapper.ts`
   - Do: Import from `models-dev-snapshot.ts` and `models-dev-mapper.ts` at the top of `models.ts`. Initialize the model registry by iterating over the snapshot data, mapping each provider's models to the internal `Model<Api>` format using the mapper, and storing them in the registry. Keep `getModel` return type as `Model<Api> | undefined` to preserve models.dev semantics.
   - Verify: `npm run build -w @gsd/pi-ai` succeeds
   - Done when: Model registry is populated at module load time; `getModel` returns models from snapshot; build passes
 
-- [ ] **T02: Add non-null assertion for default model** `est:5m`
+- [x] **T02: Add non-null assertion for default model** `est:5m`
   - Why: The `agent.ts` default model assignment fails because TypeScript can't guarantee the model exists. Adding a non-null assertion is safe because the model is guaranteed to be in the snapshot.
   - Files: `packages/pi-agent-core/src/agent.ts`
   - Do: On line 105, add the non-null assertion operator (`!`) to the default model assignment. The model "gemini-2.5-flash-lite-preview-06-17" exists in the snapshot, so if it's missing at runtime that's a real error that should surface.
   - Verify: `npm run build -w @gsd/pi-agent-core` succeeds
   - Done when: TypeScript build error is resolved; build passes
 
-- [ ] **T03: Run full verification and record decisions** `est:15m`
+- [x] **T03: Run full verification and record decisions** `est:15m`
   - Why: The research warns that additional failures may surface after the TypeScript error is fixed. Full verification ensures we catch any other issues before declaring the milestone complete.
   - Files: `.gsd/DECISIONS.md`, `.gsd/STATE.md`
   - Do: Run the full verification suite (build, unit tests, scenario tests). If any additional failures surface, investigate and fix. Once all verification passes, record the reconciliation approach in `.gsd/DECISIONS.md` and update `.gsd/STATE.md` to reflect completion.
@@ -48,3 +48,22 @@
 - `packages/pi-agent-core/src/agent.ts`
 - `.gsd/DECISIONS.md`
 - `.gsd/STATE.md`
+
+## Observability / Diagnostics
+
+**Runtime signals:**
+- Model registry is populated synchronously at module load time
+- `getModel(provider, modelId)` returns `Model<Api> | undefined` — `undefined` indicates missing model or empty registry
+- `getProviders()` returns array of registered provider IDs
+
+**How to inspect:**
+- Call `getModel("evroc", "nvidia/Llama-3.3-70B-Instruct-FP8")` to verify registry is populated
+- Call `getProviders()` to see all registered providers from snapshot
+
+**Failure states:**
+- Empty registry: snapshot file corrupted, mapper failure, or import error
+- Missing model: model ID not in snapshot, typo in model ID, or provider mismatch
+
+**Redaction:**
+- No secrets involved — snapshot contains public model metadata only
+

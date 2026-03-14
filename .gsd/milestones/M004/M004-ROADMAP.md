@@ -47,7 +47,7 @@ This milestone is complete only when all are true:
 
 ## Slices
 
-- [ ] **S01: CI Failure Fix and Verification** `risk:high` `depends:[]`
+- [x] **S01: CI Failure Fix and Verification** `risk:high` `depends:[]`
   > After this: Local build and test suite pass; the `pi-ai` model registry is populated from snapshot at module load time; the TypeScript error in `agent.ts` is resolved; local `main` is verified and ready for later PR update
 
 ## Boundary Map

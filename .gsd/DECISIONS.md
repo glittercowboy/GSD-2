@@ -31,3 +31,5 @@
 | D023 | M003/S01 | process | Merge strategy | Merge over rebase | Preserves milestone branch history and makes reconciliation explicit; rebase would rewrite commit history and obscure the merge boundary | No |
 | D024 | M003/S01 | process | Conflict resolution approach | Favor models.dev architecture | When conflicts occurred in architecture files, preserved the M001/M002 models.dev design over upstream changes to maintain architectural consistency | No |
 | D025 | M003/S01 | process | Merge commit traceability | Record merge commit hash ded3ac3b in decisions | Provides git-level traceability for the upstream reconciliation point in S01 | No |
+| D026 | M004/S01 | arch | Registry initialization | Populate from models.dev snapshot at module load time | Synchronous initialization ensures registry is ready before first use; preserves models.dev architecture (no reversion to models.generated.ts) | No |
+| D027 | M004/S01 | impl | Non-null assertion for default model | Non-null assertion (!) in agent.ts | TypeScript requires explicit handling when default model is known to exist; assertion is safe given registry is populated at load time | No |

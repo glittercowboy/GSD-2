@@ -13,7 +13,7 @@ The model registry must stay current with available models, pricing, and capabil
 - **M001 complete:** Model registry fetches from models.dev with 12h cache, fallback to bundled snapshot, local overrides preserved
 - **M002 complete:** Build/test infrastructure repaired; production-like scenario tests prove real ModelRegistry startup behavior; live verification in main suite
 - **M003 complete:** Local `main` has been reconciled with upstream `origin/main`; merge commit `ded3ac3b` is recorded, all 41 verification tests passed, and the branch is locally PR-ready
-- **M004 queued:** Newer upstream drift and CI restoration remain the active follow-up
+- **M004 complete:** Local `main` verified and ready for later PR update; build/test suite passes; model registry populated from snapshot
 - Models loaded at runtime from models.dev API or bundled snapshot (2311KB, 102 providers)
 - Legacy `packages/pi-ai/src/models.generated.ts` deleted
 - Users can override/add models via `~/.gsd/agent/models.json`
@@ -41,4 +41,5 @@ See `.gsd/REQUIREMENTS.md` for the explicit capability contract, requirement sta
   - [x] S03: Live models.dev Verification
 - [x] M003: Upstream Reconciliation and PR Preparation — Complete
   - [x] S01: Upstream Merge and Verification
-- [ ] M004: Post-M003 Upstream Drift Reconciliation and CI Restoration — Queued
+- [x] M004: Post-M003 Upstream Drift Reconciliation and CI Restoration — Complete
+  - [x] S01: CI Failure Fix and Verification
