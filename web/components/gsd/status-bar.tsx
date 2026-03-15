@@ -1,6 +1,7 @@
 "use client"
 
 import { GitBranch, Cpu, DollarSign, Clock, Zap, AlertTriangle, Wifi, Info, LifeBuoy } from "lucide-react"
+import { cn } from "@/lib/utils"
 import {
   formatCost,
   formatDuration,
@@ -40,6 +41,7 @@ export function StatusBar() {
   const titleOverride = workspace.titleOverride?.trim() || null
   const statusTexts = workspace.statusTexts
   const recoverySummary = workspace.live.recoverySummary
+  const validationCount = getLiveWorkspaceIndex(workspace)?.validationIssues.length ?? 0
   const statusTextEntries = Object.entries(statusTexts)
   const latestStatusText = statusTextEntries.length > 0 ? statusTextEntries[statusTextEntries.length - 1][1] : null
 
@@ -63,6 +65,13 @@ export function StatusBar() {
           <span className="truncate">
             {recoverySummary.retryInProgress ? `Retry ${Math.max(1, recoverySummary.retryAttempt)}` : recoverySummary.isCompacting ? "Compacting" : recoverySummary.freshness}
           </span>
+        </div>
+        <div
+          className={cn("hidden items-center gap-1.5 xl:flex", validationCount > 0 ? "text-amber-300" : "text-muted-foreground")}
+          data-testid="status-bar-validation-count"
+        >
+          <AlertTriangle className="h-3 w-3 shrink-0" />
+          <span>{validationCount} issue{validationCount === 1 ? "" : "s"}</span>
         </div>
         {visibleError && (
           <div className="hidden max-w-sm items-center gap-1.5 truncate text-destructive lg:flex" data-testid="status-bar-error">
