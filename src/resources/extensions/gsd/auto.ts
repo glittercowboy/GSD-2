@@ -69,7 +69,7 @@ import {
   getProjectTotals, formatCost, formatTokenCount,
 } from "./metrics.js";
 import { dirname, join } from "node:path";
-import { readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync, renameSync } from "node:fs";
+import { readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync, renameSync, statSync } from "node:fs";
 import { execSync, execFileSync } from "node:child_process";
 import {
   autoCommitCurrentBranch,
@@ -886,6 +886,43 @@ export async function startAuto(
 
   // Self-heal: clear stale runtime records where artifacts already exist
   await selfHealRuntimeRecords(base, ctx);
+
+  // Self-heal: remove stale .git/index.lock from prior crash.
+  // A stale lock file blocks all git operations (commit, merge, checkout).
+  // Only remove if older than 60 seconds (not from a concurrent process).
+  try {
+    const gitLockFile = join(base, ".git", "index.lock");
+    if (existsSync(gitLockFile)) {
+      const lockAge = Date.now() - statSync(gitLockFile).mtimeMs;
+      if (lockAge > 60_000) {
+        unlinkSync(gitLockFile);
+        ctx.ui.notify("Removed stale .git/index.lock from prior crash.", "info");
+      }
+    }
+  } catch { /* non-fatal */ }
+
+  // Pre-flight: validate milestone queue for multi-milestone runs.
+  // Warn about issues that will cause auto-mode to pause or block.
+  try {
+    const msDir = join(base, ".gsd", "milestones");
+    if (existsSync(msDir)) {
+      const milestoneIds = readdirSync(msDir, { withFileTypes: true })
+        .filter(d => d.isDirectory() && /^M\d{3}/.test(d.name))
+        .map(d => d.name.match(/^(M\d{3})/)?.[1] ?? d.name);
+      if (milestoneIds.length > 1) {
+        const issues: string[] = [];
+        for (const id of milestoneIds) {
+          const draft = resolveMilestoneFile(base, id, "CONTEXT-DRAFT");
+          if (draft) issues.push(`${id}: has CONTEXT-DRAFT.md (will pause for discussion)`);
+        }
+        if (issues.length > 0) {
+          ctx.ui.notify(`Pre-flight: ${milestoneIds.length} milestones queued.\n${issues.map(i => `  ⚠ ${i}`).join("\n")}`, "warning");
+        } else {
+          ctx.ui.notify(`Pre-flight: ${milestoneIds.length} milestones queued. All have full context.`, "info");
+        }
+      }
+    }
+  } catch { /* non-fatal — pre-flight should never block auto-mode */ }
 
   // Dispatch the first unit
   await dispatchNextUnit(ctx, pi);
@@ -2244,6 +2281,29 @@ async function dispatchNextUnit(
       await new Promise(r => setImmediate(r));
       await dispatchNextUnit(ctx, pi);
       return;
+    }
+
+    // Last resort for complete-milestone: generate stub summary to unblock pipeline.
+    // All slices are done (otherwise we wouldn't be in completing-milestone phase),
+    // but the LLM failed to write the summary N times. A stub lets the pipeline advance.
+    if (unitType === "complete-milestone") {
+      try {
+        const mPath = resolveMilestonePath(basePath, unitId);
+        if (mPath) {
+          const stubPath = join(mPath, `${unitId}-SUMMARY.md`);
+          if (!existsSync(stubPath)) {
+            writeFileSync(stubPath, `# ${unitId} Summary\n\nAuto-generated stub — milestone tasks completed but summary generation failed after ${prevCount + 1} attempts.\nReview and replace this stub with a proper summary.\n`);
+            ctx.ui.notify(`Generated stub summary for ${unitId} to unblock pipeline. Review later.`, "warning");
+            persistCompletedKey(basePath, dispatchKey);
+            completedKeySet.add(dispatchKey);
+            unitDispatchCount.delete(dispatchKey);
+            invalidateStateCache();
+            await new Promise(r => setImmediate(r));
+            await dispatchNextUnit(ctx, pi);
+            return;
+          }
+        }
+      } catch { /* non-fatal — fall through to normal stop */ }
     }
 
     const expected = diagnoseExpectedArtifact(unitType, unitId, basePath);
