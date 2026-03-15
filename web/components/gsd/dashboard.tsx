@@ -12,10 +12,15 @@ import {
   Cpu,
   Wrench,
   MessageSquare,
+  Loader2,
+  Plus,
+  ArrowRightLeft,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import {
   useGSDWorkspaceState,
+  useGSDWorkspaceActions,
+  buildPromptCommand,
   formatDuration,
   formatCost,
   formatTokens,
@@ -25,8 +30,10 @@ import {
   getModelLabel,
   type WorkspaceTerminalLine,
   type TerminalLineType,
+  type BootResumableSession,
 } from "@/lib/gsd-workspace-store"
 import { getTaskStatus, type ItemStatus } from "@/lib/workspace-status"
+import { deriveWorkflowAction } from "@/lib/workflow-actions"
 
 interface MetricCardProps {
   label: string
@@ -74,8 +81,22 @@ function activityDotColor(type: TerminalLineType): string {
   }
 }
 
+function formatRelativeTime(isoDate: string): string {
+  const now = Date.now()
+  const then = new Date(isoDate).getTime()
+  const diffMs = now - then
+  if (diffMs < 60_000) return "just now"
+  const minutes = Math.floor(diffMs / 60_000)
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.floor(hours / 24)
+  return `${days}d ago`
+}
+
 export function Dashboard() {
   const state = useGSDWorkspaceState()
+  const { sendCommand, refreshBoot } = useGSDWorkspaceActions()
   const boot = state.boot
   const workspace = boot?.workspace ?? null
   const auto = boot?.auto ?? null
@@ -97,6 +118,37 @@ export function Dashboard() {
   const branch = getCurrentBranch(workspace)
   const model = getModelLabel(bridge)
   const isAutoActive = auto?.active ?? false
+
+  // Workflow action derivation
+  const workflowAction = deriveWorkflowAction({
+    phase: workspace?.active.phase ?? "pre-planning",
+    autoActive: auto?.active ?? false,
+    autoPaused: auto?.paused ?? false,
+    onboardingLocked: boot?.onboarding.locked ?? false,
+    commandInFlight: state.commandInFlight,
+    bootStatus: state.bootStatus,
+    hasMilestones: (workspace?.milestones.length ?? 0) > 0,
+  })
+
+  const handleWorkflowAction = (command: string) => {
+    void sendCommand(buildPromptCommand(command, bridge))
+  }
+
+  const handleSessionSwitch = async (session: BootResumableSession) => {
+    const result = await sendCommand({ type: "switch_session", sessionPath: session.path })
+    if (result?.success !== false) {
+      await refreshBoot({ soft: true })
+    }
+  }
+
+  const handleNewSession = async () => {
+    const result = await sendCommand({ type: "new_session" })
+    if (result?.success !== false) {
+      await refreshBoot({ soft: true })
+    }
+  }
+
+  const resumableSessions = boot?.resumableSessions ?? []
 
   // Last 6 terminal lines for recent activity
   const recentLines: WorkspaceTerminalLine[] = (state.terminalLines ?? []).slice(-6)
@@ -132,6 +184,56 @@ export function Dashboard() {
       </div>
 
       <div className="flex-1 overflow-y-auto p-6">
+        {/* Workflow Action Bar */}
+        <div className="mb-6 flex items-center gap-3 rounded-md border border-border bg-card px-4 py-3" data-testid="dashboard-action-bar">
+          {workflowAction.primary && (
+            <button
+              onClick={() => handleWorkflowAction(workflowAction.primary!.command)}
+              disabled={workflowAction.disabled}
+              className={cn(
+                "inline-flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors",
+                workflowAction.primary.variant === "destructive"
+                  ? "bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  : "bg-primary text-primary-foreground hover:bg-primary/90",
+                workflowAction.disabled && "cursor-not-allowed opacity-50",
+              )}
+              title={workflowAction.disabledReason}
+            >
+              {state.commandInFlight ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Play className="h-4 w-4" />
+              )}
+              {workflowAction.primary.label}
+            </button>
+          )}
+          {workflowAction.secondaries.map((action) => (
+            <button
+              key={action.command}
+              onClick={() => handleWorkflowAction(action.command)}
+              disabled={workflowAction.disabled}
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-3 py-2 text-sm font-medium transition-colors hover:bg-accent",
+                workflowAction.disabled && "cursor-not-allowed opacity-50",
+              )}
+              title={workflowAction.disabledReason}
+            >
+              {action.label}
+            </button>
+          ))}
+          {state.commandInFlight && (
+            <span className="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Sending…
+            </span>
+          )}
+          {workflowAction.disabledReason && !state.commandInFlight && (
+            <span className="ml-auto text-xs text-muted-foreground">
+              {workflowAction.disabledReason}
+            </span>
+          )}
+        </div>
+
         {/* Metrics Grid */}
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
           <MetricCard
@@ -256,6 +358,67 @@ export function Dashboard() {
             </div>
           </div>
         </div>
+
+        {/* Session Picker */}
+        {resumableSessions.length > 0 && (
+          <div className="mt-6 rounded-md border border-border bg-card" data-testid="dashboard-session-picker">
+            <div className="flex items-center justify-between border-b border-border px-4 py-3">
+              <h2 className="text-sm font-semibold">Sessions</h2>
+              <button
+                onClick={() => void handleNewSession()}
+                disabled={workflowAction.disabled}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1 text-xs font-medium transition-colors hover:bg-accent",
+                  workflowAction.disabled && "cursor-not-allowed opacity-50",
+                )}
+              >
+                <Plus className="h-3 w-3" />
+                New Session
+              </button>
+            </div>
+            <div className="divide-y divide-border">
+              {resumableSessions.map((session) => (
+                <div
+                  key={session.id}
+                  className={cn(
+                    "flex items-center gap-3 px-4 py-2.5",
+                    session.isActive && "bg-accent/20",
+                  )}
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium truncate">
+                        {session.name || session.id}
+                      </span>
+                      {session.isActive && (
+                        <span className="flex-shrink-0 rounded-full bg-success/20 px-2 py-0.5 text-[10px] font-medium text-success">
+                          Active
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                      <span>{session.messageCount} messages</span>
+                      <span>{formatRelativeTime(session.modifiedAt)}</span>
+                    </div>
+                  </div>
+                  {!session.isActive && (
+                    <button
+                      onClick={() => void handleSessionSwitch(session)}
+                      disabled={workflowAction.disabled}
+                      className={cn(
+                        "inline-flex items-center gap-1 rounded-md border border-border bg-background px-2.5 py-1 text-xs font-medium transition-colors hover:bg-accent",
+                        workflowAction.disabled && "cursor-not-allowed opacity-50",
+                      )}
+                    >
+                      <ArrowRightLeft className="h-3 w-3" />
+                      Switch
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Recent Activity */}
         <div className="mt-6 rounded-md border border-border bg-card">

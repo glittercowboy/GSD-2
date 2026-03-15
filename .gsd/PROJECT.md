@@ -15,7 +15,9 @@ A user can run `gsd --web`, complete setup, and do the full GSD workflow in a sn
 - `src/web/bridge-service.ts` plus `web/app/api/boot|session/command|session/events` expose a live same-origin browser bridge backed by real GSD session state.
 - S02 is complete: browser onboarding uses shared auth truth, same-origin onboarding routes, server-side command gating, and bridge-auth refresh.
 - S03 is complete: the workspace store has typed live-interaction state, the terminal streams agent output with steer/abort controls, and a focused Sheet side panel handles blocking UI requests (select, confirm, input, editor) with multi-request queue support.
-- `web/` uses the preserved Next.js skin with real onboarding + live-interaction state rather than mock data.
+- S04 is complete: dashboard, roadmap, files, and activity views show real current-project data instead of mock values.
+- S05 is complete: dashboard action bar, session picker, and sidebar quick-action button let users start/resume/stop work and switch sessions from visible UI controls backed by real store state.
+- `web/` uses the preserved Next.js skin with real onboarding, live-interaction state, project surfaces, and workflow controls rather than mock data.
 - The packaged `gsd --web` proof passes end-to-end in automated coverage, and the standalone host builds cleanly.
 
 ## Architecture / Key Patterns

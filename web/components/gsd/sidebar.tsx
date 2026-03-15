@@ -17,6 +17,7 @@ import {
   Activity,
   Columns2,
   AlertTriangle,
+  Loader2,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import {
@@ -26,8 +27,11 @@ import {
   getVisibleWorkspaceError,
   shortenPath,
   useGSDWorkspaceState,
+  useGSDWorkspaceActions,
+  buildPromptCommand,
 } from "@/lib/gsd-workspace-store"
 import { getMilestoneStatus, getSliceStatus, getTaskStatus, type ItemStatus } from "@/lib/workspace-status"
+import { deriveWorkflowAction } from "@/lib/workflow-actions"
 
 const StatusIcon = ({ status }: { status: ItemStatus }) => {
   if (status === "done") {
@@ -46,6 +50,7 @@ interface SidebarProps {
 
 export function Sidebar({ activeView, onViewChange }: SidebarProps) {
   const workspace = useGSDWorkspaceState()
+  const { sendCommand } = useGSDWorkspaceActions()
   const [expandedMilestones, setExpandedMilestones] = useState<string[]>([])
   const [expandedSlices, setExpandedSlices] = useState<string[]>([])
 
@@ -173,6 +178,43 @@ export function Sidebar({ activeView, onViewChange }: SidebarProps) {
             )}
           </div>
         </div>
+
+        {/* Quick Action Button */}
+        {(() => {
+          const wa = deriveWorkflowAction({
+            phase: workspace.boot?.workspace.active.phase ?? "pre-planning",
+            autoActive: workspace.boot?.auto.active ?? false,
+            autoPaused: workspace.boot?.auto.paused ?? false,
+            onboardingLocked: workspace.boot?.onboarding.locked ?? false,
+            commandInFlight: workspace.commandInFlight,
+            bootStatus: workspace.bootStatus,
+            hasMilestones: (workspace.boot?.workspace.milestones.length ?? 0) > 0,
+          })
+          if (!wa.primary) return null
+          return (
+            <div className="border-b border-border px-3 py-2.5" data-testid="sidebar-quick-action">
+              <button
+                onClick={() => void sendCommand(buildPromptCommand(wa.primary!.command, workspace.boot?.bridge ?? null))}
+                disabled={wa.disabled}
+                className={cn(
+                  "flex w-full items-center justify-center gap-2 rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
+                  wa.primary.variant === "destructive"
+                    ? "bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                    : "bg-primary text-primary-foreground hover:bg-primary/90",
+                  wa.disabled && "cursor-not-allowed opacity-50",
+                )}
+                title={wa.disabledReason}
+              >
+                {workspace.commandInFlight ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Play className="h-3.5 w-3.5" />
+                )}
+                {wa.primary.label}
+              </button>
+            </div>
+          )
+        })()}
 
         <div className="flex-1 overflow-y-auto py-1">
           <div className="px-2 py-1.5">

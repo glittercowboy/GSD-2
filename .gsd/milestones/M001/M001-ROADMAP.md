@@ -65,7 +65,7 @@ This milestone is complete only when all are true:
 - [x] **S04: Current-project state surfaces** `risk:medium` `depends:[S01,S03]`
   > After this: dashboard, roadmap, files, and activity views show real current-project data and live session context rather than mock values.
 
-- [ ] **S05: Start/resume workflow controls** `risk:medium` `depends:[S03,S04]`
+- [x] **S05: Start/resume workflow controls** `risk:medium` `depends:[S03,S04]`
   > After this: users can start new work or resume interrupted work from the skin’s controls instead of typing hidden terminal commands.
 
 - [ ] **S06: Power mode + continuity + failure visibility** `risk:medium` `depends:[S03,S04,S05]`
