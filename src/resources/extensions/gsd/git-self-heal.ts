@@ -2,8 +2,8 @@
  * git-self-heal.ts — Automated git state recovery utilities.
  *
  * Four synchronous functions for recovering from broken git state
- * during auto-mode operations. Uses only `git reset --hard HEAD` —
- * never `git clean` (which would delete untracked .gsd/ dirs).
+ * during auto-mode operations. Uses `git reset --hard HEAD` and
+ * targeted `git clean` on runtime paths before branch checkout.
  *
  * Observability: Each function returns structured results describing
  * what actions were taken. `formatGitError` maps raw git errors to
@@ -13,7 +13,7 @@
 import { execSync } from "node:child_process";
 import { existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { MergeConflictError } from "./git-service.js";
+import { MergeConflictError, RUNTIME_EXCLUSION_PATHS } from "./git-service.js";
 
 // Re-export for consumers
 export { MergeConflictError };
@@ -143,6 +143,18 @@ export function withMergeHeal<T>(cwd: string, mergeFn: () => T): T {
  */
 export function recoverCheckout(cwd: string, targetBranch: string): void {
   execSync("git reset --hard HEAD", { cwd, stdio: "pipe" });
+
+  // Clean untracked runtime files that would block checkout when the target
+  // branch tracks them (e.g. .gsd/STATE.md diverging between branches).
+  // Mirrors GitServiceImpl.discardUntrackedRuntimeFiles().
+  try {
+    execSync(
+      `git clean -fdx -- ${RUNTIME_EXCLUSION_PATHS.join(" ")}`,
+      { cwd, stdio: "pipe" },
+    );
+  } catch {
+    // best-effort — continue even if clean fails
+  }
 
   try {
     execSync(`git checkout ${targetBranch}`, { cwd, stdio: "pipe" });

@@ -206,6 +206,36 @@ console.log("── recoverCheckout ──");
   }
 }
 
+// Test: untracked runtime files don't block checkout when target branch tracks them
+{
+  const dir = makeTempRepo();
+  try {
+    // Create .gsd/STATE.md on a branch and commit it (tracked)
+    execSync("git checkout -b slice-branch", { cwd: dir, stdio: "pipe" });
+    mkdirSync(join(dir, ".gsd"), { recursive: true });
+    writeFileSync(join(dir, ".gsd", "STATE.md"), "slice state\n");
+    execSync("git add -A && git commit -m \"add STATE.md\"", { cwd: dir, stdio: "pipe" });
+
+    // Go back to main — STATE.md doesn't exist here
+    execSync("git checkout main", { cwd: dir, stdio: "pipe" });
+
+    // Create an untracked .gsd/STATE.md on disk (simulates runtime bookkeeping)
+    mkdirSync(join(dir, ".gsd"), { recursive: true });
+    writeFileSync(join(dir, ".gsd", "STATE.md"), "runtime state\n");
+
+    // Without the fix, this checkout would fail because git refuses to
+    // overwrite an untracked file with a tracked one from the target branch.
+    recoverCheckout(dir, "slice-branch");
+
+    const branch = execSync("git branch --show-current", { cwd: dir, encoding: "utf-8" }).trim();
+    assert.strictEqual(branch, "slice-branch", "should be on slice-branch after recovery");
+
+    console.log("  ✓ cleans untracked runtime files before checkout");
+  } finally {
+    cleanup(dir);
+  }
+}
+
 // ─── formatGitError ──────────────────────────────────────────────────
 
 console.log("── formatGitError ──");
