@@ -28,7 +28,7 @@ import {
   clearPathCache,
 } from "./paths.js";
 import { parseRoadmap } from "./files.js";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, renameSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 // ─── Artifact Resolution & Verification ───────────────────────────────────────
@@ -278,7 +278,6 @@ export function persistCompletedKey(base: string, key: string): void {
     keys.push(key);
     // Atomic write: tmp file + rename prevents partial writes on crash
     const tmpFile = file + ".tmp";
-    const { renameSync } = require("node:fs");
     writeFileSync(tmpFile, JSON.stringify(keys), "utf-8");
     renameSync(tmpFile, file);
   }
