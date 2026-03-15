@@ -6,6 +6,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.13.1] - 2026-03-15
+
+### Fixed
+- Windows: multi-line commit messages in `mergeSliceToMilestone` broke shell parsing — switched to `execFileSync` with argument arrays
+- Windows: single-quoted git arguments and bash-only redirects in test files
+- Windows: worktree path normalization for `shouldUseWorktreeIsolation` and stale branch detection
+
 ## [2.13.0] - 2026-03-15
 
 ### Added
@@ -600,7 +607,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 - License updated to MIT
 
-[Unreleased]: https://github.com/gsd-build/gsd-2/compare/v2.13.0...HEAD
+[Unreleased]: https://github.com/gsd-build/gsd-2/compare/v2.13.1...HEAD
+[2.13.1]: https://github.com/gsd-build/gsd-2/compare/v2.13.0...v2.13.1
 [2.13.0]: https://github.com/gsd-build/gsd-2/compare/v2.12.0...v2.13.0
 [2.12.0]: https://github.com/gsd-build/gsd-2/compare/v2.11.1...v2.12.0
 [2.11.1]: https://github.com/gsd-build/gsd-2/compare/v2.11.0...v2.11.1

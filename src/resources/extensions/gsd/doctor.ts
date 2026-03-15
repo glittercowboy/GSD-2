@@ -1,6 +1,6 @@
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 
 import { loadFile, parsePlan, parseRoadmap, parseSummary, saveFile, parseTaskPlanMustHaves, countMustHavesMentionedInSummary } from "./files.js";
 import { resolveMilestoneFile, resolveMilestonePath, resolveSliceFile, resolveSlicePath, resolveTaskFile, resolveTaskFiles, resolveTasksDir, milestonesDir, gsdRoot, relMilestoneFile, relSliceFile, relTaskFile, relSlicePath, relGsdRootFile, resolveGsdRootFile } from "./paths.js";
@@ -31,7 +31,8 @@ export type DoctorIssueCode =
   | "orphaned_auto_worktree"
   | "stale_milestone_branch"
   | "corrupt_merge_state"
-  | "tracked_runtime_files";
+  | "tracked_runtime_files"
+  | "legacy_slice_branches";
 
 export interface DoctorIssue {
   severity: DoctorSeverity;
@@ -511,7 +512,7 @@ async function checkGitHealth(
         if (shouldFix("orphaned_auto_worktree")) {
           // Never remove a worktree matching current working directory
           const cwd = process.cwd();
-          if (wt.path === cwd || cwd.startsWith(wt.path + "/")) {
+          if (wt.path === cwd || cwd.startsWith(wt.path + sep)) {
             fixesApplied.push(`skipped removing worktree at ${wt.path} (is cwd)`);
           } else {
             try {
@@ -527,7 +528,9 @@ async function checkGitHealth(
 
     // ── Stale milestone branches ─────────────────────────────────────────
     try {
-      const branchOutput = execSync("git branch --list 'milestone/*'", { cwd: basePath, stdio: "pipe" }).toString().trim();
+      // Use unquoted glob — single quotes are not interpreted by cmd.exe on Windows,
+      // causing the pattern to match literally instead of as a glob.
+      const branchOutput = execSync("git branch --list milestone/*", { cwd: basePath, stdio: "pipe" }).toString().trim();
       if (branchOutput) {
         const branches = branchOutput.split("\n").map(b => b.trim().replace(/^\*\s*/, "")).filter(Boolean);
         const worktreeBranches = new Set(milestoneWorktrees.map(wt => wt.branch));
@@ -639,6 +642,28 @@ async function checkGitHealth(
     }
   } catch {
     // git ls-files failed — skip
+  }
+
+  // ── Legacy slice branches ──────────────────────────────────────────────
+  try {
+    const sliceBranches = execSync('git branch --format="%(refname:short)" --list "gsd/*/*"', {
+      cwd: basePath,
+      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf-8",
+    }).trim();
+    if (sliceBranches) {
+      const branchList = sliceBranches.split("\n").map(b => b.trim()).filter(Boolean);
+      issues.push({
+        severity: "info",
+        code: "legacy_slice_branches",
+        scope: "project",
+        unitId: "project",
+        message: `${branchList.length} legacy slice branch(es) found: ${branchList.slice(0, 3).join(", ")}${branchList.length > 3 ? "..." : ""}. These are no longer used (branchless architecture). Delete with: git branch -D ${branchList.join(" ")}`,
+        fixable: false,
+      });
+    }
+  } catch {
+    // git branch list failed — skip
   }
 }
 
