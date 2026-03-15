@@ -383,6 +383,7 @@ export async function buildResearchMilestonePrompt(mid: string, midTitle: string
 
   const outputRelPath = relMilestoneFile(base, mid, "RESEARCH");
   return loadPrompt("research-milestone", {
+    workingDirectory: base,
     milestoneId: mid, milestoneTitle: midTitle,
     milestonePath: relMilestonePath(base, mid),
     contextPath: contextRel,
@@ -422,6 +423,7 @@ export async function buildPlanMilestonePrompt(mid: string, midTitle: string, ba
   const outputRelPath = relMilestoneFile(base, mid, "ROADMAP");
   const secretsOutputPath = relMilestoneFile(base, mid, "SECRETS");
   return loadPrompt("plan-milestone", {
+    workingDirectory: base,
     milestoneId: mid, milestoneTitle: midTitle,
     milestonePath: relMilestonePath(base, mid),
     contextPath: contextRel,
@@ -667,6 +669,7 @@ export async function buildCompleteMilestonePrompt(
   const milestoneSummaryPath = `${relMilestonePath(base, mid)}/${mid}-SUMMARY.md`;
 
   return loadPrompt("complete-milestone", {
+    workingDirectory: base,
     milestoneId: mid,
     milestoneTitle: midTitle,
     roadmapPath: roadmapRel,
@@ -715,6 +718,7 @@ export async function buildReplanSlicePrompt(
   const replanPath = `${relSlicePath(base, mid, sid)}/${sid}-REPLAN.md`;
 
   return loadPrompt("replan-slice", {
+    workingDirectory: base,
     milestoneId: mid,
     sliceId: sid,
     sliceTitle: sTitle,
@@ -748,6 +752,7 @@ export async function buildRunUatPrompt(
   const uatType = extractUatType(uatContent) ?? "human-experience";
 
   return loadPrompt("run-uat", {
+    workingDirectory: base,
     milestoneId: mid,
     sliceId,
     uatPath,
@@ -780,6 +785,7 @@ export async function buildReassessRoadmapPrompt(
   const assessmentPath = relSliceFile(base, mid, completedSliceId, "ASSESSMENT");
 
   return loadPrompt("reassess-roadmap", {
+    workingDirectory: base,
     milestoneId: mid,
     milestoneTitle: midTitle,
     completedSliceId,
