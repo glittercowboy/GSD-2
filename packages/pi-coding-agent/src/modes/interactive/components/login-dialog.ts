@@ -1,6 +1,7 @@
 // GSD Login Dialog Component — OAuth login flow UI
 // Copyright (c) 2026 Jeremy McSpadden <jeremy@fluxlabs.net>
 import { getOAuthProviders } from "@gsd/pi-ai/oauth";
+import { SNAPSHOT } from "@gsd/pi-ai";
 import { Container, type Focusable, getEditorKeybindings, Input, Spacer, Text, type TUI } from "@gsd/pi-tui";
 import { exec } from "child_process";
 import { theme } from "../theme/theme.js";
@@ -43,7 +44,16 @@ export class LoginDialogComponent extends Container implements Focusable {
 		this.tui = tui;
 
 		const providerInfo = getOAuthProviders().find((p) => p.id === providerId);
-		const providerName = providerInfo?.name || providerId;
+		let providerName = providerInfo?.name;
+
+		if (!providerName) {
+			const modelsDevProvider = SNAPSHOT[providerId];
+			if (modelsDevProvider) {
+				providerName = modelsDevProvider.name;
+			}
+		}
+
+		providerName = providerName || providerId;
 
 		// Top border
 		this.addChild(new DynamicBorder());

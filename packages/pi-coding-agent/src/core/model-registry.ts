@@ -255,6 +255,9 @@ export class ModelRegistry {
 
 		// Fire async refresh to keep cache fresh (fire-and-forget)
 		this.refreshFromModelsDev();
+
+		// Preload git credentials (async fire-and-forget)
+		this.authStorage.preloadFromKeyring();
 	}
 
 	/**
@@ -296,8 +299,42 @@ export class ModelRegistry {
 			// Keep built-in models even if custom models failed to load
 		}
 
-		const builtInModels = this.loadBuiltInModels(overrides, modelOverrides);
+		let builtInModels = this.loadBuiltInModels(overrides, modelOverrides);
+
+		// Identify duplicate baseUrls. We assume builtInModels contains both pi.dev and models.dev providers
+		// (Wait, `builtInModels` comes entirely from `mapToModelRegistry(cache.data)` if cache hits).
+		// If `loadBuiltInModels` only loads from `models.dev`, where does `pi.dev` come from?
+
 		let combined = this.mergeCustomModels(builtInModels, customModels);
+
+		// Remove duplicate providers by baseUrl, preferring models.dev
+		let modelsDevProviderIds = new Set<string>();
+		if (SNAPSHOT) {
+			modelsDevProviderIds = new Set(Object.keys(SNAPSHOT));
+		}
+		const uniqueBaseUrls = new Map<string, string>(); // baseUrl -> provider
+
+		for (const model of combined) {
+			if (model.baseUrl && model.provider !== "custom-openai") {
+				const currentProvider = uniqueBaseUrls.get(model.baseUrl);
+				if (!currentProvider) {
+					uniqueBaseUrls.set(model.baseUrl, model.provider);
+				} else if (modelsDevProviderIds.has(model.provider) && !modelsDevProviderIds.has(currentProvider)) {
+					// Prefer models.dev provider
+					uniqueBaseUrls.set(model.baseUrl, model.provider);
+				}
+			}
+		}
+
+		combined = combined.filter((m) => {
+			if (m.baseUrl && m.provider !== "custom-openai") {
+				const preferredProvider = uniqueBaseUrls.get(m.baseUrl);
+				if (preferredProvider && preferredProvider !== m.provider) {
+					return false; // Filter out the pi.dev equivalent
+				}
+			}
+			return true;
+		});
 
 		// Let OAuth providers modify their models (e.g., update baseUrl)
 		for (const oauthProvider of this.authStorage.getOAuthProviders()) {
@@ -322,13 +359,8 @@ export class ModelRegistry {
 			return this.applyOverridesToModels(mapToModelRegistry(cache.data), overrides, modelOverrides);
 		}
 
-		// Cache miss - try snapshot as intermediate fallback
-		if (SNAPSHOT && Object.keys(SNAPSHOT).length > 0) {
-			// Snapshot available - use it with overrides applied
-			return this.applyOverridesToModels(mapToModelRegistry(SNAPSHOT), overrides, modelOverrides);
-		}
-
-		// Snapshot unavailable - fall back to static MODELS
+		// Since we use models.dev, rely on the SNAPSHOT exclusively if there's no cache.
+		// (getProviders now resolves directly from models.dev SNAPSHOT in pi-ai)
 		return this.applyOverridesToModels(
 			getProviders().flatMap((provider) => {
 				const models = getModels(provider as KnownProvider) as Model<Api>[];

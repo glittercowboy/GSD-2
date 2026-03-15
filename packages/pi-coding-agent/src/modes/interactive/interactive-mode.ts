@@ -3739,10 +3739,10 @@ export class InteractiveMode {
 		if (mode === "logout") {
 			const providers = this.session.modelRegistry.authStorage.list();
 			const loggedInProviders = providers.filter(
-				(p) => this.session.modelRegistry.authStorage.get(p)?.type === "oauth",
+				(p) => this.session.modelRegistry.authStorage.get(p) !== undefined,
 			);
 			if (loggedInProviders.length === 0) {
-				this.showStatus("No OAuth providers logged in. Use /login first.");
+				this.showStatus("No providers logged in. Use /login first.");
 				return;
 			}
 		}
@@ -3755,13 +3755,18 @@ export class InteractiveMode {
 					done();
 
 					if (mode === "login") {
-						await this.showLoginDialog(providerId);
+						const isOAuth = this.session.modelRegistry.authStorage.getOAuthProviders().some((p) => p.id === providerId);
+						if (isOAuth) {
+							await this.showLoginDialog(providerId);
+						} else {
+							await this.showApiKeyLoginDialog(providerId);
+						}
 					} else {
 						// Logout flow
-						const providerInfo = this.session.modelRegistry.authStorage
+						const oauthProviderInfo = this.session.modelRegistry.authStorage
 							.getOAuthProviders()
 							.find((p) => p.id === providerId);
-						const providerName = providerInfo?.name || providerId;
+						const providerName = oauthProviderInfo?.name || providerId;
 
 						try {
 							this.session.modelRegistry.authStorage.logout(providerId);
@@ -3795,6 +3800,52 @@ export class InteractiveMode {
 			);
 			return { component: selector, focus: selector };
 		});
+	}
+
+	private async showApiKeyLoginDialog(providerId: string): Promise<void> {
+		const providerName = providerId;
+
+		const dialog = new LoginDialogComponent(this.ui, providerId, (_success, _message) => {
+			// Handled
+		});
+
+		this.editorContainer.clear();
+		this.editorContainer.addChild(dialog);
+		this.ui.setFocus(dialog);
+		this.ui.requestRender();
+
+		const restoreEditor = () => {
+			dialog.dispose();
+			this.editorContainer.clear();
+			this.editorContainer.addChild(this.editor);
+			this.ui.setFocus(this.editor);
+			this.ui.requestRender();
+		};
+
+		try {
+			const apiKey = await dialog.showPrompt(`Enter API key for ${providerName}`);
+			if (!apiKey.trim()) {
+				throw new Error("Login cancelled");
+			}
+
+			await this.session.modelRegistry.authStorage.set(providerId, {
+				type: "api_key",
+				key: apiKey.trim(),
+			});
+
+			this.session.modelRegistry.refresh();
+			await this.updateAvailableProviderCount();
+			this.showStatus(`Successfully added API key for ${providerName}`);
+		} catch (err: unknown) {
+			const errorMsg = err instanceof Error ? err.message : String(err);
+			if (errorMsg === "Login cancelled") {
+				this.showStatus(`Login cancelled for ${providerName}`);
+			} else {
+				this.showError(`Failed to save API key for ${providerName}: ${errorMsg}`);
+			}
+		} finally {
+			restoreEditor();
+		}
 	}
 
 	private async showLoginDialog(providerId: string): Promise<void> {

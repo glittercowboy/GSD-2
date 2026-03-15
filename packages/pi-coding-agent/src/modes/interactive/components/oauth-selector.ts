@@ -1,16 +1,23 @@
 import type { OAuthProviderInterface } from "@gsd/pi-ai";
 import { getOAuthProviders } from "@gsd/pi-ai/oauth";
+import { SNAPSHOT } from "@gsd/pi-ai";
 import { Container, getEditorKeybindings, Spacer, TruncatedText } from "@gsd/pi-tui";
 import type { AuthStorage } from "../../../core/auth-storage.js";
 import { theme } from "../theme/theme.js";
 import { DynamicBorder } from "./dynamic-border.js";
+
+interface ProviderItem {
+	id: string;
+	name: string;
+	isOAuth: boolean;
+}
 
 /**
  * Component that renders an OAuth provider selector
  */
 export class OAuthSelectorComponent extends Container {
 	private listContainer: Container;
-	private allProviders: OAuthProviderInterface[] = [];
+	private allProviders: ProviderItem[] = [];
 	private selectedIndex: number = 0;
 	private mode: "login" | "logout";
 	private authStorage: AuthStorage;
@@ -56,7 +63,26 @@ export class OAuthSelectorComponent extends Container {
 	}
 
 	private loadProviders(): void {
-		this.allProviders = getOAuthProviders();
+		const oauthProviders = getOAuthProviders().map((p) => ({
+			id: p.id,
+			name: p.name,
+			isOAuth: true,
+		}));
+
+		const apiKeyProviders: ProviderItem[] = [];
+		for (const [id, provider] of Object.entries(SNAPSHOT)) {
+			if (!oauthProviders.some((p) => p.id === id)) {
+				apiKeyProviders.push({
+					id,
+					name: provider.name || id,
+					isOAuth: false,
+				});
+			}
+		}
+
+		apiKeyProviders.sort((a, b) => a.name.localeCompare(b.name));
+
+		this.allProviders = [...oauthProviders, ...apiKeyProviders];
 	}
 
 	private updateList(): void {
@@ -70,7 +96,7 @@ export class OAuthSelectorComponent extends Container {
 
 			// Check if user is logged in for this provider
 			const credentials = this.authStorage.get(provider.id);
-			const isLoggedIn = credentials?.type === "oauth";
+			const isLoggedIn = provider.isOAuth ? credentials?.type === "oauth" : credentials?.type === "api_key";
 			const statusIndicator = isLoggedIn ? theme.fg("success", " ✓ logged in") : "";
 
 			let line = "";
@@ -89,7 +115,7 @@ export class OAuthSelectorComponent extends Container {
 		// Show "no providers" if empty
 		if (this.allProviders.length === 0) {
 			const message =
-				this.mode === "login" ? "No OAuth providers available" : "No OAuth providers logged in. Use /login first.";
+				this.mode === "login" ? "No providers available" : "No providers logged in. Use /login first.";
 			this.listContainer.addChild(new TruncatedText(theme.fg("muted", `  ${message}`), 0, 0));
 		}
 	}

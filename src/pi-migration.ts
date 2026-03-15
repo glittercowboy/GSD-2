@@ -33,7 +33,7 @@ const LLM_PROVIDER_IDS = [
  * Copies any credentials GSD doesn't already have. Returns true if an LLM
  * provider was migrated (so onboarding can be skipped).
  */
-export function migratePiCredentials(authStorage: AuthStorage): boolean {
+export async function migratePiCredentials(authStorage: AuthStorage): Promise<boolean> {
   try {
     const existing = authStorage.list()
     const hasLlm = existing.some(id => LLM_PROVIDER_IDS.includes(id))
@@ -47,7 +47,7 @@ export function migratePiCredentials(authStorage: AuthStorage): boolean {
     let migratedLlm = false
     for (const [providerId, credential] of Object.entries(piData)) {
       if (authStorage.has(providerId)) continue
-      authStorage.set(providerId, credential)
+      await authStorage.set(providerId, credential)
       const isLlm = LLM_PROVIDER_IDS.includes(providerId)
       if (isLlm) migratedLlm = true
       process.stderr.write(`[gsd] Migrated ${isLlm ? 'LLM provider' : 'credential'}: ${providerId} (from Pi)\n`)

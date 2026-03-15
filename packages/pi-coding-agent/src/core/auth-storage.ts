@@ -21,10 +21,16 @@ import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
 import { getAgentDir } from "../config.js";
 import { resolveConfigValue } from "./resolve-config-value.js";
+import { execFile } from "child_process";
+import { promisify } from "util";
+import { createHash } from "crypto";
+
+const execFileAsync = promisify(execFile);
 
 export type ApiKeyCredential = {
 	type: "api_key";
 	key: string;
+	isHashed?: boolean; // Indicates if the key value stored is a hash
 };
 
 export type OAuthCredential = {
@@ -47,10 +53,75 @@ type LockResult<T> = {
 export interface AuthStorageBackend {
 	withLock<T>(fn: (current: string | undefined) => LockResult<T>): T;
 	withLockAsync<T>(fn: (current: string | undefined) => Promise<LockResult<T>>): Promise<T>;
+	getCredentialsFromKeyring?(providerId: string): Promise<string[] | undefined>;
+	saveCredentialsToKeyring?(providerId: string, keys: string[]): Promise<void>;
+	removeCredentialsFromKeyring?(providerId: string): Promise<void>;
+}
+
+function hashApiKey(key: string): string {
+	return createHash("sha256").update(key).digest("hex");
+}
+
+async function runGitCredential(operation: "fill" | "approve" | "reject", input: string): Promise<string> {
+	try {
+		const { stdout } = await execFileAsync("git", ["credential", operation], {
+			input,
+			env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+		});
+		return stdout;
+	} catch (e) {
+		throw new Error(`Git credential ${operation} failed: ${e instanceof Error ? e.message : String(e)}`);
+	}
+}
+
+async function getGitCredential(providerId: string): Promise<string | undefined> {
+	try {
+		const input = `protocol=gsd\nhost=gsd-provider-${providerId}\n`;
+		const stdout = await runGitCredential("fill", input);
+		const match = stdout.match(/^password=(.*)$/m);
+		return match ? match[1] : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+async function saveGitCredential(providerId: string, password: string): Promise<void> {
+	const input = `protocol=gsd\nhost=gsd-provider-${providerId}\nusername=${providerId}\npassword=${password}\n`;
+	await runGitCredential("approve", input);
+}
+
+async function removeGitCredential(providerId: string): Promise<void> {
+	const input = `protocol=gsd\nhost=gsd-provider-${providerId}\n`;
+	await runGitCredential("reject", input);
 }
 
 export class FileAuthStorageBackend implements AuthStorageBackend {
-	constructor(private authPath: string = join(getAgentDir(), "auth.json")) {}
+	private authPath: string;
+
+	constructor(authPath: string = join(getAgentDir(), "auth.json")) {
+		this.authPath = authPath;
+	}
+
+	async getCredentialsFromKeyring(providerId: string): Promise<string[] | undefined> {
+		const stored = await getGitCredential(providerId);
+		if (stored) {
+			try {
+				const parsed = JSON.parse(stored);
+				if (Array.isArray(parsed)) return parsed;
+			} catch {
+				return [stored]; // Backward compatibility if single key stored
+			}
+		}
+		return undefined;
+	}
+
+	async saveCredentialsToKeyring(providerId: string, keys: string[]): Promise<void> {
+		await saveGitCredential(providerId, JSON.stringify(keys));
+	}
+
+	async removeCredentialsFromKeyring(providerId: string): Promise<void> {
+		await removeGitCredential(providerId);
+	}
 
 	private ensureParentDir(): void {
 		const dir = dirname(this.authPath);
@@ -255,7 +326,10 @@ export class AuthStorage {
 	 */
 	private providerBackoff: Map<string, number> = new Map();
 
-	private constructor(private storage: AuthStorageBackend) {
+	private storage: AuthStorageBackend;
+
+	private constructor(storage: AuthStorageBackend) {
+		this.storage = storage;
 		this.reload();
 	}
 
@@ -306,6 +380,33 @@ export class AuthStorage {
 			return {};
 		}
 		return JSON.parse(content) as AuthStorageData;
+	}
+
+	/**
+	 * Preload real API keys from the secure keyring (git credential).
+	 * If the storage backend supports keyring, it will populate the runtimeOverrides
+	 * with the secure key for that provider, hiding it from auth.json plaintext.
+	 */
+	async preloadFromKeyring(): Promise<void> {
+		if (!this.storage.getCredentialsFromKeyring) return;
+
+		const providersWithKeys = Object.keys(this.data).filter(p => {
+			const creds = this.getCredentialsForProvider(p);
+			return creds.some(c => c.type === "api_key" && c.isHashed);
+		});
+
+		for (const p of providersWithKeys) {
+			try {
+				const keys = await this.storage.getCredentialsFromKeyring(p);
+				if (keys && keys.length > 0) {
+					// We only support single runtime override right now, so we set the first key.
+					// In the future, this could be integrated deeper.
+					this.setRuntimeApiKey(p, keys[0]);
+				}
+			} catch (err) {
+				this.recordError(err);
+			}
+		}
 	}
 
 	/**
@@ -371,8 +472,47 @@ export class AuthStorage {
 	 * existing credentials (accumulation on duplicate login). For OAuth,
 	 * replaces (only one OAuth token per provider makes sense).
 	 */
-	set(provider: string, credential: AuthCredential): void {
+	async set(provider: string, credential: AuthCredential): Promise<void> {
 		if (credential.type === "api_key") {
+			// Secure storage via keyring if available
+			if (this.storage.saveCredentialsToKeyring) {
+				const existing = this.getCredentialsForProvider(provider);
+				// Check if duplicate based on hash
+				const hashedKey = hashApiKey(credential.key);
+				const isDuplicate = existing.some(
+					(c) => c.type === "api_key" && (c.key === credential.key || c.key === hashedKey)
+				);
+				if (isDuplicate) return;
+
+				try {
+					// Fetch existing real keys from keyring to append
+					const realKeys = await this.storage.getCredentialsFromKeyring(provider) || [];
+					realKeys.push(credential.key);
+					await this.storage.saveCredentialsToKeyring(provider, realKeys);
+
+					// Store only the hash in auth.json
+					const secureCred: AuthCredential = {
+						type: "api_key",
+						key: hashedKey,
+						isHashed: true
+					};
+
+					const updated = [...existing, secureCred];
+					this.data[provider] = updated.length === 1 ? updated[0] : updated;
+					this.persistProviderChange(provider, updated.length === 1 ? updated[0] : updated);
+
+					// Apply the real key immediately so it works in this session
+					this.setRuntimeApiKey(provider, credential.key);
+				} catch (err) {
+					this.recordError(err);
+					// Fallback to storing plaintext if keyring fails
+					const updated = [...existing, credential];
+					this.data[provider] = updated.length === 1 ? updated[0] : updated;
+					this.persistProviderChange(provider, updated.length === 1 ? updated[0] : updated);
+				}
+				return;
+			}
+
 			const existing = this.getCredentialsForProvider(provider);
 			// Deduplicate: don't add if same key already exists
 			const isDuplicate = existing.some(
@@ -407,6 +547,11 @@ export class AuthStorage {
 		this.credentialBackoff.delete(provider);
 		this.providerBackoff.delete(provider);
 		this.persistProviderChange(provider, undefined);
+		this.removeRuntimeApiKey(provider);
+
+		if (this.storage.removeCredentialsFromKeyring) {
+			this.storage.removeCredentialsFromKeyring(provider).catch(err => this.recordError(err));
+		}
 	}
 
 	/**
@@ -468,7 +613,7 @@ export class AuthStorage {
 		}
 
 		const credentials = await provider.login(callbacks);
-		this.set(providerId, { type: "oauth", ...credentials });
+		await this.set(providerId, { type: "oauth", ...credentials });
 	}
 
 	/**
