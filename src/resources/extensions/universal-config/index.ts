@@ -31,13 +31,13 @@ export default function universalConfig(pi: ExtensionAPI) {
     label: "Discover Configs",
     description:
       "Scan for existing AI coding tool configurations in this project and the user's home directory. " +
-      "Discovers MCP servers, rules, context files, and settings from Claude Code, Cursor, Windsurf, " +
+      "Discovers MCP servers, rules, context files, settings, Claude skills, and Claude plugins from Claude Code, Cursor, Windsurf, " +
       "Gemini CLI, Codex, Cline, GitHub Copilot, and VS Code. Read-only — never modifies config files.",
-    promptSnippet: "Discover existing AI tool configs (MCP servers, rules, context files) from 8 coding tools.",
+    promptSnippet: "Discover existing AI tool configs (MCP servers, rules, context files, Claude skills/plugins) from 8 coding tools.",
     promptGuidelines: [
       "Use discover_configs when a user asks about their existing configuration, MCP servers, or when switching from another AI coding tool.",
       "The tool scans both user-level (~/) and project-level (./) config directories.",
-      "Results include MCP servers that could be reused, rules/instructions that could be adapted, and context files from other tools.",
+      "Results include MCP servers that could be reused, rules/instructions that could be adapted, context files from other tools, and Claude skills/plugins that could be imported.",
     ],
     parameters: Type.Object({
       tool: Type.Optional(
@@ -83,6 +83,8 @@ export default function universalConfig(pi: ExtensionAPI) {
             rules: allItems.filter((i) => i.type === "rule").length,
             contextFiles: allItems.filter((i) => i.type === "context-file").length,
             settings: allItems.filter((i) => i.type === "settings").length,
+            claudeSkills: allItems.filter((i) => i.type === "claude-skill").length,
+            claudePlugins: allItems.filter((i) => i.type === "claude-plugin").length,
             totalItems: allItems.length,
             toolsWithConfig: filtered.filter((t) => t.items.length > 0).length,
           },

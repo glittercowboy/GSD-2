@@ -107,6 +107,24 @@ describe("Claude Code scanner", () => {
     }
   });
 
+  test("discovers Claude Code skills and plugins", async () => {
+    const { testRoot, testHome, cleanup } = makeTempDirs();
+    try {
+      writeText(join(testHome, ".claude/skills/test-skill/SKILL.md"), "# test skill");
+      writeJson(join(testHome, ".claude/plugins/test-plugin/package.json"), { name: "test-plugin" });
+
+      const { items } = await SCANNERS.claude(testRoot, testHome, getTool("claude"));
+      const skills = items.filter((i) => i.type === "claude-skill");
+      const plugins = items.filter((i) => i.type === "claude-plugin");
+      assert.equal(skills.length, 1);
+      assert.equal(plugins.length, 1);
+      if (skills[0]?.type === "claude-skill") assert.equal(skills[0].name, "test-skill");
+      if (plugins[0]?.type === "claude-plugin") assert.equal(plugins[0].name, "test-plugin");
+    } finally {
+      cleanup();
+    }
+  });
+
   test("discovers settings.json", async () => {
     const { testRoot, testHome, cleanup } = makeTempDirs();
     try {

@@ -21,7 +21,8 @@ import {
   loadEffectiveGSDPreferences,
   resolveAllSkillReferences,
 } from "./preferences.js";
-import { loadFile, saveFile } from "./files.js";
+import { loadFile, saveFile, splitFrontmatter, parseFrontmatterMap } from "./files.js";
+import { runClaudeImportFlow } from "./claude-import.js";
 import {
   formatDoctorIssuesForPrompt,
   formatDoctorReport,
@@ -74,7 +75,7 @@ export function registerGSDCommand(pi: ExtensionAPI): void {
 
       if (parts[0] === "prefs" && parts.length <= 2) {
         const subPrefix = parts[1] ?? "";
-        return ["global", "project", "status", "wizard", "setup"]
+        return ["global", "project", "status", "wizard", "setup", "import-claude"]
           .filter((cmd) => cmd.startsWith(subPrefix))
           .map((cmd) => ({ value: `prefs ${cmd}`, label: cmd }));
       }
@@ -174,7 +175,7 @@ export function registerGSDCommand(pi: ExtensionAPI): void {
       }
 
       ctx.ui.notify(
-        `Unknown: /gsd ${trimmed}. Use /gsd, /gsd next, /gsd auto, /gsd stop, /gsd status, /gsd queue, /gsd discuss, /gsd prefs [global|project|status|wizard|setup], /gsd hooks, /gsd doctor [audit|fix|heal] [M###/S##], /gsd migrate <path>, or /gsd remote [slack|discord|status|disconnect].`,
+        `Unknown: /gsd ${trimmed}. Use /gsd, /gsd next, /gsd auto, /gsd stop, /gsd status, /gsd queue, /gsd discuss, /gsd prefs [global|project|status|wizard|setup|import-claude [global|project]], /gsd hooks, /gsd doctor [audit|fix|heal] [M###/S##], /gsd migrate <path>, or /gsd remote [slack|discord|status|disconnect].`,
         "warning",
       );
     },
@@ -232,6 +233,15 @@ async function handlePrefs(args: string, ctx: ExtensionCommandContext): Promise<
     return;
   }
 
+  if (trimmed === "import-claude" || trimmed === "import-claude global") {
+    await handleImportClaude(ctx, "global");
+    return;
+  }
+
+  if (trimmed === "import-claude project") {
+    await handleImportClaude(ctx, "project");
+    return;
+  }
   if (trimmed === "status") {
     const globalPrefs = loadGlobalGSDPreferences();
     const projectPrefs = loadProjectGSDPreferences();
@@ -262,7 +272,38 @@ async function handlePrefs(args: string, ctx: ExtensionCommandContext): Promise<
     return;
   }
 
-  ctx.ui.notify("Usage: /gsd prefs [global|project|status|wizard|setup]", "info");
+  ctx.ui.notify("Usage: /gsd prefs [global|project|status|wizard|setup|import-claude [global|project]]", "info");
+}
+
+async function handleImportClaude(ctx: ExtensionCommandContext, scope: "global" | "project"): Promise<void> {
+  const path = scope === "project" ? getProjectGSDPreferencesPath() : getGlobalGSDPreferencesPath();
+  if (!existsSync(path)) {
+    await ensurePreferencesFile(path, ctx, scope);
+  }
+
+  const readPrefs = (): Record<string, unknown> => {
+    if (!existsSync(path)) return { version: 1 };
+    const content = readFileSync(path, "utf-8");
+    const [frontmatterLines] = splitFrontmatter(content);
+    return frontmatterLines ? parseFrontmatterMap(frontmatterLines) : { version: 1 };
+  };
+
+  const writePrefs = async (prefs: Record<string, unknown>): Promise<void> => {
+    prefs.version = prefs.version || 1;
+    const frontmatter = serializePreferencesToFrontmatter(prefs);
+    let body = "\n# GSD Skill Preferences\n\nSee `~/.gsd/agent/extensions/gsd/docs/preferences-reference.md` for full field documentation and examples.\n";
+    if (existsSync(path)) {
+      const existingContent = readFileSync(path, "utf-8");
+      const closingIdx = existingContent.indexOf("\n---", existingContent.indexOf("---"));
+      if (closingIdx !== -1) {
+        const afterFrontmatter = existingContent.slice(closingIdx + 4);
+        if (afterFrontmatter.trim()) body = afterFrontmatter;
+      }
+    }
+    await saveFile(path, `---\n${frontmatter}---${body}`);
+  };
+
+  await runClaudeImportFlow(ctx, scope, readPrefs, writePrefs);
 }
 
 async function handleDoctor(args: string, ctx: ExtensionCommandContext, pi: ExtensionAPI): Promise<void> {
