@@ -42,6 +42,7 @@ import {
   writeUnitRuntimeRecord,
 } from "./unit-runtime.js";
 import { resolveAutoSupervisorConfig, resolveModelForUnit, resolveModelWithFallbacksForUnit, resolveSkillDiscoveryMode, loadEffectiveGSDPreferences } from "./preferences.js";
+import { sendDesktopNotification } from "./notifications.js";
 import type { GSDPreferences } from "./preferences.js";
 import {
   checkPostUnitHooks,
@@ -1393,6 +1394,7 @@ async function dispatchNextUnit(
       `Milestone ${currentMilestoneId} complete. Advancing to ${mid}: ${midTitle}.`,
       "info",
     );
+    sendDesktopNotification("GSD", `Milestone ${currentMilestoneId} complete!`, "success");
     // Reset stuck detection for new milestone
     unitDispatchCount.clear();
     unitRecoveryCount.clear();
@@ -1411,6 +1413,7 @@ async function dispatchNextUnit(
       snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId);
       saveActivityLog(ctx, basePath, currentUnit.type, currentUnit.id);
     }
+    sendDesktopNotification("GSD", "All milestones complete!", "success");
     await stopAuto(ctx, pi);
     return;
   }
@@ -1626,6 +1629,7 @@ async function dispatchNextUnit(
       if (existsSync(file)) writeFileSync(file, JSON.stringify([]), "utf-8");
       completedKeySet.clear();
     } catch { /* non-fatal */ }
+    sendDesktopNotification("GSD", `Milestone ${mid} complete!`, "success");
     await stopAuto(ctx, pi);
     return;
   }
@@ -1637,7 +1641,9 @@ async function dispatchNextUnit(
       saveActivityLog(ctx, basePath, currentUnit.type, currentUnit.id);
     }
     await stopAuto(ctx, pi);
-    ctx.ui.notify(`Blocked: ${state.blockers.join(", ")}. Fix and run /gsd auto.`, "warning");
+    const blockerMsg = `Blocked: ${state.blockers.join(", ")}`;
+    ctx.ui.notify(`${blockerMsg}. Fix and run /gsd auto.`, "warning");
+    sendDesktopNotification("GSD", blockerMsg, "error");
     return;
   }
 
@@ -1645,16 +1651,46 @@ async function dispatchNextUnit(
   // Ensures the UAT file and slice summary are both on main when UAT runs.
   const prefs = loadEffectiveGSDPreferences()?.preferences;
 
-  // Budget ceiling guard — pause before starting next unit if ceiling is hit
+  // Budget ceiling guard — enforce budget with configurable action
   const budgetCeiling = prefs?.budget_ceiling;
-  if (budgetCeiling !== undefined) {
+  if (budgetCeiling !== undefined && budgetCeiling > 0) {
     const currentLedger = getLedger();
     const totalCost = currentLedger ? getProjectTotals(currentLedger.units).cost : 0;
-    if (totalCost >= budgetCeiling) {
-      ctx.ui.notify(
-        `Budget ceiling ${formatCost(budgetCeiling)} reached (spent ${formatCost(totalCost)}). Pausing auto-mode — /gsd auto to continue.`,
-        "warning",
-      );
+    const budgetPct = totalCost / budgetCeiling;
+    const enforcement = prefs?.budget_enforcement ?? "pause";
+
+    if (budgetPct >= 1.0) {
+      const msg = `Budget ceiling ${formatCost(budgetCeiling)} reached (spent ${formatCost(totalCost)}).`;
+      if (enforcement === "halt") {
+        ctx.ui.notify(`${msg} Stopping auto-mode.`, "error");
+        sendDesktopNotification("GSD", msg, "error");
+        await stopAuto(ctx, pi);
+        return;
+      }
+      if (enforcement === "pause") {
+        ctx.ui.notify(`${msg} Pausing auto-mode — /gsd auto to override and continue.`, "warning");
+        sendDesktopNotification("GSD", msg, "warning");
+        await pauseAuto(ctx, pi);
+        return;
+      }
+      // "warn" — continue with warning only
+      ctx.ui.notify(`${msg} Continuing (enforcement: warn).`, "warning");
+      sendDesktopNotification("GSD", msg, "warning");
+    } else if (budgetPct >= 0.90) {
+      ctx.ui.notify(`Budget 90%: ${formatCost(totalCost)} / ${formatCost(budgetCeiling)}`, "warning");
+    } else if (budgetPct >= 0.75) {
+      ctx.ui.notify(`Budget 75%: ${formatCost(totalCost)} / ${formatCost(budgetCeiling)}`, "info");
+    }
+  }
+
+  // Context window guard — pause if approaching context limits
+  const contextThreshold = prefs?.context_pause_threshold ?? 0; // 0 = disabled by default
+  if (contextThreshold > 0 && cmdCtx) {
+    const contextUsage = (cmdCtx as any).getContextUsage?.();
+    if (contextUsage && contextUsage.percent >= contextThreshold) {
+      const msg = `Context window at ${contextUsage.percent}% (threshold: ${contextThreshold}%). Pausing to prevent truncated output.`;
+      ctx.ui.notify(`${msg} Run /gsd auto to continue (will start fresh session).`, "warning");
+      sendDesktopNotification("GSD", `Context ${contextUsage.percent}% — paused`, "warning");
       await pauseAuto(ctx, pi);
       return;
     }
@@ -1924,6 +1960,7 @@ async function dispatchNextUnit(
     const expected = diagnoseExpectedArtifact(unitType, unitId, basePath);
     const remediation = buildLoopRemediationSteps(unitType, unitId, basePath);
     await stopAuto(ctx, pi);
+    sendDesktopNotification("GSD", `Loop detected: ${unitType} ${unitId}`, "error");
     ctx.ui.notify(
       `Loop detected: ${unitType} ${unitId} dispatched ${prevCount + 1} times total. Expected artifact not found.${expected ? `\n   Expected: ${expected}` : ""}${remediation ? `\n\n   Remediation steps:\n${remediation}` : "\n   Check branch state and .gsd/ artifacts."}`,
       "error",
