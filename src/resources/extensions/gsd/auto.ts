@@ -505,7 +505,7 @@ export async function startAuto(
     if (currentMilestoneId) setActiveMilestoneId(base, currentMilestoneId);
 
     // ── Auto-worktree: re-enter worktree on resume if not already inside ──
-    if (currentMilestoneId && originalBasePath && !isInAutoWorktree(basePath) && true /* worktree isolation is always enabled */) {
+    if (currentMilestoneId && originalBasePath && !isInAutoWorktree(basePath)) {
       try {
         const existingWtPath = getAutoWorktreePath(originalBasePath, currentMilestoneId);
         if (existingWtPath) {
@@ -669,7 +669,7 @@ export async function startAuto(
   // ── Auto-worktree: create or enter worktree for the active milestone ──
   // Store the original project root before any chdir so we can restore on stop.
   originalBasePath = base;
-  if (currentMilestoneId && true /* worktree isolation is always enabled */) {
+  if (currentMilestoneId) {
     try {
       const existingWtPath = getAutoWorktreePath(base, currentMilestoneId);
       if (existingWtPath) {
