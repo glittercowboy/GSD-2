@@ -13,7 +13,8 @@ Then research the codebase and relevant technologies. Narrate key findings and s
 4. Use `resolve_library` / `get_library_docs` for unfamiliar libraries
 5. Use the **Research** output template from the inlined context above
 6. If `.gsd/REQUIREMENTS.md` exists, research against it. Identify which Active requirements are table stakes, likely omissions, overbuilt risks, or domain-standard behaviors the user may or may not want.
-7. Write `{{outputPath}}` with:
+7. **Write the Planner Brief for the next phase.** The planner will receive your research file and will NOT explore the codebase — your Planner Brief is its only source of code-level truth. Make it detailed enough that the planner can write task plans with correct file paths, function signatures, and integration points without reading a single source file. If you're unsure whether to include a detail, include it. An overly detailed Planner Brief wastes a few tokens; a sparse one wastes an entire planner session on redundant exploration.
+8. Write `{{outputPath}}` with:
    - Summary (2-3 paragraphs, primary recommendation)
    - Don't Hand-Roll table (problems with existing solutions)
    - Common Pitfalls (what goes wrong, how to avoid)

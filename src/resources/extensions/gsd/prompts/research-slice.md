@@ -19,7 +19,8 @@ Then research what this slice needs. Narrate key findings and surprises as you g
 3. Explore relevant code for this slice's scope. For targeted exploration, use `rg`, `find`, and reads. For broad or unfamiliar subsystems, use `scout` to map the relevant area first.
 4. Use `resolve_library` / `get_library_docs` for unfamiliar libraries
 5. Use the **Research** output template from the inlined context above
-6. Write `{{outputPath}}`
+6. **Write the Planner Brief for the next phase.** The planner will receive your research file and will NOT explore the codebase — your Planner Brief is its only source of code-level truth. Make it detailed enough that the planner can write task plans with correct file paths, function signatures, and integration points without reading a single source file. If you're unsure whether to include a detail, include it. An overly detailed Planner Brief wastes a few tokens; a sparse one wastes an entire planner session on redundant exploration.
+7. Write `{{outputPath}}`
 
 The slice directory already exists at `{{slicePath}}/`. Do NOT mkdir — just write the file.
 

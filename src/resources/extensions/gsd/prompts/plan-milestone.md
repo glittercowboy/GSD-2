@@ -6,6 +6,8 @@ All relevant context has been preloaded below — start working immediately with
 
 {{inlinedContext}}
 
+**The research file in your inlined context contains a Planner Brief with file paths, integration points, and patterns — this is your source of truth for the codebase. Plan from the research. Do not explore the codebase with rg, find, or read unless the research explicitly flags a gap that blocks planning. If a file path or detail you need is missing from the Planner Brief, note the gap in your plan narration and make your best judgment — don't burn context on exploration.**
+
 Narrate your decomposition reasoning — why you're grouping work this way, what risks are driving the order, what verification strategy you're choosing and why.
 
 Then:
