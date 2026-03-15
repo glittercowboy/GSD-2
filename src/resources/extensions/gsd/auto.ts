@@ -203,6 +203,30 @@ const DISPATCH_GAP_TIMEOUT_MS = 5_000; // 5 seconds
 let _sigtermHandler: (() => void) | null = null;
 
 /**
+ * 'exit' event handler registered while auto-mode is active.
+ * Clears the lock file so a stale lock is never left behind even when
+ * process.exit() is called from a different SIGTERM handler (e.g. the LSP
+ * client's handler, which fires before ours).  Removed in stopAuto/pauseAuto
+ * after the lock has already been cleared through the normal shutdown path.
+ */
+let _exitCleanup: (() => void) | null = null;
+
+function registerExitCleanup(currentBasePath: string): void {
+  if (_exitCleanup) process.off("exit", _exitCleanup);
+  _exitCleanup = () => {
+    clearLock(currentBasePath);
+  };
+  process.on("exit", _exitCleanup);
+}
+
+function deregisterExitCleanup(): void {
+  if (_exitCleanup) {
+    process.off("exit", _exitCleanup);
+    _exitCleanup = null;
+  }
+}
+
+/**
  * Register a SIGTERM handler that clears the lock file and exits cleanly.
  * Captures the active base path at registration time so the handler
  * always references the correct path even if the module variable changes.
@@ -354,8 +378,9 @@ export async function stopAuto(ctx?: ExtensionContext, pi?: ExtensionAPI): Promi
   if (basePath) clearLock(basePath);
   clearSkillSnapshot();
 
-  // Remove SIGTERM handler registered at auto-mode start
+  // Remove SIGTERM handler and exit cleanup registered at auto-mode start
   deregisterSigtermHandler();
+  deregisterExitCleanup();
 
   // ── Auto-worktree: exit worktree and reset basePath on stop ──
   if (currentMilestoneId && isInAutoWorktree(basePath)) {
@@ -433,8 +458,9 @@ export async function pauseAuto(ctx?: ExtensionContext, _pi?: ExtensionAPI): Pro
   clearUnitTimeout();
   if (basePath) clearLock(basePath);
 
-  // Remove SIGTERM handler registered at auto-mode start
+  // Remove SIGTERM handler and exit cleanup registered at auto-mode start
   deregisterSigtermHandler();
+  deregisterExitCleanup();
 
   active = false;
   paused = true;
@@ -528,8 +554,9 @@ export async function startAuto(
       }
     }
 
-    // Re-register SIGTERM handler for the resumed session
+    // Re-register SIGTERM handler and exit cleanup for the resumed session
     registerSigtermHandler(basePath);
+    registerExitCleanup(basePath);
 
     ctx.ui.setStatus("gsd-auto", stepMode ? "next" : "auto");
     ctx.ui.setFooter(hideFooter);
@@ -655,7 +682,10 @@ export async function startAuto(
   originalModelProvider = ctx.model?.provider ?? null;
 
   // Register a SIGTERM handler so `kill <pid>` cleans up the lock and exits.
+  // Also register an 'exit' event cleanup so the lock is cleared even if
+  // a different SIGTERM handler (e.g. LSP client) calls process.exit() first.
   registerSigtermHandler(base);
+  registerExitCleanup(base);
 
   // Capture the integration branch — records the branch the user was on when
   // auto-mode started. Slice branches will merge back to this branch instead
@@ -685,8 +715,9 @@ export async function startAuto(
         gitService = new GitServiceImpl(basePath, loadEffectiveGSDPreferences()?.preferences?.git ?? {});
         ctx.ui.notify(`Created auto-worktree at ${wtPath}`, "info");
       }
-      // Re-register SIGTERM handler with the new basePath
+      // Re-register SIGTERM handler and exit cleanup with the new basePath
       registerSigtermHandler(basePath);
+      registerExitCleanup(basePath);
     } catch (err) {
       // Worktree creation is non-fatal — continue in the project root.
       ctx.ui.notify(

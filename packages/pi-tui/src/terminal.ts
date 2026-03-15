@@ -62,9 +62,35 @@ export class ProcessTerminal implements Terminal {
 	private stdinBuffer?: StdinBuffer;
 	private stdinDataHandler?: (data: string) => void;
 	private writeLogPath = process.env.PI_TUI_WRITE_LOG || "";
+	private _exitCleanup?: () => void;
 
 	get kittyProtocolActive(): boolean {
 		return this._kittyProtocolActive;
+	}
+
+	/**
+	 * Synchronously restore terminal to a sane state.
+	 * Safe to call from a process 'exit' event handler.
+	 * Idempotent — flags are cleared after the first call so a second call is a no-op.
+	 * All operations are wrapped in try/catch because the terminal fd may already be
+	 * closed (e.g. piped to a closed parent process) and we must not throw here.
+	 */
+	private restoreTerminalSync(): void {
+		try { process.stdout.write("\x1b[?2004l"); } catch { /* stdout may be closed */ }
+		if (this._kittyProtocolActive) {
+			try { process.stdout.write("\x1b[<u"); } catch { /* stdout may be closed */ }
+			this._kittyProtocolActive = false;
+			setKittyProtocolActive(false);
+		}
+		if (this._modifyOtherKeysActive) {
+			try { process.stdout.write("\x1b[>4;0m"); } catch { /* stdout may be closed */ }
+			this._modifyOtherKeysActive = false;
+		}
+		// Show cursor in case it was hidden by the TUI.
+		try { process.stdout.write("\x1b[?25h"); } catch { /* stdout may be closed */ }
+		if (process.stdin.setRawMode) {
+			try { process.stdin.setRawMode(this.wasRaw); } catch { /* stdin may be closed */ }
+		}
 	}
 
 	start(onInput: (data: string) => void, onResize: () => void): void {
@@ -96,6 +122,13 @@ export class ProcessTerminal implements Terminal {
 		// events that lose modifier information. Must run AFTER setRawMode(true)
 		// since that resets console mode flags.
 		this.enableWindowsVTInput();
+
+		// Register a synchronous exit handler so the terminal is always restored
+		// to a sane state even when process.exit() is called without going through
+		// the normal stop() path (e.g. from a SIGTERM signal handler).
+		// The handler is removed in stop() once we've done proper cleanup ourselves.
+		this._exitCleanup = () => this.restoreTerminalSync();
+		process.on("exit", this._exitCleanup);
 
 		// Query and enable Kitty keyboard protocol
 		// The query handler intercepts input temporarily, then installs the user's handler
@@ -250,6 +283,13 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	stop(): void {
+		// Remove the exit cleanup handler — we're doing proper cleanup right now,
+		// so the fallback handler is no longer needed.
+		if (this._exitCleanup) {
+			process.off("exit", this._exitCleanup);
+			this._exitCleanup = undefined;
+		}
+
 		// Disable bracketed paste mode
 		process.stdout.write("\x1b[?2004l");
 
