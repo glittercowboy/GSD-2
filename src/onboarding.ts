@@ -432,7 +432,7 @@ async function runApiKeyFlow(
     p.log.warn(`Key doesn't start with expected prefix (${expectedPrefixes.join(' or ')}). Saving anyway.`)
   }
 
-  authStorage.set(providerId, { type: 'api_key', key: trimmed })
+  await authStorage.set(providerId, { type: 'api_key', key: trimmed })
   p.log.success(`API key saved for ${pc.green(providerLabel)}`)
   return true
 }
@@ -482,7 +482,7 @@ async function runCustomOpenAIFlow(
   const trimmedModelId = (modelId as string).trim()
 
   // Save API key to auth storage
-  authStorage.set('custom-openai', { type: 'api_key', key: trimmedKey })
+  await authStorage.set('custom-openai', { type: 'api_key', key: trimmedKey })
 
   // Write or merge into models.json
   const modelsJsonPath = join(agentDir, 'models.json')
@@ -590,7 +590,7 @@ async function runWebSearchStep(
     })
     if (p.isCancel(key) || !(key as string)?.trim()) return null
     const trimmed = (key as string).trim()
-    authStorage.set('brave', { type: 'api_key', key: trimmed })
+    await authStorage.set('brave', { type: 'api_key', key: trimmed })
     process.env.BRAVE_API_KEY = trimmed
     p.log.success(`Web search: ${pc.green('Brave Search')} configured`)
     return 'Brave Search'
@@ -603,7 +603,7 @@ async function runWebSearchStep(
     })
     if (p.isCancel(key) || !(key as string)?.trim()) return null
     const trimmed = (key as string).trim()
-    authStorage.set('tavily', { type: 'api_key', key: trimmed })
+    await authStorage.set('tavily', { type: 'api_key', key: trimmed })
     process.env.TAVILY_API_KEY = trimmed
     p.log.success(`Web search: ${pc.green('Tavily')} configured`)
     return 'Tavily'
@@ -641,13 +641,13 @@ async function runToolKeysStep(
 
     const trimmed = (key as string | undefined)?.trim()
     if (trimmed) {
-      authStorage.set(tk.provider, { type: 'api_key', key: trimmed })
+      await authStorage.set(tk.provider, { type: 'api_key', key: trimmed })
       process.env[tk.envVar] = trimmed
       p.log.success(`${tk.label} saved`)
       savedCount++
     } else {
       // Store empty key so wizard doesn't re-ask on next launch
-      authStorage.set(tk.provider, { type: 'api_key', key: '' })
+      await authStorage.set(tk.provider, { type: 'api_key', key: '' })
       p.log.info(pc.dim(`${tk.label} skipped`))
     }
   }
@@ -696,7 +696,7 @@ async function runRemoteQuestionsStep(
     if (p.isCancel(token) || !(token as string)?.trim()) return null
     const trimmed = (token as string).trim()
 
-    authStorage.set('discord_bot', { type: 'api_key', key: trimmed })
+    await authStorage.set('discord_bot', { type: 'api_key', key: trimmed })
     process.env.DISCORD_BOT_TOKEN = trimmed
 
     const channelName = await runDiscordChannelStep(p, pc, trimmed)
@@ -734,7 +734,7 @@ async function runRemoteQuestionsStep(
       return null
     }
 
-    authStorage.set('slack_bot', { type: 'api_key', key: trimmed })
+    await authStorage.set('slack_bot', { type: 'api_key', key: trimmed })
     process.env.SLACK_BOT_TOKEN = trimmed
 
     const channelId = await p.text({

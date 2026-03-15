@@ -111,7 +111,7 @@ ensureManagedTools(join(agentDir, 'bin'))
 
 const authStorage = AuthStorage.create(authFilePath)
 loadStoredEnvKeys(authStorage)
-migratePiCredentials(authStorage)
+await migratePiCredentials(authStorage)
 
 // Run onboarding wizard on first launch (no LLM provider configured)
 if (!isPrintMode && shouldRunOnboarding(authStorage)) {

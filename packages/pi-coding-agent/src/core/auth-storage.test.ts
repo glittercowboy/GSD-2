@@ -84,10 +84,10 @@ describe("AuthStorage — multiple credentials", () => {
 // ─── login accumulation ───────────────────────────────────────────────────────
 
 describe("AuthStorage — login accumulation", () => {
-	it("accumulates api keys on repeated set()", () => {
+	it("accumulates api keys on repeated set()", async () => {
 		const storage = inMemory({});
-		storage.set("anthropic", makeKey("sk-1"));
-		storage.set("anthropic", makeKey("sk-2"));
+		await storage.set("anthropic", makeKey("sk-1"));
+		await storage.set("anthropic", makeKey("sk-2"));
 		const creds = storage.getCredentialsForProvider("anthropic");
 		assert.equal(creds.length, 2);
 		assert.deepEqual(
@@ -96,10 +96,10 @@ describe("AuthStorage — login accumulation", () => {
 		);
 	});
 
-	it("deduplicates identical api keys", () => {
+	it("deduplicates identical api keys", async () => {
 		const storage = inMemory({});
-		storage.set("anthropic", makeKey("sk-1"));
-		storage.set("anthropic", makeKey("sk-1"));
+		await storage.set("anthropic", makeKey("sk-1"));
+		await storage.set("anthropic", makeKey("sk-1"));
 		const creds = storage.getCredentialsForProvider("anthropic");
 		assert.equal(creds.length, 1);
 	});

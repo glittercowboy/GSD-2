@@ -24,6 +24,7 @@ if (typeof process !== "undefined" && (process.versions?.node || process.version
 }
 
 import type { KnownProvider } from "./types.js";
+import { SNAPSHOT } from "./models-dev-snapshot.js";
 
 let cachedVertexAdcCredentialsExists: boolean | null = null;
 
@@ -126,6 +127,22 @@ export function getEnvApiKey(provider: any): string | undefined {
 		"custom-openai": "CUSTOM_OPENAI_API_KEY",
 	};
 
+	// Auto-api-key resolution from models.dev
+	const modelsDevProvider = SNAPSHOT[provider];
+	if (modelsDevProvider?.env?.length > 0) {
+		for (const expectedVar of modelsDevProvider.env) {
+			if (process.env[expectedVar]) {
+				return process.env[expectedVar];
+			}
+		}
+	}
+
 	const envVar = envMap[provider];
-	return envVar ? process.env[envVar] : undefined;
+	if (envVar && process.env[envVar]) {
+		return process.env[envVar];
+	}
+
+	// For error reporting, return the first expected var if nothing was found
+	const firstExpected = modelsDevProvider?.env?.[0] ?? envMap[provider];
+	return firstExpected ? process.env[firstExpected] : undefined;
 }
