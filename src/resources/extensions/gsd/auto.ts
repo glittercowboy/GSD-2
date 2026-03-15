@@ -70,7 +70,7 @@ import {
 } from "./metrics.js";
 import { dirname, join } from "node:path";
 import { sep as pathSep } from "node:path";
-import { readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync } from "node:fs";
+import { readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync, renameSync } from "node:fs";
 import { execSync, execFileSync } from "node:child_process";
 import {
   autoCommitCurrentBranch,
@@ -117,7 +117,10 @@ function persistCompletedKey(base: string, key: string): void {
   } catch { /* corrupt file — start fresh */ }
   if (!keys.includes(key)) {
     keys.push(key);
-    writeFileSync(file, JSON.stringify(keys), "utf-8");
+    // Atomic write: tmp file + rename prevents partial writes on crash
+    const tmpFile = file + ".tmp";
+    writeFileSync(tmpFile, JSON.stringify(keys), "utf-8");
+    renameSync(tmpFile, file);
   }
 }
 
@@ -463,17 +466,35 @@ async function selfHealRuntimeRecords(base: string, ctx: ExtensionContext): Prom
     const { listUnitRuntimeRecords } = await import("./unit-runtime.js");
     const records = listUnitRuntimeRecords(base);
     let healed = 0;
+    const STALE_THRESHOLD_MS = 60 * 60 * 1000; // 1 hour
+    const now = Date.now();
     for (const record of records) {
       const { unitType, unitId } = record;
       const artifactPath = resolveExpectedArtifactPath(unitType, unitId, base);
+
+      // Case 1: Artifact exists — unit completed but closeout didn't finish
       if (artifactPath && existsSync(artifactPath)) {
-        // Artifact exists — unit completed but closeout didn't finish.
+        clearUnitRuntimeRecord(base, unitType, unitId);
+        // Also persist completion key if missing
+        const key = `${unitType}/${unitId}`;
+        if (!completedKeySet.has(key)) {
+          persistCompletedKey(base, key);
+          completedKeySet.add(key);
+        }
+        healed++;
+        continue;
+      }
+
+      // Case 2: No artifact but record is stale (dispatched > 1h ago, process crashed)
+      const age = now - (record.startedAt ?? 0);
+      if (record.phase === "dispatched" && age > STALE_THRESHOLD_MS) {
         clearUnitRuntimeRecord(base, unitType, unitId);
         healed++;
+        continue;
       }
     }
     if (healed > 0) {
-      ctx.ui.notify(`Self-heal: cleared ${healed} stale runtime record(s) with completed artifacts.`, "info");
+      ctx.ui.notify(`Self-heal: cleared ${healed} stale runtime record(s).`, "info");
     }
   } catch {
     // Non-fatal — self-heal should never block auto-mode start
@@ -1431,6 +1452,10 @@ function getRoadmapSlicesSync(): { done: number; total: number; activeSliceTasks
 
 // ─── Core Loop ────────────────────────────────────────────────────────────────
 
+/** Tracks recursive skip depth to prevent TUI freeze on cascading completed-unit skips */
+let _skipDepth = 0;
+const MAX_SKIP_DEPTH = 20;
+
 async function dispatchNextUnit(
   ctx: ExtensionContext,
   pi: ExtensionAPI,
@@ -1440,6 +1465,15 @@ async function dispatchNextUnit(
       ctx.ui.notify("Auto-mode dispatch failed: no command context. Run /gsd auto to restart.", "error");
     }
     return;
+  }
+
+  // Recursion depth guard: when many units are skipped in sequence (e.g., after
+  // crash recovery with 10+ completed units), recursive dispatchNextUnit calls
+  // can freeze the TUI or overflow the stack. Yield generously after MAX_SKIP_DEPTH.
+  if (_skipDepth > MAX_SKIP_DEPTH) {
+    _skipDepth = 0;
+    ctx.ui.notify(`Skipped ${MAX_SKIP_DEPTH}+ completed units. Yielding to UI before continuing.`, "info");
+    await new Promise(r => setTimeout(r, 200));
   }
 
   // Clear stale directory listing cache so deriveState sees fresh disk state (#431)
@@ -1821,10 +1855,10 @@ async function dispatchNextUnit(
         `Skipping ${unitType} ${unitId} — already completed in a prior session. Advancing.`,
         "info",
       );
-      // Yield to the event loop before re-dispatching to avoid tight recursion
-      // when many units are already completed (e.g., after crash recovery).
-      await new Promise(r => setImmediate(r));
+      _skipDepth++;
+      await new Promise(r => setTimeout(r, 50));
       await dispatchNextUnit(ctx, pi);
+      _skipDepth = Math.max(0, _skipDepth - 1);
       return;
     } else {
       // Stale completion record — artifact missing. Remove and re-run.
@@ -1850,10 +1884,10 @@ async function dispatchNextUnit(
       `Skipping ${unitType} ${unitId} — artifact exists but completion key was missing. Repaired and advancing.`,
       "info",
     );
-    // Yield generously to the event loop to prevent TUI freeze when multiple
-    // tasks are skipped in rapid succession (T01 skip → T02 skip → T03 dispatch).
+    _skipDepth++;
     await new Promise(r => setTimeout(r, 50));
     await dispatchNextUnit(ctx, pi);
+    _skipDepth = Math.max(0, _skipDepth - 1);
     return;
   }
 
