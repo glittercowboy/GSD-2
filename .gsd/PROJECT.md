@@ -10,7 +10,7 @@ Selective context injection: the TS system becomes the context curator, using it
 
 ## Current State
 
-S01 (DB Foundation), S02 (Markdown Importers + Auto-Migration), S03 (Core Hierarchy + Full Query Layer + Prompt Rewiring), and S04 (Token Measurement + State Derivation from DB) are complete. All 9 prompt builders are rewired from `inlineGsdRootFile` to scoped DB queries. Token measurement wired into all dispatch paths with promptCharCount/baselineCharCount in UnitMetrics. deriveState() reads from DB with filesystem fallback. Fixture-proven ≥30% character savings: 52.2% plan-slice, 66.3% decisions-only, 32.2% research composite. 287 tests pass, 0 failures. 15 of 21 requirements validated.
+S01 (DB Foundation), S02 (Markdown Importers + Auto-Migration), S03 (Core Hierarchy + Full Query Layer + Prompt Rewiring), S04 (Token Measurement + State Derivation from DB), and S05 (Worktree Isolation + Merge Reconciliation) are complete. All 9 prompt builders are rewired from `inlineGsdRootFile` to scoped DB queries. Token measurement wired into all dispatch paths. deriveState() reads from DB with filesystem fallback. Worktree creation copies gsd.db; worktree merge reconciles rows via ATTACH DATABASE with conflict detection. Fixture-proven ≥30% character savings: 52.2% plan-slice, 66.3% decisions-only, 32.2% research composite. 288 tests pass, 0 failures. 17 of 21 requirements validated.
 
 ## Architecture / Key Patterns
 

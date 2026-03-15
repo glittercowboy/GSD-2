@@ -69,7 +69,7 @@ This milestone is complete only when all are true:
 - [x] **S04: Token Measurement + State Derivation from DB** `risk:medium` `depends:[S03]`
   > After this: Token counts logged per dispatch unit showing before/after savings. deriveState() reads from DB. Savings ≥30% confirmed on planning/research units with fixture data.
 
-- [ ] **S05: Worktree Isolation + Merge Reconciliation** `risk:medium` `depends:[S01,S02]`
+- [x] **S05: Worktree Isolation + Merge Reconciliation** `risk:medium` `depends:[S01,S02]`
   > After this: Worktree creation copies gsd.db. Worktree merge does row-level reconciliation with conflict detection for divergent modifications.
 
 - [ ] **S06: Structured LLM Tools + /gsd inspect** `risk:medium` `depends:[S03]`

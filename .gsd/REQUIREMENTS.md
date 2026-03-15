@@ -137,24 +137,24 @@ Guidelines:
 
 ### R012 — Worktree DB isolation
 - Class: core-capability
-- Status: active
+- Status: validated
 - Description: Each GSD worktree gets its own `gsd.db` at its `.gsd/` root, copied from the source branch on worktree creation
 - Why it matters: Worktrees are isolated workspaces — DB state must be isolated too
 - Source: user
 - Primary owning slice: M001/S05
 - Supporting slices: none
-- Validation: unmapped
+- Validation: S05 — copyWorktreeDb copies gsd.db (not WAL/SHM) to worktree, wired into createWorktree(). 37-assertion test suite proves copy correctness, non-fatal failure, and data queryability.
 - Notes: Existing worktree creation in `auto-worktree.ts` and `worktree-manager.ts` needs DB copy logic
 
 ### R013 — Worktree row-level merge reconciliation
 - Class: core-capability
-- Status: active
+- Status: validated
 - Description: When a worktree merges back, row-level reconciliation occurs with conflict detection. Deterministic PKs use INSERT OR REPLACE; auto-increment PKs remap sequences; conflicting rows flagged for review.
 - Why it matters: Git can't merge binary SQLite files — need explicit reconciliation logic
 - Source: user
 - Primary owning slice: M001/S05
 - Supporting slices: none
-- Validation: unmapped
+- Validation: S05 — reconcileWorktreeDb ATTACHes worktree DB, merges all 3 tables via INSERT OR REPLACE, detects conflicts. Wired into both deterministic and LLM merge paths. 37-assertion test suite proves merge, conflict detection, and edge cases.
 - Notes: Three strategies per PRD: INSERT OR REPLACE for deterministic PKs, sequence remapping for auto-increment, conflict flagging for divergent modifications
 
 ### R014 — Structured LLM tools
@@ -307,6 +307,14 @@ Guidelines:
 - Validated by: M001/S04
 - Proof: 99-assertion token-savings test with 24 decisions across 3 milestones, 21 requirements across 5 slices. Plan-slice: 52.2% savings. Decisions-only: 66.3%. Research composite: 32.2%. All exceed 30% threshold.
 
+### R012 — Worktree DB isolation
+- Validated by: M001/S05
+- Proof: copyWorktreeDb copies gsd.db (not WAL/SHM) to worktree, wired into createWorktree(). 37-assertion test suite proves copy correctness, non-fatal failure, and data queryability.
+
+### R013 — Worktree row-level merge reconciliation
+- Validated by: M001/S05
+- Proof: reconcileWorktreeDb ATTACHes worktree DB, merges all 3 tables via INSERT OR REPLACE, detects conflicts by comparing content columns. Wired into both deterministic and LLM merge paths. 37-assertion test suite proves merge, conflict detection, and edge cases.
+
 ## Deferred
 
 ### R030 — Vector search layer
@@ -403,8 +411,8 @@ Guidelines:
 | R009 | continuity | validated | M001/S03 | M001/S06 | S03 validated |
 | R010 | differentiator | validated | M001/S04 | none | S04 validated |
 | R011 | core-capability | validated | M001/S04 | none | S04 validated |
-| R012 | core-capability | active | M001/S05 | none | unmapped |
-| R013 | core-capability | active | M001/S05 | none | unmapped |
+| R012 | core-capability | validated | M001/S05 | none | S05 validated |
+| R013 | core-capability | validated | M001/S05 | none | S05 validated |
 | R014 | core-capability | active | M001/S06 | none | unmapped |
 | R015 | operability | active | M001/S06 | none | unmapped |
 | R016 | quality-attribute | validated | M001/S04 | M001/S03, M001/S07 | S04 validated |
@@ -423,7 +431,7 @@ Guidelines:
 
 ## Coverage Summary
 
-- Active requirements: 6
-- Mapped to slices: 6
-- Validated: 15 (R002, R003, R004, R005, R006, R007, R008, R009, R010, R011, R016, R017, R018, R020, R021)
+- Active requirements: 4
+- Mapped to slices: 4
+- Validated: 17 (R002, R003, R004, R005, R006, R007, R008, R009, R010, R011, R012, R013, R016, R017, R018, R020, R021)
 - Unmapped active requirements: 0
