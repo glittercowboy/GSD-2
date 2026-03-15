@@ -5,12 +5,15 @@ import {
   isDbAvailable,
   insertDecision,
   insertRequirement,
+  insertArtifact,
 } from '../gsd-db.ts';
 import {
   queryDecisions,
   queryRequirements,
   formatDecisionsForPrompt,
   formatRequirementsForPrompt,
+  queryArtifact,
+  queryProject,
 } from '../context-store.ts';
 
 const { assertEq, assertTrue, assertMatch, report } = createTestContext();
@@ -358,6 +361,101 @@ console.log('\n=== context-store: sub-5ms query timing ===');
   console.log(`  timing: ${elapsed.toFixed(2)}ms for 50+50 row queries`);
 
   closeDatabase();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// context-store: queryArtifact
+// ═══════════════════════════════════════════════════════════════════════════
+
+console.log('\n=== context-store: queryArtifact returns content for existing path ===');
+{
+  openDatabase(':memory:');
+
+  insertArtifact({
+    path: 'PROJECT.md',
+    artifact_type: 'project',
+    milestone_id: null,
+    slice_id: null,
+    task_id: null,
+    full_content: '# My Project\n\nProject description here.',
+  });
+  insertArtifact({
+    path: '.gsd/milestones/M001/M001-PLAN.md',
+    artifact_type: 'milestone_plan',
+    milestone_id: 'M001',
+    slice_id: null,
+    task_id: null,
+    full_content: '# M001 Plan\n\nMilestone content.',
+  });
+
+  const project = queryArtifact('PROJECT.md');
+  assertEq(project, '# My Project\n\nProject description here.', 'queryArtifact returns full_content for PROJECT.md');
+
+  const plan = queryArtifact('.gsd/milestones/M001/M001-PLAN.md');
+  assertEq(plan, '# M001 Plan\n\nMilestone content.', 'queryArtifact returns full_content for milestone plan');
+
+  closeDatabase();
+}
+
+console.log('\n=== context-store: queryArtifact returns null for missing path ===');
+{
+  openDatabase(':memory:');
+
+  const missing = queryArtifact('nonexistent.md');
+  assertEq(missing, null, 'queryArtifact returns null for path not in DB');
+
+  closeDatabase();
+}
+
+console.log('\n=== context-store: queryArtifact returns null when DB unavailable ===');
+{
+  closeDatabase();
+  assertTrue(!isDbAvailable(), 'DB should not be available');
+
+  const result = queryArtifact('PROJECT.md');
+  assertEq(result, null, 'queryArtifact returns null when DB closed');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// context-store: queryProject
+// ═══════════════════════════════════════════════════════════════════════════
+
+console.log('\n=== context-store: queryProject returns PROJECT.md content ===');
+{
+  openDatabase(':memory:');
+
+  insertArtifact({
+    path: 'PROJECT.md',
+    artifact_type: 'project',
+    milestone_id: null,
+    slice_id: null,
+    task_id: null,
+    full_content: '# Test Project\n\nThis is the project description.',
+  });
+
+  const content = queryProject();
+  assertEq(content, '# Test Project\n\nThis is the project description.', 'queryProject returns PROJECT.md content');
+
+  closeDatabase();
+}
+
+console.log('\n=== context-store: queryProject returns null when no PROJECT.md ===');
+{
+  openDatabase(':memory:');
+
+  const content = queryProject();
+  assertEq(content, null, 'queryProject returns null when PROJECT.md not imported');
+
+  closeDatabase();
+}
+
+console.log('\n=== context-store: queryProject returns null when DB unavailable ===');
+{
+  closeDatabase();
+  assertTrue(!isDbAvailable(), 'DB should not be available');
+
+  const content = queryProject();
+  assertEq(content, null, 'queryProject returns null when DB closed');
 }
 
 // ─── Final Report ──────────────────────────────────────────────────────────

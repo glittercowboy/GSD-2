@@ -63,7 +63,7 @@ This milestone is complete only when all are true:
 - [x] **S02: Markdown Importers + Auto-Migration** `risk:medium` `depends:[S01]`
   > After this: Existing GSD project starts up, gsd.db appears silently with all artifact types imported. Round-trip fidelity verified for every artifact type.
 
-- [ ] **S03: Core Hierarchy + Full Query Layer + Prompt Rewiring** `risk:high` `depends:[S01,S02]`
+- [x] **S03: Core Hierarchy + Full Query Layer + Prompt Rewiring** `risk:high` `depends:[S01,S02]`
   > After this: All build*Prompt() functions use DB queries instead of inlineGsdRootFile. Dual-write keeps markdown in sync. Prompts contain only relevant context subsets.
 
 - [ ] **S04: Token Measurement + State Derivation from DB** `risk:medium` `depends:[S03]`

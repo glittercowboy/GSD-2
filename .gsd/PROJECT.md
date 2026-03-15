@@ -10,7 +10,7 @@ Selective context injection: the TS system becomes the context curator, using it
 
 ## Current State
 
-S01 (DB Foundation + Decisions + Requirements) and S02 (Markdown Importers + Auto-Migration) are complete. The SQLite abstraction layer (`gsd-db.ts`), context store query layer (`context-store.ts`), and markdown import pipeline (`md-importer.ts`) are built, tested (284 tests, 70 import-specific assertions), and ready for consumption by downstream slices. Schema is at version 2 with `decisions`, `requirements`, `artifacts`, and `schema_version` tables. Auto-migration is wired into `startAuto()` — existing projects silently create `gsd.db` on first run. Provider chain uses `node:sqlite` on Node 22+, falls back to `better-sqlite3`, then null. Graceful fallback ensures no crash when DB unavailable.
+S01 (DB Foundation), S02 (Markdown Importers + Auto-Migration), and S03 (Core Hierarchy + Full Query Layer + Prompt Rewiring) are complete. All 9 prompt builders are rewired from `inlineGsdRootFile` to scoped DB queries via `inlineDecisionsFromDb`, `inlineRequirementsFromDb`, and `inlineProjectFromDb` helpers with transparent filesystem fallback. DB opens at session start for pre-existing `gsd.db` files. Dual-write re-import in `handleAgentEnd` keeps DB in sync after each dispatch unit. 285 tests pass, 0 failures. 12 of 21 requirements validated.
 
 ## Architecture / Key Patterns
 

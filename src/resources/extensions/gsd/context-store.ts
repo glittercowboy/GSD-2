@@ -161,3 +161,35 @@ export function formatRequirementsForPrompt(requirements: Requirement[]): string
     return lines.join('\n');
   }).join('\n\n');
 }
+
+// ─── Artifact Query Functions ──────────────────────────────────────────────
+
+/**
+ * Query a hierarchy artifact by its relative path.
+ * Returns the full_content string or null if not found/unavailable.
+ * Never throws.
+ */
+export function queryArtifact(path: string): string | null {
+  if (!isDbAvailable()) return null;
+  const adapter = _getAdapter();
+  if (!adapter) return null;
+
+  try {
+    const row = adapter.prepare('SELECT full_content FROM artifacts WHERE path = :path').get({ ':path': path });
+    if (!row) return null;
+    const content = row['full_content'] as string;
+    return content || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Query PROJECT.md content from the artifacts table.
+ * PROJECT.md is stored with the relative path 'PROJECT.md' by the importer.
+ * Returns the content string or null if not found/unavailable.
+ * Never throws.
+ */
+export function queryProject(): string | null {
+  return queryArtifact('PROJECT.md');
+}

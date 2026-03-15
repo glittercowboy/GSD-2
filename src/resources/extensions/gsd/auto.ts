@@ -62,6 +62,7 @@ import {
   formatValidationIssues,
 } from "./observability-validator.js";
 import { ensureGitignore, untrackRuntimeFiles, migrateGsdToUntracked } from "./gitignore.js";
+import { isDbAvailable } from "./gsd-db.js";
 import { runGSDDoctor, rebuildState } from "./doctor.js";
 import { snapshotSkills, clearSkillSnapshot } from "./skill-discovery.js";
 import {
@@ -647,6 +648,18 @@ export async function startAuto(
     }
   }
 
+  // Open existing gsd.db if present but not yet opened (e.g. from a prior session).
+  // If migration just created + opened it, isDbAvailable() is already true and this is skipped.
+  if (existsSync(gsdDbPath) && !isDbAvailable()) {
+    try {
+      const { openDatabase: openDb } = await import("./gsd-db.js");
+      openDb(gsdDbPath);
+    } catch (err) {
+      // Graceful degradation (D003): DB open failure must not block auto-mode
+      process.stderr.write(`gsd-db: failed to open existing database: ${(err as Error).message}\n`);
+    }
+  }
+
   // Initialize GitServiceImpl — basePath is set and git repo confirmed
   gitService = new GitServiceImpl(basePath, loadEffectiveGSDPreferences()?.preferences?.git ?? {});
 
@@ -852,6 +865,16 @@ export async function handleAgentEnd(
       autoCommitCurrentBranch(basePath, currentUnit.type, currentUnit.id);
     } catch {
       // Non-fatal
+    }
+  }
+
+  // ── DB dual-write: re-import changed markdown files so next unit's prompts use fresh data ──
+  if (isDbAvailable()) {
+    try {
+      const { migrateFromMarkdown } = await import("./md-importer.js");
+      migrateFromMarkdown(basePath);
+    } catch (err) {
+      process.stderr.write(`gsd-db: re-import failed: ${(err as Error).message}\n`);
     }
   }
 
@@ -2431,6 +2454,71 @@ async function inlineGsdRootFile(
   return inlineFileOptional(absPath, relGsdRootFile(key), label);
 }
 
+// ─── DB-Aware Inline Helpers ──────────────────────────────────────────────────
+
+/**
+ * Inline decisions from the DB (scoped by milestone and/or scope), falling back
+ * to filesystem loading via inlineGsdRootFile when DB is unavailable or empty.
+ */
+async function inlineDecisionsFromDb(
+  base: string, milestoneId?: string, scope?: string,
+): Promise<string | null> {
+  if (isDbAvailable()) {
+    try {
+      const { queryDecisions, formatDecisionsForPrompt } = await import("./context-store.js");
+      const decisions = queryDecisions({ milestoneId, scope });
+      if (decisions.length > 0) {
+        const formatted = formatDecisionsForPrompt(decisions);
+        return `### Decisions\nSource: \`.gsd/DECISIONS.md\`\n\n${formatted}`;
+      }
+    } catch {
+      // Fall through to filesystem fallback
+    }
+  }
+  return inlineGsdRootFile(base, "decisions.md", "Decisions");
+}
+
+/**
+ * Inline requirements from the DB (scoped by slice ownership), falling back
+ * to filesystem loading via inlineGsdRootFile when DB is unavailable or empty.
+ */
+async function inlineRequirementsFromDb(
+  base: string, sliceId?: string,
+): Promise<string | null> {
+  if (isDbAvailable()) {
+    try {
+      const { queryRequirements, formatRequirementsForPrompt } = await import("./context-store.js");
+      const requirements = queryRequirements({ sliceId });
+      if (requirements.length > 0) {
+        const formatted = formatRequirementsForPrompt(requirements);
+        return `### Requirements\nSource: \`.gsd/REQUIREMENTS.md\`\n\n${formatted}`;
+      }
+    } catch {
+      // Fall through to filesystem fallback
+    }
+  }
+  return inlineGsdRootFile(base, "requirements.md", "Requirements");
+}
+
+/**
+ * Inline PROJECT.md from the DB, falling back to filesystem loading
+ * via inlineGsdRootFile when DB is unavailable or empty.
+ */
+async function inlineProjectFromDb(base: string): Promise<string | null> {
+  if (isDbAvailable()) {
+    try {
+      const { queryProject } = await import("./context-store.js");
+      const content = queryProject();
+      if (content) {
+        return `### Project\nSource: \`.gsd/PROJECT.md\`\n\n${content}`;
+      }
+    } catch {
+      // Fall through to filesystem fallback
+    }
+  }
+  return inlineGsdRootFile(base, "project.md", "Project");
+}
+
 // ─── Prompt Builders ──────────────────────────────────────────────────────────
 
 async function buildResearchMilestonePrompt(mid: string, midTitle: string, base: string): Promise<string> {
@@ -2439,11 +2527,11 @@ async function buildResearchMilestonePrompt(mid: string, midTitle: string, base:
 
   const inlined: string[] = [];
   inlined.push(await inlineFile(contextPath, contextRel, "Milestone Context"));
-  const projectInline = await inlineGsdRootFile(base, "project.md", "Project");
+  const projectInline = await inlineProjectFromDb(base);
   if (projectInline) inlined.push(projectInline);
-  const requirementsInline = await inlineGsdRootFile(base, "requirements.md", "Requirements");
+  const requirementsInline = await inlineRequirementsFromDb(base);
   if (requirementsInline) inlined.push(requirementsInline);
-  const decisionsInline = await inlineGsdRootFile(base, "decisions.md", "Decisions");
+  const decisionsInline = await inlineDecisionsFromDb(base, mid);
   if (decisionsInline) inlined.push(decisionsInline);
   inlined.push(inlineTemplate("research", "Research"));
 
@@ -2472,11 +2560,11 @@ async function buildPlanMilestonePrompt(mid: string, midTitle: string, base: str
   if (researchInline) inlined.push(researchInline);
   const priorSummaryInline = await inlinePriorMilestoneSummary(mid, base);
   if (priorSummaryInline) inlined.push(priorSummaryInline);
-  const projectInline = await inlineGsdRootFile(base, "project.md", "Project");
+  const projectInline = await inlineProjectFromDb(base);
   if (projectInline) inlined.push(projectInline);
-  const requirementsInline = await inlineGsdRootFile(base, "requirements.md", "Requirements");
+  const requirementsInline = await inlineRequirementsFromDb(base);
   if (requirementsInline) inlined.push(requirementsInline);
-  const decisionsInline = await inlineGsdRootFile(base, "decisions.md", "Decisions");
+  const decisionsInline = await inlineDecisionsFromDb(base, mid);
   if (decisionsInline) inlined.push(decisionsInline);
   inlined.push(inlineTemplate("roadmap", "Roadmap"));
   inlined.push(inlineTemplate("decisions", "Decisions"));
@@ -2515,9 +2603,9 @@ async function buildResearchSlicePrompt(
   if (contextInline) inlined.push(contextInline);
   const researchInline = await inlineFileOptional(milestoneResearchPath, milestoneResearchRel, "Milestone Research");
   if (researchInline) inlined.push(researchInline);
-  const decisionsInline = await inlineGsdRootFile(base, "decisions.md", "Decisions");
+  const decisionsInline = await inlineDecisionsFromDb(base, mid);
   if (decisionsInline) inlined.push(decisionsInline);
-  const requirementsInline = await inlineGsdRootFile(base, "requirements.md", "Requirements");
+  const requirementsInline = await inlineRequirementsFromDb(base, sid);
   if (requirementsInline) inlined.push(requirementsInline);
   inlined.push(inlineTemplate("research", "Research"));
 
@@ -2551,9 +2639,9 @@ async function buildPlanSlicePrompt(
   inlined.push(await inlineFile(roadmapPath, roadmapRel, "Milestone Roadmap"));
   const researchInline = await inlineFileOptional(researchPath, researchRel, "Slice Research");
   if (researchInline) inlined.push(researchInline);
-  const decisionsInline = await inlineGsdRootFile(base, "decisions.md", "Decisions");
+  const decisionsInline = await inlineDecisionsFromDb(base, mid);
   if (decisionsInline) inlined.push(decisionsInline);
-  const requirementsInline = await inlineGsdRootFile(base, "requirements.md", "Requirements");
+  const requirementsInline = await inlineRequirementsFromDb(base, sid);
   if (requirementsInline) inlined.push(requirementsInline);
   inlined.push(inlineTemplate("plan", "Slice Plan"));
   inlined.push(inlineTemplate("task-plan", "Task Plan"));
@@ -2652,7 +2740,7 @@ async function buildCompleteSlicePrompt(
   const inlined: string[] = [];
   inlined.push(await inlineFile(roadmapPath, roadmapRel, "Milestone Roadmap"));
   inlined.push(await inlineFile(slicePlanPath, slicePlanRel, "Slice Plan"));
-  const requirementsInline = await inlineGsdRootFile(base, "requirements.md", "Requirements");
+  const requirementsInline = await inlineRequirementsFromDb(base, sid);
   if (requirementsInline) inlined.push(requirementsInline);
 
   // Inline all task summaries for this slice
@@ -2712,11 +2800,11 @@ async function buildCompleteMilestonePrompt(
   }
 
   // Inline root GSD files
-  const requirementsInline = await inlineGsdRootFile(base, "requirements.md", "Requirements");
+  const requirementsInline = await inlineRequirementsFromDb(base);
   if (requirementsInline) inlined.push(requirementsInline);
-  const decisionsInline = await inlineGsdRootFile(base, "decisions.md", "Decisions");
+  const decisionsInline = await inlineDecisionsFromDb(base, mid);
   if (decisionsInline) inlined.push(decisionsInline);
-  const projectInline = await inlineGsdRootFile(base, "project.md", "Project");
+  const projectInline = await inlineProjectFromDb(base);
   if (projectInline) inlined.push(projectInline);
   // Inline milestone context file (milestone-level, not GSD root)
   const contextPath = resolveMilestoneFile(base, mid, "CONTEXT");
@@ -2772,7 +2860,7 @@ async function buildReplanSlicePrompt(
   }
 
   // Inline decisions
-  const decisionsInline = await inlineGsdRootFile(base, "decisions.md", "Decisions");
+  const decisionsInline = await inlineDecisionsFromDb(base, mid);
   if (decisionsInline) inlined.push(decisionsInline);
 
   const inlinedContext = `## Inlined Context (preloaded — do not re-read these files)\n\n${inlined.join("\n\n---\n\n")}`;
@@ -2900,7 +2988,7 @@ async function buildRunUatPrompt(
     if (summaryInline) inlined.push(summaryInline);
   }
 
-  const projectInline = await inlineGsdRootFile(base, "project.md", "Project");
+  const projectInline = await inlineProjectFromDb(base);
   if (projectInline) inlined.push(projectInline);
 
   const inlinedContext = `## Inlined Context (preloaded — do not re-read these files)\n\n${inlined.join("\n\n---\n\n")}`;
@@ -2929,11 +3017,11 @@ async function buildReassessRoadmapPrompt(
   const inlined: string[] = [];
   inlined.push(await inlineFile(roadmapPath, roadmapRel, "Current Roadmap"));
   inlined.push(await inlineFile(summaryPath, summaryRel, `${completedSliceId} Summary`));
-  const projectInline = await inlineGsdRootFile(base, "project.md", "Project");
+  const projectInline = await inlineProjectFromDb(base);
   if (projectInline) inlined.push(projectInline);
-  const requirementsInline = await inlineGsdRootFile(base, "requirements.md", "Requirements");
+  const requirementsInline = await inlineRequirementsFromDb(base);
   if (requirementsInline) inlined.push(requirementsInline);
-  const decisionsInline = await inlineGsdRootFile(base, "decisions.md", "Decisions");
+  const decisionsInline = await inlineDecisionsFromDb(base, mid);
   if (decisionsInline) inlined.push(decisionsInline);
 
   const inlinedContext = `## Inlined Context (preloaded — do not re-read these files)\n\n${inlined.join("\n\n---\n\n")}`;

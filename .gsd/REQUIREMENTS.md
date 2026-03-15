@@ -27,13 +27,13 @@ Guidelines:
 
 ### R002 — Graceful fallback to markdown if better-sqlite3 unavailable
 - Class: failure-visibility
-- Status: active
+- Status: validated
 - Description: If `better-sqlite3` fails to load (native addon build failure, unsupported platform), the system falls back to current markdown file loading with no crash
 - Why it matters: GSD ships as an npm package to diverse environments — a native addon failure must not break the product
 - Source: user
 - Primary owning slice: M001/S01
 - Supporting slices: M001/S03
-- Validation: S01 — query/format functions return empty when DB unavailable, no crash. S03 must complete prompt builder fallback.
+- Validation: S01 — query/format functions return empty when DB unavailable, no crash. S03 — all 9 prompt builders fall back to inlineGsdRootFile when isDbAvailable() returns false; 52 test assertions verify fallback behavior.
 - Notes: Fallback is transparent — same prompt output, just without token savings
 
 ### R003 — Markdown importers for all artifact types
@@ -60,58 +60,58 @@ Guidelines:
 
 ### R005 — Selective context queries for decisions
 - Class: core-capability
-- Status: active
+- Status: validated
 - Description: Query active (non-superseded) decisions scoped by milestone, slice, and/or scope category. `active_decisions` view eliminates superseded rows.
 - Why it matters: A project with 50 decisions where 20 are superseded currently injects all 50. This eliminates the 20 irrelevant ones.
 - Source: user
 - Primary owning slice: M001/S01
 - Supporting slices: M001/S03
-- Validation: S01 — queryDecisions with milestone/scope filters verified, superseded exclusion tested. S03 must wire into prompt builders.
+- Validation: S01 — queryDecisions with milestone/scope filters verified, superseded exclusion tested. S03 — milestone-scoped decisions wired into all 9 prompt builders; 43 test assertions prove scoped content delivery.
 - Notes: Query patterns: planning gets milestone + global + architecture scope; task execution gets slice + architecture only
 
 ### R006 — Selective context queries for requirements
 - Class: core-capability
-- Status: active
+- Status: validated
 - Description: Query active (non-superseded) requirements filtered by status and/or slice ownership. `active_requirements` view eliminates superseded rows.
 - Why it matters: Requirements with 30 entries (12+ lines each) get loaded in full even when the task touches 3
 - Source: user
 - Primary owning slice: M001/S01
 - Supporting slices: M001/S03
-- Validation: S01 — queryRequirements with slice/status filters verified, superseded exclusion tested. S03 must wire into prompt builders.
+- Validation: S01 — queryRequirements with slice/status filters verified, superseded exclusion tested. S03 — slice-filtered requirements wired into all 9 prompt builders; 43 test assertions prove scoped content delivery.
 - Notes: Query patterns: planning gets all non-superseded; task execution gets only active mapped to current slice
 
 ### R007 — Context store query layer for all dispatch unit types
 - Class: core-capability
-- Status: active
+- Status: validated
 - Description: Typed query functions that return precisely the context needed for each dispatch unit type: research-milestone, plan-milestone, plan-slice, execute-task, complete-slice, complete-milestone, replan-slice, reassess-roadmap, run-uat
 - Why it matters: Each unit type has different context needs — the query layer encodes the injection matrix from the PRD
 - Source: user
 - Primary owning slice: M001/S03
 - Supporting slices: none
-- Validation: unmapped
+- Validation: S03 — queryArtifact, queryProject, queryDecisions (milestone/scope), queryRequirements (slice) wired into all 9 prompt builders per injection matrix. 52 test assertions in prompt-db.test.ts prove scoped content delivery and fallback.
 - Notes: See PRD Section 5 for the full injection matrix per unit type
 
 ### R008 — Prompt builder rewiring
 - Class: core-capability
-- Status: active
+- Status: validated
 - Description: Replace `inlineGsdRootFile()` calls in all `build*Prompt()` functions with targeted DB queries via the context store. Prompt output is equivalent or better.
 - Why it matters: This is the integration point — where token savings actually happen
 - Source: user
 - Primary owning slice: M001/S03
 - Supporting slices: none
-- Validation: unmapped
+- Validation: S03 — all 19 inlineGsdRootFile call sites replaced with DB-aware helpers (inlineDecisionsFromDb, inlineRequirementsFromDb, inlineProjectFromDb). grep confirms zero direct usage in builders. 43 test assertions prove scoped content and fallback.
 - Notes: Affects: buildResearchMilestonePrompt, buildPlanMilestonePrompt, buildPlanSlicePrompt, buildExecuteTaskPrompt, buildCompleteSlicePrompt, buildCompleteMilestonePrompt, buildReplanSlicePrompt, buildReassessRoadmapPrompt, buildRunUatPrompt
 
 ### R009 — Dual-write: markdown alongside DB
 - Class: continuity
-- Status: active
+- Status: validated
 - Description: When the DB is the source of truth, markdown files continue to be written alongside for human readability, git history, and rollback safety
 - Why it matters: Preserves the human-readable file trail and provides a rollback path — delete gsd.db and fall back to markdown
 - Source: user
 - Primary owning slice: M001/S03
 - Supporting slices: M001/S06
-- Validation: unmapped
-- Notes: Post-unit hooks or explicit write calls keep markdown in sync after DB writes
+- Validation: S03 — handleAgentEnd re-imports changed markdown files into DB via migrateFromMarkdown after auto-commit. 8 test assertions prove DB updates when source markdown changes. Re-import failure is non-fatal.
+- Notes: Post-unit hooks or explicit write calls keep markdown in sync after DB writes. S06 will add tool-triggered dual-write for structured LLM tools.
 
 ### R010 — Built-in token measurement
 - Class: differentiator
@@ -247,6 +247,10 @@ Guidelines:
 
 ## Validated
 
+### R002 — Graceful fallback to markdown if better-sqlite3 unavailable
+- Validated by: M001/S01 + M001/S03
+- Proof: S01 — query/format functions return empty when DB unavailable. S03 — all 9 prompt builders fall back to inlineGsdRootFile when isDbAvailable() returns false; 52 test assertions verify fallback behavior. Full end-to-end fallback chain proven.
+
 ### R003 — Markdown importers for all artifact types
 - Validated by: M001/S02
 - Proof: 70-assertion test suite covering parseDecisionsTable, parseRequirementsSections, importHierarchyArtifacts, migrateFromMarkdown orchestrator. All artifact types imported and round-trip verified.
@@ -254,6 +258,26 @@ Guidelines:
 ### R004 — Silent auto-migration on first run
 - Validated by: M001/S02
 - Proof: Auto-migration wired into startAuto() with dynamic imports and try/catch guard. Detects markdown files, opens DB, runs migrateFromMarkdown. Compiles clean, tested via compilation.
+
+### R005 — Selective context queries for decisions
+- Validated by: M001/S01 + M001/S03
+- Proof: S01 — queryDecisions with milestone/scope filters verified, superseded exclusion tested. S03 — milestone-scoped decisions wired into all 9 prompt builders; 43 test assertions prove scoped content delivery and fallback.
+
+### R006 — Selective context queries for requirements
+- Validated by: M001/S01 + M001/S03
+- Proof: S01 — queryRequirements with slice/status filters verified, superseded exclusion tested. S03 — slice-filtered requirements wired into all 9 prompt builders; 43 test assertions prove scoped content delivery and fallback.
+
+### R007 — Context store query layer for all dispatch unit types
+- Validated by: M001/S03
+- Proof: queryArtifact, queryProject, queryDecisions (milestone/scope), queryRequirements (slice) wired into all 9 prompt builders per injection matrix. 52 test assertions in prompt-db.test.ts prove scoped content delivery and fallback.
+
+### R008 — Prompt builder rewiring
+- Validated by: M001/S03
+- Proof: All 19 inlineGsdRootFile call sites replaced with DB-aware helpers. grep confirms zero direct usage in builders (7 remaining = 1 def + 3 fallback + 3 JSDoc). 43 test assertions prove scoped content and fallback.
+
+### R009 — Dual-write: markdown alongside DB
+- Validated by: M001/S03
+- Proof: handleAgentEnd re-imports changed markdown files into DB via migrateFromMarkdown after auto-commit. 8 test assertions prove DB updates when source markdown changes. Re-import failure is non-fatal.
 
 ### R017 — Sub-5ms query latency
 - Validated by: M001/S01
@@ -357,14 +381,14 @@ Guidelines:
 | ID | Class | Status | Primary owner | Supporting | Proof |
 |---|---|---|---|---|---|
 | R001 | core-capability | active | M001/S01 | none | S01+S02 partial |
-| R002 | failure-visibility | active | M001/S01 | M001/S03 | S01 partial |
+| R002 | failure-visibility | validated | M001/S01 | M001/S03 | S01+S03 validated |
 | R003 | core-capability | validated | M001/S02 | none | S02 validated |
 | R004 | primary-user-loop | validated | M001/S02 | none | S02 validated |
-| R005 | core-capability | active | M001/S01 | M001/S03 | S01 partial |
-| R006 | core-capability | active | M001/S01 | M001/S03 | S01 partial |
-| R007 | core-capability | active | M001/S03 | none | unmapped |
-| R008 | core-capability | active | M001/S03 | none | unmapped |
-| R009 | continuity | active | M001/S03 | M001/S06 | unmapped |
+| R005 | core-capability | validated | M001/S01 | M001/S03 | S01+S03 validated |
+| R006 | core-capability | validated | M001/S01 | M001/S03 | S01+S03 validated |
+| R007 | core-capability | validated | M001/S03 | none | S03 validated |
+| R008 | core-capability | validated | M001/S03 | none | S03 validated |
+| R009 | continuity | validated | M001/S03 | M001/S06 | S03 validated |
 | R010 | differentiator | active | M001/S04 | none | unmapped |
 | R011 | core-capability | active | M001/S04 | none | unmapped |
 | R012 | core-capability | active | M001/S05 | none | unmapped |
@@ -387,7 +411,7 @@ Guidelines:
 
 ## Coverage Summary
 
-- Active requirements: 15
-- Mapped to slices: 15
-- Validated: 6 (R003, R004, R017, R018, R020, R021)
+- Active requirements: 9
+- Mapped to slices: 9
+- Validated: 12 (R002, R003, R004, R005, R006, R007, R008, R009, R017, R018, R020, R021)
 - Unmapped active requirements: 0
