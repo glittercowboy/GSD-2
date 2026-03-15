@@ -19,6 +19,7 @@ import {
   runWebCliBranch,
   type RunWebCliBranchDeps,
 } from './cli-web-branch.js'
+import { stopWebMode } from './web-mode.js'
 import { initResources, buildResourceLoader } from './resource-loader.js'
 import { ensureManagedTools } from './tool-bootstrap.js'
 import { loadStoredEnvKeys } from './wizard.js'
@@ -49,6 +50,7 @@ export interface CliDeps extends RunWebCliBranchDeps {
   stderr?: WritableLike
   exit?: ExitFn
   importRunUpdate?: () => Promise<{ runUpdate: () => Promise<void> }>
+  stopWebMode?: typeof stopWebMode
 }
 
 function writeHelp(stdout: WritableLike): void {
@@ -69,6 +71,7 @@ function writeHelp(stdout: WritableLike): void {
   stdout.write('\nSubcommands:\n')
   stdout.write('  config                   Re-run the setup wizard\n')
   stdout.write('  update                   Update GSD to the latest version\n')
+  stdout.write('  web stop                 Stop the running web server\n')
 }
 
 function exitAndReturn(exit: ExitFn, code: number): number {
@@ -117,6 +120,20 @@ export async function runCli(argv = process.argv, deps: CliDeps = {}): Promise<n
     const { runUpdate } = await (deps.importRunUpdate ?? (() => import('./update-cmd.js')) )()
     await runUpdate()
     return exitAndReturn(exit, 0)
+  }
+
+  // Handle `gsd web stop` before the --web branch so it doesn't require the flag
+  if (cliFlags.messages[0] === 'web' && cliFlags.messages[1] === 'stop') {
+    const webBranch = await runWebCliBranch(cliFlags, {
+      stopWebMode: deps.stopWebMode,
+      cwd: deps.cwd,
+      stderr,
+      baseSessionsDir: sessionsDir,
+      agentDir,
+    })
+    if (webBranch.handled) {
+      return exitAndReturn(exit, webBranch.exitCode)
+    }
   }
 
   ;(deps.loadStoredEnvKeys ?? loadStoredEnvKeys)(authStorage)

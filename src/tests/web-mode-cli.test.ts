@@ -21,7 +21,8 @@ test('package hooks declare a concrete staged web host', () => {
   assert.equal(rootPackage.scripts['stage:web-host'], 'node scripts/stage-web-standalone.cjs')
   assert.equal(rootPackage.scripts['build:web-host'], 'npm --prefix web run build && npm run stage:web-host')
   assert.equal(rootPackage.scripts['gsd'], 'node scripts/dev-cli.js')
-  assert.equal(rootPackage.scripts['gsd:web'], 'node scripts/dev-cli.js --web')
+  assert.equal(rootPackage.scripts['gsd:web'], 'node scripts/build-web-if-stale.cjs && node scripts/dev-cli.js --web')
+  assert.equal(rootPackage.scripts['gsd:web:stop'], 'node scripts/dev-cli.js web stop')
   assert.ok(rootPackage.files.includes('dist/web'))
 
   const webPackage = JSON.parse(readFileSync(join(projectRoot, 'web', 'package.json'), 'utf-8'))
@@ -95,6 +96,9 @@ test('launchWebMode prefers the packaged standalone host and opens the resolved 
   let spawnInvocation:
     | { command: string; args: readonly string[]; options: Record<string, any> }
     | undefined
+  let writtenPid: { path: string; pid: number } | undefined
+
+  const pidFilePath = join(tmp, 'web-server.pid')
 
   try {
     const status = await webMode.launchWebMode(
@@ -114,6 +118,7 @@ test('launchWebMode prefers the packaged standalone host and opens the resolved 
         spawn: (command, args, options) => {
           spawnInvocation = { command, args, options: options as Record<string, any> }
           return {
+            pid: 99999,
             once: () => undefined,
             unref: () => {
               unrefCalled = true
@@ -123,6 +128,11 @@ test('launchWebMode prefers the packaged standalone host and opens the resolved 
         waitForBootReady: async () => undefined,
         openBrowser: (url) => {
           openedUrl = url
+        },
+        pidFilePath,
+        writePidFile: (path, pid) => {
+          writtenPid = { path, pid }
+          webMode.writePidFile(path, pid)
         },
         stderr: {
           write(chunk: string) {
@@ -163,6 +173,82 @@ test('launchWebMode prefers the packaged standalone host and opens the resolved 
     })
     assert.match(stderrOutput, /status=started/)
     assert.match(stderrOutput, /port=45123/)
+    // PID file must be written with the spawned process's PID
+    assert.deepEqual(writtenPid, { path: pidFilePath, pid: 99999 })
+    assert.equal(webMode.readPidFile(pidFilePath), 99999)
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+})
+
+test('stopWebMode kills process by PID and removes PID file', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'gsd-web-stop-'))
+  const pidFilePath = join(tmp, 'web-server.pid')
+  let stderrOutput = ''
+  let killedPid: number | undefined
+
+  try {
+    webMode.writePidFile(pidFilePath, 12345)
+
+    const result = webMode.stopWebMode({
+      pidFilePath,
+      readPidFile: webMode.readPidFile,
+      deletePidFile: webMode.deletePidFile,
+      stderr: { write: (chunk: string) => { stderrOutput += chunk; return true } },
+      // Override process.kill to avoid killing a real process in tests
+    })
+
+    // Since PID 12345 is almost certainly dead, stopWebMode should succeed by treating ESRCH as "already gone"
+    assert.equal(result.ok, true)
+    assert.match(stderrOutput, /pid=12345/)
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+})
+
+test('stopWebMode reports error when no PID file exists', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'gsd-web-stop-nopid-'))
+  const pidFilePath = join(tmp, 'web-server.pid')
+  let stderrOutput = ''
+
+  try {
+    const result = webMode.stopWebMode({
+      pidFilePath,
+      readPidFile: webMode.readPidFile,
+      deletePidFile: webMode.deletePidFile,
+      stderr: { write: (chunk: string) => { stderrOutput += chunk; return true } },
+    })
+
+    assert.equal(result.ok, false)
+    assert.equal(result.reason, 'no-pid-file')
+    assert.match(stderrOutput, /not running/)
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+})
+
+test('runWebCliBranch handles "web stop" subcommand without --web flag', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'gsd-web-branch-stop-'))
+  const pidFilePath = join(tmp, 'web-server.pid')
+  let stderrOutput = ''
+
+  try {
+    const flags = cliWeb.parseCliArgs(['node', 'dist/loader.js', 'web', 'stop'])
+    assert.equal(flags.web, undefined)
+    assert.deepEqual(flags.messages, ['web', 'stop'])
+
+    const result = await cliWeb.runWebCliBranch(flags, {
+      stopWebMode: (deps) => {
+        return webMode.stopWebMode({ ...deps, pidFilePath })
+      },
+      stderr: { write: (chunk: string) => { stderrOutput += chunk; return true } },
+    })
+
+    assert.equal(result.handled, true)
+    if (!result.handled) throw new Error('expected web stop to be handled')
+    assert.equal(result.exitCode, 1) // no PID file — expected failure
+    if (result.action !== 'stop') throw new Error('expected action=stop')
+    assert.equal(result.stopResult.ok, false)
   } finally {
     rmSync(tmp, { recursive: true, force: true })
   }

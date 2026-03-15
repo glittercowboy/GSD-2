@@ -1,4 +1,4 @@
-import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, rmSync, symlinkSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, unlinkSync, symlinkSync } from "node:fs";
 import { delimiter, join } from "node:path";
 
 type ManagedTool = "fd" | "rg";
@@ -54,16 +54,34 @@ export function resolveToolFromPath(tool: ManagedTool, pathValue: string | undef
   return null;
 }
 
+function pathExists(p: string): boolean {
+  try {
+    lstatSync(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Returns true only when the path resolves to an actual file (not a broken symlink). */
+function isProvisioned(p: string): boolean {
+  try {
+    return lstatSync(p).isFile() || existsSync(p);
+  } catch {
+    return false;
+  }
+}
+
 function provisionTool(targetDir: string, tool: ManagedTool, sourcePath: string): string {
   const targetPath = join(targetDir, TOOL_SPECS[tool].targetName);
-  if (existsSync(targetPath)) return targetPath;
+  if (isProvisioned(targetPath)) return targetPath;
 
   mkdirSync(targetDir, { recursive: true });
 
   try {
     symlinkSync(sourcePath, targetPath);
   } catch {
-    rmSync(targetPath, { force: true });
+    try { unlinkSync(targetPath); } catch { /* already gone */ }
     copyFileSync(sourcePath, targetPath);
     chmodSync(targetPath, 0o755);
   }
@@ -75,7 +93,7 @@ export function ensureManagedTools(targetDir: string, pathValue: string | undefi
   const provisioned: string[] = [];
 
   for (const tool of Object.keys(TOOL_SPECS) as ManagedTool[]) {
-    if (existsSync(join(targetDir, TOOL_SPECS[tool].targetName))) continue;
+    if (isProvisioned(join(targetDir, TOOL_SPECS[tool].targetName))) continue;
     const sourcePath = resolveToolFromPath(tool, pathValue);
     if (!sourcePath) continue;
     provisioned.push(provisionTool(targetDir, tool, sourcePath));

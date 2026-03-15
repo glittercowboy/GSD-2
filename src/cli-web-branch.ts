@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readdirSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { agentDir as defaultAgentDir, sessionsDir as defaultSessionsDir } from './app-paths.js'
 import { getProjectSessionsDir } from './project-sessions.js'
-import { launchWebMode, type WebModeLaunchStatus } from './web-mode.js'
+import { launchWebMode, stopWebMode, type WebModeLaunchStatus, type WebModeStopResult } from './web-mode.js'
 
 export interface CliFlags {
   mode?: 'text' | 'json' | 'rpc'
@@ -24,6 +24,7 @@ type WritableLike = Pick<typeof process.stderr, 'write'>
 
 export interface RunWebCliBranchDeps {
   runWebMode?: typeof launchWebMode
+  stopWebMode?: typeof stopWebMode
   cwd?: () => string
   stderr?: WritableLike
   baseSessionsDir?: string
@@ -95,19 +96,41 @@ function emitWebModeFailure(stderr: WritableLike, status: WebModeLaunchStatus): 
   stderr.write(`[gsd] Web mode launch failed: ${status.failureReason}\n`)
 }
 
-export async function runWebCliBranch(
-  flags: CliFlags,
-  deps: RunWebCliBranchDeps = {},
-): Promise<
+export type RunWebCliBranchResult =
   | { handled: false }
   | {
       handled: true
       exitCode: number
+      action: 'start'
       status: WebModeLaunchStatus
       launchInputs: { cwd: string; projectSessionsDir: string; agentDir: string }
     }
-> {
-  if (!flags.web) {
+  | {
+      handled: true
+      exitCode: number
+      action: 'stop'
+      stopResult: WebModeStopResult
+    }
+
+export async function runWebCliBranch(
+  flags: CliFlags,
+  deps: RunWebCliBranchDeps = {},
+): Promise<RunWebCliBranchResult> {
+  // Handle `gsd web stop` subcommand
+  if (flags.messages[0] === 'web' && flags.messages[1] === 'stop') {
+    const stderr = deps.stderr ?? process.stderr
+    const stopResult = (deps.stopWebMode ?? stopWebMode)({ stderr })
+    return {
+      handled: true,
+      exitCode: stopResult.ok ? 0 : 1,
+      action: 'stop',
+      stopResult,
+    }
+  }
+
+  // `gsd web start` is an alias for `gsd --web`
+  const isWebStart = flags.messages[0] === 'web' && (flags.messages[1] === 'start' || flags.messages[1] === undefined && false)
+  if (!flags.web && !isWebStart) {
     return { handled: false }
   }
 
@@ -131,6 +154,7 @@ export async function runWebCliBranch(
   return {
     handled: true,
     exitCode: status.ok ? 0 : 1,
+    action: 'start',
     status,
     launchInputs: {
       cwd: currentCwd,

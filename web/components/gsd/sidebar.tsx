@@ -37,12 +37,12 @@ import { deriveWorkflowAction } from "@/lib/workflow-actions"
 
 const StatusIcon = ({ status }: { status: ItemStatus }) => {
   if (status === "done") {
-    return <CheckCircle2 className="h-3.5 w-3.5 text-foreground/70" />
+    return <CheckCircle2 className="h-4 w-4 shrink-0 text-foreground/70" />
   }
   if (status === "in-progress") {
-    return <Play className="h-3.5 w-3.5 text-foreground" />
+    return <Play className="h-4 w-4 shrink-0 text-foreground" />
   }
-  return <Circle className="h-3.5 w-3.5 text-muted-foreground/50" />
+  return <Circle className="h-4 w-4 shrink-0 text-muted-foreground/50" />
 }
 
 interface SidebarProps {
@@ -266,14 +266,14 @@ export function Sidebar({ activeView, onViewChange }: SidebarProps) {
                 <button
                   onClick={() => toggleMilestone(milestone.id)}
                   className={cn(
-                    "flex w-full items-center gap-1.5 px-2 py-1 text-sm transition-colors hover:bg-accent/50",
+                    "flex w-full items-center gap-1.5 px-2 py-1.5 text-sm transition-colors hover:bg-accent/50",
                     milestoneActive && "bg-accent/30",
                   )}
                 >
                   {milestoneOpen ? (
-                    <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                    <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
                   ) : (
-                    <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+                    <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
                   )}
                   <StatusIcon status={status} />
                   <span className={cn("truncate", status === "pending" && "text-muted-foreground")}>
@@ -294,14 +294,14 @@ export function Sidebar({ activeView, onViewChange }: SidebarProps) {
                           <button
                             onClick={() => toggleSlice(sliceKey)}
                             className={cn(
-                              "flex w-full items-center gap-1.5 px-2 py-1 text-sm transition-colors hover:bg-accent/50",
+                              "flex w-full items-center gap-1.5 px-2 py-1.5 text-sm transition-colors hover:bg-accent/50",
                               sliceActive && "bg-accent/20",
                             )}
                           >
                             {sliceOpen ? (
-                              <ChevronDown className="h-3 w-3 text-muted-foreground" />
+                              <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
                             ) : (
-                              <ChevronRight className="h-3 w-3 text-muted-foreground" />
+                              <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
                             )}
                             <StatusIcon status={sliceStatus} />
                             <span className={cn("truncate text-[13px]", sliceStatus === "pending" && "text-muted-foreground")}>
@@ -322,11 +322,11 @@ export function Sidebar({ activeView, onViewChange }: SidebarProps) {
                                   <div
                                     key={`${sliceKey}-${task.id}`}
                                     className={cn(
-                                      "flex cursor-pointer items-center gap-1.5 px-2 py-0.5 text-xs transition-colors hover:bg-accent/50",
+                                      "flex cursor-pointer items-center gap-1.5 px-2 py-1 text-xs transition-colors hover:bg-accent/50",
                                       activeScope?.taskId === task.id && sliceActive && "bg-accent/10",
                                     )}
                                   >
-                                    <FileText className="h-3 w-3 text-muted-foreground" />
+                                    <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
                                     <StatusIcon status={taskStatus} />
                                     <span className={cn("truncate", taskStatus === "pending" && "text-muted-foreground")}>
                                       {task.id}: {task.title}

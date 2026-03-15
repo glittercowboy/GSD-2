@@ -1,10 +1,11 @@
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { request as httpRequest } from 'node:http'
 import { createServer } from 'node:net'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { openBrowser } from './onboarding.js'
+import { webPidFilePath as defaultWebPidFilePath } from './app-paths.js'
 
 const DEFAULT_HOST = '127.0.0.1'
 const DEFAULT_PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -15,7 +16,7 @@ type ResourceBootstrapLike = {
   initResources: (agentDir: string) => void
 }
 
-type SpawnedChildLike = Pick<ChildProcess, 'once' | 'unref'>
+type SpawnedChildLike = Pick<ChildProcess, 'once' | 'unref' | 'pid'>
 
 export interface WebModeLaunchOptions {
   cwd: string
@@ -84,6 +85,68 @@ export interface WebModeDeps {
   env?: NodeJS.ProcessEnv
   platform?: NodeJS.Platform
   execPath?: string
+  pidFilePath?: string
+  writePidFile?: (path: string, pid: number) => void
+  readPidFile?: (path: string) => number | null
+  deletePidFile?: (path: string) => void
+}
+
+export interface WebModeStopResult {
+  ok: boolean
+  reason?: string
+}
+
+export function writePidFile(filePath: string, pid: number): void {
+  writeFileSync(filePath, String(pid), 'utf8')
+}
+
+export function readPidFile(filePath: string): number | null {
+  try {
+    const content = readFileSync(filePath, 'utf8').trim()
+    const pid = parseInt(content, 10)
+    return Number.isFinite(pid) && pid > 0 ? pid : null
+  } catch {
+    return null
+  }
+}
+
+export function deletePidFile(filePath: string): void {
+  try {
+    unlinkSync(filePath)
+  } catch {
+    // Non-fatal — file may already be gone
+  }
+}
+
+export function stopWebMode(deps: Pick<WebModeDeps, 'pidFilePath' | 'readPidFile' | 'deletePidFile' | 'stderr'> = {}): WebModeStopResult {
+  const stderr = deps.stderr ?? process.stderr
+  const pidFilePath = deps.pidFilePath ?? defaultWebPidFilePath
+  const readPid = deps.readPidFile ?? readPidFile
+  const deletePid = deps.deletePidFile ?? deletePidFile
+
+  const pid = readPid(pidFilePath)
+  if (pid === null) {
+    const message = `[gsd] Web server is not running (no PID file at ${pidFilePath})\n`
+    stderr.write(message)
+    return { ok: false, reason: 'no-pid-file' }
+  }
+
+  try {
+    process.kill(pid, 'SIGTERM')
+    deletePid(pidFilePath)
+    stderr.write(`[gsd] Web server stopped (pid=${pid})\n`)
+    return { ok: true }
+  } catch (error) {
+    const isAlreadyDead = error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'ESRCH'
+    deletePid(pidFilePath)
+    if (isAlreadyDead) {
+      stderr.write(`[gsd] Web server process (pid=${pid}) was already gone — cleared stale PID file\n`)
+      return { ok: true }
+    }
+    const reason = error instanceof Error ? error.message : String(error)
+    stderr.write(`[gsd] Failed to stop web server (pid=${pid}): ${reason}\n`)
+    return { ok: false, reason }
+  }
 }
 
 async function loadResourceBootstrap(): Promise<ResourceBootstrapLike> {
@@ -403,6 +466,11 @@ export async function launchWebMode(
 
   try {
     spawnResult.child.unref?.()
+    const pid = spawnResult.child.pid
+    if (pid !== undefined) {
+      const pidFilePath = deps.pidFilePath ?? defaultWebPidFilePath
+      ;(deps.writePidFile ?? writePidFile)(pidFilePath, pid)
+    }
     ;(deps.openBrowser ?? openBrowser)(url)
   } catch (error) {
     const failure: WebModeLaunchFailure = {

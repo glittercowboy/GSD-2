@@ -1,0 +1,85 @@
+#!/usr/bin/env node
+/**
+ * Rebuild the Next.js web host only when web source files are newer than the
+ * staged standalone build.  Skips the build when nothing has changed.
+ *
+ * Exit codes:
+ *   0 — build was up-to-date or successfully rebuilt
+ *   1 — build failed
+ */
+
+'use strict'
+
+const { execSync } = require('node:child_process')
+const { existsSync, readdirSync, statSync } = require('node:fs')
+const { join, resolve } = require('node:path')
+
+const root = resolve(__dirname, '..')
+const webRoot = join(root, 'web')
+const stagedSentinel = join(root, 'dist', 'web', 'standalone', 'server.js')
+
+// Directories inside web/ that are not source and should be ignored for
+// staleness comparison.
+const IGNORED_DIRS = new Set(['node_modules', '.next', '.turbo', 'dist', 'out', '.cache'])
+
+/**
+ * Walk a directory tree, yield the mtime of every file, skipping ignored dirs.
+ * Returns the maximum mtime found (ms since epoch), or 0 if nothing found.
+ */
+function newestMtime(dir) {
+  let max = 0
+  let stack = [dir]
+  while (stack.length > 0) {
+    const current = stack.pop()
+    let entries
+    try {
+      entries = readdirSync(current, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        if (!IGNORED_DIRS.has(entry.name)) {
+          stack.push(join(current, entry.name))
+        }
+        continue
+      }
+      try {
+        const mt = statSync(join(current, entry.name)).mtimeMs
+        if (mt > max) max = mt
+      } catch {
+        // skip unreadable files
+      }
+    }
+  }
+  return max
+}
+
+function sentinelMtime() {
+  try {
+    return statSync(stagedSentinel).mtimeMs
+  } catch {
+    return 0
+  }
+}
+
+const sourceMtime = newestMtime(webRoot)
+const builtMtime = sentinelMtime()
+
+if (builtMtime > 0 && builtMtime >= sourceMtime) {
+  console.log('[gsd] Web build is up-to-date, skipping rebuild.')
+  process.exit(0)
+}
+
+if (builtMtime === 0) {
+  console.log('[gsd] No staged web build found — building now...')
+} else {
+  console.log('[gsd] Web source has changed since last build — rebuilding...')
+}
+
+try {
+  execSync('npm run build:web-host', { cwd: root, stdio: 'inherit' })
+} catch (err) {
+  console.error('[gsd] Web build failed:', err.message)
+  process.exit(1)
+}

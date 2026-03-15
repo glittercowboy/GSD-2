@@ -121,54 +121,35 @@ function WorkspaceChrome() {
   return (
     <div className="relative flex h-screen flex-col overflow-hidden bg-background text-foreground">
       <header className="flex h-12 flex-shrink-0 items-center justify-between border-b border-border bg-card px-4">
-        <div className="min-w-0 flex items-center gap-3">
+        <div className="flex items-center gap-3">
           <div className="flex items-center gap-2">
             <div className="flex h-5 w-5 items-center justify-center rounded bg-foreground text-xs font-bold text-background">
               G
             </div>
             <span className="font-semibold tracking-tight">GSD 2</span>
           </div>
-          <div className="min-w-0">
-            <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-              <span className="truncate">{projectLabel}</span>
-              {titleOverride && (
-                <span
-                  className="inline-flex max-w-[24rem] items-center rounded-full border border-foreground/15 bg-accent/60 px-2 py-0.5 text-[10px] font-medium text-foreground"
-                  data-testid="workspace-title-override"
-                  title={titleOverride}
-                >
-                  {titleOverride}
-                </span>
-              )}
-            </div>
-            <div
-              className="truncate font-mono text-[11px] text-muted-foreground/80"
-              data-testid="workspace-project-cwd"
-              title={projectPath || "Project path pending"}
-            >
-              {projectPath ? shortenPath(projectPath, 5) : "Resolving current project…"}
-            </div>
-          </div>
+          <span className="text-2xl font-thin text-muted-foreground/50 leading-none select-none">/</span>
+          <span className="text-sm text-muted-foreground" data-testid="workspace-project-cwd">
+            {projectLabel}
+            {titleOverride && (
+              <span
+                className="ml-2 inline-flex items-center rounded-full border border-foreground/15 bg-accent/60 px-2 py-0.5 text-[10px] font-medium text-foreground"
+                data-testid="workspace-title-override"
+                title={titleOverride}
+              >
+                {titleOverride}
+              </span>
+            )}
+          </span>
         </div>
 
         <div className="flex items-center gap-3">
           <span
-            className={cn(
-              "inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-xs",
-              statusPillClass(status.tone),
-            )}
-            data-testid="workspace-connection-status"
+            className="text-xs text-muted-foreground"
+            data-testid="workspace-scope-label"
           >
-            <span className={cn("h-2 w-2 rounded-full", connectionDotClass(status.tone), status.tone === "success" && "animate-pulse")} />
-            <span>{status.label}</span>
+            {scopeLabel}
           </span>
-          <div className="hidden text-right md:block">
-            <div className="text-xs text-muted-foreground">{sessionLabel || "Session pending"}</div>
-            <div className="font-mono text-[11px] text-muted-foreground/80" data-testid="workspace-scope-label">
-              {scopeLabel}
-            </div>
-          </div>
-          <span className="font-mono text-xs text-muted-foreground">v2.0.0</span>
         </div>
       </header>
 
