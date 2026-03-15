@@ -42,7 +42,7 @@
 
 ## Tasks
 
-- [ ] **T01: Markdown generators + DB-first write helpers** `est:45m`
+- [x] **T01: Markdown generators + DB-first write helpers** `est:45m`
   - Why: The DB→markdown direction is missing. S03 writes markdown first then re-imports to DB. S06 tools need to write DB first then regenerate markdown files. This task creates the generators for DECISIONS.md and REQUIREMENTS.md from DB state, plus a helper to write an artifact to DB + disk. Round-trip fidelity is the critical risk.
   - Files: `src/resources/extensions/gsd/db-writer.ts`, `src/resources/extensions/gsd/tests/db-writer.test.ts`
   - Do: Create `db-writer.ts` with: (1) `generateDecisionsMd(decisions)` — takes Decision[] and produces full DECISIONS.md content with header, comment block, table header, separator, and data rows; (2) `generateRequirementsMd(requirements)` — takes Requirement[] grouped by status into Active/Validated/Deferred/Out of Scope sections with ### headings and bullet fields; (3) `nextDecisionId()` — queries DB for MAX id and returns next D-number; (4) `saveDecisionToDb(fields)` — upserts decision to DB, calls `getActiveDecisions()`, regenerates DECISIONS.md via `generateDecisionsMd()`, writes file with `saveFile()`; (5) `updateRequirementInDb(id, updates)` — upserts requirement to DB, calls `getActiveRequirements()`, regenerates REQUIREMENTS.md via `generateRequirementsMd()`, writes file; (6) `saveArtifactToDb(path, type, content, milestoneId?, sliceId?, taskId?)` — inserts artifact to DB and writes markdown file to disk. All dynamic imports of gsd-db.js inside try/catch per D014. Test round-trip: generate → parse → compare for both decisions and requirements.

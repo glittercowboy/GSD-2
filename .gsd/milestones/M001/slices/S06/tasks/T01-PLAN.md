@@ -41,6 +41,12 @@ Create `db-writer.ts` with functions that generate DECISIONS.md and REQUIREMENTS
 - Round-trip: `generateRequirementsMd(reqs)` → `parseRequirementsSections(output)` → fields match original requirements
 - `npx tsc --noEmit` — clean compilation
 
+## Observability Impact
+
+- **stderr logging**: All DB write helpers emit `gsd-db:` prefixed messages to stderr on failure (saveDecisionToDb, updateRequirementInDb, saveArtifactToDb, nextDecisionId)
+- **Future agent inspection**: Generated DECISIONS.md and REQUIREMENTS.md files are readable on disk; DB state queryable via `_getAdapter()` or context-store queries
+- **Failure visibility**: Dynamic import failures are caught and logged; `nextDecisionId` returns `D001` as safe fallback when DB unavailable; `updateRequirementInDb` throws with descriptive message when requirement not found
+
 ## Inputs
 
 - `src/resources/extensions/gsd/gsd-db.ts` — upsertDecision, upsertRequirement, insertArtifact, getActiveDecisions, getActiveRequirements, getRequirementById, _getAdapter
