@@ -914,11 +914,16 @@ export function validatePreferences(preferences: GSDPreferences): {
         errors.push("git.main_branch must be a valid branch name (alphanumeric, _, -, /, .)");
       }
     }
-    // Deprecated: isolation and merge_to_main are ignored (branchless architecture).
-    // Emit warnings so users know to remove them from preferences.
     if (g.isolation !== undefined) {
-      warnings.push("git.isolation is deprecated — worktree isolation is now always enabled. Remove this setting.");
+      const validIsolationModes = new Set(["worktree", "branch"]);
+      if (typeof g.isolation === "string" && validIsolationModes.has(g.isolation)) {
+        git.isolation = g.isolation as "worktree" | "branch";
+      } else {
+        errors.push("git.isolation must be one of: worktree, branch");
+      }
     }
+    // Deprecated: merge_to_main is ignored (milestone-level merge architecture).
+    // Emit a warning so users know to remove it from preferences.
     if (g.merge_to_main !== undefined) {
       warnings.push("git.merge_to_main is deprecated — milestone-level merge is now always used. Remove this setting.");
     }

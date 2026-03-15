@@ -34,6 +34,7 @@ export interface GitPreferences {
   commit_type?: string;
   main_branch?: string;
   merge_strategy?: "squash" | "merge";
+  isolation?: "worktree" | "branch";
 }
 
 export const VALID_BRANCH_NAME = /^[a-zA-Z0-9_\-\/.]+$/;

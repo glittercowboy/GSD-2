@@ -19,6 +19,7 @@ import {
 } from "./git-service.js";
 import { parseRoadmap } from "./files.js";
 import { loadEffectiveGSDPreferences } from "./preferences.js";
+import type { GSDPreferences } from "./preferences.js";
 
 // ─── Module State ──────────────────────────────────────────────────────────
 
@@ -76,6 +77,24 @@ function getCurrentBranch(cwd: string): string {
 
 export function autoWorktreeBranch(milestoneId: string): string {
   return `milestone/${milestoneId}`;
+}
+
+export function shouldUseWorktreeIsolation(basePath: string, overridePrefs?: GSDPreferences): boolean {
+  const preferences = overridePrefs ?? loadEffectiveGSDPreferences()?.preferences;
+  const isolation = preferences?.git?.isolation;
+  if (isolation === "worktree") return true;
+  if (isolation === "branch") return false;
+
+  try {
+    const legacyBranches = execFileSync("git", ["branch", "--list", "gsd/*/*"], {
+      cwd: basePath,
+      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf-8",
+    }).trim();
+    return legacyBranches === "";
+  } catch {
+    return true;
+  }
 }
 
 // ─── Public API ────────────────────────────────────────────────────────────

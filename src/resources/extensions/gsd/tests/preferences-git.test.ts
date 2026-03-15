@@ -1,6 +1,6 @@
 /**
- * preferences-git.test.ts — Validates that deprecated git.isolation and
- * git.merge_to_main preference fields produce deprecation warnings.
+ * preferences-git.test.ts — Validates git preference parsing for isolation
+ * plus the deprecated merge_to_main warning.
  */
 
 import { createTestContext } from "./test-helpers.ts";
@@ -9,21 +9,25 @@ import { validatePreferences } from "../preferences.ts";
 const { assertEq, assertTrue, report } = createTestContext();
 
 async function main(): Promise<void> {
-  console.log("\n=== git.isolation deprecated ===");
+  console.log("\n=== git.isolation validation ===");
 
-  // Any value produces a deprecation warning
   {
-    const { warnings } = validatePreferences({ git: { isolation: "worktree" } });
-    assertTrue(warnings.length > 0, "isolation: worktree — produces deprecation warning");
-    assertTrue(warnings[0].includes("deprecated"), "isolation: worktree — warning mentions deprecated");
+    const { preferences, errors, warnings } = validatePreferences({ git: { isolation: "worktree" } });
+    assertEq(errors.length, 0, "isolation: worktree — no errors");
+    assertEq(warnings.length, 0, "isolation: worktree — no warnings");
+    assertEq(preferences.git?.isolation, "worktree", "isolation: worktree — stored");
   }
   {
-    const { warnings } = validatePreferences({ git: { isolation: "branch" } });
-    assertTrue(warnings.length > 0, "isolation: branch — produces deprecation warning");
-    assertTrue(warnings[0].includes("deprecated"), "isolation: branch — warning mentions deprecated");
+    const { preferences, errors, warnings } = validatePreferences({ git: { isolation: "branch" } });
+    assertEq(errors.length, 0, "isolation: branch — no errors");
+    assertEq(warnings.length, 0, "isolation: branch — no warnings");
+    assertEq(preferences.git?.isolation, "branch", "isolation: branch — stored");
+  }
+  {
+    const { errors } = validatePreferences({ git: { isolation: "bad-mode" as never } });
+    assertTrue(errors.some(error => error.includes("git.isolation")), "isolation: invalid value — produces error");
   }
 
-  // Undefined passes through without warning
   {
     const { preferences, warnings } = validatePreferences({ git: { auto_push: true } });
     assertEq(warnings.length, 0, "isolation: undefined — no warnings");
@@ -51,13 +55,14 @@ async function main(): Promise<void> {
     assertEq(preferences.git?.merge_to_main, undefined, "merge_to_main: undefined — not set");
   }
 
-  console.log("\n=== both deprecated fields together ===");
+  console.log("\n=== isolation + merge_to_main together ===");
   {
-    const { warnings } = validatePreferences({
+    const { preferences, warnings, errors } = validatePreferences({
       git: { isolation: "worktree", merge_to_main: "slice" },
     });
-    assertEq(warnings.length, 2, "both deprecated fields — 2 warnings");
-    assertTrue(warnings.some(w => w.includes("isolation")), "one warning mentions isolation");
+    assertEq(errors.length, 0, "combined fields — no errors");
+    assertEq(preferences.git?.isolation, "worktree", "combined fields — isolation stored");
+    assertEq(warnings.length, 1, "combined fields — only merge_to_main warns");
     assertTrue(warnings.some(w => w.includes("merge_to_main")), "one warning mentions merge_to_main");
   }
 
