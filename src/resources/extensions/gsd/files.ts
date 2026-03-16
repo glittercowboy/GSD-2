@@ -849,7 +849,7 @@ export function parseContextDependsOn(content: string | null): string[] {
   const fm = parseFrontmatterMap(fmLines);
   const raw = fm['depends_on'];
   if (!Array.isArray(raw) || raw.length === 0) return [];
-  return (raw as string[]).map(s => String(s).toUpperCase().trim()).filter(Boolean);
+  return (raw as string[]).map(s => String(s).trim()).filter(Boolean);
 }
 
 /**
