@@ -6,6 +6,22 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.17.0] - 2026-03-15
+
+### Added
+- **Token optimization profiles** — `budget`, `balanced`, and `quality` presets that coordinate model selection, phase skipping, and context compression to reduce token usage by 40-60% on budget mode
+- **Complexity-based task routing** — automatically classifies tasks as simple/standard/heavy and routes to appropriate models, with persistent learning from routing history
+- **`git.commit_docs` preference** — set to `false` to keep `.gsd/` planning artifacts local-only, useful for teams where only some members use GSD
+
+### Changed
+- Updated Ollama cloud provider model catalog
+
+### Fixed
+- Native binary hangs in GSD auto-mode paths (#453)
+- Auto-mode can be stopped from a different terminal (#586)
+- Parse cache collision causing false loop detection on `complete-slice` (#583)
+- Exhaustive switch handling and cleanup in Google provider (#587)
+
 ## [2.16.0] - 2026-03-15
 
 ### Added
@@ -722,7 +738,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 - License updated to MIT
 
-[Unreleased]: https://github.com/gsd-build/gsd-2/compare/v2.16.0...HEAD
+[Unreleased]: https://github.com/gsd-build/gsd-2/compare/v2.17.0...HEAD
+[2.17.0]: https://github.com/gsd-build/gsd-2/compare/v2.16.0...v2.17.0
 [2.16.0]: https://github.com/gsd-build/gsd-2/compare/v2.15.1...v2.16.0
 [2.15.1]: https://github.com/gsd-build/gsd-2/releases/tag/v2.15.1
 [2.15.0]: https://github.com/gsd-build/gsd-2/compare/v2.14.4...v2.15.0

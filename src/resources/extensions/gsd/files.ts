@@ -26,12 +26,16 @@ import { nativeParseRoadmap, nativeExtractSection, nativeParsePlanFile, nativePa
 
 const CACHE_MAX = 50;
 
-/** Fast composite key: length + first/last 100 chars. Unique enough for distinct markdown files. */
+/** Fast composite key: length + first/mid/last 100 chars. The middle sample
+ *  prevents collisions when only a few characters change in the interior of
+ *  a file (e.g., a checkbox [ ] → [x] that doesn't alter length or endpoints). */
 function cacheKey(content: string): string {
   const len = content.length;
   const head = content.slice(0, 100);
+  const midStart = Math.max(0, Math.floor(len / 2) - 50);
+  const mid = len > 200 ? content.slice(midStart, midStart + 100) : '';
   const tail = len > 100 ? content.slice(-100) : '';
-  return `${len}:${head}:${tail}`;
+  return `${len}:${head}:${mid}:${tail}`;
 }
 
 const _parseCache = new Map<string, unknown>();
@@ -845,7 +849,7 @@ export function parseContextDependsOn(content: string | null): string[] {
   const fm = parseFrontmatterMap(fmLines);
   const raw = fm['depends_on'];
   if (!Array.isArray(raw) || raw.length === 0) return [];
-  return (raw as string[]).map(s => String(s).toUpperCase().trim()).filter(Boolean);
+  return (raw as string[]).map(s => String(s).trim()).filter(Boolean);
 }
 
 /**
@@ -944,6 +948,128 @@ export async function appendOverride(basePath: string, change: string, appliedAt
       "",
     ].join("\n");
     await saveFile(overridesPath, header + entry);
+  }
+}
+
+export async function appendKnowledge(
+  basePath: string,
+  type: "rule" | "pattern" | "lesson",
+  entry: string,
+  scope: string,
+): Promise<void> {
+  const knowledgePath = resolveGsdRootFile(basePath, "KNOWLEDGE");
+  const existing = await loadFile(knowledgePath);
+
+  if (existing) {
+    // Find the next ID for this type
+    const prefix = type === "rule" ? "K" : type === "pattern" ? "P" : "L";
+    const idPattern = new RegExp(`^\\| ${prefix}(\\d+)`, "gm");
+    let maxId = 0;
+    let match;
+    while ((match = idPattern.exec(existing)) !== null) {
+      const num = parseInt(match[1], 10);
+      if (num > maxId) maxId = num;
+    }
+    const nextId = `${prefix}${String(maxId + 1).padStart(3, "0")}`;
+
+    // Build the table row
+    let row: string;
+    if (type === "rule") {
+      row = `| ${nextId} | ${scope} | ${entry} | — | manual |`;
+    } else if (type === "pattern") {
+      row = `| ${nextId} | ${entry} | — | ${scope} |`;
+    } else {
+      row = `| ${nextId} | ${entry} | — | — | ${scope} |`;
+    }
+
+    // Find the right section and append after the table header
+    const sectionHeading = type === "rule" ? "## Rules" : type === "pattern" ? "## Patterns" : "## Lessons Learned";
+    const sectionIdx = existing.indexOf(sectionHeading);
+    if (sectionIdx !== -1) {
+      // Find the end of the table header row (the |---|...| line)
+      const afterHeading = existing.indexOf("\n", sectionIdx);
+      // Find the next section or end
+      const nextSection = existing.indexOf("\n## ", afterHeading + 1);
+      const insertPoint = nextSection !== -1 ? nextSection : existing.length;
+
+      // Insert row before the next section (or at end)
+      const before = existing.slice(0, insertPoint).trimEnd();
+      const after = existing.slice(insertPoint);
+      await saveFile(knowledgePath, before + "\n" + row + "\n" + after);
+    } else {
+      // Section not found — append at end
+      await saveFile(knowledgePath, existing.trimEnd() + "\n\n" + row + "\n");
+    }
+  } else {
+    // Create file from scratch with template header
+    const header = [
+      "# Project Knowledge",
+      "",
+      "Append-only register of project-specific rules, patterns, and lessons learned.",
+      "Agents read this before every unit. Add entries when you discover something worth remembering.",
+      "",
+    ].join("\n");
+
+    let content: string;
+    if (type === "rule") {
+      content = header + [
+        "## Rules",
+        "",
+        "| # | Scope | Rule | Why | Added |",
+        "|---|-------|------|-----|-------|",
+        `| K001 | ${scope} | ${entry} | — | manual |`,
+        "",
+        "## Patterns",
+        "",
+        "| # | Pattern | Where | Notes |",
+        "|---|---------|-------|-------|",
+        "",
+        "## Lessons Learned",
+        "",
+        "| # | What Happened | Root Cause | Fix | Scope |",
+        "|---|--------------|------------|-----|-------|",
+        "",
+      ].join("\n");
+    } else if (type === "pattern") {
+      content = header + [
+        "## Rules",
+        "",
+        "| # | Scope | Rule | Why | Added |",
+        "|---|-------|------|-----|-------|",
+        "",
+        "## Patterns",
+        "",
+        "| # | Pattern | Where | Notes |",
+        "|---|---------|-------|-------|",
+        `| P001 | ${entry} | — | ${scope} |`,
+        "",
+        "## Lessons Learned",
+        "",
+        "| # | What Happened | Root Cause | Fix | Scope |",
+        "|---|--------------|------------|-----|-------|",
+        "",
+      ].join("\n");
+    } else {
+      content = header + [
+        "## Rules",
+        "",
+        "| # | Scope | Rule | Why | Added |",
+        "|---|-------|------|-----|-------|",
+        "",
+        "## Patterns",
+        "",
+        "| # | Pattern | Where | Notes |",
+        "|---|---------|-------|-------|",
+        "",
+        "## Lessons Learned",
+        "",
+        "| # | What Happened | Root Cause | Fix | Scope |",
+        "|---|--------------|------------|-----|-------|",
+        `| L001 | ${entry} | — | — | ${scope} |`,
+        "",
+      ].join("\n");
+    }
+    await saveFile(knowledgePath, content);
   }
 }
 
