@@ -20,9 +20,20 @@ export class Input implements Component, Focusable {
 	private cursor: number = 0; // Cursor position in the value
 	public onSubmit?: (value: string) => void;
 	public onEscape?: () => void;
+	public placeholder: string = "";
 
 	/** Focusable interface - set by TUI when focus changes */
-	focused: boolean = false;
+	private _focused: boolean = false;
+	get focused(): boolean {
+		return this._focused;
+	}
+	set focused(value: boolean) {
+		this._focused = value;
+		if (!value) {
+			this.isInPaste = false;
+			this.pasteBuffer = "";
+		}
+	}
 
 	// Bracketed paste mode buffering
 	private pasteBuffer: string = "";
@@ -438,6 +449,16 @@ export class Input implements Component, Focusable {
 
 		if (availableWidth <= 0) {
 			return [prompt];
+		}
+
+		// Show placeholder when value is empty
+		if (this.value === "" && this.placeholder) {
+			const placeholderText = this.placeholder.slice(0, availableWidth - 1);
+			const marker = this.focused ? CURSOR_MARKER : "";
+			const cursorChar = "\x1b[7m \x1b[27m"; // inverse space for cursor
+			const dimPlaceholder = `\x1b[2m${placeholderText}\x1b[22m`; // dim text
+			const padding = " ".repeat(Math.max(0, availableWidth - visibleWidth(placeholderText) - 1));
+			return [prompt + marker + cursorChar + dimPlaceholder + padding];
 		}
 
 		let visibleText = "";

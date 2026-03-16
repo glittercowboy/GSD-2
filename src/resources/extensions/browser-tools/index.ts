@@ -17,6 +17,16 @@ import { registerWaitTools } from "./tools/wait.js";
 import { registerPageTools } from "./tools/pages.js";
 import { registerFormTools } from "./tools/forms.js";
 import { registerIntentTools } from "./tools/intent.js";
+import { registerPdfTools } from "./tools/pdf.js";
+import { registerStatePersistenceTools } from "./tools/state-persistence.js";
+import { registerNetworkMockTools } from "./tools/network-mock.js";
+import { registerDeviceTools } from "./tools/device.js";
+import { registerExtractTools } from "./tools/extract.js";
+import { registerVisualDiffTools } from "./tools/visual-diff.js";
+import { registerZoomTools } from "./tools/zoom.js";
+import { registerCodegenTools } from "./tools/codegen.js";
+import { registerActionCacheTools } from "./tools/action-cache.js";
+import { registerInjectionDetectionTools } from "./tools/injection-detect.js";
 
 export default function (pi: ExtensionAPI) {
 	pi.on("session_shutdown", async () => { await closeBrowser(); });
@@ -48,4 +58,14 @@ export default function (pi: ExtensionAPI) {
 	registerPageTools(pi, deps);
 	registerFormTools(pi, deps);
 	registerIntentTools(pi, deps);
+	registerPdfTools(pi, deps);
+	registerStatePersistenceTools(pi, deps);
+	registerNetworkMockTools(pi, deps);
+	registerDeviceTools(pi, deps);
+	registerExtractTools(pi, deps);
+	registerVisualDiffTools(pi, deps);
+	registerZoomTools(pi, deps);
+	registerCodegenTools(pi, deps);
+	registerActionCacheTools(pi, deps);
+	registerInjectionDetectionTools(pi, deps);
 }

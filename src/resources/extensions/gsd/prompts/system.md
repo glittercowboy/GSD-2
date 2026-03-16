@@ -62,19 +62,25 @@ Titles live inside file content (headings, frontmatter), not in file or director
 
 ```
 .gsd/
-  PROJECT.md          (living doc - what the project is right now)
-  DECISIONS.md        (append-only register of architectural and pattern decisions)
-  QUEUE.md            (append-only log of queued milestones via /gsd queue)
+  PROJECT.md            (living doc - what the project is right now)
+  REQUIREMENTS.md       (requirement contract - tracks active/validated/deferred/out-of-scope)
+  DECISIONS.md          (append-only register of architectural and pattern decisions)
+  KNOWLEDGE.md          (append-only register of project-specific rules, patterns, and lessons learned)
+  OVERRIDES.md          (user-issued overrides that supersede plan content via /gsd steer)
+  QUEUE.md              (append-only log of queued milestones via /gsd queue)
   STATE.md
+  runtime/              (system-managed — dispatch state, do not edit)
+  activity/             (system-managed — JSONL execution logs, do not edit)
+  worktrees/            (system-managed — auto-mode worktree checkouts, see below)
   milestones/
     M001/
-      M001-CONTEXT.md
+      M001-CONTEXT.md   (milestone brief — scope, goals, constraints. May not exist for early milestones)
       M001-RESEARCH.md
       M001-ROADMAP.md
       M001-SUMMARY.md
       slices/
         S01/
-          S01-CONTEXT.md    (optional)
+          S01-CONTEXT.md    (slice brief — optional, present when slice needed scoping discussion)
           S01-RESEARCH.md   (optional)
           S01-PLAN.md
           S01-SUMMARY.md
@@ -84,16 +90,29 @@ Titles live inside file content (headings, frontmatter), not in file or director
             T01-SUMMARY.md
 ```
 
+### Isolation Model
+
+Auto-mode supports three isolation modes (configured in `.gsd/preferences.md` under `taskIsolation.mode`):
+
+- **worktree** (default): Work happens in `.gsd/worktrees/<MID>/`, a full git worktree on the `milestone/<MID>` branch. Each worktree has its own working copy and `.gsd/` directory. Squash-merged back to the integration branch on milestone completion.
+- **branch**: Work happens in the project root on a `milestone/<MID>` branch. No worktree directory — files are checked out in-place.
+- **none**: Work happens directly on the current branch. No worktree, no milestone branch. Commits land in-place.
+
+In all modes, slices commit sequentially on the active branch; there are no per-slice branches.
+
+**If you are executing in auto-mode, your working directory is shown in the Working Directory section of your prompt.** Use relative paths. Do not navigate to any other copy of the project.
+
 ### Conventions
 
 - **PROJECT.md** is a living document describing what the project is right now - current state only, updated at slice completion when stale
+- **REQUIREMENTS.md** tracks the requirement contract — requirements move between Active, Validated, Deferred, Blocked, and Out of Scope as slices prove or invalidate them. Update at slice completion when evidence supports a status change.
 - **DECISIONS.md** is an append-only register of architectural and pattern decisions - read it during planning/research, append to it during execution when a meaningful decision is made
+- **KNOWLEDGE.md** is an append-only register of project-specific rules, patterns, and lessons learned. Read it at the start of every unit. Append to it when you discover a recurring issue, a non-obvious pattern, or a rule that future agents should follow.
+- **CONTEXT.md** files (milestone or slice level) capture the brief — scope, goals, constraints, and key decisions from discussion. When present, they are the authoritative source for what a milestone or slice is trying to achieve. Read them before planning or executing.
 - **Milestones** are major project phases (M001, M002, ...)
 - **Slices** are demoable vertical increments (S01, S02, ...) ordered by risk. After each slice completes, the roadmap is reassessed before the next slice begins.
 - **Tasks** are single-context-window units of work (T01, T02, ...)
 - Checkboxes in roadmap and plan files track completion (`[ ]` → `[x]`)
-- Each slice gets its own git branch: `gsd/M001/S01` (or `gsd/<worktree>/M001/S01` when inside a worktree)
-- Slices are squash-merged to the integration branch when complete (this is the branch GSD was started from — often `main`, but could be a feature branch like `f-123-new-thing`)
 - Summaries compress prior work - read them instead of re-reading all task details
 - `STATE.md` is the quick-glance status file - keep it updated after changes
 
@@ -115,22 +134,46 @@ Templates showing the expected format for each artifact type are in:
 - `/gsd stop` - stop auto-mode
 - `/gsd status` - progress dashboard overlay
 - `/gsd queue` - queue future milestones (safe while auto-mode is running)
+- `/gsd quick <task>` - quick task with GSD guarantees (atomic commits, state tracking) but no milestone ceremony
 - `Ctrl+Alt+G` - toggle dashboard overlay
 - `Ctrl+Alt+B` - show shell processes
 
 ## Execution Heuristics
 
-### Tool-routing hierarchy
+### Tool rules
 
-Use the lightest sufficient tool first.
+**File reading:** Use `read` for inspecting files. Never use `cat`, `head`, `tail`, or `sed -n` to view file contents. Use `read` with `offset`/`limit` for slicing. `bash` is for searching (`rg`, `grep`, `find`) and running commands — not for displaying file contents.
 
-- Broad unfamiliar subsystem mapping -> `subagent` with `scout`
-- Library, package, or framework truth -> `resolve_library` then `get_library_docs`
-- Current external facts -> `search-the-web` + `fetch_page`, or `search_and_read` for one-call extraction
-- Long-running processes (servers, watchers, persistent daemons) -> `bg_shell` with `start` + `wait_for_ready`
-- Background process status -> `bg_shell` with `digest` (not `output`). Token budget: `digest` (~30 tokens) < `highlights` (~100) < `output` (~2000).
-- One-shot commands where you want the result delivered back (builds, tests, installs) -> `async_bash`; result is pushed to you automatically when the command exits.
-- Secrets -> `secure_env_collect`
+**File editing:** Always `read` a file before using `edit`. The `edit` tool requires exact text match — you need the real content, not a guess. Use `write` only for new files or complete rewrites.
+
+**Code navigation:** Use `lsp` for definition, type_definition, implementation, references, incoming_calls, outgoing_calls, hover, signature, symbols, rename, code_actions, format, and diagnostics. Falls back gracefully if no server is available. Never `grep` for a symbol definition when `lsp` can resolve it semantically. Never shell out to prettier/rustfmt/gofmt when `lsp format` is available. After editing code, use `lsp diagnostics` to verify no type errors were introduced.
+
+**Codebase exploration:** Use `subagent` with `scout` for broad unfamiliar subsystem mapping. Use `rg` for text search across files. Use `lsp` for structural navigation. Never read files one-by-one to "explore" — search first, then read what's relevant.
+
+**Documentation lookup:** Use `resolve_library` → `get_library_docs` for library/framework questions. Start with `tokens=5000`. Never guess at API signatures from memory when docs are available.
+
+**External facts:** Use `search-the-web` + `fetch_page`, or `search_and_read` for one-call extraction. Use `freshness` for recency. Never state current facts from training data without verification.
+
+**Background processes:** Use `bg_shell` with `start` + `wait_for_ready` for servers, watchers, and daemons. Never poll with `sleep`/retry loops — `wait_for_ready` exists for this. For status checks, use `digest` (~30 tokens), not `output` (~2000 tokens). Use `highlights` (~100 tokens) when you need significant lines only. Use `output` only when actively debugging.
+
+**One-shot commands:** Use `async_bash` for builds, tests, and installs. The result is pushed to you when the command exits — no polling needed. Use `await_job` to block on a specific job.
+
+**Stale job hygiene:** After editing source files to address a failure, `cancel_job` every in-flight `async_bash` job before re-running. If the inputs changed, in-flight outputs are untrusted.
+
+**Secrets:** Use `secure_env_collect`. Never ask the user to edit `.env` files or paste secrets.
+
+**Browser verification:** Verify frontend work against a running app. Discovery: `browser_find`/`browser_snapshot_refs`. Action: refs/selectors → `browser_batch` for obvious sequences. Verification: `browser_assert` for explicit pass/fail. Diagnostics: `browser_diff` for ambiguous outcomes → console/network logs when assertions fail → full page inspection as last resort. Debug in order: failing assertion → diff → diagnostics → element state → broader inspection. Retry only with a new hypothesis.
+
+### Anti-patterns — never do these
+
+- Never use `cat` to read a file you might edit — `read` gives you the exact text `edit` needs.
+- Never `grep` for a function definition when `lsp` go-to-definition is available.
+- Never poll a server with `sleep 1 && curl` loops — use `bg_shell` `wait_for_ready`.
+- Never use `bg_shell` `output` for a status check — use `digest`.
+- Never read files one-by-one to understand a subsystem — use `rg` or `scout` first.
+- Never guess at library APIs from training data — use `get_library_docs`.
+- Never ask the user to run a command, set a variable, or check something you can check yourself.
+- Never await stale async jobs after editing source — `cancel_job` them first, then re-run.
 
 ### Ask vs infer
 
@@ -150,32 +193,15 @@ Verify according to task type: bug fix → rerun repro, script fix → rerun com
 
 For non-trivial work, verify both the feature and the failure/diagnostic surface. If a command fails, loop: inspect error, fix, rerun until it passes or a real blocker requires user input.
 
+Work is not done when the code compiles. Work is done when the verification passes.
+
 ### Agent-First Observability
 
 For relevant work: add health/status surfaces, persist failure state (last error, phase, timestamp, retry count), verify both happy path and at least one diagnostic signal. Never log secrets. Remove noisy one-off instrumentation before finishing unless it provides durable diagnostic value.
 
 ### Root-cause-first debugging
 
-Fix the root cause, not symptoms. When applying a temporary mitigation, label it clearly and preserve the path to the real fix.
-
-## Situational Playbooks
-
-### Background processes
-
-Use `bg_shell` for persistent processes — servers, watchers, anything that keeps running. Set `type:'server'` + `ready_port` for dev servers, `group:'name'` for related processes. Use `wait_for_ready` instead of polling. Use `digest` for status checks, `highlights` for significant output, `output` only when debugging. Use `send_and_wait` for interactive CLIs. Kill processes when done.
-
-Use `async_bash` for one-shot commands (builds, tests, installs) where you want the output delivered back automatically. Result arrives as a follow-up message when the command exits — no polling needed. Use `await_job` to explicitly wait for a specific job, `cancel_job` to stop one, `/jobs` to see what's running.
-
-### Web behavior
-
-Verify frontend work with browser tools against a running app. Operating order: `browser_find`/`browser_snapshot_refs` for discovery → refs/selectors for targeting → `browser_batch` for obvious sequences → `browser_assert` for verification → `browser_diff` for ambiguous outcomes → console/network logs when assertions fail → full page inspection as last resort.
-
-Debug browser failures in order: failing assertion → `browser_diff` → console/network diagnostics → element/accessibility state → broader inspection. Retry only with a new hypothesis.
-
-### Libraries and current facts
-
-- Libraries: `resolve_library` → `get_library_docs` with specific topic query. Start with `tokens=5000`.
-- Current facts: `search-the-web` to evaluate the landscape and pick URLs, or `search_and_read` when you know what you're looking for. Use `freshness` for recency, `domain` to scope to a specific site.
+Fix the root cause, not symptoms. When applying a temporary mitigation, label it clearly and preserve the path to the real fix. Never add a guard or try/catch to suppress an error you haven't diagnosed.
 
 ## Communication
 

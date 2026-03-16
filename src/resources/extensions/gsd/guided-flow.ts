@@ -13,6 +13,8 @@ import { loadPrompt, inlineTemplate } from "./prompt-loader.js";
 import { deriveState } from "./state.js";
 import { startAuto } from "./auto.js";
 import { readCrashLock, clearLock, formatCrashInfo } from "./crash-recovery.js";
+import { listUnitRuntimeRecords, clearUnitRuntimeRecord } from "./unit-runtime.js";
+import { resolveExpectedArtifactPath } from "./auto.js";
 import {
   gsdRoot, milestonesDir, resolveMilestoneFile, resolveMilestonePath,
   resolveSliceFile, resolveSlicePath, resolveGsdRootFile, relGsdRootFile,
@@ -20,11 +22,12 @@ import {
 } from "./paths.js";
 import { randomInt } from "node:crypto";
 import { join } from "node:path";
-import { readFileSync, existsSync, mkdirSync, readdirSync, rmSync, unlinkSync } from "node:fs";
-import { execSync, execFileSync } from "node:child_process";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, rmSync, unlinkSync } from "node:fs";
+import { nativeIsRepo, nativeInit, nativeAddPaths, nativeCommit } from "./native-git-bridge.js";
 import { ensureGitignore, ensurePreferences, untrackRuntimeFiles } from "./gitignore.js";
 import { loadEffectiveGSDPreferences } from "./preferences.js";
 import { showConfirm } from "../shared/confirm-ui.js";
+import { loadQueueOrder, sortByQueueOrder, saveQueueOrder } from "./queue-order.js";
 
 // ─── Auto-start after discuss ─────────────────────────────────────────────────
 
@@ -48,12 +51,77 @@ export function checkAutoStartAfterDiscuss(): boolean {
 
   const { ctx, pi, basePath, milestoneId, step } = pendingAutoStart;
 
-  // Don't fire until the discuss phase has actually produced a context file
-  // for the milestone being discussed. agent_end fires after every LLM turn,
-  // including the initial "What do you want to build?" response — we need to
-  // wait for the full conversation to complete and the LLM to write CONTEXT.md.
+  // Gate 1: Primary milestone must have CONTEXT.md or ROADMAP.md
+  // The "discuss" path creates CONTEXT.md; the "plan" path creates ROADMAP.md.
   const contextFile = resolveMilestoneFile(basePath, milestoneId, "CONTEXT");
-  if (!contextFile) return false; // no context yet — keep waiting
+  const roadmapFile = resolveMilestoneFile(basePath, milestoneId, "ROADMAP");
+  if (!contextFile && !roadmapFile) return false; // neither artifact yet — keep waiting
+
+  // Gate 2: STATE.md must exist — written as the last step in the discuss
+  // output phase. This prevents auto-start from firing during Phase 3
+  // (sequential readiness gates for remaining milestones) in multi-milestone
+  // discussions, where M001-CONTEXT.md exists but M002/M003 haven't been
+  // processed yet.
+  const stateFile = resolveGsdRootFile(basePath, "STATE");
+  if (!stateFile) return false; // discussion not finalized yet
+
+  // Gate 3: Multi-milestone completeness warning
+  // Parse PROJECT.md for milestone sequence, warn if any are missing context.
+  // Don't block — milestones can be intentionally queued without context.
+  const projectFile = resolveGsdRootFile(basePath, "PROJECT");
+  if (projectFile) {
+    try {
+      const projectContent = readFileSync(projectFile, "utf-8");
+      const milestoneIds = parseMilestoneSequenceFromProject(projectContent);
+      if (milestoneIds.length > 1) {
+        const missing = milestoneIds.filter(id => {
+          const hasContext = !!resolveMilestoneFile(basePath, id, "CONTEXT");
+          const hasDraft = !!resolveMilestoneFile(basePath, id, "CONTEXT-DRAFT");
+          const hasDir = existsSync(join(basePath, ".gsd", "milestones", id));
+          return !hasContext && !hasDraft && !hasDir;
+        });
+        if (missing.length > 0) {
+          ctx.ui.notify(
+            `Multi-milestone validation: ${missing.join(", ")} not found in filesystem. ` +
+            `Discussion may not have completed all readiness gates.`,
+            "warning",
+          );
+        }
+      }
+    } catch { /* non-fatal — PROJECT.md parsing failure shouldn't block auto-start */ }
+  }
+
+  // Gate 4: Discussion manifest process verification (multi-milestone only)
+  // The LLM writes DISCUSSION-MANIFEST.json after each Phase 3 gate decision.
+  // If the manifest exists but gates_completed < total, the LLM hasn't finished
+  // presenting all readiness gates to the user — block auto-start.
+  const manifestPath = join(basePath, ".gsd", "DISCUSSION-MANIFEST.json");
+  if (existsSync(manifestPath)) {
+    try {
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
+      const total = typeof manifest.total === "number" ? manifest.total : 0;
+      const completed = typeof manifest.gates_completed === "number" ? manifest.gates_completed : 0;
+
+      if (total > 1 && completed < total) {
+        // Discussion not complete — block auto-start until all gates are done
+        return false;
+      }
+
+      // Cross-check manifest milestones against PROJECT.md if available
+      if (projectFile) {
+        const projectContent = readFileSync(projectFile, "utf-8");
+        const projectIds = parseMilestoneSequenceFromProject(projectContent);
+        const manifestIds = Object.keys(manifest.milestones ?? {});
+        const untracked = projectIds.filter(id => !manifestIds.includes(id));
+        if (untracked.length > 0) {
+          ctx.ui.notify(
+            `Discussion manifest missing gates for: ${untracked.join(", ")}`,
+            "warning",
+          );
+        }
+      }
+    } catch { /* malformed manifest — warn but don't block */ }
+  }
 
   // Draft promotion cleanup: if a CONTEXT-DRAFT.md exists alongside the new
   // CONTEXT.md, delete the draft — it's been consumed by the discussion.
@@ -62,9 +130,29 @@ export function checkAutoStartAfterDiscuss(): boolean {
     if (draftFile) unlinkSync(draftFile);
   } catch { /* non-fatal — stale draft doesn't break anything, CONTEXT.md wins */ }
 
+  // Cleanup: remove discussion manifest after auto-start (only needed during discussion)
+  try { unlinkSync(manifestPath); } catch { /* may not exist for single-milestone */ }
+
   pendingAutoStart = null;
-  startAuto(ctx, pi, basePath, false, { step }).catch(() => {});
+  startAuto(ctx, pi, basePath, false, { step }).catch((err) => {
+    ctx.ui.notify(`Auto-start failed: ${err instanceof Error ? err.message : String(err)}`, "warning");
+    if (process.env.GSD_DEBUG) console.error('[gsd] auto start error:', err);
+  });
   return true;
+}
+
+/**
+ * Extract milestone IDs from PROJECT.md milestone sequence table.
+ * Looks for rows like "| M001 | Name | Status |" and extracts the ID column.
+ */
+function parseMilestoneSequenceFromProject(content: string): string[] {
+  const ids: string[] = [];
+  const lines = content.split(/\r?\n/);
+  for (const line of lines) {
+    const match = line.match(/^\|\s*(M\d{3}[A-Z0-9-]*)\s*\|/);
+    if (match) ids.push(match[1]);
+  }
+  return ids;
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -116,14 +204,21 @@ function buildDiscussPrompt(nextId: string, preamble: string, _basePath: string)
 export function findMilestoneIds(basePath: string): string[] {
   const dir = milestonesDir(basePath);
   try {
-    return readdirSync(dir, { withFileTypes: true })
+    const ids = readdirSync(dir, { withFileTypes: true })
       .filter((d) => d.isDirectory())
       .map((d) => {
         const match = d.name.match(/^(M\d+(?:-[a-z0-9]{6})?)/);
         return match ? match[1] : d.name;
-      })
-      .sort(milestoneIdSort);
-  } catch {
+      });
+
+    // Apply custom queue order if available, else fall back to numeric sort
+    const customOrder = loadQueueOrder(basePath);
+    return sortByQueueOrder(ids, customOrder);
+  } catch (err) {
+    // Log why milestone scanning failed — silent [] here causes infinite loops (#456)
+    if (existsSync(dir)) {
+      console.error(`[gsd] findMilestoneIds: .gsd/milestones/ exists but readdirSync failed — ${err instanceof Error ? err.message : String(err)}`);
+    }
     return [];
   }
 }
@@ -217,6 +312,235 @@ export async function showQueue(
     ctx.ui.notify("No milestones exist yet. Run /gsd to create the first one.", "warning");
     return;
   }
+
+  // ── Count pending milestones ────────────────────────────────────────
+  const pendingMilestones = state.registry.filter(
+    m => m.status === "pending" || m.status === "active",
+  );
+  const completeCount = state.registry.filter(m => m.status === "complete").length;
+
+  // ── If multiple pending milestones, show queue management hub ──────
+  if (pendingMilestones.length > 1) {
+    const choice = await showNextAction(ctx, {
+      title: "GSD — Queue Management",
+      summary: [
+        `${completeCount} complete, ${pendingMilestones.length} pending.`,
+      ],
+      actions: [
+        {
+          id: "reorder",
+          label: "Reorder queue",
+          description: `Change execution order of ${pendingMilestones.length} pending milestones.`,
+          recommended: true,
+        },
+        {
+          id: "add",
+          label: "Add new work",
+          description: "Queue new milestones via discussion.",
+        },
+      ],
+      notYetMessage: "Run /gsd queue when ready.",
+    });
+
+    if (choice === "reorder") {
+      await handleQueueReorder(ctx, basePath, state);
+      return;
+    }
+    if (choice === "not_yet") return;
+    // "add" falls through to existing queue-add logic below
+  }
+
+  // ── Existing queue-add flow ─────────────────────────────────────────
+  await showQueueAdd(ctx, pi, basePath, state);
+}
+
+async function handleQueueReorder(
+  ctx: ExtensionCommandContext,
+  basePath: string,
+  state: Awaited<ReturnType<typeof deriveState>>,
+): Promise<void> {
+  const { showQueueReorder: showReorderUI } = await import("./queue-reorder-ui.js");
+  const { invalidateStateCache } = await import("./state.js");
+
+  const completed = state.registry
+    .filter(m => m.status === "complete")
+    .map(m => ({ id: m.id, title: m.title, dependsOn: m.dependsOn }));
+
+  const pending = state.registry
+    .filter(m => m.status !== "complete")
+    .map(m => ({ id: m.id, title: m.title, dependsOn: m.dependsOn }));
+
+  const result = await showReorderUI(ctx, completed, pending);
+  if (!result) {
+    ctx.ui.notify("Queue reorder cancelled.", "info");
+    return;
+  }
+
+  // Save the new order
+  saveQueueOrder(basePath, result.order);
+  invalidateStateCache();
+
+  // Remove conflicting depends_on entries from CONTEXT.md files
+  if (result.depsToRemove.length > 0) {
+    removeDependsOnFromContextFiles(basePath, result.depsToRemove);
+  }
+
+  // Sync PROJECT.md milestone sequence table
+  syncProjectMdSequence(basePath, state.registry, result.order);
+
+  // Commit the change
+  const filesToAdd = [".gsd/QUEUE-ORDER.json", ".gsd/PROJECT.md"];
+  for (const r of result.depsToRemove) {
+    filesToAdd.push(`.gsd/milestones/${r.milestone}/${r.milestone}-CONTEXT.md`);
+  }
+  try {
+    nativeAddPaths(basePath, filesToAdd);
+    nativeCommit(basePath, "docs: reorder queue");
+  } catch {
+    // Commit may fail if nothing changed or git hooks block — non-fatal
+  }
+
+  const depInfo = result.depsToRemove.length > 0
+    ? ` (removed ${result.depsToRemove.length} depends_on)`
+    : "";
+  ctx.ui.notify(`Queue reordered: ${result.order.join(" → ")}${depInfo}`, "info");
+}
+
+/**
+ * Remove specific depends_on entries from milestone CONTEXT.md frontmatter.
+ */
+function removeDependsOnFromContextFiles(
+  basePath: string,
+  depsToRemove: Array<{ milestone: string; dep: string }>,
+): void {
+  // Group removals by milestone
+  const byMilestone = new Map<string, string[]>();
+  for (const { milestone, dep } of depsToRemove) {
+    const existing = byMilestone.get(milestone) ?? [];
+    existing.push(dep);
+    byMilestone.set(milestone, existing);
+  }
+
+  for (const [mid, depsToRemoveForMid] of byMilestone) {
+    const contextFile = resolveMilestoneFile(basePath, mid, "CONTEXT");
+    if (!contextFile || !existsSync(contextFile)) continue;
+
+    const content = readFileSync(contextFile, "utf-8");
+
+    // Parse frontmatter
+    const trimmed = content.trimStart();
+    if (!trimmed.startsWith("---")) continue;
+    const afterFirst = trimmed.indexOf("\n");
+    if (afterFirst === -1) continue;
+    const rest = trimmed.slice(afterFirst + 1);
+    const endIdx = rest.indexOf("\n---");
+    if (endIdx === -1) continue;
+
+    const fmText = rest.slice(0, endIdx);
+    const body = rest.slice(endIdx + 4);
+
+    // Parse depends_on line(s)
+    const fmLines = fmText.split("\n");
+    const removeSet = new Set(depsToRemoveForMid.map(d => d.toUpperCase()));
+
+    // Handle inline format: depends_on: [M009, M010]
+    const inlineMatch = fmLines.findIndex(l => /^depends_on:\s*\[/.test(l));
+    if (inlineMatch >= 0) {
+      const line = fmLines[inlineMatch];
+      const inner = line.match(/\[([^\]]*)\]/);
+      if (inner) {
+        const remaining = inner[1]
+          .split(",")
+          .map(s => s.trim())
+          .filter(s => s && !removeSet.has(s.toUpperCase()));
+        if (remaining.length === 0) {
+          fmLines.splice(inlineMatch, 1);
+        } else {
+          fmLines[inlineMatch] = `depends_on: [${remaining.join(", ")}]`;
+        }
+      }
+    } else {
+      // Handle multi-line format
+      const keyIdx = fmLines.findIndex(l => /^depends_on:\s*$/.test(l));
+      if (keyIdx >= 0) {
+        let end = keyIdx + 1;
+        while (end < fmLines.length && /^\s+-\s/.test(fmLines[end])) {
+          const val = fmLines[end].replace(/^\s+-\s*/, "").trim().toUpperCase();
+          if (removeSet.has(val)) {
+            fmLines.splice(end, 1);
+          } else {
+            end++;
+          }
+        }
+        if (end === keyIdx + 1 || (end <= fmLines.length && !/^\s+-\s/.test(fmLines[keyIdx + 1] ?? ""))) {
+          fmLines.splice(keyIdx, 1);
+        }
+      }
+    }
+
+    // Rebuild file
+    const newFm = fmLines.filter(l => l !== undefined).join("\n");
+    const newContent = newFm.trim()
+      ? `---\n${newFm}\n---${body}`
+      : body.replace(/^\n+/, "");
+    writeFileSync(contextFile, newContent, "utf-8");
+  }
+}
+
+function syncProjectMdSequence(
+  basePath: string,
+  registry: Array<{ id: string; title: string; status: string }>,
+  newOrder: string[],
+): void {
+  const projectPath = resolveGsdRootFile(basePath, "PROJECT");
+  if (!projectPath || !existsSync(projectPath)) return;
+
+  const content = readFileSync(projectPath, "utf-8");
+  const lines = content.split("\n");
+
+  const headerIdx = lines.findIndex(l => /^##\s+Milestone Sequence/.test(l));
+  if (headerIdx < 0) return;
+
+  let tableStart = headerIdx + 1;
+  while (tableStart < lines.length && !lines[tableStart].startsWith("|")) tableStart++;
+  if (tableStart >= lines.length) return;
+
+  let tableEnd = tableStart + 1;
+  while (tableEnd < lines.length && lines[tableEnd].startsWith("|")) tableEnd++;
+
+  const registryMap = new Map(registry.map(m => [m.id, m]));
+  const completedSet = new Set(registry.filter(m => m.status === "complete").map(m => m.id));
+
+  const newRows: string[] = [];
+  for (const m of registry) {
+    if (m.status === "complete") {
+      newRows.push(`| ${m.id} | ${m.title} | ✅ Complete |`);
+    }
+  }
+  let isFirst = true;
+  for (const id of newOrder) {
+    if (completedSet.has(id)) continue;
+    const m = registryMap.get(id);
+    if (!m) continue;
+    const status = isFirst ? "📋 Next" : "📋 Queued";
+    newRows.push(`| ${m.id} | ${m.title} | ${status} |`);
+    isFirst = false;
+  }
+
+  const headerLine = lines[tableStart];
+  const separatorLine = lines[tableStart + 1];
+  const newTable = [headerLine, separatorLine, ...newRows];
+  lines.splice(tableStart, tableEnd - tableStart, ...newTable);
+  writeFileSync(projectPath, lines.join("\n"), "utf-8");
+}
+
+async function showQueueAdd(
+  ctx: ExtensionCommandContext,
+  pi: ExtensionAPI,
+  basePath: string,
+  state: Awaited<ReturnType<typeof deriveState>>,
+): Promise<void> {
+  const milestoneIds = findMilestoneIds(basePath);
 
   // ── Build existing milestones context for the prompt ────────────────
   const existingContext = await buildExistingMilestonesContext(basePath, milestoneIds, state);
@@ -465,6 +789,62 @@ export async function showDiscuss(
   const mid = state.activeMilestone.id;
   const milestoneTitle = state.activeMilestone.title;
 
+  // Special case: milestone is in needs-discussion phase (has CONTEXT-DRAFT.md but no roadmap yet).
+  // Route to the draft discussion flow instead of erroring — the discussion IS how the roadmap gets created.
+  if (state.phase === "needs-discussion") {
+    const draftFile = resolveMilestoneFile(basePath, mid, "CONTEXT-DRAFT");
+    const draftContent = draftFile ? await loadFile(draftFile) : null;
+
+    const choice = await showNextAction(ctx as any, {
+      title: `GSD — ${mid}: ${milestoneTitle}`,
+      summary: ["This milestone has a draft context from a prior discussion.", "It needs a dedicated discussion before auto-planning can begin."],
+      actions: [
+        {
+          id: "discuss_draft",
+          label: "Discuss from draft",
+          description: "Continue where the prior discussion left off — seed material is loaded automatically.",
+          recommended: true,
+        },
+        {
+          id: "discuss_fresh",
+          label: "Start fresh discussion",
+          description: "Discard the draft and start a new discussion from scratch.",
+        },
+        {
+          id: "skip_milestone",
+          label: "Skip — create new milestone",
+          description: "Leave this milestone as-is and start something new.",
+        },
+      ],
+      notYetMessage: "Run /gsd discuss when ready to discuss this milestone.",
+    });
+
+    if (choice === "discuss_draft") {
+      const discussMilestoneTemplates = inlineTemplate("context", "Context");
+      const basePrompt = loadPrompt("guided-discuss-milestone", {
+        milestoneId: mid, milestoneTitle, inlinedTemplates: discussMilestoneTemplates,
+      });
+      const seed = draftContent
+        ? `${basePrompt}\n\n## Prior Discussion (Draft Seed)\n\n${draftContent}`
+        : basePrompt;
+      pendingAutoStart = { ctx, pi, basePath, milestoneId: mid, step: false };
+      dispatchWorkflow(pi, seed, "gsd-discuss");
+    } else if (choice === "discuss_fresh") {
+      const discussMilestoneTemplates = inlineTemplate("context", "Context");
+      pendingAutoStart = { ctx, pi, basePath, milestoneId: mid, step: false };
+      dispatchWorkflow(pi, loadPrompt("guided-discuss-milestone", {
+        milestoneId: mid, milestoneTitle, inlinedTemplates: discussMilestoneTemplates,
+      }), "gsd-discuss");
+    } else if (choice === "skip_milestone") {
+      const milestoneIds = findMilestoneIds(basePath);
+      const uniqueMilestoneIds = !!loadEffectiveGSDPreferences()?.preferences?.unique_milestone_ids;
+      const nextId = nextMilestoneId(milestoneIds, uniqueMilestoneIds);
+      pendingAutoStart = { ctx, pi, basePath, milestoneId: nextId, step: false };
+      dispatchWorkflow(pi, buildDiscussPrompt(nextId, `New milestone ${nextId}.`, basePath));
+    }
+    return;
+  }
+
   // Guard: no roadmap yet
   const roadmapFile = resolveMilestoneFile(basePath, mid, "ROADMAP");
   const roadmapContent = roadmapFile ? await loadFile(roadmapFile) : null;
@@ -518,6 +898,42 @@ export async function showDiscuss(
 /**
  * The one wizard. Reads state, shows contextual options, dispatches into the workflow doc.
  */
+/**
+ * Self-heal: scan runtime records and clear stale ones left behind when
+ * auto-mode crashed mid-unit. auto.ts has its own selfHealRuntimeRecords()
+ * but guided-flow (manual /gsd mode) never called it — meaning stale records
+ * persisted until the next /gsd auto run.  This ensures the wizard always
+ * starts from a clean state regardless of how the previous session ended.
+ */
+function selfHealRuntimeRecords(basePath: string, ctx: ExtensionContext): { cleared: number } {
+  try {
+    const records = listUnitRuntimeRecords(basePath);
+    let cleared = 0;
+    for (const record of records) {
+      const { unitType, unitId, phase } = record;
+      // Clear records whose expected artifact already exists (completed but not cleaned up)
+      const artifactPath = resolveExpectedArtifactPath(unitType, unitId, basePath);
+      if (artifactPath && existsSync(artifactPath)) {
+        clearUnitRuntimeRecord(basePath, unitType, unitId);
+        cleared++;
+        continue;
+      }
+      // Clear records stuck in dispatched or timeout phase (process died mid-unit)
+      if (phase === "dispatched" || phase === "timeout") {
+        clearUnitRuntimeRecord(basePath, unitType, unitId);
+        cleared++;
+      }
+    }
+    if (cleared > 0) {
+      ctx.ui.notify(`Self-heal: cleared ${cleared} stale runtime record(s) from a previous session.`, "info");
+    }
+    return { cleared };
+  } catch {
+    // Non-fatal — self-heal should never block the wizard
+    return { cleared: 0 };
+  }
+}
+
 export async function showSmartEntry(
   ctx: ExtensionCommandContext,
   pi: ExtensionAPI,
@@ -526,16 +942,15 @@ export async function showSmartEntry(
 ): Promise<void> {
   const stepMode = options?.step;
 
-  // ── Ensure git repo exists — GSD needs it for branch-per-slice ──────
-  try {
-    execSync("git rev-parse --git-dir", { cwd: basePath, stdio: "pipe" });
-  } catch {
+  // ── Ensure git repo exists — GSD needs it for worktree isolation ──────
+  if (!nativeIsRepo(basePath)) {
     const mainBranch = loadEffectiveGSDPreferences()?.preferences?.git?.main_branch || "main";
-    execFileSync("git", ["init", "-b", mainBranch], { cwd: basePath, stdio: "pipe" });
+    nativeInit(basePath, mainBranch);
   }
 
   // ── Ensure .gitignore has baseline patterns ──────────────────────────
-  ensureGitignore(basePath);
+  const commitDocs = loadEffectiveGSDPreferences()?.preferences?.git?.commit_docs;
+  ensureGitignore(basePath, { commitDocs });
   untrackRuntimeFiles(basePath);
 
   // ── No GSD project OR no milestone → Create first/next milestone ────
@@ -546,15 +961,19 @@ export async function showSmartEntry(
 
     // ── Create PREFERENCES.md template ────────────────────────────────
     ensurePreferences(basePath);
-    try {
-      execSync("git add -A .gsd .gitignore && git commit -m 'chore: init gsd'", {
-        cwd: basePath,
-        stdio: "pipe",
-      });
-    } catch {
-      // nothing to commit — that's fine
+    // Only commit .gsd/ init when commit_docs is not explicitly false
+    if (commitDocs !== false) {
+      try {
+        nativeAddPaths(basePath, [".gsd", ".gitignore"]);
+        nativeCommit(basePath, "chore: init gsd");
+      } catch {
+        // nothing to commit — that's fine
+      }
     }
   }
+
+  // ── Self-heal stale runtime records from crashed auto-mode sessions ──
+  selfHealRuntimeRecords(basePath, ctx);
 
   // Check for crash from previous auto-mode session
   const crashLock = readCrashLock(basePath);
@@ -587,6 +1006,27 @@ export async function showSmartEntry(
     }
 
     const milestoneIds = findMilestoneIds(basePath);
+
+    // Sanity check (#456): if findMilestoneIds returns [] but the milestones
+    // directory has contents, something went wrong (permissions, stale worktree
+    // cwd, etc). Warn instead of silently starting a new-project flow.
+    if (milestoneIds.length === 0) {
+      const mDir = milestonesDir(basePath);
+      if (existsSync(mDir)) {
+        try {
+          const entries = readdirSync(mDir);
+          if (entries.length > 0) {
+            ctx.ui.notify(
+              `Milestone directory has ${entries.length} entries but none were recognized as milestones. ` +
+              `This may indicate a corrupted state or wrong working directory. Run \`/gsd doctor\` to diagnose.`,
+              "warning",
+            );
+            return;
+          }
+        } catch { /* directory exists but unreadable — fall through to normal flow */ }
+      }
+    }
+
     const uniqueMilestoneIds = !!loadEffectiveGSDPreferences()?.preferences?.unique_milestone_ids;
     const nextId = nextMilestoneId(milestoneIds, uniqueMilestoneIds);
     const isFirst = milestoneIds.length === 0;
@@ -767,6 +1207,10 @@ export async function showSmartEntry(
       });
 
       if (choice === "plan") {
+<<<<<<< HEAD
+=======
+        pendingAutoStart = { ctx, pi, basePath, milestoneId, step: stepMode };
+>>>>>>> upstream/main
         const planMilestoneTemplates = [
           inlineTemplate("roadmap", "Roadmap"),
           inlineTemplate("plan", "Slice Plan"),
@@ -935,7 +1379,11 @@ export async function showSmartEntry(
         inlineTemplate("uat", "UAT"),
       ].join("\n\n---\n\n");
       dispatchWorkflow(pi, loadPrompt("guided-complete-slice", {
+<<<<<<< HEAD
         milestoneId, sliceId, sliceTitle, inlinedTemplates: completeSliceTemplates,
+=======
+        workingDirectory: basePath, milestoneId, sliceId, sliceTitle, inlinedTemplates: completeSliceTemplates,
+>>>>>>> upstream/main
       }));
     } else if (choice === "status") {
       const { fireStatusViaCommand } = await import("./commands.js");

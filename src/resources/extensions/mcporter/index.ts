@@ -26,6 +26,8 @@ import { Text } from "@gsd/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { execFile, exec } from "node:child_process";
 import { promisify } from "node:util";
+import { readFileSync, existsSync } from "node:fs";
+import { join } from "node:path";
 
 const execFileAsync = promisify(execFile);
 const execAsync = promisify(exec);
@@ -99,6 +101,37 @@ async function runMcporter(
 	return stdout;
 }
 
+/**
+ * Read .mcp.json from the project root (cwd) and return servers not already
+ * discovered by mcporter. This bridges the gap where mcporter doesn't scan
+ * the standard .mcp.json config used by Claude Code, Cursor, etc.
+ */
+function readProjectMcpJson(knownNames: Set<string>): McpServer[] {
+	const servers: McpServer[] = [];
+	try {
+		const mcpJsonPath = join(process.cwd(), ".mcp.json");
+		if (!existsSync(mcpJsonPath)) return servers;
+		const raw = readFileSync(mcpJsonPath, "utf-8");
+		const data = JSON.parse(raw) as Record<string, unknown>;
+		const mcpServers = (data.mcpServers ?? data.servers) as Record<string, Record<string, unknown>> | undefined;
+		if (!mcpServers || typeof mcpServers !== "object") return servers;
+
+		for (const [name, config] of Object.entries(mcpServers)) {
+			if (knownNames.has(name)) continue; // Already discovered by mcporter
+			const transport = (config.type as string) ?? (config.command ? "stdio" : config.url ? "http" : "unknown");
+			servers.push({
+				name,
+				status: "ok",
+				transport,
+				tools: [], // Tools unknown until mcp_discover is called
+			});
+		}
+	} catch {
+		// Non-fatal — .mcp.json may not exist or be malformed
+	}
+	return servers;
+}
+
 async function getServerList(signal?: AbortSignal): Promise<McpServer[]> {
 	if (serverListCache) return serverListCache;
 
@@ -112,6 +145,14 @@ async function getServerList(signal?: AbortSignal): Promise<McpServer[]> {
 	if (!Array.isArray(data.servers)) {
 		throw new Error(`Unexpected mcporter response shape: ${JSON.stringify(Object.keys(data))}`);
 	}
+
+	// Merge servers from project-root .mcp.json that mcporter didn't discover
+	const knownNames = new Set(data.servers.map((s) => s.name));
+	const projectServers = readProjectMcpJson(knownNames);
+	if (projectServers.length > 0) {
+		data.servers.push(...projectServers);
+	}
+
 	serverListCache = data.servers;
 	return serverListCache;
 }
@@ -122,10 +163,37 @@ async function getServerDetail(
 ): Promise<McpServerDetail> {
 	if (serverDetailCache.has(serverName)) return serverDetailCache.get(serverName)!;
 
-	const raw = await runMcporter(["list", serverName, "--schema", "--json"], signal);
+	// Check if this server came from .mcp.json (not known to mcporter natively)
+	const mcpJsonUrl = getMcpJsonServerUrl(serverName);
+	const args = mcpJsonUrl
+		? ["list", mcpJsonUrl, "--schema", "--json"]
+		: ["list", serverName, "--schema", "--json"];
+
+	const raw = await runMcporter(args, signal);
 	const data = JSON.parse(raw) as McpServerDetail;
+	// Preserve the user-facing name from .mcp.json
+	if (mcpJsonUrl) data.name = serverName;
 	serverDetailCache.set(serverName, data);
 	return data;
+}
+
+/**
+ * Look up a server's URL from .mcp.json if it's an HTTP server not known to mcporter.
+ */
+function getMcpJsonServerUrl(serverName: string): string | null {
+	try {
+		const mcpJsonPath = join(process.cwd(), ".mcp.json");
+		if (!existsSync(mcpJsonPath)) return null;
+		const raw = readFileSync(mcpJsonPath, "utf-8");
+		const data = JSON.parse(raw) as Record<string, unknown>;
+		const mcpServers = (data.mcpServers ?? data.servers) as Record<string, Record<string, unknown>> | undefined;
+		if (!mcpServers?.[serverName]) return null;
+		const config = mcpServers[serverName];
+		if (config.type === "http" && typeof config.url === "string") return config.url;
+		return null;
+	} catch {
+		return null;
+	}
 }
 
 function formatServerList(servers: McpServer[]): string {
@@ -328,7 +396,10 @@ export default function (pi: ExtensionAPI) {
 
 		async execute(_id, params, signal) {
 			// Build mcporter call command: mcporter call server.tool key:value ...
-			const callTarget = `${params.server}.${params.tool}`;
+			// For HTTP servers from .mcp.json, use the URL directly as the server identifier
+			const mcpJsonUrl = getMcpJsonServerUrl(params.server);
+			const serverRef = mcpJsonUrl ?? params.server;
+			const callTarget = `${serverRef}.${params.tool}`;
 			const cliArgs = ["call", callTarget, "--output", "raw"];
 
 			if (params.args && Object.keys(params.args).length > 0) {
@@ -418,12 +489,24 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		try {
 			const ver = (await runMcporter(["--version"], undefined, 5000)).trim();
-		ctx.ui.notify(`MCPorter ${ver} ready`, "info");
+			ctx.ui.notify(`MCPorter ${ver} ready`, "info");
 		} catch {
-			ctx.ui.notify(
-				"MCPorter not found. Install with: npm i -g mcporter",
-				"error",
-			);
+			ctx.ui.notify("MCPorter not found — attempting auto-install…", "warning");
+			try {
+				await new Promise<void>((resolve, reject) => {
+					exec("npm install -g mcporter", { timeout: 60000 }, (err) => {
+						if (err) reject(err);
+						else resolve();
+					});
+				});
+				const ver = (await runMcporter(["--version"], undefined, 5000)).trim();
+				ctx.ui.notify(`MCPorter ${ver} auto-installed ✓`, "info");
+			} catch {
+				ctx.ui.notify(
+					"MCPorter auto-install failed. Install manually: npm i -g mcporter",
+					"error",
+				);
+			}
 		}
 	});
 }

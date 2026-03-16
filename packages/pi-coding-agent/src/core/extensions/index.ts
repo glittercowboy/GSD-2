@@ -6,8 +6,11 @@ export type { SlashCommandInfo, SlashCommandLocation, SlashCommandSource } from 
 export {
 	createExtensionRuntime,
 	discoverAndLoadExtensions,
+	getUntrustedExtensionPaths,
+	isProjectTrusted,
 	loadExtensionFromFactory,
 	loadExtensions,
+	trustProject,
 } from "./loader.js";
 export type {
 	ExtensionErrorListener,

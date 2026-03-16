@@ -29,11 +29,21 @@ import {
   resolveGsdRootFile,
   gsdRoot,
 } from './paths.js';
+<<<<<<< HEAD
 import { getActiveSliceBranch } from './worktree.js';
 import { milestoneIdSort, findMilestoneIds } from './guided-flow.js';
 import { nativeBatchParseGsdFiles, type BatchParsedFile } from './native-parser-bridge.js';
 
 import { join, resolve } from 'path';
+=======
+
+import { milestoneIdSort, findMilestoneIds } from './guided-flow.js';
+import { nativeBatchParseGsdFiles, type BatchParsedFile } from './native-parser-bridge.js';
+import { isDbAvailable, _getAdapter } from './gsd-db.js';
+
+import { join, resolve } from 'path';
+import { debugCount, debugTime } from './debug-logger.js';
+>>>>>>> upstream/main
 
 // ─── Query Functions ───────────────────────────────────────────────────────
 
@@ -116,7 +126,14 @@ export async function deriveState(basePath: string): Promise<GSDState> {
     return _stateCache.result;
   }
 
+<<<<<<< HEAD
   const result = await _deriveStateImpl(basePath);
+=======
+  const stopTimer = debugTime("derive-state-impl");
+  const result = await _deriveStateImpl(basePath);
+  stopTimer({ phase: result.phase, milestone: result.activeMilestone?.id });
+  debugCount("deriveStateCalls");
+>>>>>>> upstream/main
   _stateCache = { basePath, result, timestamp: Date.now() };
   return result;
 }
@@ -131,6 +148,7 @@ async function _deriveStateImpl(basePath: string): Promise<GSDState> {
   const fileContentCache = new Map<string, string>();
   const gsdDir = gsdRoot(basePath);
 
+<<<<<<< HEAD
   const batchFiles = nativeBatchParseGsdFiles(gsdDir);
   if (batchFiles) {
     for (const f of batchFiles) {
@@ -175,6 +193,40 @@ async function _deriveStateImpl(basePath: string): Promise<GSDState> {
       }
     }
   }
+=======
+  // ── DB-first content loading ──
+  // When the DB is available, load artifact content from the artifacts table
+  // (indexed SELECT instead of O(N) file I/O). Falls back to native Rust batch
+  // parser, which in turn falls back to sequential JS reads via cachedLoadFile.
+  let dbContentLoaded = false;
+  if (isDbAvailable()) {
+    const adapter = _getAdapter();
+    if (adapter) {
+      try {
+        const rows = adapter.prepare('SELECT path, full_content FROM artifacts').all();
+        for (const row of rows) {
+          const relPath = (row as Record<string, unknown>)['path'] as string;
+          const content = (row as Record<string, unknown>)['full_content'] as string;
+          const absPath = resolve(gsdDir, relPath);
+          fileContentCache.set(absPath, content);
+        }
+        dbContentLoaded = rows.length > 0;
+      } catch {
+        // DB query failed — fall through to native batch parse
+      }
+    }
+  }
+
+  if (!dbContentLoaded) {
+  const batchFiles = nativeBatchParseGsdFiles(gsdDir);
+  if (batchFiles) {
+    for (const f of batchFiles) {
+      const absPath = resolve(gsdDir, f.path);
+      fileContentCache.set(absPath, f.rawContent);
+    }
+  }
+  }
+>>>>>>> upstream/main
 
   /**
    * Load file content from batch cache first, falling back to disk read.
@@ -261,9 +313,21 @@ async function _deriveStateImpl(basePath: string): Promise<GSDState> {
           const draftFile = resolveMilestoneFile(basePath, mid, "CONTEXT-DRAFT");
           if (draftFile) activeMilestoneHasDraft = true;
         }
-        activeMilestone = { id: mid, title: mid };
-        activeMilestoneFound = true;
-        registry.push({ id: mid, title: mid, status: 'active' });
+
+        // Check milestone-level dependencies before promoting to active.
+        // Without this, a queued milestone with depends_on in its CONTEXT
+        // frontmatter would be promoted to active even when its deps are unmet
+        // (the dep check only existed in the has-roadmap path previously).
+        const contextContent = contextFile ? await cachedLoadFile(contextFile) : null;
+        const deps = parseContextDependsOn(contextContent);
+        const depsUnmet = deps.some(dep => !completeMilestoneIds.has(dep));
+        if (depsUnmet) {
+          registry.push({ id: mid, title: mid, status: 'pending', dependsOn: deps });
+        } else {
+          activeMilestone = { id: mid, title: mid };
+          activeMilestoneFound = true;
+          registry.push({ id: mid, title: mid, status: 'active', ...(deps.length > 0 ? { dependsOn: deps } : {}) });
+        }
       } else {
         registry.push({ id: mid, title: mid, status: 'pending' });
       }
@@ -438,8 +502,6 @@ async function _deriveStateImpl(basePath: string): Promise<GSDState> {
     };
   }
 
-  const activeBranch = getActiveSliceBranch(basePath);
-
   // Check if the slice has a plan
   const planFile = resolveSliceFile(basePath, activeMilestone.id, activeSlice.id, "PLAN");
   const slicePlanContent = planFile ? await cachedLoadFile(planFile) : null;
@@ -453,7 +515,7 @@ async function _deriveStateImpl(basePath: string): Promise<GSDState> {
       recentDecisions: [],
       blockers: [],
       nextAction: `Plan slice ${activeSlice.id} (${activeSlice.title}).`,
-      activeBranch: activeBranch ?? undefined,
+
       registry,
       requirements,
       progress: {
@@ -470,7 +532,7 @@ async function _deriveStateImpl(basePath: string): Promise<GSDState> {
   };
   const activeTaskEntry = slicePlan.tasks.find(t => !t.done);
 
-  if (!activeTaskEntry) {
+  if (!activeTaskEntry && slicePlan.tasks.length > 0) {
     // All tasks done but slice not marked complete
     return {
       activeMilestone,
@@ -480,7 +542,28 @@ async function _deriveStateImpl(basePath: string): Promise<GSDState> {
       recentDecisions: [],
       blockers: [],
       nextAction: `All tasks done in ${activeSlice.id}. Write slice summary and complete slice.`,
-      activeBranch: activeBranch ?? undefined,
+
+      registry,
+      requirements,
+      progress: {
+        milestones: milestoneProgress,
+        slices: sliceProgress,
+        tasks: taskProgress,
+      },
+    };
+  }
+
+  // Empty plan — no tasks defined yet, stay in planning phase
+  if (!activeTaskEntry) {
+    return {
+      activeMilestone,
+      activeSlice,
+      activeTask: null,
+      phase: 'planning',
+      recentDecisions: [],
+      blockers: [],
+      nextAction: `Slice ${activeSlice.id} has a plan file but no tasks. Add tasks to the plan.`,
+
       registry,
       requirements,
       progress: {
@@ -526,7 +609,7 @@ async function _deriveStateImpl(basePath: string): Promise<GSDState> {
         recentDecisions: [],
         blockers: [`Task ${blockerTaskId} discovered a blocker requiring slice replan`],
         nextAction: `Task ${blockerTaskId} reported blocker_discovered. Replan slice ${activeSlice.id} before continuing.`,
-        activeBranch: activeBranch ?? undefined,
+  
         activeWorkspace: undefined,
         registry,
         requirements,
@@ -557,7 +640,6 @@ async function _deriveStateImpl(basePath: string): Promise<GSDState> {
     nextAction: hasInterrupted
       ? `Resume interrupted work on ${activeTask.id}: ${activeTask.title} in slice ${activeSlice.id}. Read continue.md first.`
       : `Execute ${activeTask.id}: ${activeTask.title} in slice ${activeSlice.id}.`,
-    activeBranch: activeBranch ?? undefined,
     registry,
     requirements,
     progress: {

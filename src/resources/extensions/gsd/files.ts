@@ -5,7 +5,7 @@
 
 import { promises as fs } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { resolveMilestoneFile, relMilestoneFile } from './paths.js';
+import { resolveMilestoneFile, relMilestoneFile, resolveGsdRootFile } from './paths.js';
 import { milestoneIdSort, findMilestoneIds } from './guided-flow.js';
 
 import type {
@@ -20,7 +20,40 @@ import type {
 
 import { checkExistingEnvKeys } from '../shared/env-key-utils.js';
 import { parseRoadmapSlices } from './roadmap-slices.js';
-import { nativeParseRoadmap, nativeExtractSection, NATIVE_UNAVAILABLE } from './native-parser-bridge.js';
+import { nativeParseRoadmap, nativeExtractSection, nativeParsePlanFile, nativeParseSummaryFile, NATIVE_UNAVAILABLE } from './native-parser-bridge.js';
+import { debugTime, debugCount } from './debug-logger.js';
+
+// ─── Parse Cache ──────────────────────────────────────────────────────────
+
+const CACHE_MAX = 50;
+
+/** Fast composite key: length + first/mid/last 100 chars. The middle sample
+ *  prevents collisions when only a few characters change in the interior of
+ *  a file (e.g., a checkbox [ ] → [x] that doesn't alter length or endpoints). */
+function cacheKey(content: string): string {
+  const len = content.length;
+  const head = content.slice(0, 100);
+  const midStart = Math.max(0, Math.floor(len / 2) - 50);
+  const mid = len > 200 ? content.slice(midStart, midStart + 100) : '';
+  const tail = len > 100 ? content.slice(-100) : '';
+  return `${len}:${head}:${mid}:${tail}`;
+}
+
+const _parseCache = new Map<string, unknown>();
+
+function cachedParse<T>(content: string, tag: string, parseFn: (c: string) => T): T {
+  const key = tag + '|' + cacheKey(content);
+  if (_parseCache.has(key)) return _parseCache.get(key) as T;
+  if (_parseCache.size >= CACHE_MAX) _parseCache.clear();
+  const result = parseFn(content);
+  _parseCache.set(key, result);
+  return result;
+}
+
+/** Clear the module-scoped parse cache. Call when files change on disk. */
+export function clearParseCache(): void {
+  _parseCache.clear();
+}
 
 // ─── Parse Cache ──────────────────────────────────────────────────────────
 
@@ -220,9 +253,17 @@ export function parseRoadmap(content: string): Roadmap {
 }
 
 function _parseRoadmapImpl(content: string): Roadmap {
+<<<<<<< HEAD
+=======
+  const stopTimer = debugTime("parse-roadmap");
+>>>>>>> upstream/main
   // Try native parser first for better performance
   const nativeResult = nativeParseRoadmap(content);
-  if (nativeResult) return nativeResult;
+  if (nativeResult) {
+    stopTimer({ native: true, slices: nativeResult.slices.length, boundaryEntries: nativeResult.boundaryMap.length });
+    debugCount("parseRoadmapCalls");
+    return nativeResult;
+  }
 
   const lines = content.split('\n');
 
@@ -261,21 +302,40 @@ function _parseRoadmapImpl(content: string): Roadmap {
       let produces = '';
       let consumes = '';
 
-      const prodMatch = sectionContent.match(/^Produces:\s*\n([\s\S]*?)(?=^Consumes|$)/m);
-      if (prodMatch) produces = prodMatch[1].trim();
+      // Use indexOf-based parsing instead of [\s\S]*? regex to avoid
+      // catastrophic backtracking on content with code fences (#468).
+      const prodIdx = sectionContent.search(/^Produces:\s*$/m);
+      if (prodIdx !== -1) {
+        const afterProd = sectionContent.indexOf('\n', prodIdx);
+        if (afterProd !== -1) {
+          const consIdx = sectionContent.search(/^Consumes/m);
+          const endIdx = consIdx !== -1 && consIdx > afterProd ? consIdx : sectionContent.length;
+          produces = sectionContent.slice(afterProd + 1, endIdx).trim();
+        }
+      }
 
-      const consMatch = sectionContent.match(/^Consumes[^:]*:\s*\n?([\s\S]*?)$/m);
-      if (consMatch) consumes = consMatch[1].trim();
+      const consLineMatch = sectionContent.match(/^Consumes[^:]*:\s*(.+)$/m);
+      if (consLineMatch) {
+        consumes = consLineMatch[1].trim();
+      }
       if (!consumes) {
-        const singleCons = sectionContent.match(/^Consumes[^:]*:\s*(.+)$/m);
-        if (singleCons) consumes = singleCons[1].trim();
+        const consIdx = sectionContent.search(/^Consumes[^:]*:\s*$/m);
+        if (consIdx !== -1) {
+          const afterCons = sectionContent.indexOf('\n', consIdx);
+          if (afterCons !== -1) {
+            consumes = sectionContent.slice(afterCons + 1).trim();
+          }
+        }
       }
 
       boundaryMap.push({ fromSlice, toSlice, produces, consumes });
     }
   }
 
-  return { title, vision, successCriteria, slices, boundaryMap };
+  const result = { title, vision, successCriteria, slices, boundaryMap };
+  stopTimer({ native: false, slices: slices.length, boundaryEntries: boundaryMap.length });
+  debugCount("parseRoadmapCalls");
+  return result;
 }
 
 // ─── Secrets Manifest Parser ───────────────────────────────────────────────
@@ -354,6 +414,33 @@ export function parsePlan(content: string): SlicePlan {
 }
 
 function _parsePlanImpl(content: string): SlicePlan {
+<<<<<<< HEAD
+=======
+  const stopTimer = debugTime("parse-plan");
+  // Try native parser first for better performance
+  const nativeResult = nativeParsePlanFile(content);
+  if (nativeResult) {
+    stopTimer({ native: true });
+    return {
+      id: nativeResult.id,
+      title: nativeResult.title,
+      goal: nativeResult.goal,
+      demo: nativeResult.demo,
+      mustHaves: nativeResult.mustHaves,
+      tasks: nativeResult.tasks.map(t => ({
+        id: t.id,
+        title: t.title,
+        description: t.description,
+        done: t.done,
+        estimate: t.estimate,
+        ...(t.files.length > 0 ? { files: t.files } : {}),
+        ...(t.verify ? { verify: t.verify } : {}),
+      })),
+      filesLikelyTouched: nativeResult.filesLikelyTouched,
+    };
+  }
+
+>>>>>>> upstream/main
   const lines = content.split('\n');
 
   const h1 = lines.find(l => l.startsWith('# '));
@@ -383,7 +470,7 @@ function _parsePlanImpl(content: string): SlicePlan {
     let currentTask: TaskPlanEntry | null = null;
 
     for (const line of taskLines) {
-      const cbMatch = line.match(/^-\s+\[([ xX])\]\s+\*\*(\w+):\s+(.+?)\*\*\s*(.*)/);
+      const cbMatch = line.match(/^-\s+\[([ xX])\]\s+\*\*([\w.]+):\s+(.+?)\*\*\s*(.*)/);
       if (cbMatch) {
         if (currentTask) tasks.push(currentTask);
 
@@ -426,7 +513,10 @@ function _parsePlanImpl(content: string): SlicePlan {
   const filesSection = extractSection(content, 'Files Likely Touched');
   const filesLikelyTouched = filesSection ? parseBullets(filesSection) : [];
 
-  return { id, title, goal, demo, mustHaves, tasks, filesLikelyTouched };
+  const result = { id, title, goal, demo, mustHaves, tasks, filesLikelyTouched };
+  stopTimer({ tasks: tasks.length });
+  debugCount("parsePlanCalls");
+  return result;
 }
 
 // ─── Summary Parser ────────────────────────────────────────────────────────
@@ -436,6 +526,39 @@ export function parseSummary(content: string): Summary {
 }
 
 function _parseSummaryImpl(content: string): Summary {
+<<<<<<< HEAD
+=======
+  // Try native parser first for better performance
+  const nativeResult = nativeParseSummaryFile(content);
+  if (nativeResult) {
+    const nfm = nativeResult.frontmatter;
+    return {
+      frontmatter: {
+        id: nfm.id,
+        parent: nfm.parent,
+        milestone: nfm.milestone,
+        provides: nfm.provides,
+        requires: nfm.requires,
+        affects: nfm.affects,
+        key_files: nfm.keyFiles,
+        key_decisions: nfm.keyDecisions,
+        patterns_established: nfm.patternsEstablished,
+        drill_down_paths: nfm.drillDownPaths,
+        observability_surfaces: nfm.observabilitySurfaces,
+        duration: nfm.duration,
+        verification_result: nfm.verificationResult,
+        completed_at: nfm.completedAt,
+        blocker_discovered: nfm.blockerDiscovered,
+      },
+      title: nativeResult.title,
+      oneLiner: nativeResult.oneLiner,
+      whatHappened: nativeResult.whatHappened,
+      deviations: nativeResult.deviations,
+      filesModified: nativeResult.filesModified,
+    };
+  }
+
+>>>>>>> upstream/main
   const [fmLines, body] = splitFrontmatter(content);
 
   const fm = fmLines ? parseFrontmatterMap(fmLines) : {};
@@ -793,7 +916,7 @@ export function parseContextDependsOn(content: string | null): string[] {
   const fm = parseFrontmatterMap(fmLines);
   const raw = fm['depends_on'];
   if (!Array.isArray(raw) || raw.length === 0) return [];
-  return (raw as string[]).map(s => String(s).toUpperCase().trim()).filter(Boolean);
+  return (raw as string[]).map(s => String(s).trim()).filter(Boolean);
 }
 
 /**
@@ -854,4 +977,226 @@ export async function getManifestStatus(
   }
 
   return result;
+}
+
+// ─── Overrides ──────────────────────────────────────────────────────────────
+
+export interface Override {
+  timestamp: string;
+  change: string;
+  scope: "active" | "resolved";
+  appliedAt: string;
+}
+
+export async function appendOverride(basePath: string, change: string, appliedAt: string): Promise<void> {
+  const overridesPath = resolveGsdRootFile(basePath, "OVERRIDES");
+  const timestamp = new Date().toISOString();
+  const entry = [
+    `## Override: ${timestamp}`,
+    "",
+    `**Change:** ${change}`,
+    `**Scope:** active`,
+    `**Applied-at:** ${appliedAt}`,
+    "",
+    "---",
+    "",
+  ].join("\n");
+
+  const existing = await loadFile(overridesPath);
+  if (existing) {
+    await saveFile(overridesPath, existing.trimEnd() + "\n\n" + entry);
+  } else {
+    const header = [
+      "# GSD Overrides",
+      "",
+      "User-issued overrides that supersede plan document content.",
+      "",
+      "---",
+      "",
+    ].join("\n");
+    await saveFile(overridesPath, header + entry);
+  }
+}
+
+export async function appendKnowledge(
+  basePath: string,
+  type: "rule" | "pattern" | "lesson",
+  entry: string,
+  scope: string,
+): Promise<void> {
+  const knowledgePath = resolveGsdRootFile(basePath, "KNOWLEDGE");
+  const existing = await loadFile(knowledgePath);
+
+  if (existing) {
+    // Find the next ID for this type
+    const prefix = type === "rule" ? "K" : type === "pattern" ? "P" : "L";
+    const idPattern = new RegExp(`^\\| ${prefix}(\\d+)`, "gm");
+    let maxId = 0;
+    let match;
+    while ((match = idPattern.exec(existing)) !== null) {
+      const num = parseInt(match[1], 10);
+      if (num > maxId) maxId = num;
+    }
+    const nextId = `${prefix}${String(maxId + 1).padStart(3, "0")}`;
+
+    // Build the table row
+    let row: string;
+    if (type === "rule") {
+      row = `| ${nextId} | ${scope} | ${entry} | — | manual |`;
+    } else if (type === "pattern") {
+      row = `| ${nextId} | ${entry} | — | ${scope} |`;
+    } else {
+      row = `| ${nextId} | ${entry} | — | — | ${scope} |`;
+    }
+
+    // Find the right section and append after the table header
+    const sectionHeading = type === "rule" ? "## Rules" : type === "pattern" ? "## Patterns" : "## Lessons Learned";
+    const sectionIdx = existing.indexOf(sectionHeading);
+    if (sectionIdx !== -1) {
+      // Find the end of the table header row (the |---|...| line)
+      const afterHeading = existing.indexOf("\n", sectionIdx);
+      // Find the next section or end
+      const nextSection = existing.indexOf("\n## ", afterHeading + 1);
+      const insertPoint = nextSection !== -1 ? nextSection : existing.length;
+
+      // Insert row before the next section (or at end)
+      const before = existing.slice(0, insertPoint).trimEnd();
+      const after = existing.slice(insertPoint);
+      await saveFile(knowledgePath, before + "\n" + row + "\n" + after);
+    } else {
+      // Section not found — append at end
+      await saveFile(knowledgePath, existing.trimEnd() + "\n\n" + row + "\n");
+    }
+  } else {
+    // Create file from scratch with template header
+    const header = [
+      "# Project Knowledge",
+      "",
+      "Append-only register of project-specific rules, patterns, and lessons learned.",
+      "Agents read this before every unit. Add entries when you discover something worth remembering.",
+      "",
+    ].join("\n");
+
+    let content: string;
+    if (type === "rule") {
+      content = header + [
+        "## Rules",
+        "",
+        "| # | Scope | Rule | Why | Added |",
+        "|---|-------|------|-----|-------|",
+        `| K001 | ${scope} | ${entry} | — | manual |`,
+        "",
+        "## Patterns",
+        "",
+        "| # | Pattern | Where | Notes |",
+        "|---|---------|-------|-------|",
+        "",
+        "## Lessons Learned",
+        "",
+        "| # | What Happened | Root Cause | Fix | Scope |",
+        "|---|--------------|------------|-----|-------|",
+        "",
+      ].join("\n");
+    } else if (type === "pattern") {
+      content = header + [
+        "## Rules",
+        "",
+        "| # | Scope | Rule | Why | Added |",
+        "|---|-------|------|-----|-------|",
+        "",
+        "## Patterns",
+        "",
+        "| # | Pattern | Where | Notes |",
+        "|---|---------|-------|-------|",
+        `| P001 | ${entry} | — | ${scope} |`,
+        "",
+        "## Lessons Learned",
+        "",
+        "| # | What Happened | Root Cause | Fix | Scope |",
+        "|---|--------------|------------|-----|-------|",
+        "",
+      ].join("\n");
+    } else {
+      content = header + [
+        "## Rules",
+        "",
+        "| # | Scope | Rule | Why | Added |",
+        "|---|-------|------|-----|-------|",
+        "",
+        "## Patterns",
+        "",
+        "| # | Pattern | Where | Notes |",
+        "|---|---------|-------|-------|",
+        "",
+        "## Lessons Learned",
+        "",
+        "| # | What Happened | Root Cause | Fix | Scope |",
+        "|---|--------------|------------|-----|-------|",
+        `| L001 | ${entry} | — | — | ${scope} |`,
+        "",
+      ].join("\n");
+    }
+    await saveFile(knowledgePath, content);
+  }
+}
+
+export async function loadActiveOverrides(basePath: string): Promise<Override[]> {
+  const overridesPath = resolveGsdRootFile(basePath, "OVERRIDES");
+  const content = await loadFile(overridesPath);
+  if (!content) return [];
+  return parseOverrides(content).filter(o => o.scope === "active");
+}
+
+export function parseOverrides(content: string): Override[] {
+  const overrides: Override[] = [];
+  const blocks = content.split(/^## Override: /m).slice(1);
+
+  for (const block of blocks) {
+    const lines = block.split("\n");
+    const timestamp = lines[0]?.trim() ?? "";
+    let change = "";
+    let scope: "active" | "resolved" = "active";
+    let appliedAt = "";
+
+    for (const line of lines) {
+      const changeMatch = line.match(/^\*\*Change:\*\*\s*(.+)$/);
+      if (changeMatch) change = changeMatch[1].trim();
+      const scopeMatch = line.match(/^\*\*Scope:\*\*\s*(.+)$/);
+      if (scopeMatch) scope = scopeMatch[1].trim() as "active" | "resolved";
+      const appliedMatch = line.match(/^\*\*Applied-at:\*\*\s*(.+)$/);
+      if (appliedMatch) appliedAt = appliedMatch[1].trim();
+    }
+
+    if (change) {
+      overrides.push({ timestamp, change, scope, appliedAt });
+    }
+  }
+
+  return overrides;
+}
+
+export function formatOverridesSection(overrides: Override[]): string {
+  if (overrides.length === 0) return "";
+
+  const entries = overrides.map((o, i) => [
+    `${i + 1}. **${o.change}**`,
+    `   _Issued: ${o.timestamp} during ${o.appliedAt}_`,
+  ].join("\n")).join("\n");
+
+  return [
+    "## Active Overrides (supersede plan content)",
+    "",
+    "The following overrides were issued by the user and supersede any conflicting content in plan documents below. Follow these overrides even if they contradict the inlined task plan.",
+    "",
+    entries,
+    "",
+  ].join("\n");
+}
+
+export async function resolveAllOverrides(basePath: string): Promise<void> {
+  const overridesPath = resolveGsdRootFile(basePath, "OVERRIDES");
+  const content = await loadFile(overridesPath);
+  if (!content) return;
+  const updated = content.replace(/\*\*Scope:\*\* active/g, "**Scope:** resolved");
+  await saveFile(overridesPath, updated);
 }

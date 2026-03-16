@@ -5,7 +5,7 @@
  * Terminals that lack this support silently swallow the key combos.
  */
 
-const UNSUPPORTED_TERMS = ["apple_terminal"];
+const UNSUPPORTED_TERMS = ["apple_terminal", "warpterm"];
 
 export function supportsCtrlAltShortcuts(): boolean {
   const term = (process.env.TERM_PROGRAM || "").toLowerCase();

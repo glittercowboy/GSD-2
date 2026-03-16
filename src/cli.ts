@@ -12,6 +12,7 @@ import {
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { agentDir, sessionsDir, authFilePath } from './app-paths.js'
+<<<<<<< HEAD
 import {
   getProjectSessionsDir,
   migrateLegacyFlatSessions,
@@ -21,12 +22,18 @@ import {
 } from './cli-web-branch.js'
 import { stopWebMode } from './web-mode.js'
 import { initResources, buildResourceLoader } from './resource-loader.js'
+=======
+import { initResources, buildResourceLoader, getNewerManagedResourceVersion } from './resource-loader.js'
+>>>>>>> upstream/main
 import { ensureManagedTools } from './tool-bootstrap.js'
 import { loadStoredEnvKeys } from './wizard.js'
 import { getPiDefaultModelAndProvider, migratePiCredentials } from './pi-migration.js'
 import { shouldRunOnboarding, runOnboarding } from './onboarding.js'
+import chalk from 'chalk'
 import { checkForUpdates } from './update-check.js'
+import { printHelp, printSubcommandHelp } from './help-text.js'
 
+<<<<<<< HEAD
 type WritableLike = Pick<typeof process.stdout, 'write'>
 
 type ExitFn = (code: number) => never | void
@@ -84,6 +91,210 @@ function emitExtensionLoadErrors(stderr: WritableLike, errors: Array<{ error: un
   if (errors.length === 0) return
   for (const err of errors) {
     stderr.write(`[gsd] Extension load error: ${err.error}\n`)
+=======
+// ---------------------------------------------------------------------------
+// Minimal CLI arg parser — detects print/subagent mode flags
+// ---------------------------------------------------------------------------
+interface CliFlags {
+  mode?: 'text' | 'json' | 'rpc' | 'mcp'
+  print?: boolean
+  continue?: boolean
+  noSession?: boolean
+  model?: string
+  listModels?: string | true
+  extensions: string[]
+  appendSystemPrompt?: string
+  tools?: string[]
+  messages: string[]
+}
+
+function exitIfManagedResourcesAreNewer(currentAgentDir: string): void {
+  const currentVersion = process.env.GSD_VERSION || '0.0.0'
+  const managedVersion = getNewerManagedResourceVersion(currentAgentDir, currentVersion)
+  if (!managedVersion) {
+    return
+  }
+
+  process.stderr.write(
+    `[gsd] ${chalk.yellow('Version mismatch detected')}\n` +
+    `[gsd] Synced resources are from ${chalk.bold(`v${managedVersion}`)}, but this \`gsd\` binary is ${chalk.dim(`v${currentVersion}`)}.\n` +
+    `[gsd] Run ${chalk.bold('npm install -g gsd-pi@latest')} or ${chalk.bold('gsd update')}, then try again.\n`,
+  )
+  process.exit(1)
+}
+
+function parseCliArgs(argv: string[]): CliFlags {
+  const flags: CliFlags = { extensions: [], messages: [] }
+  const args = argv.slice(2) // skip node + script
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]
+    if (arg === '--mode' && i + 1 < args.length) {
+      const m = args[++i]
+      if (m === 'text' || m === 'json' || m === 'rpc' || m === 'mcp') flags.mode = m
+    } else if (arg === '--print' || arg === '-p') {
+      flags.print = true
+    } else if (arg === '--continue' || arg === '-c') {
+      flags.continue = true
+    } else if (arg === '--no-session') {
+      flags.noSession = true
+    } else if (arg === '--model' && i + 1 < args.length) {
+      flags.model = args[++i]
+    } else if (arg === '--extension' && i + 1 < args.length) {
+      flags.extensions.push(args[++i])
+    } else if (arg === '--append-system-prompt' && i + 1 < args.length) {
+      flags.appendSystemPrompt = args[++i]
+    } else if (arg === '--tools' && i + 1 < args.length) {
+      flags.tools = args[++i].split(',')
+    } else if (arg === '--list-models') {
+      flags.listModels = (i + 1 < args.length && !args[i + 1].startsWith('-')) ? args[++i] : true
+    } else if (arg === '--version' || arg === '-v') {
+      process.stdout.write((process.env.GSD_VERSION || '0.0.0') + '\n')
+      process.exit(0)
+    } else if (arg === '--help' || arg === '-h') {
+      printHelp(process.env.GSD_VERSION || '0.0.0')
+      process.exit(0)
+    } else if (!arg.startsWith('--') && !arg.startsWith('-')) {
+      flags.messages.push(arg)
+    }
+  }
+  return flags
+}
+
+const cliFlags = parseCliArgs(process.argv)
+const isPrintMode = cliFlags.print || cliFlags.mode !== undefined
+
+// `gsd <subcommand> --help` — show subcommand-specific help
+const subcommand = cliFlags.messages[0]
+if (subcommand && process.argv.includes('--help')) {
+  if (printSubcommandHelp(subcommand, process.env.GSD_VERSION || '0.0.0')) {
+    process.exit(0)
+  }
+}
+
+// `gsd config` — replay the setup wizard and exit
+if (cliFlags.messages[0] === 'config') {
+  const authStorage = AuthStorage.create(authFilePath)
+  loadStoredEnvKeys(authStorage)
+  await runOnboarding(authStorage)
+  process.exit(0)
+}
+
+// `gsd update` — update to the latest version via npm
+if (cliFlags.messages[0] === 'update') {
+  const { runUpdate } = await import('./update-cmd.js')
+  await runUpdate()
+  process.exit(0)
+}
+
+// Pi's tool bootstrap can mis-detect already-installed fd/rg on some systems
+// because spawnSync(..., ["--version"]) returns EPERM despite a zero exit code.
+// Provision local managed binaries first so Pi sees them without probing PATH.
+ensureManagedTools(join(agentDir, 'bin'))
+
+const authStorage = AuthStorage.create(authFilePath)
+loadStoredEnvKeys(authStorage)
+migratePiCredentials(authStorage)
+
+const modelRegistry = new ModelRegistry(authStorage)
+const settingsManager = SettingsManager.create(agentDir)
+
+// Run onboarding wizard on first launch (no LLM provider configured)
+if (!isPrintMode && shouldRunOnboarding(authStorage, settingsManager.getDefaultProvider())) {
+  await runOnboarding(authStorage)
+
+  // Clean up stdin state left by @clack/prompts.
+  // readline.emitKeypressEvents() adds a permanent data listener and
+  // readline.createInterface() may leave stdin paused. Remove stale
+  // listeners and pause stdin so the TUI can start with a clean slate.
+  process.stdin.removeAllListeners('data')
+  process.stdin.removeAllListeners('keypress')
+  if (process.stdin.setRawMode) process.stdin.setRawMode(false)
+  process.stdin.pause()
+}
+
+// Non-blocking update check — runs at most once per 24h, fire-and-forget
+if (!isPrintMode) {
+  checkForUpdates().catch(() => {})
+}
+
+// Warn if terminal is too narrow for readable output
+if (!isPrintMode && process.stdout.columns && process.stdout.columns < 40) {
+  process.stderr.write(
+    chalk.yellow(`[gsd] Terminal width is ${process.stdout.columns} columns (minimum recommended: 40). Output may be unreadable.\n`),
+  )
+}
+
+// --list-models: print available models and exit (no TTY needed)
+if (cliFlags.listModels !== undefined) {
+  const models = modelRegistry.getAvailable()
+  if (models.length === 0) {
+    console.log('No models available. Set API keys in environment variables.')
+    process.exit(0)
+  }
+
+  const searchPattern = typeof cliFlags.listModels === 'string' ? cliFlags.listModels : undefined
+  let filtered = models
+  if (searchPattern) {
+    const q = searchPattern.toLowerCase()
+    filtered = models.filter((m) => `${m.provider} ${m.id} ${m.name}`.toLowerCase().includes(q))
+  }
+
+  // Sort by name descending (newest first), then provider, then id
+  filtered.sort((a, b) => {
+    const nameCmp = b.name.localeCompare(a.name)
+    if (nameCmp !== 0) return nameCmp
+    const provCmp = a.provider.localeCompare(b.provider)
+    if (provCmp !== 0) return provCmp
+    return a.id.localeCompare(b.id)
+  })
+
+  const fmt = (n: number) => n >= 1_000_000 ? `${n / 1_000_000}M` : n >= 1_000 ? `${n / 1_000}K` : `${n}`
+  const rows = filtered.map((m) => [
+    m.provider,
+    m.id,
+    m.name,
+    fmt(m.contextWindow),
+    fmt(m.maxTokens),
+    m.reasoning ? 'yes' : 'no',
+  ])
+  const hdrs = ['provider', 'model', 'name', 'context', 'max-out', 'thinking']
+  const widths = hdrs.map((h, i) => Math.max(h.length, ...rows.map((r) => r[i].length)))
+  const pad = (s: string, w: number) => s.padEnd(w)
+  console.log(hdrs.map((h, i) => pad(h, widths[i])).join('  '))
+  for (const row of rows) {
+    console.log(row.map((c, i) => pad(c, widths[i])).join('  '))
+  }
+  process.exit(0)
+}
+
+// Validate configured model on startup — catches stale settings from prior installs
+// (e.g. grok-2 which no longer exists) and fresh installs with no settings.
+// Only resets the default when the configured model no longer exists in the registry;
+// never overwrites a valid user choice.
+const configuredProvider = settingsManager.getDefaultProvider()
+const configuredModel = settingsManager.getDefaultModel()
+const allModels = modelRegistry.getAll()
+const availableModels = modelRegistry.getAvailable()
+const configuredExists = configuredProvider && configuredModel &&
+  allModels.some((m) => m.provider === configuredProvider && m.id === configuredModel)
+const configuredAvailable = configuredProvider && configuredModel &&
+  availableModels.some((m) => m.provider === configuredProvider && m.id === configuredModel)
+
+if (!configuredModel || !configuredExists || !configuredAvailable) {
+  const piDefault = getPiDefaultModelAndProvider()
+  const preferred =
+    (piDefault
+      ? availableModels.find((m) => m.provider === piDefault.provider && m.id === piDefault.model)
+      : undefined) ||
+    availableModels.find((m) => m.provider === 'openai' && m.id === 'gpt-5.4') ||
+    availableModels.find((m) => m.provider === 'openai') ||
+    availableModels.find((m) => m.provider === 'anthropic' && m.id === 'claude-opus-4-6') ||
+    availableModels.find((m) => m.provider === 'anthropic' && m.id.includes('opus')) ||
+    availableModels.find((m) => m.provider === 'anthropic') ||
+    availableModels[0]
+  if (preferred) {
+    settingsManager.setDefaultModelAndProvider(preferred.provider, preferred.id)
+>>>>>>> upstream/main
   }
 }
 
@@ -137,6 +348,7 @@ export async function runCli(argv = process.argv, deps: CliDeps = {}): Promise<n
     }
   }
 
+<<<<<<< HEAD
   ;(deps.loadStoredEnvKeys ?? loadStoredEnvKeys)(authStorage)
   ;(deps.migratePiCredentials ?? migratePiCredentials)(authStorage)
 
@@ -147,6 +359,11 @@ export async function runCli(argv = process.argv, deps: CliDeps = {}): Promise<n
     cwd: () => currentCwd,
     stderr,
     baseSessionsDir: sessionsDir,
+=======
+  exitIfManagedResourcesAreNewer(agentDir)
+  initResources(agentDir)
+  const resourceLoader = new DefaultResourceLoader({
+>>>>>>> upstream/main
     agentDir,
   })
   if (webBranch.handled) {
@@ -325,6 +542,7 @@ export async function runCli(argv = process.argv, deps: CliDeps = {}): Promise<n
     const scopedModels: Array<{ model: (typeof scopedAvailableModels)[number] }> = []
     const seen = new Set<string>()
 
+<<<<<<< HEAD
     for (const pattern of enabledModelPatterns) {
       const slashIdx = pattern.indexOf('/')
       if (slashIdx !== -1) {
@@ -346,12 +564,123 @@ export async function runCli(argv = process.argv, deps: CliDeps = {}): Promise<n
             seen.add(key)
             scopedModels.push({ model })
           }
+=======
+  const mode = cliFlags.mode || 'text'
+
+  if (mode === 'rpc') {
+    await runRpcMode(session)
+    process.exit(0)
+  }
+
+  if (mode === 'mcp') {
+    const { startMcpServer } = await import('./mcp-server.js')
+    await startMcpServer({
+      tools: session.agent.state.tools ?? [],
+      version: process.env.GSD_VERSION || '0.0.0',
+    })
+    // MCP server runs until the transport closes; keep alive
+    await new Promise(() => {})
+  }
+
+  await runPrintMode(session, {
+    mode: mode as 'text' | 'json',
+    messages: cliFlags.messages,
+  })
+  process.exit(0)
+}
+
+// ---------------------------------------------------------------------------
+// Interactive mode — normal TTY session
+// ---------------------------------------------------------------------------
+
+// Per-directory session storage — same encoding as the upstream SDK so that
+// /resume only shows sessions from the current working directory.
+const cwd = process.cwd()
+const safePath = `--${cwd.replace(/^[/\\]/, '').replace(/[/\\:]/g, '-')}--`
+const projectSessionsDir = join(sessionsDir, safePath)
+
+// Migrate legacy flat sessions: before per-directory scoping, all .jsonl session
+// files lived directly in ~/.gsd/sessions/. Move them into the correct per-cwd
+// subdirectory so /resume can find them.
+if (existsSync(sessionsDir)) {
+  try {
+    const entries = readdirSync(sessionsDir)
+    const flatJsonl = entries.filter(f => f.endsWith('.jsonl'))
+    if (flatJsonl.length > 0) {
+      const { mkdirSync } = await import('node:fs')
+      mkdirSync(projectSessionsDir, { recursive: true })
+      for (const file of flatJsonl) {
+        const src = join(sessionsDir, file)
+        const dst = join(projectSessionsDir, file)
+        if (!existsSync(dst)) {
+          renameSync(src, dst)
+>>>>>>> upstream/main
         }
       }
     }
 
+<<<<<<< HEAD
     if (scopedModels.length > 0 && scopedModels.length < scopedAvailableModels.length) {
       session.setScopedModels(scopedModels)
+=======
+const sessionManager = cliFlags.continue
+  ? SessionManager.continueRecent(cwd, projectSessionsDir)
+  : SessionManager.create(cwd, projectSessionsDir)
+
+exitIfManagedResourcesAreNewer(agentDir)
+initResources(agentDir)
+const resourceLoader = buildResourceLoader(agentDir)
+await resourceLoader.reload()
+
+const { session, extensionsResult } = await createAgentSession({
+  authStorage,
+  modelRegistry,
+  settingsManager,
+  sessionManager,
+  resourceLoader,
+})
+
+if (extensionsResult.errors.length > 0) {
+  for (const err of extensionsResult.errors) {
+    process.stderr.write(`[gsd] Extension load error: ${err.error}\n`)
+  }
+}
+
+// Restore scoped models from settings on startup.
+// The upstream InteractiveMode reads enabledModels from settings when /scoped-models is opened,
+// but doesn't apply them to the session at startup — so Ctrl+P cycles all models instead of
+// just the saved selection until the user re-runs /scoped-models.
+const enabledModelPatterns = settingsManager.getEnabledModels()
+if (enabledModelPatterns && enabledModelPatterns.length > 0) {
+  const availableModels = modelRegistry.getAvailable()
+  const scopedModels: Array<{ model: (typeof availableModels)[number] }> = []
+  const seen = new Set<string>()
+
+  for (const pattern of enabledModelPatterns) {
+    // Patterns are "provider/modelId" exact strings saved by /scoped-models
+    const slashIdx = pattern.indexOf('/')
+    if (slashIdx !== -1) {
+      const provider = pattern.substring(0, slashIdx)
+      const modelId = pattern.substring(slashIdx + 1)
+      const model = availableModels.find((m) => m.provider === provider && m.id === modelId)
+      if (model) {
+        const key = `${model.provider}/${model.id}`
+        if (!seen.has(key)) {
+          seen.add(key)
+          scopedModels.push({ model })
+        }
+      }
+    } else {
+      // Fallback: match by model id alone
+      const model = availableModels.find((m) => m.id === pattern)
+      if (model) {
+        const key = `${model.provider}/${model.id}`
+        if (!seen.has(key)) {
+          seen.add(key)
+          scopedModels.push({ model })
+        }
+      }
+>>>>>>> upstream/main
     }
   }
 
@@ -370,6 +699,17 @@ export async function runCli(argv = process.argv, deps: CliDeps = {}): Promise<n
   return 0
 }
 
+<<<<<<< HEAD
 if (process.env.GSD_SKIP_CLI_AUTORUN !== '1') {
   await runCli()
+=======
+if (!process.stdin.isTTY) {
+  process.stderr.write('[gsd] Error: Interactive mode requires a terminal (TTY).\n')
+  process.stderr.write('[gsd] Non-interactive alternatives:\n')
+  process.stderr.write('[gsd]   gsd --print "your message"     Single-shot prompt\n')
+  process.stderr.write('[gsd]   gsd --mode rpc                 JSON-RPC over stdin/stdout\n')
+  process.stderr.write('[gsd]   gsd --mode mcp                 MCP server over stdin/stdout\n')
+  process.stderr.write('[gsd]   gsd --mode text "message"      Text output mode\n')
+  process.exit(1)
+>>>>>>> upstream/main
 }

@@ -7,6 +7,7 @@
 [![npm version](https://img.shields.io/npm/v/gsd-pi?style=for-the-badge&logo=npm&logoColor=white&color=CB3837)](https://www.npmjs.com/package/gsd-pi)
 [![npm downloads](https://img.shields.io/npm/dm/gsd-pi?style=for-the-badge&logo=npm&logoColor=white&color=CB3837)](https://www.npmjs.com/package/gsd-pi)
 [![GitHub stars](https://img.shields.io/github/stars/gsd-build/GSD-2?style=for-the-badge&logo=github&color=181717)](https://github.com/gsd-build/GSD-2)
+[![Discord](https://img.shields.io/badge/Discord-Join%20us-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/gsd)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=for-the-badge)](LICENSE)
 
 The original GSD went viral as a prompt framework for Claude Code. It worked, but it was fighting the tool — injecting prompts through slash commands, hoping the LLM would follow instructions, with no actual control over context windows, sessions, or execution.
@@ -18,6 +19,25 @@ One command. Walk away. Come back to a built project with clean git history.
 <pre><code>npm install -g gsd-pi</code></pre>
 
 </div>
+
+---
+
+## Documentation
+
+Full documentation is available in the [`docs/`](./docs/) directory:
+
+- **[Getting Started](./docs/getting-started.md)** — install, first run, basic usage
+- **[Auto Mode](./docs/auto-mode.md)** — autonomous execution deep-dive
+- **[Configuration](./docs/configuration.md)** — all preferences, models, git, and hooks
+- **[Token Optimization](./docs/token-optimization.md)** — profiles, context compression, complexity routing (v2.17)
+- **[Cost Management](./docs/cost-management.md)** — budgets, tracking, projections
+- **[Git Strategy](./docs/git-strategy.md)** — worktree isolation, branching, merge behavior
+- **[Working in Teams](./docs/working-in-teams.md)** — unique IDs, shared artifacts
+- **[Skills](./docs/skills.md)** — bundled skills, discovery, custom authoring
+- **[Commands Reference](./docs/commands.md)** — all commands and keyboard shortcuts
+- **[Architecture](./docs/architecture.md)** — system design and dispatch pipeline
+- **[Troubleshooting](./docs/troubleshooting.md)** — common issues, doctor, recovery
+- **[Migration from v1](./docs/migration.md)** — `.planning` → `.gsd` migration
 
 ---
 
@@ -38,7 +58,7 @@ GSD v2 solves all of these because it's not a prompt framework anymore — it's 
 | Context management   | Hope the LLM doesn't fill up | Fresh session per task, programmatic                    |
 | Auto mode            | LLM self-loop                | State machine reading `.gsd/` files                     |
 | Crash recovery       | None                         | Lock files + session forensics                          |
-| Git strategy         | LLM writes git commands      | Programmatic branch-per-slice, squash merge             |
+| Git strategy         | LLM writes git commands      | Worktree isolation, sequential commits, squash merge    |
 | Cost tracking        | None                         | Per-unit token/cost ledger with dashboard               |
 | Stuck detection      | None                         | Retry once, then stop with diagnostics                  |
 | Timeout supervision  | None                         | Soft/idle/hard timeouts with recovery steering          |
@@ -111,7 +131,7 @@ Auto mode is a state machine driven by files on disk. It reads `.gsd/STATE.md`, 
 
 2. **Context pre-loading** — The dispatch prompt includes inlined task plans, slice plans, prior task summaries, dependency summaries, roadmap excerpts, and decisions register. The LLM starts with everything it needs instead of spending tool calls reading files.
 
-3. **Git branch-per-slice** — Each slice gets its own branch (`gsd/M001/S01`). Tasks commit atomically on the branch. When the slice completes, it's squash-merged to main (or whichever branch you started from) as one clean commit.
+3. **Git worktree isolation** — Each milestone runs in its own git worktree with a `milestone/<MID>` branch. All slice work commits sequentially — no branch switching, no merge conflicts. When the milestone completes, it's squash-merged to main as one clean commit.
 
 4. **Crash recovery** — A lock file tracks the current unit. If the session dies, the next `/gsd auto` reads the surviving session file, synthesizes a recovery briefing from every tool call that made it to disk, and resumes with full context.
 
@@ -212,13 +232,19 @@ On first run, GSD launches a branded setup wizard that walks you through LLM pro
 | `/gsd`                  | Step mode — executes one unit at a time, pauses between each    |
 | `/gsd next`             | Explicit step mode (same as bare `/gsd`)                        |
 | `/gsd auto`             | Autonomous mode — researches, plans, executes, commits, repeats |
+| `/gsd quick`            | Execute a quick task with GSD guarantees, skip planning overhead |
 | `/gsd stop`             | Stop auto mode gracefully                                       |
+| `/gsd steer`            | Hard-steer plan documents during execution                      |
 | `/gsd discuss`          | Discuss architecture and decisions (works alongside auto mode)  |
 | `/gsd status`           | Progress dashboard                                              |
 | `/gsd queue`            | Queue future milestones (safe during auto mode)                 |
 | `/gsd prefs`            | Model selection, timeouts, budget ceiling                       |
 | `/gsd migrate`          | Migrate a v1 `.planning` directory to `.gsd` format             |
-| `/gsd doctor`           | Validate `.gsd/` integrity, find and fix issues                 |
+| `/gsd help`             | Categorized command reference for all GSD subcommands           |
+| `/gsd mode`             | Switch workflow mode (solo/team) with coordinated defaults      |
+| `/gsd forensics`        | Post-mortem investigation of auto-mode failures                 |
+| `/gsd cleanup`          | Archive phase directories from completed milestones             |
+| `/gsd doctor`           | Runtime health checks with auto-fix for common issues           |
 | `/worktree` (`/wt`)     | Git worktree lifecycle — create, switch, merge, remove          |
 | `/voice`                | Toggle real-time speech-to-text (macOS, Linux)                  |
 | `/exit`                 | Graceful shutdown — saves session state before exiting          |
@@ -268,7 +294,7 @@ gsd/M001/S01 (deleted after merge):
   feat(S01/T01): core types and interfaces
 ```
 
-One commit per slice on main (or whichever branch you started from). Squash commits are the permanent record — branches are deleted after merge. Git bisect works. Individual slices are revertable.
+One squash commit per milestone on main (or whichever branch you started from). The worktree is torn down after merge. Git bisect works. Individual milestones are revertable.
 
 ### Verification
 
@@ -331,7 +357,37 @@ unique_milestone_ids: true
 | `uat_dispatch`         | Enable automatic UAT runs after slice completion                                                      |
 | `always_use_skills`    | Skills to always load when relevant                                                                   |
 | `skill_rules`          | Situational rules for skill routing                                                                   |
+| `skill_staleness_days` | Skills unused for N days get deprioritized (default: 60, 0 = disabled)                                |
 | `unique_milestone_ids` | Uses unique milestone names to avoid clashes when working in teams of people                          |
+| `git.isolation`        | `worktree` (default) or `none` — disable worktree isolation for projects that don't need it           |
+
+### Agent Instructions
+
+Create an `agent-instructions.md` file in your project root to inject persistent per-project behavioral guidance into every agent session. This file is loaded automatically and provides project-specific context the LLM should always have — coding standards, architectural decisions, domain terminology, or workflow preferences.
+
+### Debug Mode
+
+Start GSD with `gsd --debug` to enable structured JSONL diagnostic logging. Debug logs capture dispatch decisions, state transitions, and timing data for troubleshooting auto-mode issues.
+
+### Token Optimization (v2.17)
+
+GSD 2.17 introduced a coordinated token optimization system that reduces usage by 40-60% on cost-sensitive workloads. Set a single preference to coordinate model selection, phase skipping, and context compression:
+
+```yaml
+token_profile: budget      # or balanced (default), quality
+```
+
+| Profile | Savings | What It Does |
+|---------|---------|-------------|
+| `budget` | 40-60% | Cheap models, skip research/reassess, minimal context inlining |
+| `balanced` | 10-20% | Default models, skip slice research, standard context |
+| `quality` | 0% | All phases, all context, full model power |
+
+**Complexity-based routing** automatically classifies tasks as simple/standard/complex and routes to appropriate models. Simple docs tasks get Haiku; complex architectural work gets Opus. The classification is heuristic (sub-millisecond, no LLM calls) and learns from outcomes via a persistent routing history.
+
+**Budget pressure** graduates model downgrading as you approach your budget ceiling — 50%, 75%, and 90% thresholds progressively shift work to cheaper tiers.
+
+See the full [Token Optimization Guide](./docs/token-optimization.md) for details.
 
 ### Bundled Tools
 

@@ -7,9 +7,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as readline from "node:readline";
 
-const SWIFT_SRC = path.join(__dirname, "speech-recognizer.swift");
-const RECOGNIZER_BIN = path.join(__dirname, "speech-recognizer");
-const PYTHON_SCRIPT = path.join(__dirname, "speech-recognizer.py");
+const __extensionDir = import.meta.dirname!;
+const SWIFT_SRC = path.join(__extensionDir, "speech-recognizer.swift");
+const RECOGNIZER_BIN = path.join(__extensionDir, "speech-recognizer");
+const PYTHON_SCRIPT = path.join(__extensionDir, "speech-recognizer.py");
 
 const IS_DARWIN = process.platform === "darwin";
 const IS_LINUX = process.platform === "linux";

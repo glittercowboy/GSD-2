@@ -2,7 +2,7 @@
  * Remote Questions — shared types
  */
 
-export type RemoteChannel = "slack" | "discord";
+export type RemoteChannel = "slack" | "discord" | "telegram";
 
 export interface RemoteQuestionOption {
   label: string;
@@ -72,4 +72,5 @@ export interface ChannelAdapter {
   validate(): Promise<void>;
   sendPrompt(prompt: RemotePrompt): Promise<RemoteDispatchResult>;
   pollAnswer(prompt: RemotePrompt, ref: RemotePromptRef): Promise<RemoteAnswer | null>;
+  acknowledgeAnswer?(ref: RemotePromptRef): Promise<void>;
 }

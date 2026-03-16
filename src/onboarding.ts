@@ -73,6 +73,10 @@ const LLM_PROVIDER_IDS = [
   'xai',
   'openrouter',
   'mistral',
+<<<<<<< HEAD
+=======
+  'ollama-cloud',
+>>>>>>> upstream/main
   'custom-openai',
 ]
 
@@ -88,6 +92,10 @@ const OTHER_PROVIDERS = [
   { value: 'xai', label: 'xAI (Grok)' },
   { value: 'openrouter', label: 'OpenRouter' },
   { value: 'mistral', label: 'Mistral' },
+<<<<<<< HEAD
+=======
+  { value: 'ollama-cloud', label: 'Ollama Cloud' },
+>>>>>>> upstream/main
   { value: 'custom-openai', label: 'Custom (OpenAI-compatible)' },
 ]
 
@@ -144,10 +152,13 @@ function isCancelError(p: ClackModule, err: unknown): boolean {
  *
  * Returns false (skip wizard) when:
  * - Any LLM provider is already available via auth.json, env vars, runtime overrides, or fallback auth
+ * - A default provider is already configured in settings (covers extension-based providers
+ *   that may not require credentials in auth.json)
  * - Not a TTY (piped input, subagent, CI)
  */
-export function shouldRunOnboarding(authStorage: AuthStorage): boolean {
+export function shouldRunOnboarding(authStorage: AuthStorage, settingsDefaultProvider?: string): boolean {
   if (!process.stdin.isTTY) return false
+  if (settingsDefaultProvider) return false
   // Check if any LLM provider has credentials
   const hasLlmAuth = LLM_PROVIDER_IDS.some(id => authStorage.hasAuth(id))
   return !hasLlmAuth
@@ -665,7 +676,8 @@ async function runRemoteQuestionsStep(
   // Check existing config
   const hasDiscord = authStorage.has('discord_bot') && !!(authStorage.get('discord_bot') as any)?.key
   const hasSlack = authStorage.has('slack_bot') && !!(authStorage.get('slack_bot') as any)?.key
-  const existingChannel = hasDiscord ? 'Discord' : hasSlack ? 'Slack' : null
+  const hasTelegram = authStorage.has('telegram_bot') && !!(authStorage.get('telegram_bot') as any)?.key
+  const existingChannel = hasDiscord ? 'Discord' : hasSlack ? 'Slack' : hasTelegram ? 'Telegram' : null
 
   type RemoteOption = { value: string; label: string; hint?: string }
   const options: RemoteOption[] = []
@@ -677,6 +689,7 @@ async function runRemoteQuestionsStep(
   options.push(
     { value: 'discord', label: 'Discord', hint: 'receive questions in a Discord channel' },
     { value: 'slack', label: 'Slack', hint: 'receive questions in a Slack channel' },
+    { value: 'telegram', label: 'Telegram', hint: 'receive questions via Telegram bot' },
     { value: 'skip', label: 'Skip for now', hint: 'use /gsd remote inside GSD later' },
   )
 
@@ -745,10 +758,79 @@ async function runRemoteQuestionsStep(
     })
     if (p.isCancel(channelId) || !channelId) return null
 
-    const { saveRemoteQuestionsConfig } = await import('./resources/extensions/remote-questions/remote-command.js')
+    const { saveRemoteQuestionsConfig } = await import('./remote-questions-config.js')
     saveRemoteQuestionsConfig('slack', (channelId as string).trim())
     p.log.success(`Slack channel: ${pc.green((channelId as string).trim())}`)
     return 'Slack'
+  }
+
+  if (choice === 'telegram') {
+    const token = await p.password({
+      message: 'Paste your Telegram bot token (from @BotFather):',
+      mask: '●',
+    })
+    if (p.isCancel(token) || !(token as string)?.trim()) return null
+    const trimmed = (token as string).trim()
+    if (!/^\d+:[A-Za-z0-9_-]+$/.test(trimmed)) {
+      p.log.warn('Invalid token format — Telegram bot tokens look like 123456789:ABCdefGHI...')
+      return null
+    }
+
+    // Validate
+    const s = p.spinner()
+    s.start('Validating Telegram bot token...')
+    try {
+      const res = await fetch(`https://api.telegram.org/bot${trimmed}/getMe`, {
+        signal: AbortSignal.timeout(15_000),
+      })
+      const data = await res.json() as any
+      if (!data?.ok || !data?.result?.id) {
+        s.stop('Telegram token validation failed')
+        return null
+      }
+      s.stop(`Telegram bot: ${pc.green(data.result.first_name ?? data.result.username ?? 'bot')}`)
+    } catch {
+      s.stop('Could not reach Telegram API')
+      return null
+    }
+
+    authStorage.set('telegram_bot', { type: 'api_key', key: trimmed })
+    process.env.TELEGRAM_BOT_TOKEN = trimmed
+
+    const chatId = await p.text({
+      message: 'Paste the Telegram chat ID (e.g. -1001234567890):',
+      validate: (val) => {
+        if (!val || !/^-?\d{5,20}$/.test(val.trim())) return 'Expected a numeric chat ID (can be negative for groups)'
+      },
+    })
+    if (p.isCancel(chatId) || !chatId) return null
+    const trimmedChatId = (chatId as string).trim()
+
+    // Test send
+    const ts = p.spinner()
+    ts.start('Testing message delivery...')
+    try {
+      const res = await fetch(`https://api.telegram.org/bot${trimmed}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: trimmedChatId, text: 'GSD remote questions connected.' }),
+        signal: AbortSignal.timeout(15_000),
+      })
+      const data = await res.json() as any
+      if (!data?.ok) {
+        ts.stop(`Could not send to chat: ${data?.description ?? 'unknown error'}`)
+        return null
+      }
+      ts.stop('Test message sent')
+    } catch {
+      ts.stop('Could not reach Telegram API')
+      return null
+    }
+
+    const { saveRemoteQuestionsConfig } = await import('./remote-questions-config.js')
+    saveRemoteQuestionsConfig('telegram', trimmedChatId)
+    p.log.success(`Telegram chat: ${pc.green(trimmedChatId)}`)
+    return 'Telegram'
   }
 
   return null
@@ -850,13 +932,14 @@ async function runDiscordChannelStep(p: ClackModule, pc: PicoModule, token: stri
   }
 
   // Save remote questions config
-  const { saveRemoteQuestionsConfig } = await import('./resources/extensions/remote-questions/remote-command.js')
+  const { saveRemoteQuestionsConfig } = await import('./remote-questions-config.js')
   saveRemoteQuestionsConfig('discord', channelId)
   const channelName = channels.find(ch => ch.id === channelId)?.name
   p.log.success(`Discord channel: ${pc.green(channelName ? `#${channelName}` : channelId)}`)
   return channelName ?? null
 }
 
+<<<<<<< HEAD
 // ─── Env hydration (migrated from wizard.ts) ─────────────────────────────────
 
 /**
@@ -884,3 +967,5 @@ export function loadStoredEnvKeys(authStorage: AuthStorage): void {
     }
   }
 }
+=======
+>>>>>>> upstream/main

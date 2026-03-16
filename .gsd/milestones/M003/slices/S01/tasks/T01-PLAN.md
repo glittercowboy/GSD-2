@@ -114,6 +114,13 @@ Initiate `git merge upstream/main` and resolve ~35 of the 50 conflicted files th
 - `grep "stage:web-host" package.json` → confirms fork's staging script preserved
 - The remaining conflicted files should only be the GSD extension core modules (auto.ts, index.ts, commands.ts, state.ts, preferences.ts, types.ts, git-service.ts) and CLI entry points (cli.ts, loader.ts, onboarding.ts) and remaining extension modules (files.ts, activity-log.ts, dashboard-overlay.ts, guided-flow.ts, worktree-manager.ts)
 
+## Observability Impact
+
+- **Merge state:** After this task, `git diff --name-only --diff-filter=U` shows ~15 remaining conflicted files (GSD extension core + CLI entry points). This is the primary inspection surface for T02/T03.
+- **Conflict marker scan:** `rg "<<<<<<|>>>>>>|======" .github/ native/ packages/ CHANGELOG.md .gitignore package.json src/resources/extensions/gsd/prompts/ src/resources/extensions/gsd/tests/ src/tests/` must return empty — confirms all T01-scope files are clean.
+- **Lockfile absent:** `package-lock.json` is deleted; its absence is intentional and expected until T04 regenerates it.
+- **No runtime signals changed:** This task only resolves merge conflicts in source files — no running services, logs, or endpoints are affected.
+
 ## Inputs
 
 - Clean `main` branch at commit `587ec3f`

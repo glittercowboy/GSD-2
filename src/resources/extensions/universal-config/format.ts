@@ -23,7 +23,7 @@ export function formatDiscoveryForTool(result: DiscoveryResult): string {
     return lines.join("\n");
   }
 
-  lines.push(`Found: ${summary.mcpServers} MCP server(s), ${summary.rules} rule(s), ${summary.contextFiles} context file(s), ${summary.settings} settings file(s)`);
+  lines.push(`Found: ${summary.mcpServers} MCP server(s), ${summary.rules} rule(s), ${summary.contextFiles} context file(s), ${summary.settings} settings file(s), ${summary.claudeSkills} Claude skill(s), ${summary.claudePlugins} Claude plugin(s)`);
   lines.push("");
 
   for (const toolResult of result.tools) {
@@ -70,9 +70,24 @@ export function formatDiscoveryForTool(result: DiscoveryResult): string {
       lines.push(`  Settings (${byType.settings.length}):`);
       for (const item of byType.settings) {
         if (item.type !== "settings") continue;
-        const keys = Object.keys(item.data).slice(0, 5);
-        const suffix = Object.keys(item.data).length > 5 ? ` +${Object.keys(item.data).length - 5} more` : "";
-        lines.push(`    - ${item.source.path} (${item.source.level}): keys: ${keys.join(", ")}${suffix}`);
+        lines.push(`    - ${item.source.path} (${item.source.level})`);
+      }
+    }
+
+    if (byType["claude-skill"]?.length) {
+      lines.push(`  Claude Skills (${byType["claude-skill"].length}):`);
+      for (const item of byType["claude-skill"]) {
+        if (item.type !== "claude-skill") continue;
+        lines.push(`    - ${item.name} (${item.source.level}) ${item.path}`);
+      }
+    }
+
+    if (byType["claude-plugin"]?.length) {
+      lines.push(`  Claude Plugins (${byType["claude-plugin"].length}):`);
+      for (const item of byType["claude-plugin"]) {
+        if (item.type !== "claude-plugin") continue;
+        const label = item.packageName ? `${item.name} [${item.packageName}]` : item.name;
+        lines.push(`    - ${label} (${item.source.level}) ${item.path}`);
       }
     }
 
@@ -111,6 +126,8 @@ export function formatDiscoveryForCommand(result: DiscoveryResult): string[] {
   lines.push(`  Rules:       ${summary.rules}`);
   lines.push(`  Context:     ${summary.contextFiles}`);
   lines.push(`  Settings:    ${summary.settings}`);
+  lines.push(`  Claude skills: ${summary.claudeSkills}`);
+  lines.push(`  Claude plugins: ${summary.claudePlugins}`);
   lines.push("");
 
   for (const toolResult of result.tools) {
@@ -122,6 +139,8 @@ export function formatDiscoveryForCommand(result: DiscoveryResult): string[] {
     if (counts.rule) parts.push(`${counts.rule} rules`);
     if (counts["context-file"]) parts.push(`${counts["context-file"]} context`);
     if (counts.settings) parts.push(`${counts.settings} settings`);
+    if (counts["claude-skill"]) parts.push(`${counts["claude-skill"]} Claude skills`);
+    if (counts["claude-plugin"]) parts.push(`${counts["claude-plugin"]} Claude plugins`);
 
     lines.push(`  ${toolResult.tool.name}: ${parts.join(", ")}`);
 
@@ -130,6 +149,18 @@ export function formatDiscoveryForCommand(result: DiscoveryResult): string[] {
     for (const server of servers) {
       if (server.type !== "mcp-server") continue;
       lines.push(`    MCP: ${server.name} (${server.source.level})`);
+    }
+
+    const claudeSkills = toolResult.items.filter((i) => i.type === "claude-skill");
+    for (const skill of claudeSkills) {
+      if (skill.type !== "claude-skill") continue;
+      lines.push(`    Skill: ${skill.name} (${skill.source.level})`);
+    }
+
+    const claudePlugins = toolResult.items.filter((i) => i.type === "claude-plugin");
+    for (const plugin of claudePlugins) {
+      if (plugin.type !== "claude-plugin") continue;
+      lines.push(`    Plugin: ${plugin.name} (${plugin.source.level})`);
     }
   }
 

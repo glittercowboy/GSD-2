@@ -13,6 +13,7 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@gsd/pi-coding-agent";
 import { loadPrompt } from "./prompt-loader.js";
 import { autoCommitCurrentBranch } from "./worktree.js";
+import { runWorktreePostCreateHook } from "./auto-worktree.js";
 import { showConfirm } from "../shared/confirm-ui.js";
 import { gsdRoot, milestonesDir } from "./paths.js";
 import {
@@ -31,8 +32,8 @@ import {
 } from "./worktree-manager.js";
 import { inferCommitType } from "./git-service.js";
 import type { FileLineStat } from "./worktree-manager.js";
-import { execSync } from "node:child_process";
 import { existsSync, realpathSync, readFileSync, readdirSync, rmSync, unlinkSync, utimesSync } from "node:fs";
+import { nativeMergeAbort } from "./native-git-bridge.js";
 import { join, resolve, sep } from "node:path";
 
 /**
@@ -360,6 +361,12 @@ async function handleCreate(
     const mainBase = originalCwd ?? basePath;
     const info = createWorktree(mainBase, name);
 
+    // Run user-configured post-create hook (#597) — e.g. copy .env, symlink assets
+    const hookError = runWorktreePostCreateHook(mainBase, info.path);
+    if (hookError) {
+      ctx.ui.notify(hookError, "warning");
+    }
+
     // Track original cwd before switching
     if (!originalCwd) originalCwd = basePath;
 
@@ -672,6 +679,17 @@ async function handleMerge(
     // Try a direct squash-merge first. Only fall back to LLM on conflict.
     const commitType = inferCommitType(name);
     const commitMessage = `${commitType}(${name}): merge worktree ${name}`;
+
+    // Reconcile worktree DB into main DB before squash merge
+    const wtDbPath = join(worktreePath(basePath, name), ".gsd", "gsd.db");
+    const mainDbPath = join(basePath, ".gsd", "gsd.db");
+    if (existsSync(wtDbPath) && existsSync(mainDbPath)) {
+      try {
+        const { reconcileWorktreeDb } = await import("./gsd-db.js");
+        reconcileWorktreeDb(mainDbPath, wtDbPath);
+      } catch { /* non-fatal */ }
+    }
+
     try {
       mergeWorktreeToMain(basePath, name, commitMessage);
       ctx.ui.notify(
@@ -691,7 +709,7 @@ async function handleMerge(
       if (isConflict) {
         // Abort the failed merge so the working tree is clean for LLM retry
         try {
-          execSync("git merge --abort", { cwd: basePath, stdio: "pipe" });
+          nativeMergeAbort(basePath);
         } catch { /* already clean */ }
 
         ctx.ui.notify(

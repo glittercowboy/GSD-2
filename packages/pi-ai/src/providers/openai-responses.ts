@@ -18,6 +18,16 @@ import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copi
 import { convertResponsesMessages, convertResponsesTools, processResponsesStream } from "./openai-responses-shared.js";
 import { buildBaseOptions, clampReasoning } from "./simple-options.js";
 
+/**
+ * Clamp reasoning effort for models that don't support all levels.
+ * gpt-5.x models don't support "minimal" — map to "low".
+ */
+function clampReasoningForModel(modelName: string, effort: string): string {
+	const name = modelName.includes("/") ? modelName.split("/").pop()! : modelName;
+	if (name.startsWith("gpt-5") && effort === "minimal") return "low";
+	return effort;
+}
+
 const OPENAI_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
 
 /**
@@ -215,8 +225,9 @@ function buildParams(model: Model<"openai-responses">, context: Context, options
 
 	if (model.reasoning) {
 		if (options?.reasoningEffort || options?.reasoningSummary) {
+			const effort = clampReasoningForModel(model.name, options?.reasoningEffort || "medium") as typeof options.reasoningEffort;
 			params.reasoning = {
-				effort: options?.reasoningEffort || "medium",
+				effort: effort || "medium",
 				summary: options?.reasoningSummary || "auto",
 			};
 			params.include = ["reasoning.encrypted_content"];

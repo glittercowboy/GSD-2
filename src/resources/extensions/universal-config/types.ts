@@ -80,11 +80,28 @@ export interface DiscoveredSettings {
   source: ConfigSource;
 }
 
+export interface DiscoveredClaudeSkill {
+  type: "claude-skill";
+  name: string;
+  path: string;
+  source: ConfigSource;
+}
+
+export interface DiscoveredClaudePlugin {
+  type: "claude-plugin";
+  name: string;
+  path: string;
+  packageName?: string;
+  source: ConfigSource;
+}
+
 export type DiscoveredItem =
   | DiscoveredMCPServer
   | DiscoveredRule
   | DiscoveredContextFile
-  | DiscoveredSettings;
+  | DiscoveredSettings
+  | DiscoveredClaudeSkill
+  | DiscoveredClaudePlugin;
 
 // ── Discovery result ──────────────────────────────────────────────────────────
 
@@ -105,6 +122,8 @@ export interface DiscoveryResult {
     rules: number;
     contextFiles: number;
     settings: number;
+    claudeSkills: number;
+    claudePlugins: number;
     totalItems: number;
     toolsScanned: number;
     toolsWithConfig: number;

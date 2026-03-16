@@ -8,6 +8,19 @@ import { execSync } from "child_process";
 // Cache for shell command results (persists for process lifetime)
 const commandResultCache = new Map<string, string | undefined>();
 
+export const SAFE_COMMAND_PREFIXES = [
+	"pass",
+	"op",
+	"aws",
+	"gcloud",
+	"vault",
+	"security",
+	"gpg",
+	"bw",
+	"gopass",
+	"lpass",
+];
+
 /**
  * Resolve a config value (API key, header value, etc.) to an actual value.
  * - If starts with "!", executes the rest as a shell command and uses stdout (cached)
@@ -27,6 +40,13 @@ function executeCommand(commandConfig: string): string | undefined {
 	}
 
 	const command = commandConfig.slice(1);
+	const firstToken = command.split(/\s+/)[0];
+	if (!SAFE_COMMAND_PREFIXES.includes(firstToken)) {
+		process.stderr.write(`[resolve-config-value] Blocked disallowed command: "${firstToken}". Allowed: ${SAFE_COMMAND_PREFIXES.join(", ")}\n`);
+		commandResultCache.set(commandConfig, undefined);
+		return undefined;
+	}
+
 	let result: string | undefined;
 	try {
 		const output = execSync(command, {

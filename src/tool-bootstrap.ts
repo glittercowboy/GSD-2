@@ -33,7 +33,8 @@ function getCandidateNames(name: string): string[] {
 
 function isRegularFile(path: string): boolean {
   try {
-    return lstatSync(path).isFile() || lstatSync(path).isSymbolicLink();
+    const stat = lstatSync(path);
+    return stat.isFile() || stat.isSymbolicLink();
   } catch {
     return false;
   }

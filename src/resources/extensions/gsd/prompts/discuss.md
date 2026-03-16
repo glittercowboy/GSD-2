@@ -91,13 +91,19 @@ Do not count the reflection step as a question round. Rounds start after reflect
 
 ## Depth Verification
 
-Before moving to the wrap-up gate, present a structured depth summary to the user via `ask_user_questions`. This is a checkpoint — show what you captured across the depth checklist dimensions, using the user's own terminology and framing.
+Before moving to the wrap-up gate, present a structured depth summary as a checkpoint.
 
-The question should summarize: what you understood them to be building, what shaped your understanding most (their emphasis, constraints, concerns), and any areas where you're least confident in your understanding. Frame it as: "Before we move to planning, here's what I captured — did I get the depth right?"
+**Print the summary as normal chat text first** — this is where the formatting renders properly. Structure the summary across the depth checklist dimensions using the user's own terminology and framing. Cover: what you understood them to be building, what shaped your understanding most (their emphasis, constraints, concerns), and any areas where you're least confident in your understanding.
 
-**Convention:** The question ID must contain `depth_verification` (e.g., `depth_verification_summary`). This naming convention enables downstream mechanical detection of this step.
+**Then** use `ask_user_questions` with a short confirmation question — NOT the summary itself. The question field is designed for single sentences, not multi-paragraph summaries.
 
-Offer two options: "Yes, you got it (Recommended)" and "Not quite — let me clarify." If they clarify, absorb the correction and re-verify.
+**Convention:** The question ID must contain `depth_verification` (e.g., `depth_verification_confirm`). This naming convention enables downstream mechanical detection of this step.
+
+Example flow:
+1. Print in chat: the full depth summary with markdown formatting (headers, bold, bullets)
+2. Call `ask_user_questions` with: header "Depth Check", question "Did I capture the depth right?", options "Yes, you got it (Recommended)" and "Not quite — let me clarify"
+
+If they clarify, absorb the correction and re-verify.
 
 ## Wrap-up Gate
 
@@ -215,6 +221,20 @@ Once the user confirms the milestone split:
 5. Write a full `CONTEXT.md` for the primary milestone (the one discussed in depth).
 6. Write a `ROADMAP.md` for **only the primary milestone** — detail-planning later milestones now is waste because the codebase will change. Include requirement coverage and a milestone definition of done.
 
+#### MANDATORY: depends_on Frontmatter in CONTEXT.md
+
+Every CONTEXT.md for a milestone that depends on other milestones MUST have YAML frontmatter with `depends_on`. The auto-mode state machine reads this field to determine execution order — without it, milestones may execute out of order or in parallel when they shouldn't.
+
+```yaml
+---
+depends_on: [M001, M002]
+---
+
+# M003: Title
+```
+
+If a milestone has no dependencies, omit the frontmatter. The dependency chain from the milestone confirmation gate MUST be reflected in each CONTEXT.md frontmatter. Do NOT rely on QUEUE.md or PROJECT.md for dependency tracking — the state machine only reads CONTEXT.md frontmatter.
+
 #### Phase 3: Sequential readiness gate for remaining milestones
 
 For each remaining milestone **one at a time, in sequence**, use `ask_user_questions` to assess readiness. Present three options:
@@ -226,6 +246,27 @@ For each remaining milestone **one at a time, in sequence**, use `ask_user_quest
 **Why sequential, not batch:** After writing the primary milestone's context and roadmap, the agent still has context window capacity. Asking one milestone at a time lets the user decide per-milestone whether to invest that remaining capacity in a focused discussion now, or defer to a future session. A batch question ("Ready/Draft/Queue for M002, M003, M004?") forces the user to decide everything upfront without knowing how much session capacity remains.
 
 Each context file (full or draft) should be rich enough that a future agent encountering it fresh — with no memory of this conversation — can understand the intent, constraints, dependencies, what this milestone unlocks, and what "done" looks like.
+
+#### Milestone Gate Tracking (MANDATORY for multi-milestone)
+
+After EVERY Phase 3 gate decision, immediately write or update `.gsd/DISCUSSION-MANIFEST.json` with the cumulative state. This file is mechanically validated by the system before auto-mode starts — if gates are incomplete, auto-mode will NOT start.
+
+```json
+{
+  "primary": "M001",
+  "milestones": {
+    "M001": { "gate": "discussed", "context": "full" },
+    "M002": { "gate": "discussed", "context": "full" },
+    "M003": { "gate": "queued",    "context": "none" }
+  },
+  "total": 3,
+  "gates_completed": 3
+}
+```
+
+Write this file AFTER each gate decision, not just at the end. Update `gates_completed` incrementally. The system reads this file and BLOCKS auto-start if `gates_completed < total`.
+
+For single-milestone projects, do NOT write this file — it is only for multi-milestone discussions.
 
 #### Phase 4: Finalize
 

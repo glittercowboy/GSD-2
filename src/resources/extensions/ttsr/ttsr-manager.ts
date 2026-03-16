@@ -10,6 +10,7 @@
  * per-rule JS RegExp iteration when the native module is not loaded.
  */
 import picomatch from "picomatch";
+import { debugTime, debugCount, debugPeak } from "../gsd/debug-logger.js";
 
 // ── Native TTSR engine (optional) ─────────────────────────────────────
 let nativeTtsr: {
@@ -98,6 +99,12 @@ const DEFAULT_SETTINGS: Required<TtsrSettings> = {
 /** Cap per-stream buffer at 512KB to prevent unbounded memory growth. */
 const MAX_BUFFER_BYTES = 512 * 1024;
 
+/**
+ * Minimum interval (ms) between JS-fallback regex checks on the same buffer.
+ * Prevents CPU spinning when deltas arrive faster than regex evaluation (#468).
+ */
+const JS_FALLBACK_CHECK_INTERVAL_MS = 50;
+
 const DEFAULT_SCOPE: TtsrScope = {
 	allowText: true,
 	allowThinking: false,
@@ -110,6 +117,8 @@ export class TtsrManager {
 	readonly #rules = new Map<string, TtsrEntry>();
 	readonly #injectionRecords = new Map<string, InjectionRecord>();
 	readonly #buffers = new Map<string, string>();
+	/** Tracks last JS-fallback check time per buffer key to throttle CPU (#468). */
+	readonly #lastJsCheckAt = new Map<string, number>();
 	#messageCount = 0;
 	#nativeHandle: number | null = null;
 	#nativeDirty = false;
@@ -333,6 +342,7 @@ export class TtsrManager {
 	 * remain in JS as they are lightweight and context-dependent.
 	 */
 	checkDelta(delta: string, context: TtsrMatchContext): Rule[] {
+		const stopTimer = debugTime("ttsr-check");
 		const bufferKey = this.#bufferKey(context);
 		let nextBuffer = `${this.#buffers.get(bufferKey) ?? ""}${delta}`;
 		// Cap buffer size — keep the tail so patterns still match recent output
@@ -340,6 +350,7 @@ export class TtsrManager {
 			nextBuffer = nextBuffer.slice(-MAX_BUFFER_BYTES);
 		}
 		this.#buffers.set(bufferKey, nextBuffer);
+		debugPeak("ttsrPeakBuffer", nextBuffer.length);
 
 		// Lazily compile native engine if rules changed.
 		if (this.#nativeDirty) this.#compileNative();
@@ -357,10 +368,22 @@ export class TtsrManager {
 				if (!this.#matchesGlobalPaths(entry, context)) continue;
 				matches.push(entry.rule);
 			}
+			debugCount("ttsrChecks");
+			stopTimer({ bufferSize: nextBuffer.length, native: true, rulesChecked: this.#rules.size, matched: matches.map(m => m.name) });
 			return matches;
 		}
 
 		// ── JS fallback: per-rule regex iteration ─────────────────────────
+		// Throttle JS regex checks to prevent CPU spinning on fast token
+		// streams — regex on a growing buffer is O(rules × buffer_size) (#468).
+		const now = Date.now();
+		const lastCheck = this.#lastJsCheckAt.get(bufferKey) ?? 0;
+		if (now - lastCheck < JS_FALLBACK_CHECK_INTERVAL_MS) {
+			stopTimer({ bufferSize: nextBuffer.length, throttled: true });
+			return [];
+		}
+		this.#lastJsCheckAt.set(bufferKey, now);
+
 		const matches: Rule[] = [];
 		for (const [name, entry] of this.#rules) {
 			if (!this.#canTrigger(name)) continue;
@@ -369,6 +392,8 @@ export class TtsrManager {
 			if (!this.#matchesCondition(entry, nextBuffer)) continue;
 			matches.push(entry.rule);
 		}
+		debugCount("ttsrChecks");
+		stopTimer({ bufferSize: nextBuffer.length, native: false, rulesChecked: this.#rules.size, matched: matches.map(m => m.name) });
 		return matches;
 	}
 
@@ -406,6 +431,7 @@ export class TtsrManager {
 	/** Reset stream buffers (called on new turn). */
 	resetBuffer(): void {
 		this.#buffers.clear();
+		this.#lastJsCheckAt.clear();
 	}
 
 	/** Check if any TTSR rules are registered. */

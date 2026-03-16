@@ -4,7 +4,171 @@
  * Kept free of pi-specific imports so it can be exercised with node:test.
  */
 
-export function createActionTimeline(limit = 60) {
+// ---------------------------------------------------------------------------
+// Interfaces & Types
+// ---------------------------------------------------------------------------
+
+export interface ActionTimeline {
+	limit: number;
+	nextId: number;
+	entries: ActionEntry[];
+}
+
+export interface ActionEntry {
+	id: number;
+	tool: string;
+	paramsSummary: string;
+	startedAt: number;
+	finishedAt: number | null;
+	status: string;
+	beforeUrl: string;
+	afterUrl: string;
+	verificationSummary?: string;
+	warningSummary?: string;
+	diffSummary?: string;
+	changed?: boolean;
+	error?: string;
+}
+
+export interface ActionPartial {
+	tool: string;
+	paramsSummary?: string;
+	startedAt?: number;
+	beforeUrl?: string;
+	afterUrl?: string;
+	verificationSummary?: string;
+	warningSummary?: string;
+	diffSummary?: string;
+	changed?: boolean;
+	error?: string;
+}
+
+export interface ActionUpdates {
+	finishedAt?: number;
+	status?: string;
+	afterUrl?: string;
+	verificationSummary?: string;
+	warningSummary?: string;
+	diffSummary?: string;
+	changed?: boolean;
+	error?: string;
+}
+
+export interface DiffResult {
+	changed: boolean;
+	changes: Array<{ type: string; before: unknown; after: unknown }>;
+	summary: string;
+}
+
+export interface Threshold {
+	op: string;
+	n: number;
+}
+
+export interface PageRegistry {
+	pages: PageEntry[];
+	activePageId: number | null;
+	nextId: number;
+}
+
+export interface PageEntry {
+	id: number;
+	page: any;
+	title: string;
+	url: string;
+	opener: number | null;
+}
+
+export interface PageListEntry {
+	id: number;
+	title: string;
+	url: string;
+	opener: number | null;
+	isActive: boolean;
+}
+
+export interface SnapshotModeConfig {
+	tags: string[];
+	roles: string[];
+	selectors: string[];
+	ariaAttributes: string[];
+	useInteractiveFilter: boolean;
+	visibleOnly?: boolean;
+	containerExpand?: boolean;
+}
+
+export interface AssertionCheckResult {
+	name: string;
+	passed: boolean;
+	actual: unknown;
+	expected: unknown;
+	selector?: string;
+	text?: string;
+}
+
+export interface AssertionEvaluation {
+	verified: boolean;
+	checks: AssertionCheckResult[];
+	summary: string;
+	agentHint: string;
+}
+
+export interface WaitValidationError {
+	error: string;
+}
+
+export interface BatchStepResult {
+	ok: boolean;
+	stopReason: string | null;
+	failedStepIndex: number | null;
+	stepResults: unknown[];
+	summary: string;
+}
+
+export interface FormattedTimeline {
+	entries: Array<{
+		id: number | null;
+		tool: string;
+		status: string;
+		durationMs: number | null;
+		beforeUrl: string;
+		afterUrl: string;
+		line: string;
+	}>;
+	retained: number;
+	totalRecorded: number;
+	bounded: boolean;
+	summary: string;
+}
+
+export interface FailureHypothesis {
+	hasFailures: boolean;
+	categories: string[];
+	summary: string;
+	signals: Array<{ category: string; source: string; detail: string }>;
+}
+
+export interface SessionSummary {
+	counts: {
+		pages: number;
+		actions: { total: number; retained: number; success: number; error: number; running: number };
+		waits: { total: number; success: number; error: number; running: number };
+		assertions: { total: number; passed: number; failed: number; running: number };
+		consoleErrors: number;
+		failedRequests: number;
+		dialogs: number;
+	};
+	activePage: { id: number | null; title: string; url: string } | null;
+	caveats: string[];
+	failureHypothesis: FailureHypothesis;
+	summary: string;
+}
+
+// ---------------------------------------------------------------------------
+// Action Timeline
+// ---------------------------------------------------------------------------
+
+export function createActionTimeline(limit = 60): ActionTimeline {
   return {
     limit,
     nextId: 1,
@@ -12,8 +176,8 @@ export function createActionTimeline(limit = 60) {
   };
 }
 
-export function beginAction(timeline, partial) {
-  const entry = {
+export function beginAction(timeline: ActionTimeline, partial: ActionPartial): ActionEntry {
+  const entry: ActionEntry = {
     id: timeline.nextId++,
     tool: partial.tool,
     paramsSummary: partial.paramsSummary ?? "",
@@ -35,7 +199,7 @@ export function beginAction(timeline, partial) {
   return entry;
 }
 
-export function finishAction(timeline, actionId, updates = {}) {
+export function finishAction(timeline: ActionTimeline, actionId: number, updates: ActionUpdates = {}): ActionEntry | null {
   const entry = timeline.entries.find((item) => item.id === actionId);
   if (!entry) return null;
   Object.assign(entry, updates, {
@@ -51,14 +215,14 @@ export function finishAction(timeline, actionId, updates = {}) {
   return entry;
 }
 
-export function findAction(timeline, actionId) {
+export function findAction(timeline: ActionTimeline, actionId: number): ActionEntry | null {
   return timeline.entries.find((item) => item.id === actionId) ?? null;
 }
 
-export function toActionParamsSummary(params) {
+export function toActionParamsSummary(params: unknown): string {
   if (!params || typeof params !== "object") return "";
-  const entries = [];
-  for (const [key, value] of Object.entries(params)) {
+  const entries: string[] = [];
+  for (const [key, value] of Object.entries(params as Record<string, unknown>)) {
     if (value === undefined || value === null) continue;
     if (typeof value === "string") {
       entries.push(`${key}=${JSON.stringify(value.length > 60 ? `${value.slice(0, 57)}...` : value)}`);
@@ -77,8 +241,22 @@ export function toActionParamsSummary(params) {
   return entries.slice(0, 6).join(", ");
 }
 
-export function diffCompactStates(before, after) {
-  const changes = [];
+// ---------------------------------------------------------------------------
+// Compact State Diffing
+// ---------------------------------------------------------------------------
+
+interface CompactStateForDiff {
+  url?: string;
+  title?: string;
+  focus?: string;
+  dialog?: { count?: number; title?: string };
+  counts?: Record<string, number>;
+  headings?: string[];
+  bodyText?: string;
+}
+
+export function diffCompactStates(before: CompactStateForDiff | null | undefined, after: CompactStateForDiff | null | undefined): DiffResult {
+  const changes: Array<{ type: string; before: unknown; after: unknown }> = [];
   if (!before || !after) {
     return {
       changed: false,
@@ -159,11 +337,15 @@ export function diffCompactStates(before, after) {
   return { changed, changes, summary };
 }
 
-function normalizeString(value) {
+// ---------------------------------------------------------------------------
+// String helpers
+// ---------------------------------------------------------------------------
+
+function normalizeString(value: unknown): string {
   return String(value ?? "").trim();
 }
 
-export function includesNeedle(haystack, needle) {
+export function includesNeedle(haystack: string, needle: string): boolean {
   return normalizeString(haystack).toLowerCase().includes(normalizeString(needle).toLowerCase());
 }
 
@@ -173,10 +355,8 @@ export function includesNeedle(haystack, needle) {
 
 /**
  * Parse a threshold expression like ">=3", "==0", "<5", or bare "3" (defaults to ">=").
- * @param {string} value
- * @returns {{ op: string, n: number } | null} — null if malformed
  */
-export function parseThreshold(value) {
+export function parseThreshold(value: string | null | undefined): Threshold | null {
   if (value == null) return null;
   const str = String(value).trim();
   if (str === "") return null;
@@ -189,11 +369,8 @@ export function parseThreshold(value) {
 
 /**
  * Evaluate whether a count meets a parsed threshold.
- * @param {number} count
- * @param {{ op: string, n: number }} threshold
- * @returns {boolean}
  */
-export function meetsThreshold(count, threshold) {
+export function meetsThreshold(count: number, threshold: Threshold): boolean {
   switch (threshold.op) {
     case ">=": return count >= threshold.n;
     case "<=": return count <= threshold.n;
@@ -207,12 +384,12 @@ export function meetsThreshold(count, threshold) {
 /**
  * Filter entries that occurred at or after a given action's start time.
  * If sinceActionId is missing or the action isn't found, returns all entries.
- * @param {Array<{ timestamp?: number }>} entries
- * @param {number | undefined} sinceActionId
- * @param {{ entries: Array<{ id: number, startedAt: number }> }} timeline
- * @returns {Array}
  */
-export function getEntriesSince(entries, sinceActionId, timeline) {
+export function getEntriesSince(
+  entries: Array<{ timestamp?: number }>,
+  sinceActionId: number | undefined,
+  timeline: ActionTimeline,
+): Array<{ timestamp?: number }> {
   if (!entries || !Array.isArray(entries)) return [];
   if (sinceActionId == null || !timeline) return entries;
   const action = findAction(timeline, sinceActionId);
@@ -221,8 +398,34 @@ export function getEntriesSince(entries, sinceActionId, timeline) {
   return entries.filter((e) => (e.timestamp ?? 0) >= since);
 }
 
-export function evaluateAssertionChecks({ checks, state }) {
-  const results = [];
+// ---------------------------------------------------------------------------
+// Assertion Evaluation
+// ---------------------------------------------------------------------------
+
+interface AssertionCheckInput {
+  kind: string;
+  selector?: string;
+  value?: string;
+  text?: string;
+  checked?: boolean;
+  sinceActionId?: number;
+}
+
+interface AssertionState {
+  url?: string;
+  title?: string;
+  bodyText?: string;
+  focus?: string;
+  selectorStates?: Record<string, { visible?: boolean; value?: string; checked?: boolean | null }>;
+  consoleEntries?: Array<{ type?: string; text?: string; message?: string; timestamp?: number }>;
+  networkEntries?: Array<{ type?: string; url?: string; status?: number; failed?: boolean; timestamp?: number }>;
+  allConsoleEntries?: Array<{ type?: string; text?: string; message?: string; timestamp?: number }>;
+  allNetworkEntries?: Array<{ type?: string; url?: string; status?: number; failed?: boolean; timestamp?: number }>;
+  actionTimeline?: ActionTimeline | null;
+}
+
+export function evaluateAssertionChecks({ checks, state }: { checks: AssertionCheckInput[]; state: AssertionState }): AssertionEvaluation {
+  const results: AssertionCheckResult[] = [];
   const selectorStates = state.selectorStates ?? {};
   const consoleEntries = state.consoleEntries ?? [];
   const networkEntries = state.networkEntries ?? [];
@@ -233,29 +436,29 @@ export function evaluateAssertionChecks({ checks, state }) {
   for (const check of checks) {
     const selectorState = check.selector ? selectorStates[check.selector] ?? null : null;
     let passed = false;
-    let actual;
-    let expected;
+    let actual: unknown;
+    let expected: unknown;
 
     switch (check.kind) {
       case "url_contains":
         actual = state.url ?? "";
         expected = check.value ?? "";
-        passed = includesNeedle(actual, expected);
+        passed = includesNeedle(actual as string, expected as string);
         break;
       case "title_contains":
         actual = state.title ?? "";
         expected = check.value ?? "";
-        passed = includesNeedle(actual, expected);
+        passed = includesNeedle(actual as string, expected as string);
         break;
       case "text_visible":
         actual = state.bodyText ?? "";
         expected = check.text ?? "";
-        passed = includesNeedle(actual, expected);
+        passed = includesNeedle(actual as string, expected as string);
         break;
       case "text_not_visible":
         actual = state.bodyText ?? "";
         expected = check.text ?? "";
-        passed = !includesNeedle(actual, expected);
+        passed = !includesNeedle(actual as string, expected as string);
         break;
       case "selector_visible":
         actual = selectorState?.visible ?? false;
@@ -275,12 +478,12 @@ export function evaluateAssertionChecks({ checks, state }) {
       case "value_contains":
         actual = selectorState?.value ?? "";
         expected = check.value ?? "";
-        passed = includesNeedle(actual, expected);
+        passed = includesNeedle(actual as string, expected as string);
         break;
       case "focused_matches":
         actual = state.focus ?? "";
         expected = check.value ?? "";
-        passed = includesNeedle(actual, expected);
+        passed = includesNeedle(actual as string, expected as string);
         break;
       case "checked_equals":
         actual = selectorState?.checked ?? null;
@@ -301,8 +504,8 @@ export function evaluateAssertionChecks({ checks, state }) {
       // --- S02: New structured network/console assertion kinds ---
 
       case "request_url_seen": {
-        const filtered = getEntriesSince(allNetworkEntries, check.sinceActionId, actionTimeline);
-        const matches = filtered.filter((e) => includesNeedle(e.url ?? "", check.text ?? ""));
+        const filtered = getEntriesSince(allNetworkEntries, check.sinceActionId, actionTimeline!);
+        const matches = (filtered as typeof allNetworkEntries).filter((e) => includesNeedle(e.url ?? "", check.text ?? ""));
         actual = matches.length > 0;
         expected = true;
         passed = actual === true;
@@ -310,9 +513,9 @@ export function evaluateAssertionChecks({ checks, state }) {
       }
 
       case "response_status": {
-        const filtered = getEntriesSince(allNetworkEntries, check.sinceActionId, actionTimeline);
-        const statusNum = parseInt(check.value, 10);
-        const matches = filtered.filter(
+        const filtered = getEntriesSince(allNetworkEntries, check.sinceActionId, actionTimeline!);
+        const statusNum = parseInt(check.value!, 10);
+        const matches = (filtered as typeof allNetworkEntries).filter(
           (e) => includesNeedle(e.url ?? "", check.text ?? "") && typeof e.status === "number" && e.status === statusNum
         );
         actual = matches.length > 0 ? `found (status=${matches[0].status})` : `not found`;
@@ -322,8 +525,8 @@ export function evaluateAssertionChecks({ checks, state }) {
       }
 
       case "console_message_matches": {
-        const filtered = getEntriesSince(allConsoleEntries, check.sinceActionId, actionTimeline);
-        const matches = filtered.filter((e) => includesNeedle(e.text ?? "", check.text ?? ""));
+        const filtered = getEntriesSince(allConsoleEntries, check.sinceActionId, actionTimeline!);
+        const matches = (filtered as typeof allConsoleEntries).filter((e) => includesNeedle(e.text ?? "", check.text ?? ""));
         actual = matches.length > 0;
         expected = true;
         passed = actual === true;
@@ -331,8 +534,8 @@ export function evaluateAssertionChecks({ checks, state }) {
       }
 
       case "network_count": {
-        const filtered = getEntriesSince(allNetworkEntries, check.sinceActionId, actionTimeline);
-        const matches = filtered.filter((e) => includesNeedle(e.url ?? "", check.text ?? ""));
+        const filtered = getEntriesSince(allNetworkEntries, check.sinceActionId, actionTimeline!);
+        const matches = (filtered as typeof allNetworkEntries).filter((e) => includesNeedle(e.url ?? "", check.text ?? ""));
         const threshold = parseThreshold(check.value);
         if (!threshold) {
           actual = `invalid threshold: ${check.value}`;
@@ -347,8 +550,8 @@ export function evaluateAssertionChecks({ checks, state }) {
       }
 
       case "console_count": {
-        const filtered = getEntriesSince(allConsoleEntries, check.sinceActionId, actionTimeline);
-        const matches = filtered.filter((e) => includesNeedle(e.text ?? "", check.text ?? ""));
+        const filtered = getEntriesSince(allConsoleEntries, check.sinceActionId, actionTimeline!);
+        const matches = (filtered as typeof allConsoleEntries).filter((e) => includesNeedle(e.text ?? "", check.text ?? ""));
         const threshold = parseThreshold(check.value);
         if (!threshold) {
           actual = `invalid threshold: ${check.value}`;
@@ -363,8 +566,8 @@ export function evaluateAssertionChecks({ checks, state }) {
       }
 
       case "no_console_errors_since": {
-        const filtered = getEntriesSince(allConsoleEntries, check.sinceActionId, actionTimeline);
-        const errors = filtered.filter((e) => e.type === "error" || e.type === "pageerror");
+        const filtered = getEntriesSince(allConsoleEntries, check.sinceActionId, actionTimeline!);
+        const errors = (filtered as typeof allConsoleEntries).filter((e) => e.type === "error" || e.type === "pageerror");
         actual = errors.length;
         expected = 0;
         passed = errors.length === 0;
@@ -372,8 +575,8 @@ export function evaluateAssertionChecks({ checks, state }) {
       }
 
       case "no_failed_requests_since": {
-        const filtered = getEntriesSince(allNetworkEntries, check.sinceActionId, actionTimeline);
-        const failures = filtered.filter((e) => e.failed || (typeof e.status === "number" && e.status >= 400));
+        const filtered = getEntriesSince(allNetworkEntries, check.sinceActionId, actionTimeline!);
+        const failures = (filtered as typeof allNetworkEntries).filter((e) => e.failed || (typeof e.status === "number" && e.status >= 400));
         actual = failures.length;
         expected = 0;
         passed = failures.length === 0;
@@ -417,11 +620,16 @@ export function evaluateAssertionChecks({ checks, state }) {
 // Wait-condition validation
 // ---------------------------------------------------------------------------
 
+interface WaitConditionSpec {
+  needsValue: boolean;
+  valueLabel: string;
+  needsThreshold?: boolean;
+}
+
 /**
  * All recognized wait conditions with their parameter requirements.
- * Each entry: { needsValue: bool, valueLabel: string, needsThreshold?: bool }
  */
-const WAIT_CONDITIONS = {
+const WAIT_CONDITIONS: Record<string, WaitConditionSpec> = {
   // Existing 5 conditions
   selector_visible:   { needsValue: true,  valueLabel: "CSS selector" },
   selector_hidden:    { needsValue: true,  valueLabel: "CSS selector" },
@@ -440,10 +648,8 @@ const WAIT_CONDITIONS = {
 
 /**
  * Validate parameters for a browser_wait_for condition.
- * @param {{ condition: string, value?: string, threshold?: string }} params
- * @returns {null | { error: string }} — null if valid, structured error otherwise
  */
-export function validateWaitParams(params) {
+export function validateWaitParams(params: { condition: string; value?: string; threshold?: string }): WaitValidationError | null {
   const { condition, value, threshold } = params ?? {};
 
   if (!condition) {
@@ -477,14 +683,8 @@ export function validateWaitParams(params) {
 /**
  * Generate a JS expression string for page.waitForFunction() that detects
  * DOM stability by comparing snapshot hashes across polling intervals.
- *
- * The script stores a snapshot on a namespaced window key. When the snapshot
- * matches the previous value, the region is considered stable.
- *
- * @param {string} selector — CSS selector for the target element
- * @returns {string} — self-contained JS function body suitable for waitForFunction
  */
-export function createRegionStableScript(selector) {
+export function createRegionStableScript(selector: string): string {
   // Create a stable key from the selector (simple hash to avoid special chars)
   const safeKey = Array.from(selector).reduce((h, c) => ((h << 5) - h + c.charCodeAt(0)) | 0, 0) >>> 0;
   const windowKey = `__pw_region_stable_${safeKey}`;
@@ -504,40 +704,20 @@ export function createRegionStableScript(selector) {
 // Page Registry — pure-logic operations for multi-page/tab management
 // ---------------------------------------------------------------------------
 
-/**
- * Create a fresh page registry.
- * @returns {{ pages: Array, activePageId: number | null, nextId: number }}
- */
-export function createPageRegistry() {
+export function createPageRegistry(): PageRegistry {
   return { pages: [], activePageId: null, nextId: 1 };
 }
 
-/**
- * @typedef {{ id: number, page: any, title: string, url: string, opener: number | null }} PageEntry
- */
-
-/**
- * Add a page to the registry. Assigns an auto-incrementing ID.
- * @param {ReturnType<typeof createPageRegistry>} registry
- * @param {{ page: any, title?: string, url?: string, opener?: number | null }} info
- * @returns {PageEntry}
- */
-export function registryAddPage(registry, { page, title = "", url = "", opener = null }) {
-  const entry = { id: registry.nextId++, page, title, url, opener };
+export function registryAddPage(
+  registry: PageRegistry,
+  { page, title = "", url = "", opener = null }: { page: unknown; title?: string; url?: string; opener?: number | null },
+): PageEntry {
+  const entry: PageEntry = { id: registry.nextId++, page, title, url, opener };
   registry.pages.push(entry);
   return entry;
 }
 
-/**
- * Remove a page from the registry by ID.
- * If the removed page was active, falls back to the opener (if still present)
- * or the last remaining page.
- * Orphans any pages whose opener was the removed page (sets their opener to null).
- * @param {ReturnType<typeof createPageRegistry>} registry
- * @param {number} pageId
- * @returns {{ removed: PageEntry, newActiveId: number | null }}
- */
-export function registryRemovePage(registry, pageId) {
+export function registryRemovePage(registry: PageRegistry, pageId: number): { removed: PageEntry; newActiveId: number | null } {
   const idx = registry.pages.findIndex((p) => p.id === pageId);
   if (idx === -1) {
     const available = registry.pages.map((p) => p.id);
@@ -571,12 +751,7 @@ export function registryRemovePage(registry, pageId) {
   return { removed, newActiveId };
 }
 
-/**
- * Set the active page by ID. Throws if the page is not in the registry.
- * @param {ReturnType<typeof createPageRegistry>} registry
- * @param {number} pageId
- */
-export function registrySetActive(registry, pageId) {
+export function registrySetActive(registry: PageRegistry, pageId: number): void {
   const entry = registry.pages.find((p) => p.id === pageId);
   if (!entry) {
     const available = registry.pages.map((p) => p.id);
@@ -589,12 +764,7 @@ export function registrySetActive(registry, pageId) {
   registry.activePageId = pageId;
 }
 
-/**
- * Get the active page entry. Throws if no active page or active page not found.
- * @param {ReturnType<typeof createPageRegistry>} registry
- * @returns {PageEntry}
- */
-export function registryGetActive(registry) {
+export function registryGetActive(registry: PageRegistry): PageEntry {
   if (registry.activePageId === null) {
     throw new Error(
       `registryGetActive: no active page. ` +
@@ -613,22 +783,11 @@ export function registryGetActive(registry) {
   return entry;
 }
 
-/**
- * Get a page entry by ID, or null if not found.
- * @param {ReturnType<typeof createPageRegistry>} registry
- * @param {number} pageId
- * @returns {PageEntry | null}
- */
-export function registryGetPage(registry, pageId) {
+export function registryGetPage(registry: PageRegistry, pageId: number): PageEntry | null {
   return registry.pages.find((p) => p.id === pageId) ?? null;
 }
 
-/**
- * List all pages (without the raw `page` reference).
- * @param {ReturnType<typeof createPageRegistry>} registry
- * @returns {Array<{ id: number, title: string, url: string, opener: number | null, isActive: boolean }>}
- */
-export function registryListPages(registry) {
+export function registryListPages(registry: PageRegistry): PageListEntry[] {
   return registry.pages.map((entry) => ({
     id: entry.id,
     title: entry.title,
@@ -642,13 +801,8 @@ export function registryListPages(registry) {
 // FIFO Bounded Log Pusher
 // ---------------------------------------------------------------------------
 
-/**
- * Create a push function that enforces FIFO eviction at push-time.
- * @param {number} maxSize — maximum number of entries to retain
- * @returns {(array: Array, entry: any) => void}
- */
-export function createBoundedLogPusher(maxSize) {
-  return function push(array, entry) {
+export function createBoundedLogPusher(maxSize: number): (array: unknown[], entry: unknown) => void {
+  return function push(array: unknown[], entry: unknown): void {
     array.push(entry);
     if (array.length > maxSize) {
       array.splice(0, array.length - maxSize);
@@ -656,10 +810,14 @@ export function createBoundedLogPusher(maxSize) {
   };
 }
 
-export async function runBatchSteps({ steps, executeStep, stopOnFailure = true }) {
-  const results = [];
+export async function runBatchSteps({ steps, executeStep, stopOnFailure = true }: {
+  steps: unknown[];
+  executeStep: (step: unknown, index: number) => Promise<{ ok: boolean; [key: string]: unknown }>;
+  stopOnFailure?: boolean;
+}): Promise<BatchStepResult> {
+  const results: unknown[] = [];
   for (let i = 0; i < steps.length; i += 1) {
-    const step = steps[i];
+    const step = steps[i] as { action: string };
     const result = await executeStep(step, i);
     results.push(result);
     if (result.ok === false && stopOnFailure) {
@@ -685,15 +843,7 @@ export async function runBatchSteps({ steps, executeStep, stopOnFailure = true }
 // Snapshot Modes — semantic element filtering for browser_snapshot_refs
 // ---------------------------------------------------------------------------
 
-/**
- * Pre-defined snapshot modes that filter elements by semantic category.
- * Each mode config defines which elements should be captured.
- *
- * Shape: { tags: string[], roles: string[], selectors: string[],
- *          ariaAttributes: string[], useInteractiveFilter: boolean,
- *          visibleOnly?: boolean, containerExpand?: boolean }
- */
-export const SNAPSHOT_MODES = {
+export const SNAPSHOT_MODES: Record<string, SnapshotModeConfig> = {
   interactive: {
     tags: [],
     roles: [],
@@ -748,12 +898,7 @@ export const SNAPSHOT_MODES = {
   },
 };
 
-/**
- * Get the snapshot mode config by name.
- * @param {string} mode — mode name (e.g. "form", "dialog", "interactive")
- * @returns {{ tags: string[], roles: string[], selectors: string[], ariaAttributes: string[], useInteractiveFilter: boolean, visibleOnly?: boolean, containerExpand?: boolean } | null}
- */
-export function getSnapshotModeConfig(mode) {
+export function getSnapshotModeConfig(mode: string): SnapshotModeConfig | null {
   return SNAPSHOT_MODES[mode] ?? null;
 }
 
@@ -761,13 +906,7 @@ export function getSnapshotModeConfig(mode) {
 // Fingerprint functions — structural identity for ref resolution
 // ---------------------------------------------------------------------------
 
-/**
- * Compute a content hash from visible text using djb2.
- * Caller is expected to pre-truncate to ~200 chars and normalize whitespace.
- * @param {string} text — visible text content
- * @returns {string} — hex string hash, or "0" for empty input
- */
-export function computeContentHash(text) {
+export function computeContentHash(text: string): string {
   if (!text) return "0";
   let h = 5381;
   for (let i = 0; i < text.length; i++) {
@@ -776,15 +915,7 @@ export function computeContentHash(text) {
   return (h >>> 0).toString(16);
 }
 
-/**
- * Compute a structural signature from tag, role, and immediate child tag names.
- * Uses djb2 hash on the concatenated string `tag|role|child1,child2,...`.
- * @param {string} tag — element tag name (lowercase)
- * @param {string} role — ARIA role or empty string
- * @param {string[]} childTags — array of immediate child tag names (lowercase)
- * @returns {string} — hex string hash
- */
-export function computeStructuralSignature(tag, role, childTags) {
+export function computeStructuralSignature(tag: string, role: string, childTags: string[]): string {
   const input = `${tag}|${role}|${childTags.join(",")}`;
   let h = 5381;
   for (let i = 0; i < input.length; i++) {
@@ -793,14 +924,10 @@ export function computeStructuralSignature(tag, role, childTags) {
   return (h >>> 0).toString(16);
 }
 
-/**
- * Match two fingerprint objects by contentHash and structuralSignature.
- * Returns true only when both fields are present on both objects and both match.
- * @param {{ contentHash?: string, structuralSignature?: string }} stored
- * @param {{ contentHash?: string, structuralSignature?: string }} candidate
- * @returns {boolean}
- */
-export function matchFingerprint(stored, candidate) {
+export function matchFingerprint(
+  stored: { contentHash?: string; structuralSignature?: string },
+  candidate: { contentHash?: string; structuralSignature?: string },
+): boolean {
   if (!stored || !candidate) return false;
   if (!stored.contentHash || !stored.structuralSignature) return false;
   if (!candidate.contentHash || !candidate.structuralSignature) return false;
@@ -808,30 +935,34 @@ export function matchFingerprint(stored, candidate) {
     stored.structuralSignature === candidate.structuralSignature;
 }
 
-function formatDurationMs(entry) {
+// ---------------------------------------------------------------------------
+// Timeline Formatting
+// ---------------------------------------------------------------------------
+
+function formatDurationMs(entry: { startedAt?: number; finishedAt?: number | null }): number | null {
   const startedAt = typeof entry?.startedAt === "number" ? entry.startedAt : null;
   const finishedAt = typeof entry?.finishedAt === "number" ? entry.finishedAt : null;
   if (startedAt == null || finishedAt == null || finishedAt < startedAt) return null;
   return finishedAt - startedAt;
 }
 
-function summarizeActionStatus(status) {
+function summarizeActionStatus(status: string | undefined): string {
   if (status === "error") return "error";
   if (status === "running") return "running";
   return "success";
 }
 
-function looksBoundedWarning(value) {
+function looksBoundedWarning(value: unknown): boolean {
   return /bounded .*history/i.test(String(value ?? ""));
 }
 
-function uniqueStrings(values) {
-  return [...new Set(values.filter(Boolean))];
+function uniqueStrings(values: (string | undefined)[]): string[] {
+  return [...new Set(values.filter(Boolean))] as string[];
 }
 
-export function formatTimelineEntries(entries = [], options = {}) {
-  const retained = options.retained ?? entries.length;
-  const totalRecorded = options.totalRecorded ?? retained;
+export function formatTimelineEntries(entries: ActionEntry[] = [], options: Record<string, unknown> = {}): FormattedTimeline {
+  const retained = (options.retained as number) ?? entries.length;
+  const totalRecorded = (options.totalRecorded as number) ?? retained;
   const bounded = totalRecorded > retained;
 
   if (!entries.length) {
@@ -847,7 +978,7 @@ export function formatTimelineEntries(entries = [], options = {}) {
   const formattedEntries = entries.map((entry) => {
     const status = summarizeActionStatus(entry.status);
     const durationMs = formatDurationMs(entry);
-    const parts = [
+    const parts: string[] = [
       `#${entry.id ?? "?"}`,
       entry.tool ?? "unknown_tool",
       status,
@@ -884,12 +1015,16 @@ export function formatTimelineEntries(entries = [], options = {}) {
   };
 }
 
-export function buildFailureHypothesis(session = {}) {
+// ---------------------------------------------------------------------------
+// Failure Hypothesis
+// ---------------------------------------------------------------------------
+
+export function buildFailureHypothesis(session: Record<string, any> = {}): FailureHypothesis {
   const timelineEntries = session.actionTimeline?.entries ?? [];
   const consoleEntries = session.consoleEntries ?? [];
   const networkEntries = session.networkEntries ?? [];
   const dialogEntries = session.dialogEntries ?? [];
-  const signals = [];
+  const signals: Array<{ category: string; source: string; detail: string }> = [];
 
   for (const entry of timelineEntries) {
     if (entry?.status !== "error") continue;
@@ -920,7 +1055,7 @@ export function buildFailureHypothesis(session = {}) {
     if (entry?.type !== "error" && entry?.type !== "pageerror") continue;
     signals.push({
       category: "console",
-      source: entry.type,
+      source: entry.type!,
       detail: entry.text || "Console error recorded",
     });
   }
@@ -957,18 +1092,22 @@ export function buildFailureHypothesis(session = {}) {
   };
 }
 
-export function summarizeBrowserSession(session = {}) {
-  const actionTimeline = session.actionTimeline ?? { limit: 0, entries: [] };
-  const actionEntries = actionTimeline.entries ?? [];
-  const retainedActionCount = session.retainedActionCount ?? actionEntries.length;
-  const totalActionCount = session.totalActionCount ?? retainedActionCount;
-  const pages = session.pages ?? [];
-  const consoleEntries = session.consoleEntries ?? [];
-  const networkEntries = session.networkEntries ?? [];
-  const dialogEntries = session.dialogEntries ?? [];
+// ---------------------------------------------------------------------------
+// Session Summary
+// ---------------------------------------------------------------------------
+
+export function summarizeBrowserSession(session: Record<string, any> = {}): SessionSummary {
+  const actionTimeline = session.actionTimeline ?? { limit: 0, entries: [] as ActionEntry[] };
+  const actionEntries: ActionEntry[] = actionTimeline.entries ?? [];
+  const retainedActionCount: number = session.retainedActionCount ?? actionEntries.length;
+  const totalActionCount: number = session.totalActionCount ?? retainedActionCount;
+  const pages: Array<Record<string, any>> = session.pages ?? [];
+  const consoleEntries: Array<Record<string, any>> = session.consoleEntries ?? [];
+  const networkEntries: Array<Record<string, any>> = session.networkEntries ?? [];
+  const dialogEntries: Array<Record<string, any>> = session.dialogEntries ?? [];
 
   const actionStatusCounts = actionEntries.reduce(
-    (acc, entry) => {
+    (acc: Record<string, number>, entry: ActionEntry) => {
       const status = summarizeActionStatus(entry.status);
       acc[status] = (acc[status] ?? 0) + 1;
       return acc;
@@ -976,13 +1115,13 @@ export function summarizeBrowserSession(session = {}) {
     { success: 0, error: 0, running: 0 },
   );
 
-  const waitEntries = actionEntries.filter((entry) => entry.tool === "browser_wait_for");
-  const assertEntries = actionEntries.filter((entry) => entry.tool === "browser_assert");
-  const consoleErrors = consoleEntries.filter((entry) => entry.type === "error" || entry.type === "pageerror");
-  const failedRequests = networkEntries.filter((entry) => entry.failed || (typeof entry.status === "number" && entry.status >= 400));
-  const activePage = pages.find((page) => page.isActive) ?? pages[0] ?? null;
+  const waitEntries = actionEntries.filter((entry: ActionEntry) => entry.tool === "browser_wait_for");
+  const assertEntries = actionEntries.filter((entry: ActionEntry) => entry.tool === "browser_assert");
+  const consoleErrors = consoleEntries.filter((entry: Record<string, any>) => entry.type === "error" || entry.type === "pageerror");
+  const failedRequests = networkEntries.filter((entry: Record<string, any>) => entry.failed || (typeof entry.status === "number" && entry.status >= 400));
+  const activePage = pages.find((page: Record<string, any>) => page.isActive) ?? pages[0] ?? null;
 
-  const caveats = [];
+  const caveats: string[] = [];
   if (totalActionCount > retainedActionCount) {
     caveats.push(`Showing ${retainedActionCount} of ${totalActionCount} recorded actions; older actions were discarded due to bounded history.`);
   }

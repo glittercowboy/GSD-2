@@ -41,6 +41,8 @@ describe("discoverAllConfigs", () => {
       assert.equal(result.summary.totalItems, 0);
       assert.equal(result.summary.toolsScanned, 8);
       assert.equal(result.summary.toolsWithConfig, 0);
+      assert.equal(result.summary.claudeSkills, 0);
+      assert.equal(result.summary.claudePlugins, 0);
       assert.ok(result.durationMs >= 0);
     } finally {
       cleanup();
@@ -53,6 +55,8 @@ describe("discoverAllConfigs", () => {
       writeJson(join(testHome, ".claude.json"), {
         mcpServers: { "claude-mcp": { command: "node", args: ["server.js"] } },
       });
+      writeText(join(testHome, ".claude/skills/test-skill/SKILL.md"), "# Test skill");
+      writeJson(join(testHome, ".claude/plugins/test-plugin/package.json"), { name: "test-plugin" });
       writeText(join(testRoot, ".cursorrules"), "Use semicolons.");
       writeText(join(testRoot, ".github/copilot-instructions.md"), "Be helpful.");
 
@@ -61,7 +65,9 @@ describe("discoverAllConfigs", () => {
       assert.equal(result.summary.mcpServers, 1);
       assert.equal(result.summary.rules, 1);
       assert.equal(result.summary.contextFiles, 1);
-      assert.equal(result.allItems.length, 3);
+      assert.equal(result.summary.claudeSkills, 1);
+      assert.equal(result.summary.claudePlugins, 1);
+      assert.equal(result.allItems.length, 5);
     } finally {
       cleanup();
     }
@@ -103,6 +109,8 @@ describe("discoverAllConfigs", () => {
       assert.equal(result.summary.rules, 2);
       assert.equal(result.summary.contextFiles, 1);
       assert.equal(result.summary.settings, 1);
+      assert.equal(result.summary.claudeSkills, 0);
+      assert.equal(result.summary.claudePlugins, 0);
       assert.equal(result.summary.totalItems, 5);
     } finally {
       cleanup();

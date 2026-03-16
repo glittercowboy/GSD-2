@@ -126,7 +126,7 @@ test("loader sets all 4 GSD_ env vars and PI_PACKAGE_DIR", async () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 test("initResources syncs extensions, agents, and skills to target dir", async () => {
-  const { initResources } = await import("../resource-loader.ts");
+  const { initResources, readManagedResourceVersion } = await import("../resource-loader.ts");
   const tmp = mkdtempSync(join(tmpdir(), "gsd-resources-test-"));
   const fakeAgentDir = join(tmp, "agent");
 
@@ -145,6 +145,10 @@ test("initResources syncs extensions, agents, and skills to target dir", async (
 
     // Skills synced
     assert.ok(existsSync(join(fakeAgentDir, "skills")), "skills directory synced");
+
+    // Version manifest synced
+    const managedVersion = readManagedResourceVersion(fakeAgentDir);
+    assert.ok(managedVersion, "managed resource version written");
 
     // Idempotent: run again, no crash
     initResources(fakeAgentDir);
@@ -169,19 +173,21 @@ test("loadStoredEnvKeys hydrates process.env from auth.json", async () => {
     brave_answers: { type: "api_key", key: "test-answers-key" },
     context7: { type: "api_key", key: "test-ctx7-key" },
     tavily: { type: "api_key", key: "test-tavily-key" },
+    telegram_bot: { type: "api_key", key: "test-telegram-key" },
+    "custom-openai": { type: "api_key", key: "test-custom-openai-key" },
   }));
 
   // Clear any existing env vars
-  const origBrave = process.env.BRAVE_API_KEY;
-  const origBraveAnswers = process.env.BRAVE_ANSWERS_KEY;
-  const origCtx7 = process.env.CONTEXT7_API_KEY;
-  const origJina = process.env.JINA_API_KEY;
-  const origTavily = process.env.TAVILY_API_KEY;
-  delete process.env.BRAVE_API_KEY;
-  delete process.env.BRAVE_ANSWERS_KEY;
-  delete process.env.CONTEXT7_API_KEY;
-  delete process.env.JINA_API_KEY;
-  delete process.env.TAVILY_API_KEY;
+  const envVarsToRestore = [
+    "BRAVE_API_KEY", "BRAVE_ANSWERS_KEY", "CONTEXT7_API_KEY",
+    "JINA_API_KEY", "TAVILY_API_KEY", "TELEGRAM_BOT_TOKEN",
+    "CUSTOM_OPENAI_API_KEY",
+  ];
+  const origValues: Record<string, string | undefined> = {};
+  for (const v of envVarsToRestore) {
+    origValues[v] = process.env[v];
+    delete process.env[v];
+  }
 
   try {
     const auth = AuthStorage.create(authPath);
@@ -192,13 +198,12 @@ test("loadStoredEnvKeys hydrates process.env from auth.json", async () => {
     assert.equal(process.env.CONTEXT7_API_KEY, "test-ctx7-key", "CONTEXT7_API_KEY hydrated");
     assert.equal(process.env.JINA_API_KEY, undefined, "JINA_API_KEY not set (not in auth)");
     assert.equal(process.env.TAVILY_API_KEY, "test-tavily-key", "TAVILY_API_KEY hydrated");
+    assert.equal(process.env.TELEGRAM_BOT_TOKEN, "test-telegram-key", "TELEGRAM_BOT_TOKEN hydrated");
+    assert.equal(process.env.CUSTOM_OPENAI_API_KEY, "test-custom-openai-key", "CUSTOM_OPENAI_API_KEY hydrated");
   } finally {
-    // Restore original env
-    if (origBrave) process.env.BRAVE_API_KEY = origBrave; else delete process.env.BRAVE_API_KEY;
-    if (origBraveAnswers) process.env.BRAVE_ANSWERS_KEY = origBraveAnswers; else delete process.env.BRAVE_ANSWERS_KEY;
-    if (origCtx7) process.env.CONTEXT7_API_KEY = origCtx7; else delete process.env.CONTEXT7_API_KEY;
-    if (origJina) process.env.JINA_API_KEY = origJina; else delete process.env.JINA_API_KEY;
-    if (origTavily) process.env.TAVILY_API_KEY = origTavily; else delete process.env.TAVILY_API_KEY;
+    for (const v of envVarsToRestore) {
+      if (origValues[v]) process.env[v] = origValues[v]; else delete process.env[v];
+    }
     rmSync(tmp, { recursive: true, force: true });
   }
 });

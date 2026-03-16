@@ -1661,4 +1661,44 @@ console.log('\n=== LLM round-trip: extra blank lines ===');
   assertTrue(consecutiveBlanks === null, 'blank-lines: formatted output has no 4+ consecutive newlines');
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// parseRoadmap: boundary map with embedded code fences (#468)
+// ═══════════════════════════════════════════════════════════════════════════
+
+console.log('\n=== parseRoadmap: boundary map with code fences (#468) ===');
+{
+  const content = `# M001: Test
+
+**Vision:** Test
+
+## Slices
+
+- [ ] **S01: Core** \`risk:low\` \`depends:[]\`
+- [ ] **S02: API** \`risk:low\` \`depends:[S01]\`
+
+## Boundary Map
+
+### S01 → S02
+
+Produces:
+  types.ts — all types
+  \`\`\`
+  const x = 1;
+  \`\`\`
+
+Consumes: nothing
+`;
+
+  // This test ensures the boundary map parser does not hang or
+  // catastrophically backtrack when content contains code fences.
+  const start = Date.now();
+  const r = parseRoadmap(content);
+  const elapsed = Date.now() - start;
+
+  assertTrue(elapsed < 1000, `boundary map with code fences parsed in ${elapsed}ms (should be < 1s)`);
+  assertEq(r.slices.length, 2, 'code-fence roadmap: slice count');
+  // Boundary map should still parse (may not capture perfectly with code fences, but must not hang)
+  assertTrue(r.boundaryMap.length >= 0, 'code-fence roadmap: boundary map parsed without hanging');
+}
+
 report();

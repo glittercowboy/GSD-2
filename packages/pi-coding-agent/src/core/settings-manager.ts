@@ -79,6 +79,13 @@ export interface FallbackSettings {
 	chains?: Record<string, FallbackChainEntry[]>; // keyed by chain name
 }
 
+export interface ModelDiscoverySettings {
+	enabled?: boolean; // default: false
+	providers?: string[]; // limit discovery to specific providers
+	ttlMinutes?: number; // override default TTLs (in minutes)
+	autoRefreshOnModelSelect?: boolean; // default: false - refresh discovery when opening model selector
+}
+
 export type TransportSetting = Transport;
 
 /**
@@ -134,6 +141,8 @@ export interface Settings {
 	bashInterceptor?: BashInterceptorSettings;
 	taskIsolation?: TaskIsolationSettings;
 	fallback?: FallbackSettings;
+	modelDiscovery?: ModelDiscoverySettings;
+
 }
 
 /** Deep merge settings: project/overrides take precedence, nested objects merge recursively */
@@ -465,6 +474,16 @@ export class SettingsManager {
 		this.errors.push({ scope, error: normalizedError });
 	}
 
+	/**
+	 * Check if project-level settings are active (loaded from a file).
+	 * Used to scope model persistence to the project when possible,
+	 * preventing model config bleed between concurrent instances (#650).
+	 */
+	private hasProjectSettings(): boolean {
+		// Project settings are active if we loaded them and they weren't empty/errored
+		return !this.projectSettingsLoadError && Object.keys(this.projectSettings).length > 0;
+	}
+
 	private clearModifiedScope(scope: SettingsScope): void {
 		if (scope === "global") {
 			this.modifiedFields.clear();
@@ -587,23 +606,43 @@ export class SettingsManager {
 	}
 
 	setDefaultProvider(provider: string): void {
-		this.globalSettings.defaultProvider = provider;
-		this.markModified("defaultProvider");
-		this.save();
+		if (this.hasProjectSettings()) {
+			this.projectSettings.defaultProvider = provider;
+			this.markProjectModified("defaultProvider");
+			this.saveProjectSettings(this.projectSettings);
+		} else {
+			this.globalSettings.defaultProvider = provider;
+			this.markModified("defaultProvider");
+			this.save();
+		}
 	}
 
 	setDefaultModel(modelId: string): void {
-		this.globalSettings.defaultModel = modelId;
-		this.markModified("defaultModel");
-		this.save();
+		if (this.hasProjectSettings()) {
+			this.projectSettings.defaultModel = modelId;
+			this.markProjectModified("defaultModel");
+			this.saveProjectSettings(this.projectSettings);
+		} else {
+			this.globalSettings.defaultModel = modelId;
+			this.markModified("defaultModel");
+			this.save();
+		}
 	}
 
 	setDefaultModelAndProvider(provider: string, modelId: string): void {
-		this.globalSettings.defaultProvider = provider;
-		this.globalSettings.defaultModel = modelId;
-		this.markModified("defaultProvider");
-		this.markModified("defaultModel");
-		this.save();
+		if (this.hasProjectSettings()) {
+			this.projectSettings.defaultProvider = provider;
+			this.projectSettings.defaultModel = modelId;
+			this.markProjectModified("defaultProvider");
+			this.markProjectModified("defaultModel");
+			this.saveProjectSettings(this.projectSettings);
+		} else {
+			this.globalSettings.defaultProvider = provider;
+			this.globalSettings.defaultModel = modelId;
+			this.markModified("defaultProvider");
+			this.markModified("defaultModel");
+			this.save();
+		}
 	}
 
 	getSteeringMode(): "all" | "one-at-a-time" {
@@ -1075,5 +1114,18 @@ export class SettingsManager {
 			enabled: this.getFallbackEnabled(),
 			chains: this.getFallbackChains(),
 		};
+	}
+
+	getModelDiscoverySettings(): ModelDiscoverySettings {
+		return this.settings.modelDiscovery ?? {};
+	}
+
+	setModelDiscoveryEnabled(enabled: boolean): void {
+		if (!this.globalSettings.modelDiscovery) {
+			this.globalSettings.modelDiscovery = {};
+		}
+		this.globalSettings.modelDiscovery.enabled = enabled;
+		this.markModified("modelDiscovery", "enabled");
+		this.save();
 	}
 }

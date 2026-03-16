@@ -150,6 +150,12 @@ export class Editor implements Component, Focusable {
 	private autocompletePrefix: string = "";
 	private autocompleteMaxVisible: number = 5;
 
+	// Debounce for @ file autocomplete to prevent blocking the event loop
+	// with synchronous fuzzyFind calls on every keystroke
+	private autocompleteDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+	private lastAutocompleteLookupPrefix: string | null = null;
+	private static readonly AUTOCOMPLETE_DEBOUNCE_MS = 150;
+
 	// Paste tracking for large pastes
 	private pastes: Map<number, string> = new Map();
 	private pasteCounter: number = 0;
@@ -176,7 +182,7 @@ export class Editor implements Component, Focusable {
 	private undoStack = new UndoStack<EditorState>();
 	private textVersion = 0;
 	private cachedText: string | null = null;
-	private layoutCache: { width: number; textVersion: number; lines: LayoutLine[] } | null = null;
+	private layoutCache: { width: number; textVersion: number; cursorLine: number; cursorCol: number; lines: LayoutLine[] } | null = null;
 	private visualLineMapCache: { width: number; textVersion: number; lines: VisualLine[] } | null = null;
 
 	public onSubmit?: (text: string) => void;
@@ -237,12 +243,14 @@ export class Editor implements Component, Focusable {
 
 	private getLayoutLines(width: number): LayoutLine[] {
 		const cached = this.layoutCache;
-		if (cached && cached.width === width && cached.textVersion === this.textVersion) {
+		if (cached && cached.width === width && cached.textVersion === this.textVersion
+			&& cached.cursorLine === this.state.cursorLine && cached.cursorCol === this.state.cursorCol) {
 			return cached.lines;
 		}
 
 		const lines = this.layoutText(width);
-		this.layoutCache = { width, textVersion: this.textVersion, lines };
+		this.layoutCache = { width, textVersion: this.textVersion, lines,
+			cursorLine: this.state.cursorLine, cursorCol: this.state.cursorCol };
 		return lines;
 	}
 
@@ -724,8 +732,17 @@ export class Editor implements Component, Focusable {
 			return;
 		}
 
-		// Regular characters
+		// Regular characters — reject partial escape sequence remnants that can
+		// occur when event loop latency causes the StdinBuffer to split an escape
+		// sequence (e.g. \x1b flushed as ESC, then "[D" arrives as text).
 		if (data.charCodeAt(0) >= 32) {
+			if (data[0] === "[" && data.length >= 2 && data.length <= 8) {
+				const last = data[data.length - 1]!;
+				// CSI navigation remnants: [A-F (arrows/home/end), [H, [Z (shift-tab), [<n>~ (func keys)
+				if (/^[A-FHZ]$/.test(last) || last === "~") {
+					return; // Drop CSI remnant (e.g. "[D", "[C", "[5~")
+				}
+			}
 			this.insertCharacter(data);
 		}
 	}
@@ -965,14 +982,32 @@ export class Editor implements Component, Focusable {
 				if (this.isInSlashCommandContext(textBeforeCursor)) {
 					this.tryTriggerAutocomplete();
 				}
-				// Check if we're in an @ file reference context
+				// Check if we're in an @ file reference context (debounce to avoid
+				// blocking the event loop with synchronous fuzzyFind on every keystroke)
 				else if (textBeforeCursor.match(/(?:^|[\s])@[^\s]*$/)) {
-					this.tryTriggerAutocomplete();
+					this.debouncedTriggerAutocomplete();
 				}
 			}
 		} else {
 			this.updateAutocomplete();
 		}
+	}
+
+	/**
+	 * Debounced version of tryTriggerAutocomplete for @ file reference context.
+	 * Prevents synchronous fuzzyFind calls from blocking the event loop on every keystroke.
+	 */
+	private debouncedTriggerAutocomplete(): void {
+		if (this.autocompleteDebounceTimer) {
+			clearTimeout(this.autocompleteDebounceTimer);
+			this.autocompleteDebounceTimer = null;
+		}
+
+		this.autocompleteDebounceTimer = setTimeout(() => {
+			this.autocompleteDebounceTimer = null;
+			this.tryTriggerAutocomplete();
+			this.tui.requestRender();
+		}, Editor.AUTOCOMPLETE_DEBOUNCE_MS);
 	}
 
 	private handlePaste(pastedText: string): void {
@@ -1133,9 +1168,9 @@ export class Editor implements Component, Focusable {
 			if (this.isInSlashCommandContext(textBeforeCursor)) {
 				this.tryTriggerAutocomplete();
 			}
-			// @ file reference context
+			// @ file reference context (debounced to avoid blocking event loop)
 			else if (textBeforeCursor.match(/(?:^|[\s])@[^\s]*$/)) {
-				this.tryTriggerAutocomplete();
+				this.debouncedTriggerAutocomplete();
 			}
 		}
 	}
@@ -1440,9 +1475,9 @@ export class Editor implements Component, Focusable {
 			if (this.isInSlashCommandContext(textBeforeCursor)) {
 				this.tryTriggerAutocomplete();
 			}
-			// @ file reference context
+			// @ file reference context (debounced to avoid blocking event loop)
 			else if (textBeforeCursor.match(/(?:^|[\s])@[^\s]*$/)) {
-				this.tryTriggerAutocomplete();
+				this.debouncedTriggerAutocomplete();
 			}
 		}
 	}
@@ -2020,6 +2055,19 @@ https://github.com/EsotericSoftware/spine-runtimes/actions/runs/19536643416/job/
 		this.autocompleteState = null;
 		this.autocompleteList = undefined;
 		this.autocompletePrefix = "";
+		this.clearAutocompleteDebounce();
+	}
+
+	private clearAutocompleteDebounce(): void {
+		if (this.autocompleteDebounceTimer) {
+			clearTimeout(this.autocompleteDebounceTimer);
+			this.autocompleteDebounceTimer = null;
+		}
+		this.lastAutocompleteLookupPrefix = null;
+	}
+
+	public dispose(): void {
+		this.clearAutocompleteDebounce();
 	}
 
 	public isShowingAutocomplete(): boolean {
@@ -2033,6 +2081,38 @@ https://github.com/EsotericSoftware/spine-runtimes/actions/runs/19536643416/job/
 			this.forceFileAutocomplete();
 			return;
 		}
+
+		// Check if we're in an @ file reference context — these trigger expensive
+		// synchronous fuzzyFind calls that block the event loop. Debounce them so
+		// rapid typing doesn't cascade into dozens of blocking searches.
+		const currentLine = this.state.lines[this.state.cursorLine] || "";
+		const textBeforeCursor = currentLine.slice(0, this.state.cursorCol);
+		if (this.autocompletePrefix.startsWith("@") || textBeforeCursor.match(/(?:^|[\s])@[^\s]*$/)) {
+			this.debouncedUpdateAutocompleteSuggestions();
+			return;
+		}
+
+		this.applyAutocompleteSuggestions();
+	}
+
+	private debouncedUpdateAutocompleteSuggestions(): void {
+		// Clear any pending debounce
+		if (this.autocompleteDebounceTimer) {
+			clearTimeout(this.autocompleteDebounceTimer);
+			this.autocompleteDebounceTimer = null;
+		}
+
+		this.autocompleteDebounceTimer = setTimeout(() => {
+			this.autocompleteDebounceTimer = null;
+			// Guard: autocomplete may have been cancelled during debounce wait
+			if (!this.autocompleteState || !this.autocompleteProvider) return;
+			this.applyAutocompleteSuggestions();
+			this.tui.requestRender();
+		}, Editor.AUTOCOMPLETE_DEBOUNCE_MS);
+	}
+
+	private applyAutocompleteSuggestions(): void {
+		if (!this.autocompleteProvider) return;
 
 		const suggestions = this.autocompleteProvider.getSuggestions(
 			this.state.lines,
@@ -2051,6 +2131,10 @@ https://github.com/EsotericSoftware/spine-runtimes/actions/runs/19536643416/job/
 			}
 		} else {
 			this.cancelAutocomplete();
+		}
+	}
+}
+);
 		}
 	}
 }

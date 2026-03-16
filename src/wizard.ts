@@ -16,7 +16,10 @@ export function loadStoredEnvKeys(authStorage: AuthStorage): void {
     ['tavily',        'TAVILY_API_KEY'],
     ['slack_bot',     'SLACK_BOT_TOKEN'],
     ['discord_bot',   'DISCORD_BOT_TOKEN'],
+    ['telegram_bot',  'TELEGRAM_BOT_TOKEN'],
     ['groq',          'GROQ_API_KEY'],
+    ['ollama-cloud',  'OLLAMA_API_KEY'],
+    ['custom-openai', 'CUSTOM_OPENAI_API_KEY'],
   ]
   for (const [provider, envVar] of providers) {
     if (!process.env[envVar]) {

@@ -19,7 +19,7 @@ const procs = [
   spawn('node', [resolve(__dirname, 'watch-resources.js')], {
     cwd: root, stdio: 'inherit'
   }),
-  spawn('npx', ['tsc', '--watch'], {
+  spawn(resolve(root, 'node_modules', '.bin', 'tsc'), ['--watch'], {
     cwd: root, stdio: 'inherit'
   })
 ]

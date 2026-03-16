@@ -8,23 +8,35 @@
  * paths, commit type inference, and the runGit shell helper.
  */
 
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, sep } from "node:path";
+import { join } from "node:path";
 
 import {
   detectWorktreeName,
-  getSliceBranchName,
   SLICE_BRANCH_RE,
 } from "./worktree.js";
 import {
   nativeGetCurrentBranch,
   nativeDetectMainBranch,
   nativeBranchExists,
+<<<<<<< HEAD
   nativeHasMergeConflicts,
   nativeHasChanges,
   nativeCommitCountBetween,
 } from "./native-git-bridge.js";
+=======
+  nativeHasChanges,
+  nativeAddAll,
+  nativeResetPaths,
+  nativeHasStagedChanges,
+  nativeCommit,
+  nativeRmCached,
+  nativeUpdateRef,
+  nativeAddPaths,
+} from "./native-git-bridge.js";
+import { GSDError, GSD_MERGE_CONFLICT } from "./errors.js";
+>>>>>>> upstream/main
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -37,6 +49,23 @@ export interface GitPreferences {
   commit_type?: string;
   main_branch?: string;
   merge_strategy?: "squash" | "merge";
+  /** Controls auto-mode git isolation strategy.
+   *  - "worktree": (default) creates a milestone worktree for isolated work
+   *  - "branch": works directly in the project root (for submodule-heavy repos)
+   *  - "none": no git isolation — commits land on the user's current branch directly
+   */
+  isolation?: "worktree" | "branch" | "none";
+  /** When false, prevents GSD from committing .gsd/ planning artifacts to git.
+   *  The .gsd/ folder is added to .gitignore and kept local-only.
+   *  Default: true (planning docs are tracked in git).
+   */
+  commit_docs?: boolean;
+  /** Script to run after a worktree is created (#597).
+   *  Receives SOURCE_DIR and WORKTREE_DIR as environment variables.
+   *  Can be an absolute path or relative to the project root.
+   *  Failure is non-fatal — logged as a warning.
+   */
+  worktree_post_create?: string;
 }
 
 export const VALID_BRANCH_NAME = /^[a-zA-Z0-9_\-\/.]+$/;
@@ -46,18 +75,12 @@ export interface CommitOptions {
   allowEmpty?: boolean;
 }
 
-export interface MergeSliceResult {
-  branch: string;
-  mergedCommitMessage: string;
-  deletedBranch: boolean;
-}
-
 /**
  * Thrown when a slice merge hits code conflicts in non-.gsd files.
  * The working tree is left in a conflicted state (no reset) so the
  * caller can dispatch a fix-merge session to resolve it.
  */
-export class MergeConflictError extends Error {
+export class MergeConflictError extends GSDError {
   readonly conflictedFiles: string[];
   readonly strategy: "squash" | "merge";
   readonly branch: string;
@@ -70,6 +93,7 @@ export class MergeConflictError extends Error {
     mainBranch: string,
   ) {
     super(
+      GSD_MERGE_CONFLICT,
       `${strategy === "merge" ? "Merge" : "Squash-merge"} of "${branch}" into "${mainBranch}" ` +
       `failed with conflicts in ${conflictedFiles.length} non-.gsd file(s): ${conflictedFiles.join(", ")}`,
     );
@@ -104,22 +128,8 @@ export const RUNTIME_EXCLUSION_PATHS: readonly string[] = [
   ".gsd/metrics.json",
   ".gsd/completed-units.json",
   ".gsd/STATE.md",
-];
-
-/**
- * GSD planning artifact paths that must be force-added even when .gsd/
- * is in .gitignore. These are durable planning files that the agent writes
- * and that must survive squash-merges to main.
- *
- * `git add --force` is a no-op when the path doesn't exist or has no
- * changes, so this list is safe to apply unconditionally.
- */
-const GSD_DURABLE_PATHS: readonly string[] = [
-  ".gsd/milestones/",
-  ".gsd/DECISIONS.md",
-  ".gsd/QUEUE.md",
-  ".gsd/PROJECT.md",
-  ".gsd/REQUIREMENTS.md",
+  ".gsd/gsd.db",
+  ".gsd/DISCUSSION-MANIFEST.json",
 ];
 
 // ─── Integration Branch Metadata ───────────────────────────────────────────
@@ -155,15 +165,13 @@ export function readIntegrationBranch(basePath: string, milestoneId: string): st
  * Persist the integration branch for a milestone.
  *
  * Called when auto-mode starts on a milestone. Records the branch the user
- * was on at that point, so that slice branches merge back to it instead of
- * the repo's default branch. Idempotent when the branch matches; updates
- * the record when the user starts from a different branch.
+ * was on at that point, so the milestone worktree merges back to the correct
+ * branch. Idempotent when the branch matches; updates the record when the
+ * user starts from a different branch.
  *
- * The file is committed immediately so it survives branch switches — the
- * pre-switch auto-commit excludes `.gsd/` to avoid merge conflicts, and
- * uncommitted `.gsd/` files are discarded during checkout.
+ * The file is committed immediately so the metadata is persisted in git.
  */
-export function writeIntegrationBranch(basePath: string, milestoneId: string, branch: string): void {
+export function writeIntegrationBranch(basePath: string, milestoneId: string, branch: string, options?: { commitDocs?: boolean }): void {
   // Don't record slice branches as the integration target
   if (SLICE_BRANCH_RE.test(branch)) return;
   // Validate
@@ -188,6 +196,7 @@ export function writeIntegrationBranch(basePath: string, milestoneId: string, br
   existing.integrationBranch = branch;
   writeFileSync(metaFile, JSON.stringify(existing, null, 2) + "\n", "utf-8");
 
+<<<<<<< HEAD
   // Commit immediately — .gsd/ files are discarded during branch switches
   // (ensureSliceBranch excludes .gsd/ from pre-switch auto-commit and runs
   // git checkout -- .gsd/ to prevent checkout conflicts). Without this
@@ -200,6 +209,18 @@ export function writeIntegrationBranch(basePath: string, milestoneId: string, br
   } catch {
     // Non-fatal — file is on disk even if commit fails (e.g. nothing to commit
     // because the file was already tracked with identical content)
+=======
+  // Commit immediately so the metadata is persisted in git.
+  // Skip when commit_docs is explicitly false — .gsd/ is local-only.
+  if (options?.commitDocs !== false) {
+    try {
+      nativeAddPaths(basePath, [metaFile]);
+      nativeCommit(basePath, `chore(${milestoneId}): record integration branch`, { allowEmpty: false });
+    } catch {
+      // Non-fatal — file is on disk even if commit fails (e.g. nothing to commit
+      // because the file was already tracked with identical content)
+    }
+>>>>>>> upstream/main
   }
 }
 
@@ -233,7 +254,7 @@ function filterGitSvnNoise(message: string): string {
  */
 export function runGit(basePath: string, args: string[], options: { allowFailure?: boolean; input?: string } = {}): string {
   try {
-    return execSync(`git ${args.join(" ")}`, {
+    return execFileSync("git", args, {
       cwd: basePath,
       stdio: [options.input != null ? "pipe" : "ignore", "pipe", "pipe"],
       encoding: "utf-8",
@@ -300,7 +321,10 @@ export class GitServiceImpl {
    * @param extraExclusions Additional pathspec exclusions beyond RUNTIME_EXCLUSION_PATHS.
    */
   private smartStage(extraExclusions: readonly string[] = []): void {
-    const allExclusions = [...RUNTIME_EXCLUSION_PATHS, ...extraExclusions];
+    // When commit_docs is false, exclude the entire .gsd/ directory from staging
+    const commitDocsDisabled = this.prefs.commit_docs === false;
+    const gsdExclusion = commitDocsDisabled ? [".gsd/"] : [];
+    const allExclusions = [...RUNTIME_EXCLUSION_PATHS, ...gsdExclusion, ...extraExclusions];
 
     // One-time cleanup: if runtime files are already tracked in the index
     // (from older versions where the fallback bug staged them), untrack them
@@ -309,11 +333,15 @@ export class GitServiceImpl {
     if (!this._runtimeFilesCleanedUp) {
       let cleaned = false;
       for (const exclusion of RUNTIME_EXCLUSION_PATHS) {
-        const result = this.git(["rm", "--cached", "-r", "--ignore-unmatch", exclusion], { allowFailure: true });
-        if (result && result.includes("rm '")) cleaned = true;
+        const removed = nativeRmCached(this.basePath, [exclusion]);
+        if (removed.length > 0) cleaned = true;
       }
       if (cleaned) {
+<<<<<<< HEAD
         this.git(["commit", "--no-verify", "-F", "-"], { input: "chore: untrack .gsd/ runtime files from git index" });
+=======
+        nativeCommit(this.basePath, "chore: untrack .gsd/ runtime files from git index", { allowEmpty: false });
+>>>>>>> upstream/main
       }
       this._runtimeFilesCleanedUp = true;
     }
@@ -328,24 +356,10 @@ export class GitServiceImpl {
     //
     // git reset HEAD silently succeeds when the path isn't staged, so no
     // error handling is needed per-path.
-    this.git(["add", "-A"]);
-
-    // Force-add GSD planning artifacts that live under .gsd/ but may be
-    // blocked by a .gsd/ gitignore pattern. `git add -A` respects .gitignore,
-    // so new files (CONTEXT.md, SUMMARY.md, PLAN.md, etc.) in gitignored
-    // directories are silently skipped. Without this force-add, planning
-    // artifacts are never committed — they exist on disk but not in git.
-    // Squash-merges then delete them on main because they appear as "removed
-    // relative to main" during the merge.
-    //
-    // Only force-add durable planning paths — runtime paths are excluded
-    // by the reset step below.
-    for (const durablePath of GSD_DURABLE_PATHS) {
-      this.git(["add", "--force", "--", durablePath], { allowFailure: true });
-    }
+    nativeAddAll(this.basePath);
 
     for (const exclusion of allExclusions) {
-      this.git(["reset", "HEAD", "--", exclusion], { allowFailure: true });
+      try { nativeResetPaths(this.basePath, [exclusion]); } catch { /* path not staged — ignore */ }
     }
   }
 
@@ -361,13 +375,16 @@ export class GitServiceImpl {
     this.smartStage();
 
     // Check if anything was actually staged
-    const staged = this.git(["diff", "--cached", "--stat"], { allowFailure: true });
-    if (!staged && !opts.allowEmpty) return null;
+    if (!nativeHasStagedChanges(this.basePath) && !opts.allowEmpty) return null;
 
+<<<<<<< HEAD
     this.git(
       ["commit", "--no-verify", "-F", "-", ...(opts.allowEmpty ? ["--allow-empty"] : [])],
       { input: opts.message },
     );
+=======
+    nativeCommit(this.basePath, opts.message, { allowEmpty: opts.allowEmpty ?? false });
+>>>>>>> upstream/main
     return opts.message;
   }
 
@@ -385,11 +402,14 @@ export class GitServiceImpl {
 
     // After smart staging, check if anything was actually staged
     // (all changes might have been runtime files that got excluded)
-    const staged = this.git(["diff", "--cached", "--stat"], { allowFailure: true });
-    if (!staged) return null;
+    if (!nativeHasStagedChanges(this.basePath)) return null;
 
     const message = `chore(${unitId}): auto-commit after ${unitType}`;
+<<<<<<< HEAD
     this.git(["commit", "--no-verify", "-F", "-"], { input: message });
+=======
+    nativeCommit(this.basePath, message, { allowEmpty: false });
+>>>>>>> upstream/main
     return message;
   }
 
@@ -444,23 +464,9 @@ export class GitServiceImpl {
   }
 
   /** True if currently on a GSD slice branch. */
-  isOnSliceBranch(): boolean {
-    const current = this.getCurrentBranch();
-    return SLICE_BRANCH_RE.test(current);
-  }
-
-  /** Returns the slice branch name if on one, null otherwise. */
-  getActiveSliceBranch(): string | null {
-    try {
-      const current = this.getCurrentBranch();
-      return SLICE_BRANCH_RE.test(current) ? current : null;
-    } catch {
-      return null;
-    }
-  }
-
   // ─── Branch Lifecycle ──────────────────────────────────────────────────
 
+<<<<<<< HEAD
   /**
    * Check if a local branch exists. Native libgit2 when available, execSync fallback.
    */
@@ -578,6 +584,8 @@ export class GitServiceImpl {
     this.git(["clean", "-fdx", "--", ...RUNTIME_EXCLUSION_PATHS], { allowFailure: true });
   }
 
+=======
+>>>>>>> upstream/main
   // ─── S05 Features ─────────────────────────────────────────────────────
 
   /**
@@ -598,7 +606,7 @@ export class GitServiceImpl {
       + String(now.getSeconds()).padStart(2, "0");
 
     const refPath = `refs/gsd/snapshots/${label}/${ts}`;
-    this.git(["update-ref", refPath, "HEAD"]);
+    nativeUpdateRef(this.basePath, refPath, "HEAD");
   }
 
   /**
@@ -619,7 +627,7 @@ export class GitServiceImpl {
     } else {
       // Auto-detect: look for package.json with a test script
       try {
-        const pkg = execSync("cat package.json", { cwd: this.basePath, encoding: "utf-8" });
+        const pkg = readFileSync(join(this.basePath, "package.json"), "utf-8");
         const parsed = JSON.parse(pkg);
         if (parsed.scripts?.test) {
           command = "npm test";
@@ -642,6 +650,7 @@ export class GitServiceImpl {
 
   // ─── Merge ─────────────────────────────────────────────────────────────
 
+<<<<<<< HEAD
   /**
    * Build a rich squash-commit message with a task list from branch commits.
    *
@@ -880,6 +889,8 @@ export class GitServiceImpl {
       deletedBranch: true,
     };
   }
+=======
+>>>>>>> upstream/main
 }
 
 // ─── Commit Type Inference ─────────────────────────────────────────────────

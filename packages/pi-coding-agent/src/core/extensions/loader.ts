@@ -19,6 +19,7 @@ import * as _bundledPiTui from "@gsd/pi-tui";
 // These MUST be static so Bun bundles them into the compiled binary.
 // The virtualModules option then makes them available to extensions.
 import * as _bundledTypebox from "@sinclair/typebox";
+import * as _bundledYaml from "yaml";
 import { getAgentDir, isBunBinary } from "../../config.js";
 // NOTE: This import works because loader.ts exports are NOT re-exported from index.ts,
 // avoiding a circular dependency. Extensions can import from @gsd/pi-coding-agent.
@@ -26,6 +27,8 @@ import * as _bundledPiCodingAgent from "../../index.js";
 import { createEventBus, type EventBus } from "../event-bus.js";
 import type { ExecOptions } from "../exec.js";
 import { execCommand } from "../exec.js";
+import { getUntrustedExtensionPaths } from "./project-trust.js";
+export { isProjectTrusted, trustProject, getUntrustedExtensionPaths } from "./project-trust.js";
 import type {
 	Extension,
 	ExtensionAPI,
@@ -46,6 +49,7 @@ const VIRTUAL_MODULES: Record<string, unknown> = {
 	"@gsd/pi-ai": _bundledPiAi,
 	"@gsd/pi-ai/oauth": _bundledPiAiOauth,
 	"@gsd/pi-coding-agent": _bundledPiCodingAgent,
+	"yaml": _bundledYaml,
 	// Aliases for external PI ecosystem packages that import from the original scope
 	"@mariozechner/pi-agent-core": _bundledPiAgentCore,
 	"@mariozechner/pi-tui": _bundledPiTui,
@@ -70,6 +74,9 @@ function getAliases(): Record<string, string> {
 	const typeboxEntry = require.resolve("@sinclair/typebox");
 	const typeboxRoot = typeboxEntry.replace(/[\\/]build[\\/]cjs[\\/]index\.js$/, "");
 
+	const yamlEntry = require.resolve("yaml");
+	const yamlRoot = yamlEntry.replace(/[\\/]dist[\\/]index\.js$/, "");
+
 	const packagesRoot = path.resolve(__dirname, "../../../../");
 	const resolveWorkspaceOrImport = (workspaceRelativePath: string, specifier: string): string => {
 		const workspacePath = path.join(packagesRoot, workspaceRelativePath);
@@ -86,6 +93,7 @@ function getAliases(): Record<string, string> {
 		"@gsd/pi-ai": resolveWorkspaceOrImport("ai/dist/index.js", "@gsd/pi-ai"),
 		"@gsd/pi-ai/oauth": resolveWorkspaceOrImport("ai/dist/oauth.js", "@gsd/pi-ai/oauth"),
 		"@sinclair/typebox": typeboxRoot,
+		"yaml": yamlRoot,
 		// Aliases for external PI ecosystem packages that import from the original scope
 		"@mariozechner/pi-coding-agent": packageIndex,
 		"@mariozechner/pi-agent-core": resolveWorkspaceOrImport("agent/dist/index.js", "@gsd/pi-agent-core"),
@@ -369,22 +377,26 @@ export async function loadExtensionFromFactory(
 
 /**
  * Load extensions from paths.
+ *
+ * Extensions are loaded in parallel to reduce wall-clock time (~30-50% faster
+ * than sequential loading for I/O-bound jiti compilation).
  */
 export async function loadExtensions(paths: string[], cwd: string, eventBus?: EventBus): Promise<LoadExtensionsResult> {
-	const extensions: Extension[] = [];
-	const errors: Array<{ path: string; error: string }> = [];
 	const resolvedEventBus = eventBus ?? createEventBus();
 	const runtime = createExtensionRuntime();
 
-	for (const extPath of paths) {
-		const { extension, error } = await loadExtension(extPath, cwd, resolvedEventBus, runtime);
+	const results = await Promise.all(
+		paths.map((extPath) => loadExtension(extPath, cwd, resolvedEventBus, runtime)),
+	);
 
+	const extensions: Extension[] = [];
+	const errors: Array<{ path: string; error: string }> = [];
+
+	for (let i = 0; i < results.length; i++) {
+		const { extension, error } = results[i];
 		if (error) {
-			errors.push({ path: extPath, error });
-			continue;
-		}
-
-		if (extension) {
+			errors.push({ path: paths[i], error });
+		} else if (extension) {
 			extensions.push(extension);
 		}
 	}
@@ -528,8 +540,19 @@ export async function discoverAndLoadExtensions(
 	};
 
 	// 1. Project-local extensions: cwd/.pi/extensions/
+	// Only loaded when the project path has been explicitly trusted (TOFU model).
 	const localExtDir = path.join(cwd, ".pi", "extensions");
-	addPaths(discoverExtensionsInDir(localExtDir));
+	const localDiscovered = discoverExtensionsInDir(localExtDir);
+	if (localDiscovered.length > 0) {
+		const untrusted = getUntrustedExtensionPaths(cwd, localDiscovered, agentDir);
+		if (untrusted.length > 0) {
+			process.stderr.write(
+				`[pi] Skipping ${untrusted.length} project-local extension(s) in ${localExtDir} — project not trusted. Use trustProject() to enable.\n`,
+			);
+		}
+		const trusted = localDiscovered.filter((p) => !untrusted.includes(p));
+		addPaths(trusted);
+	}
 
 	// 2. Global extensions: agentDir/extensions/
 	const globalExtDir = path.join(agentDir, "extensions");

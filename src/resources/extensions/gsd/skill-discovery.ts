@@ -110,10 +110,12 @@ function listSkillDirs(): string[] {
 function parseSkillFrontmatter(path: string): { name?: string; description?: string } | null {
   try {
     const content = readFileSync(path, "utf-8");
-    const match = content.match(/^---\n([\s\S]*?)\n---/);
-    if (!match) return null;
+    // Use indexOf instead of [\s\S]*? regex to avoid backtracking (#468)
+    if (!content.startsWith('---\n')) return null;
+    const endIdx = content.indexOf('\n---', 4);
+    if (endIdx === -1) return null;
 
-    const fm = match[1];
+    const fm = content.slice(4, endIdx);
     const result: { name?: string; description?: string } = {};
 
     const nameMatch = fm.match(/^name:\s*(.+)$/m);

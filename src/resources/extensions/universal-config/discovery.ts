@@ -58,6 +58,8 @@ export async function discoverAllConfigs(
   const rules = allItems.filter((i) => i.type === "rule").length;
   const contextFiles = allItems.filter((i) => i.type === "context-file").length;
   const settings = allItems.filter((i) => i.type === "settings").length;
+  const claudeSkills = allItems.filter((i) => i.type === "claude-skill").length;
+  const claudePlugins = allItems.filter((i) => i.type === "claude-plugin").length;
   const toolsWithConfig = toolResults.filter((r) => r.items.length > 0).length;
 
   return {
@@ -68,6 +70,8 @@ export async function discoverAllConfigs(
       rules,
       contextFiles,
       settings,
+      claudeSkills,
+      claudePlugins,
       totalItems: allItems.length,
       toolsScanned: TOOLS.length,
       toolsWithConfig,

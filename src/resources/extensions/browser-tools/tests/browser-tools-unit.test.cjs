@@ -612,3 +612,28 @@ describe("constrainScreenshot", () => {
 		assert.equal(meta.height, 1568);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// browser_save_pdf — tool registration
+// ---------------------------------------------------------------------------
+
+describe("browser_save_pdf tool registration", () => {
+	it("registerPdfTools exports a function", () => {
+		const { registerPdfTools } = jiti("../tools/pdf.ts");
+		assert.equal(typeof registerPdfTools, "function", "registerPdfTools should be a function");
+	});
+
+	it("tool can be registered with a mock pi", () => {
+		const { registerPdfTools } = jiti("../tools/pdf.ts");
+		const registeredTools = [];
+		const mockPi = {
+			registerTool: (tool) => registeredTools.push(tool),
+		};
+		const mockDeps = {};
+		registerPdfTools(mockPi, mockDeps);
+		assert.equal(registeredTools.length, 1, "should register exactly 1 tool");
+		assert.equal(registeredTools[0].name, "browser_save_pdf", "tool name should be browser_save_pdf");
+		assert.ok(registeredTools[0].parameters, "tool should have parameters schema");
+		assert.equal(typeof registeredTools[0].execute, "function", "tool should have execute function");
+	});
+});

@@ -36,6 +36,7 @@ export interface AutoUnitRuntimeRecord {
   updatedAt: number;
   phase: UnitRuntimePhase;
   wrapupWarningSent: boolean;
+  continueHereFired: boolean;
   timeoutAt: number | null;
   lastProgressAt: number;
   progressCount: number;
@@ -50,7 +51,9 @@ function runtimeDir(basePath: string): string {
 }
 
 function runtimePath(basePath: string, unitType: string, unitId: string): string {
-  return join(runtimeDir(basePath), `${unitType}-${unitId.replace(/[\/]/g, "-")}.json`);
+  const sanitizedUnitType = unitType.replace(/[\/]/g, "-");
+  const sanitizedUnitId = unitId.replace(/[\/]/g, "-");
+  return join(runtimeDir(basePath), `${sanitizedUnitType}-${sanitizedUnitId}.json`);
 }
 
 export function writeUnitRuntimeRecord(
@@ -72,6 +75,7 @@ export function writeUnitRuntimeRecord(
     updatedAt: Date.now(),
     phase: updates.phase ?? prev?.phase ?? "dispatched",
     wrapupWarningSent: updates.wrapupWarningSent ?? prev?.wrapupWarningSent ?? false,
+    continueHereFired: updates.continueHereFired ?? prev?.continueHereFired ?? false,
     timeoutAt: updates.timeoutAt ?? prev?.timeoutAt ?? null,
     lastProgressAt: updates.lastProgressAt ?? prev?.lastProgressAt ?? Date.now(),
     progressCount: updates.progressCount ?? prev?.progressCount ?? 0,

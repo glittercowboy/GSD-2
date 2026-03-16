@@ -1,6 +1,6 @@
 {
   "name": "gsd-pi",
-  "version": "2.11.1",
+  "version": "2.22.0",
   "description": "GSD — Get Shit Done coding agent",
   "license": "MIT",
   "repository": {
@@ -47,10 +47,11 @@
     "build": "npm run build:pi && tsc && npm run copy-resources && npm run copy-themes && npm run copy-export-html",
     "stage:web-host": "node scripts/stage-web-standalone.cjs",
     "build:web-host": "npm --prefix web run build && npm run stage:web-host",
-    "copy-resources": "node -e \"const{cpSync,rmSync}=require('fs');rmSync('dist/resources',{recursive:true,force:true});cpSync('src/resources','dist/resources',{recursive:true,force:true})\"",
-    "copy-themes": "node -e \"const{mkdirSync,cpSync}=require('fs');const{resolve}=require('path');const src=resolve(__dirname,'packages/pi-coding-agent/dist/modes/interactive/theme');mkdirSync('pkg/dist/modes/interactive/theme',{recursive:true});cpSync(src,'pkg/dist/modes/interactive/theme',{recursive:true})\"",
-    "copy-export-html": "node -e \"const{mkdirSync,cpSync}=require('fs');const{resolve}=require('path');const src=resolve(__dirname,'packages/pi-coding-agent/dist/core/export-html');mkdirSync('pkg/dist/core/export-html',{recursive:true});cpSync(src,'pkg/dist/core/export-html',{recursive:true})\"",
+    "copy-resources": "node scripts/copy-resources.cjs",
+    "copy-themes": "node scripts/copy-themes.cjs",
+    "copy-export-html": "node scripts/copy-export-html.cjs",
     "test:unit": "node --import ./src/resources/extensions/gsd/tests/resolve-ts.mjs --experimental-strip-types --test src/resources/extensions/gsd/tests/*.test.ts src/resources/extensions/gsd/tests/*.test.mjs src/tests/*.test.ts",
+    "test:coverage": "c8 --reporter=text --reporter=lcov --exclude='src/resources/extensions/gsd/tests/**' --exclude='src/tests/**' --exclude='scripts/**' --exclude='native/**' --exclude='node_modules/**' --check-coverage --statements=40 --lines=40 --branches=0 --functions=0 node --import ./src/resources/extensions/gsd/tests/resolve-ts.mjs --experimental-strip-types --test src/resources/extensions/gsd/tests/*.test.ts src/resources/extensions/gsd/tests/*.test.mjs src/tests/*.test.ts",
     "test:integration": "node --import ./src/resources/extensions/gsd/tests/resolve-ts.mjs --experimental-strip-types --test src/resources/extensions/gsd/tests/*integration*.test.ts src/tests/integration/*.test.ts",
     "test": "npm run test:unit && npm run test:integration",
     "test:browser-tools": "node --test src/resources/extensions/browser-tools/tests/browser-tools-unit.test.cjs src/resources/extensions/browser-tools/tests/browser-tools-integration.test.mjs",
@@ -67,8 +68,9 @@
     "pi:uninstall-global": "node scripts/uninstall-pi-global.js",
     "sync-pkg-version": "node scripts/sync-pkg-version.cjs",
     "sync-platform-versions": "node native/scripts/sync-platform-versions.cjs",
-    "validate-pack": "bash scripts/validate-pack.sh",
-    "prepublishOnly": "npm run sync-pkg-version && npm run sync-platform-versions && git diff --exit-code || (echo 'ERROR: version sync changed files — commit them before publishing' && exit 1) && npm run build && npm run validate-pack"
+    "validate-pack": "node scripts/validate-pack.js",
+    "typecheck:extensions": "tsc --noEmit --project tsconfig.extensions.json",
+    "prepublishOnly": "npm run sync-pkg-version && npm run sync-platform-versions && git diff --exit-code || (echo 'ERROR: version sync changed files — commit them before publishing' && exit 1) && npm run build && npm run typecheck:extensions && npm run validate-pack"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.73.0",
@@ -77,12 +79,15 @@
     "@google/genai": "^1.40.0",
     "@mariozechner/jiti": "^2.6.2",
     "@mistralai/mistralai": "1.14.1",
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "@octokit/rest": "^22.0.1",
     "@silvia-odwyer/photon-node": "^0.3.4",
     "@sinclair/typebox": "^0.34.41",
     "@types/mime-types": "^2.1.4",
     "ajv": "^8.17.1",
     "ajv-formats": "^3.0.1",
-    "chalk": "^5.5.0",
+    "chalk": "^5.6.2",
+    "chokidar": "^5.0.0",
     "diff": "^8.0.2",
     "extract-zip": "^2.0.1",
     "file-type": "^21.1.1",
@@ -112,6 +117,7 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/picomatch": "^4.0.2",
+    "c8": "^11.0.0",
     "jiti": "^2.6.1",
     "typescript": "^5.4.0"
   },

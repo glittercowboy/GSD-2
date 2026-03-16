@@ -132,9 +132,14 @@ export class LoginDialogComponent extends Container implements Focusable {
 			this.contentContainer.addChild(new Text(theme.fg("warning", instructions), 1, 0));
 		}
 
-		// Try to open browser
+		// Try to open browser — on Windows, `start` needs an empty title arg
+		// so it treats the URL as a target, not a window title
 		const openCmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
-		exec(`${openCmd} "${url}"`);
+		if (process.platform === "win32") {
+			exec(`start "" "${url}"`);
+		} else {
+			exec(`${openCmd} "${url}"`);
+		}
 
 		this.tui.requestRender();
 	}

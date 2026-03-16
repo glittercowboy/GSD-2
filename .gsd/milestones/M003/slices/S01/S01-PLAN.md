@@ -24,6 +24,15 @@
 - `npm run build:web-host` → exit 0
 - `git log --oneline HEAD..upstream/main | wc -l` → 0 (all upstream commits present)
 
+## Observability / Diagnostics
+
+- **Conflict marker sweep:** `rg "<<<<<<|>>>>>>|======" src/ web/ packages/ .github/` — must return empty after all tasks complete.
+- **Upstream delta:** `git log --oneline HEAD..upstream/main | wc -l` — tracks how many upstream commits remain unmerged. Should reach 0.
+- **Build health:** `npm run build` and `npm run build:web-host` exit codes. Non-zero means merge broke something.
+- **Remaining conflicts during merge:** `git diff --name-only --diff-filter=U` — lists files still unresolved. Shrinks as tasks progress.
+- **Lockfile state:** `test -f package-lock.json && echo "present" || echo "absent"` — should be absent after T01–T03, present after T04.
+- **Redaction:** No secrets involved in this slice. All files are source code, configs, and prompts.
+
 ## Integration Closure
 
 - Upstream surfaces consumed: all 398 upstream commits — new modules include `auto-dispatch.ts`, `auto-recovery.ts`, `auto-dashboard.ts`, `auto-prompts.ts`, `auto-supervisor.ts`, `auto-worktree.ts`, `forensics.ts`, `captures.ts`, `context-store.ts`, `model-router.ts`, `complexity-classifier.ts`, `context-budget.ts`, `skill-health.ts`, `quick.ts`, `history.ts`, `undo.ts`, `visualizer-data.ts`, `visualizer-views.ts`, `cache.ts`, and others
@@ -32,7 +41,7 @@
 
 ## Tasks
 
-- [ ] **T01: Execute merge and resolve trivial + mechanical conflicts** `est:2h`
+- [x] **T01: Execute merge and resolve trivial + mechanical conflicts** `est:2h`
   - Why: Initiates the merge and clears ~35 of 50 conflicts that need minimal thought — batch take-upstream files, deletions, package/CI merges, prompts, and tests. Unblocks T02/T03 to focus on the hard GSD extension conflicts.
   - Files: `package.json`, `.github/workflows/ci.yml`, `packages/pi-ai/src/env-api-keys.ts`, `packages/pi-coding-agent/src/core/settings-manager.ts`, `packages/pi-tui/src/components/editor.ts`, 7 prompt `.md` files, 11 test files, `.gitignore`, `CHANGELOG.md`, 5 native `package.json` files, `native/crates/engine/src/git.rs`, `src/resources/extensions/gsd/native-git-bridge.ts`, `src/resources/extensions/gsd/post-unit-hooks.ts`, `package-lock.json`, `src/resources/extensions/gsd/tests/orphaned-branch.test.ts`
   - Do: (1) `git merge upstream/main` — will fail with conflicts, expected. (2) Batch `git checkout upstream/main --` for 10 take-upstream files. (3) `git rm` orphaned-branch.test.ts, `rm` package-lock.json. (4) Take upstream for 11 test files. (5) Manually merge package.json — combine both sides' deps and scripts, preserving fork's web scripts. (6) Manually merge ci.yml — combine both sides' steps. (7) Resolve env-api-keys.ts, settings-manager.ts, editor.ts. (8) Resolve 7 prompt .md files — both sides made additive changes. (9) `git add` all resolved files.

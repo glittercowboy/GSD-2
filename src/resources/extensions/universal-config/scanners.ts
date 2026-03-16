@@ -8,6 +8,7 @@
  */
 
 import { readFile, readdir, stat } from "node:fs/promises";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, basename, resolve } from "node:path";
 import { homedir } from "node:os";
 import type {
@@ -27,6 +28,30 @@ import type {
 
 function source(tool: ToolInfo, path: string, level: ConfigLevel): ConfigSource {
   return { tool: tool.id, toolName: tool.name, path, level };
+}
+
+function walkDirectories(root: string, visit: (dir: string, depth: number) => void, maxDepth = 4): void {
+  const skip = new Set([".git", "node_modules", ".worktrees", "dist", "build", "cache", ".cache"]);
+
+  function walk(dir: string, depth: number) {
+    visit(dir, depth);
+    if (depth >= maxDepth) return;
+
+    let entries: Array<{ name: string; isDirectory: () => boolean }> = [];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (skip.has(entry.name)) continue;
+      walk(join(dir, entry.name), depth + 1);
+    }
+  }
+
+  walk(root, 0);
 }
 
 async function readTextFile(path: string): Promise<string | null> {
@@ -166,8 +191,8 @@ async function scanClaude(projectRoot: string, home: string, tool: ToolInfo): Pr
     }
   }
 
-  // Project-level MCP: .claude/.mcp.json or .claude/mcp.json
-  for (const relPath of [".claude/.mcp.json", ".claude/mcp.json"]) {
+  // Project-level MCP: .mcp.json (standard), .claude/.mcp.json, or .claude/mcp.json
+  for (const relPath of [".mcp.json", ".claude/.mcp.json", ".claude/mcp.json"]) {
     const fullPath = join(projectRoot, relPath);
     const content = await readTextFile(fullPath);
     if (content) {
@@ -206,6 +231,44 @@ async function scanClaude(projectRoot: string, home: string, tool: ToolInfo): Pr
         source: source(tool, fullPath, "project"),
       });
     }
+  }
+
+  // Claude skills: ~/.claude/skills/**/SKILL.md
+  const userSkillsRoot = join(home, ".claude/skills");
+  if (existsSync(userSkillsRoot)) {
+    walkDirectories(userSkillsRoot, (dir) => {
+      const skillFile = join(dir, "SKILL.md");
+      if (!existsSync(skillFile)) return;
+      items.push({
+        type: "claude-skill",
+        name: basename(dir),
+        path: dir,
+        source: source(tool, skillFile, "user"),
+      });
+    }, 5);
+  }
+
+  // Claude plugins: ~/.claude/plugins/**/package.json
+  const userPluginsRoot = join(home, ".claude/plugins");
+  if (existsSync(userPluginsRoot)) {
+    walkDirectories(userPluginsRoot, (dir) => {
+      const packageJsonPath = join(dir, "package.json");
+      if (!existsSync(packageJsonPath)) return;
+      let packageName: string | undefined;
+      try {
+        const pkg = JSON.parse(readFileSync(packageJsonPath, "utf8")) as { name?: string };
+        packageName = pkg.name;
+      } catch {
+        packageName = undefined;
+      }
+      items.push({
+        type: "claude-plugin",
+        name: packageName || basename(dir),
+        packageName,
+        path: dir,
+        source: source(tool, packageJsonPath, "user"),
+      });
+    }, 4);
   }
 
   // User-level settings: ~/.claude/settings.json

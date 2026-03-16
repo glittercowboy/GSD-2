@@ -21,6 +21,7 @@ export async function handleRemote(
 
   if (trimmed === "slack") return handleSetupSlack(ctx);
   if (trimmed === "discord") return handleSetupDiscord(ctx);
+  if (trimmed === "telegram") return handleSetupTelegram(ctx);
   if (trimmed === "status") return handleRemoteStatus(ctx);
   if (trimmed === "disconnect") return handleDisconnect(ctx);
 
@@ -36,9 +37,28 @@ async function handleSetupSlack(ctx: ExtensionCommandContext): Promise<void> {
   const auth = await fetchJson("https://slack.com/api/auth.test", { headers: { Authorization: `Bearer ${token}` } });
   if (!auth?.ok) return void ctx.ui.notify("Token validation failed — check the token and app install.", "error");
 
-  const channelId = await promptInput(ctx, "Channel ID", "Paste the Slack channel ID (e.g. C0123456789)");
+  const channels = await listSlackChannels(token);
+  const MANUAL_OPTION = "Enter channel ID manually";
+  let channelId: string;
+
+  if (!channels || channels.length === 0) {
+    ctx.ui.notify("Could not list Slack channels — falling back to manual entry.", "warning");
+    channelId = await promptSlackChannelId(ctx) ?? "";
+  } else {
+    const channelOptions = [...channels.map((channel) => channel.label), MANUAL_OPTION];
+    const selectedChannel = await ctx.ui.select("Select a Slack channel", channelOptions);
+    if (!selectedChannel) return void ctx.ui.notify("Slack setup cancelled.", "info");
+
+    if (selectedChannel === MANUAL_OPTION) {
+      channelId = await promptSlackChannelId(ctx) ?? "";
+    } else {
+      const chosen = channels.find((channel) => channel.label === selectedChannel);
+      if (!chosen) return void ctx.ui.notify("Slack setup cancelled.", "info");
+      channelId = chosen.id;
+    }
+  }
+
   if (!channelId) return void ctx.ui.notify("Slack setup cancelled.", "info");
-  if (!isValidChannelId("slack", channelId)) return void ctx.ui.notify("Invalid Slack channel ID format — expected 9-12 uppercase alphanumeric characters.", "error");
 
   const send = await fetchJson("https://slack.com/api/chat.postMessage", {
     method: "POST",
@@ -136,6 +156,32 @@ async function handleSetupDiscord(ctx: ExtensionCommandContext): Promise<void> {
   ctx.ui.notify(`Discord connected — remote questions enabled for channel ${channelId}.`, "info");
 }
 
+async function handleSetupTelegram(ctx: ExtensionCommandContext): Promise<void> {
+  const token = await promptMaskedInput(ctx, "Telegram Bot Token", "Paste your bot token from @BotFather");
+  if (!token) return void ctx.ui.notify("Telegram setup cancelled.", "info");
+  if (!/^\d+:[A-Za-z0-9_-]+$/.test(token)) return void ctx.ui.notify("Invalid token format — Telegram bot tokens look like 123456789:ABCdefGHI...", "warning");
+
+  ctx.ui.notify("Validating token...", "info");
+  const auth = await fetchJson(`https://api.telegram.org/bot${token}/getMe`);
+  if (!auth?.ok || !auth?.result?.id) return void ctx.ui.notify("Token validation failed — check the bot token.", "error");
+
+  const chatId = await promptInput(ctx, "Chat ID", "Paste the Telegram chat ID (e.g. -1001234567890)");
+  if (!chatId) return void ctx.ui.notify("Telegram setup cancelled.", "info");
+  if (!isValidChannelId("telegram", chatId)) return void ctx.ui.notify("Invalid Telegram chat ID format — expected a numeric ID (can be negative for groups).", "error");
+
+  const send = await fetchJson(`https://api.telegram.org/bot${token}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: chatId, text: "GSD remote questions connected." }),
+  });
+  if (!send?.ok) return void ctx.ui.notify(`Could not send to chat: ${send?.description ?? "unknown error"}`, "error");
+
+  saveProviderToken("telegram_bot", token);
+  process.env.TELEGRAM_BOT_TOKEN = token;
+  saveRemoteQuestionsConfig("telegram", chatId);
+  ctx.ui.notify(`Telegram connected — remote questions enabled for chat ${chatId}.`, "info");
+}
+
 async function handleRemoteStatus(ctx: ExtensionCommandContext): Promise<void> {
   const status = getRemoteConfigStatus();
   const config = resolveRemoteConfig();
@@ -161,9 +207,11 @@ async function handleDisconnect(ctx: ExtensionCommandContext): Promise<void> {
   if (!channel) return void ctx.ui.notify("No remote channel configured — nothing to disconnect.", "info");
 
   removeRemoteQuestionsConfig();
-  removeProviderToken(channel === "slack" ? "slack_bot" : "discord_bot");
+  const providerMap: Record<string, string> = { slack: "slack_bot", discord: "discord_bot", telegram: "telegram_bot" };
+  removeProviderToken(providerMap[channel] ?? channel);
   if (channel === "slack") delete process.env.SLACK_BOT_TOKEN;
   if (channel === "discord") delete process.env.DISCORD_BOT_TOKEN;
+  if (channel === "telegram") delete process.env.TELEGRAM_BOT_TOKEN;
   ctx.ui.notify(`Remote questions disconnected (${channel}).`, "info");
 }
 
@@ -181,6 +229,7 @@ async function handleRemoteMenu(ctx: ExtensionCommandContext): Promise<void> {
         "  /gsd remote disconnect",
         "  /gsd remote slack",
         "  /gsd remote discord",
+        "  /gsd remote telegram",
       ]
     : [
         "No remote question channel configured.",
@@ -188,6 +237,7 @@ async function handleRemoteMenu(ctx: ExtensionCommandContext): Promise<void> {
         "Commands:",
         "  /gsd remote slack",
         "  /gsd remote discord",
+        "  /gsd remote telegram",
         "  /gsd remote status",
       ];
 
@@ -201,6 +251,52 @@ async function fetchJson(url: string, init?: RequestInit): Promise<any> {
   } catch {
     return null;
   }
+}
+
+async function listSlackChannels(token: string): Promise<Array<{ id: string; label: string }> | null> {
+  const headers = { Authorization: `Bearer ${token}` };
+  const channels: Array<{ id: string; label: string; name: string }> = [];
+  let cursor = "";
+
+  do {
+    const params = new URLSearchParams({
+      exclude_archived: "true",
+      limit: "200",
+      types: "public_channel,private_channel",
+    });
+    if (cursor) params.set("cursor", cursor);
+
+    const response = await fetchJson(`https://slack.com/api/users.conversations?${params.toString()}`, { headers });
+    if (!response?.ok || !Array.isArray(response.channels)) {
+      return channels.length > 0 ? channels.map(({ id, label }) => ({ id, label })) : null;
+    }
+
+    for (const channel of response.channels as Array<{ id?: string; name?: string; is_private?: boolean }>) {
+      if (!channel.id || !channel.name) continue;
+      channels.push({
+        id: channel.id,
+        name: channel.name,
+        label: channel.is_private ? `[private] ${channel.name}` : `#${channel.name}`,
+      });
+    }
+
+    cursor = typeof response.response_metadata?.next_cursor === "string"
+      ? response.response_metadata.next_cursor
+      : "";
+  } while (cursor);
+
+  channels.sort((a, b) => a.name.localeCompare(b.name));
+  return channels.map(({ id, label }) => ({ id, label }));
+}
+
+async function promptSlackChannelId(ctx: ExtensionCommandContext): Promise<string | null> {
+  const channelId = await promptInput(ctx, "Channel ID", "Paste the Slack channel ID (e.g. C0123456789)");
+  if (!channelId) return null;
+  if (!isValidChannelId("slack", channelId)) {
+    ctx.ui.notify("Invalid Slack channel ID format — expected 9-12 uppercase alphanumeric characters.", "error");
+    return null;
+  }
+  return channelId;
 }
 
 function getAuthStorage(): AuthStorage {
@@ -219,7 +315,7 @@ function removeProviderToken(provider: string): void {
   auth.set(provider, { type: "api_key", key: "" });
 }
 
-export function saveRemoteQuestionsConfig(channel: "slack" | "discord", channelId: string): void {
+export function saveRemoteQuestionsConfig(channel: "slack" | "discord" | "telegram", channelId: string): void {
   const prefsPath = getGlobalGSDPreferencesPath();
   const block = [
     "remote_questions:",

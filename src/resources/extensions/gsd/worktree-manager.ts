@@ -15,9 +15,31 @@
  *   4. remove()  — git worktree remove + branch cleanup
  */
 
+<<<<<<< HEAD
 import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { join, resolve } from "node:path";
+=======
+import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
+import { join, resolve, sep } from "node:path";
+import {
+  nativeBranchDelete,
+  nativeBranchExists,
+  nativeBranchForceReset,
+  nativeCommit,
+  nativeDetectMainBranch,
+  nativeDiffContent,
+  nativeDiffNameStatus,
+  nativeDiffNumstat,
+  nativeGetCurrentBranch,
+  nativeLogOneline,
+  nativeMergeSquash,
+  nativeWorktreeAdd,
+  nativeWorktreeList,
+  nativeWorktreePrune,
+  nativeWorktreeRemove,
+} from "./native-git-bridge.js";
+>>>>>>> upstream/main
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -44,8 +66,9 @@ export interface WorktreeDiffSummary {
   removed: string[];
 }
 
-// ─── Git Helpers ───────────────────────────────────────────────────────────
+// ─── Path Helpers ──────────────────────────────────────────────────────────
 
+<<<<<<< HEAD
 /** Env overlay that suppresses interactive git credential prompts and git-svn noise. */
 const GIT_NO_PROMPT_ENV = {
   ...process.env,
@@ -80,6 +103,14 @@ function runGit(cwd: string, args: string[], opts: { allowFailure?: boolean } = 
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`git ${args.join(" ")} failed in ${cwd}: ${filterGitSvnNoise(message)}`);
   }
+=======
+function normalizePathForComparison(path: string): string {
+  const normalized = path
+    .replaceAll("\\", "/")
+    .replace(/^\/\/\?\//, "")
+    .replace(/\/+$/, "");
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+>>>>>>> upstream/main
 }
 
 function normalizePathForComparison(path: string): string {
@@ -91,17 +122,36 @@ function normalizePathForComparison(path: string): string {
 }
 
 export function getMainBranch(basePath: string): string {
-  const symbolic = runGit(basePath, ["symbolic-ref", "refs/remotes/origin/HEAD"], { allowFailure: true });
-  if (symbolic) {
-    const match = symbolic.match(/refs\/remotes\/origin\/(.+)$/);
-    if (match) return match[1]!;
-  }
-  if (runGit(basePath, ["show-ref", "--verify", "refs/heads/main"], { allowFailure: true })) return "main";
-  if (runGit(basePath, ["show-ref", "--verify", "refs/heads/master"], { allowFailure: true })) return "master";
-  return runGit(basePath, ["branch", "--show-current"]);
+  return nativeDetectMainBranch(basePath);
 }
 
-// ─── Path Helpers ──────────────────────────────────────────────────────────
+// ─── resolveGitDir ─────────────────────────────────────────────────────────
+
+/**
+ * Resolve the actual git directory for a given repository path.
+ *
+ * In a normal repo, .git is a directory → returns `<basePath>/.git`.
+ * In a worktree, .git is a file containing `gitdir: <path>` → resolves
+ * and returns that path.
+ *
+ * This is critical for operations that reference git metadata files like
+ * MERGE_HEAD, SQUASH_MSG, etc. — these live in the git directory, not
+ * in the working tree root. Without this, worktree merges fail because
+ * they look for MERGE_HEAD in the wrong location.
+ */
+export function resolveGitDir(basePath: string): string {
+  const gitPath = join(basePath, ".git");
+  if (!existsSync(gitPath)) return join(basePath, ".git");
+  try {
+    const content = readFileSync(gitPath, "utf-8").trim();
+    if (content.startsWith("gitdir: ")) {
+      return resolve(basePath, content.slice(8));
+    }
+  } catch {
+    // Not a file or unreadable — fall through to default
+  }
+  return join(basePath, ".git");
+}
 
 export function worktreesDir(basePath: string): string {
   return join(basePath, ".gsd", "worktrees");
@@ -120,15 +170,17 @@ export function worktreeBranchName(name: string): string {
 /**
  * Create a new git worktree under .gsd/worktrees/<name>/ with branch worktree/<name>.
  * The branch is created from the current HEAD of the main branch.
+ *
+ * @param opts.branch — override the default `worktree/<name>` branch name
  */
-export function createWorktree(basePath: string, name: string): WorktreeInfo {
+export function createWorktree(basePath: string, name: string, opts: { branch?: string; startPoint?: string; reuseExistingBranch?: boolean } = {}): WorktreeInfo {
   // Validate name: alphanumeric, hyphens, underscores only
   if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
     throw new Error(`Invalid worktree name "${name}". Use only letters, numbers, hyphens, and underscores.`);
   }
 
   const wtPath = worktreePath(basePath, name);
-  const branch = worktreeBranchName(name);
+  const branch = opts.branch ?? worktreeBranchName(name);
 
   if (existsSync(wtPath)) {
     throw new Error(`Worktree "${name}" already exists at ${wtPath}`);
@@ -139,17 +191,19 @@ export function createWorktree(basePath: string, name: string): WorktreeInfo {
   mkdirSync(wtDir, { recursive: true });
 
   // Prune any stale worktree entries from a previous removal
-  runGit(basePath, ["worktree", "prune"], { allowFailure: true });
+  nativeWorktreePrune(basePath);
+
+  // Use the explicit start point (e.g. integration branch) if provided,
+  // otherwise fall back to the repo's detected main branch.
+  const startPoint = opts.startPoint ?? nativeDetectMainBranch(basePath);
 
   // Check if the branch already exists (leftover from a previous worktree)
-  const branchExists = runGit(basePath, ["show-ref", "--verify", `refs/heads/${branch}`], { allowFailure: true });
-  const mainBranch = getMainBranch(basePath);
+  const branchAlreadyExists = nativeBranchExists(basePath, branch);
 
-  if (branchExists) {
+  if (branchAlreadyExists) {
     // Check if the branch is actively used by an existing worktree.
-    // `git branch -f` will fail if the branch is checked out somewhere.
-    const worktreeUsing = runGit(basePath, ["worktree", "list", "--porcelain"], { allowFailure: true });
-    const branchInUse = worktreeUsing.includes(`branch refs/heads/${branch}`);
+    const worktreeEntries = nativeWorktreeList(basePath);
+    const branchInUse = worktreeEntries.some(entry => entry.branch === branch);
 
     if (branchInUse) {
       throw new Error(
@@ -158,11 +212,18 @@ export function createWorktree(basePath: string, name: string): WorktreeInfo {
       );
     }
 
-    // Reset the stale branch to current main, then attach worktree to it
-    runGit(basePath, ["branch", "-f", branch, mainBranch]);
-    runGit(basePath, ["worktree", "add", wtPath, branch]);
+    if (opts.reuseExistingBranch) {
+      // Attach worktree to the existing branch as-is (preserving commits).
+      // Used when resuming auto-mode: the milestone branch has valid work
+      // from prior sessions that must not be reset.
+      nativeWorktreeAdd(basePath, wtPath, branch);
+    } else {
+      // Reset the stale branch to the start point, then attach worktree to it
+      nativeBranchForceReset(basePath, branch, startPoint);
+      nativeWorktreeAdd(basePath, wtPath, branch);
+    }
   } else {
-    runGit(basePath, ["worktree", "add", "-b", branch, wtPath, mainBranch]);
+    nativeWorktreeAdd(basePath, wtPath, branch, true, startPoint);
   }
 
   return {
@@ -175,7 +236,7 @@ export function createWorktree(basePath: string, name: string): WorktreeInfo {
 
 /**
  * List all GSD-managed worktrees.
- * Parses `git worktree list` and filters to those under .gsd/worktrees/.
+ * Uses native worktree list and filters to those under .gsd/worktrees/.
  */
 export function listWorktrees(basePath: string): WorktreeInfo[] {
   const baseVariants = [resolve(basePath)];
@@ -195,23 +256,41 @@ export function listWorktrees(basePath: string): WorktreeInfo[] {
       seenRoots.add(root.normalized);
       return true;
     });
+<<<<<<< HEAD
   const rawList = runGit(basePath, ["worktree", "list", "--porcelain"]);
+=======
+>>>>>>> upstream/main
 
-  if (!rawList.trim()) return [];
+  const entries = nativeWorktreeList(basePath);
+
+  if (!entries.length) return [];
 
   const worktrees: WorktreeInfo[] = [];
+<<<<<<< HEAD
   const entries = rawList.replaceAll("\r\n", "\n").split("\n\n").filter(Boolean);
+=======
+>>>>>>> upstream/main
 
   for (const entry of entries) {
-    const lines = entry.split("\n");
-    const wtLine = lines.find(l => l.startsWith("worktree "));
-    const branchLine = lines.find(l => l.startsWith("branch "));
+    if (entry.isBare) continue;
 
-    if (!wtLine || !branchLine) continue;
+    const entryPath = entry.path;
+    const branch = entry.branch;
 
+<<<<<<< HEAD
     const entryPath = wtLine.replace("worktree ", "");
     const branch = branchLine.replace("branch refs/heads/", "");
     const branchWorktreeName = branch.startsWith("worktree/") ? branch.slice("worktree/".length) : null;
+=======
+    if (!branch) continue;
+
+    const branchWorktreeName = branch.startsWith("worktree/")
+      ? branch.slice("worktree/".length)
+      : branch.startsWith("milestone/")
+        ? branch.slice("milestone/".length)
+        : null;
+
+>>>>>>> upstream/main
     const entryVariants = [resolve(entryPath)];
     if (existsSync(entryPath)) {
       entryVariants.push(realpathSync(entryPath));
@@ -260,41 +339,41 @@ export function listWorktrees(basePath: string): WorktreeInfo[] {
 export function removeWorktree(
   basePath: string,
   name: string,
-  opts: { deleteBranch?: boolean; force?: boolean } = {},
+  opts: { deleteBranch?: boolean; force?: boolean; branch?: string } = {},
 ): void {
   const wtPath = worktreePath(basePath, name);
   const resolvedWtPath = existsSync(wtPath) ? realpathSync(wtPath) : wtPath;
-  const branch = worktreeBranchName(name);
-  const { deleteBranch = true, force = false } = opts;
+  const branch = opts.branch ?? worktreeBranchName(name);
+  const { deleteBranch = true, force = true } = opts;
 
   // If we're inside the worktree, move out first — git can't remove an in-use directory
   const cwd = process.cwd();
   const resolvedCwd = existsSync(cwd) ? realpathSync(cwd) : cwd;
-  if (resolvedCwd === resolvedWtPath || resolvedCwd.startsWith(resolvedWtPath + "/")) {
+  if (resolvedCwd === resolvedWtPath || resolvedCwd.startsWith(resolvedWtPath + sep)) {
     process.chdir(basePath);
   }
 
   if (!existsSync(wtPath)) {
-    runGit(basePath, ["worktree", "prune"], { allowFailure: true });
+    nativeWorktreePrune(basePath);
     if (deleteBranch) {
-      runGit(basePath, ["branch", "-D", branch], { allowFailure: true });
+      try { nativeBranchDelete(basePath, branch, true); } catch { /* branch may not exist */ }
     }
     return;
   }
 
-  // Force-remove to handle dirty worktrees
-  runGit(basePath, ["worktree", "remove", "--force", wtPath], { allowFailure: true });
+  // Remove worktree (force if requested, to handle dirty worktrees)
+  try { nativeWorktreeRemove(basePath, wtPath, force); } catch { /* may fail */ }
 
-  // If the directory is still there (e.g. locked), try harder
+  // If the directory is still there (e.g. locked), try harder with force
   if (existsSync(wtPath)) {
-    runGit(basePath, ["worktree", "remove", "--force", "--force", wtPath], { allowFailure: true });
+    try { nativeWorktreeRemove(basePath, wtPath, true); } catch { /* may fail */ }
   }
 
   // Prune stale entries so git knows the worktree is gone
-  runGit(basePath, ["worktree", "prune"], { allowFailure: true });
+  nativeWorktreePrune(basePath);
 
   if (deleteBranch) {
-    runGit(basePath, ["branch", "-D", branch], { allowFailure: true });
+    try { nativeBranchDelete(basePath, branch, true); } catch { /* branch may not exist */ }
   }
 }
 
@@ -308,27 +387,22 @@ function shouldSkipPath(filePath: string): boolean {
   return false;
 }
 
-function parseDiffNameStatus(diffOutput: string): WorktreeDiffSummary {
+function parseDiffNameStatus(entries: { status: string; path: string }[]): WorktreeDiffSummary {
   const added: string[] = [];
   const modified: string[] = [];
   const removed: string[] = [];
 
-  if (!diffOutput.trim()) return { added, modified, removed };
-
-  for (const line of diffOutput.split("\n").filter(Boolean)) {
-    const [status, ...pathParts] = line.split("\t");
-    const filePath = pathParts.join("\t");
-
-    if (shouldSkipPath(filePath)) continue;
+  for (const { status, path } of entries) {
+    if (shouldSkipPath(path)) continue;
 
     switch (status) {
-      case "A": added.push(filePath); break;
-      case "M": modified.push(filePath); break;
-      case "D": removed.push(filePath); break;
+      case "A": added.push(path); break;
+      case "M": modified.push(path); break;
+      case "D": removed.push(path); break;
       default:
         // Renames, copies — treat as modified
         if (status?.startsWith("R") || status?.startsWith("C")) {
-          modified.push(filePath);
+          modified.push(path);
         }
     }
   }
@@ -342,19 +416,13 @@ function parseDiffNameStatus(diffOutput: string): WorktreeDiffSummary {
  */
 export function diffWorktreeGSD(basePath: string, name: string): WorktreeDiffSummary {
   const branch = worktreeBranchName(name);
-  const mainBranch = getMainBranch(basePath);
+  const mainBranch = nativeDetectMainBranch(basePath);
 
-  const diffOutput = runGit(basePath, [
-    "diff", "--name-status", `${mainBranch}...${branch}`, "--", ".gsd/",
-  ], { allowFailure: true });
+  const entries = nativeDiffNameStatus(basePath, mainBranch, branch, ".gsd/", true);
 
-  return parseDiffNameStatus(diffOutput);
+  return parseDiffNameStatus(entries);
 }
 
-/**
- * Diff ALL files between the worktree branch and main branch.
- * Returns a summary of added, modified, and removed files across the entire repo.
- */
 /**
  * Diff ALL files between the worktree branch and main branch.
  * Uses direct diff (no merge-base) to show what will actually change
@@ -363,13 +431,11 @@ export function diffWorktreeGSD(basePath: string, name: string): WorktreeDiffSum
  */
 export function diffWorktreeAll(basePath: string, name: string): WorktreeDiffSummary {
   const branch = worktreeBranchName(name);
-  const mainBranch = getMainBranch(basePath);
+  const mainBranch = nativeDetectMainBranch(basePath);
 
-  const diffOutput = runGit(basePath, [
-    "diff", "--name-status", mainBranch, branch,
-  ], { allowFailure: true });
+  const entries = nativeDiffNameStatus(basePath, mainBranch, branch);
 
-  return parseDiffNameStatus(diffOutput);
+  return parseDiffNameStatus(entries);
 }
 
 /**
@@ -378,22 +444,14 @@ export function diffWorktreeAll(basePath: string, name: string): WorktreeDiffSum
  */
 export function diffWorktreeNumstat(basePath: string, name: string): FileLineStat[] {
   const branch = worktreeBranchName(name);
-  const mainBranch = getMainBranch(basePath);
+  const mainBranch = nativeDetectMainBranch(basePath);
 
-  const raw = runGit(basePath, [
-    "diff", "--numstat", mainBranch, branch,
-  ], { allowFailure: true });
-
-  if (!raw.trim()) return [];
+  const rawStats = nativeDiffNumstat(basePath, mainBranch, branch);
 
   const stats: FileLineStat[] = [];
-  for (const line of raw.split("\n").filter(Boolean)) {
-    const [a, r, ...pathParts] = line.split("\t");
-    const file = pathParts.join("\t");
-    if (shouldSkipPath(file)) continue;
-    const added = a === "-" ? 0 : parseInt(a ?? "0", 10);
-    const removed = r === "-" ? 0 : parseInt(r ?? "0", 10);
-    stats.push({ file, added, removed });
+  for (const entry of rawStats) {
+    if (shouldSkipPath(entry.path)) continue;
+    stats.push({ file: entry.path, added: entry.added, removed: entry.removed });
   }
   return stats;
 }
@@ -404,11 +462,9 @@ export function diffWorktreeNumstat(basePath: string, name: string): FileLineSta
  */
 export function getWorktreeGSDDiff(basePath: string, name: string): string {
   const branch = worktreeBranchName(name);
-  const mainBranch = getMainBranch(basePath);
+  const mainBranch = nativeDetectMainBranch(basePath);
 
-  return runGit(basePath, [
-    "diff", `${mainBranch}...${branch}`, "--", ".gsd/",
-  ], { allowFailure: true });
+  return nativeDiffContent(basePath, mainBranch, branch, ".gsd/", undefined, true);
 }
 
 /**
@@ -417,13 +473,9 @@ export function getWorktreeGSDDiff(basePath: string, name: string): string {
  */
 export function getWorktreeCodeDiff(basePath: string, name: string): string {
   const branch = worktreeBranchName(name);
-  const mainBranch = getMainBranch(basePath);
+  const mainBranch = nativeDetectMainBranch(basePath);
 
-  // Get full diff, then exclude .gsd/ paths
-  // We use pathspec magic to exclude .gsd/
-  return runGit(basePath, [
-    "diff", `${mainBranch}...${branch}`, "--", ".", ":(exclude).gsd/",
-  ], { allowFailure: true });
+  return nativeDiffContent(basePath, mainBranch, branch, undefined, ".gsd/", true);
 }
 
 /**
@@ -431,11 +483,11 @@ export function getWorktreeCodeDiff(basePath: string, name: string): string {
  */
 export function getWorktreeLog(basePath: string, name: string): string {
   const branch = worktreeBranchName(name);
-  const mainBranch = getMainBranch(basePath);
+  const mainBranch = nativeDetectMainBranch(basePath);
 
-  return runGit(basePath, [
-    "log", "--oneline", `${mainBranch}..${branch}`,
-  ], { allowFailure: true });
+  const entries = nativeLogOneline(basePath, mainBranch, branch);
+
+  return entries.map(e => `${e.sha} ${e.message}`).join("\n");
 }
 
 /**
@@ -445,15 +497,19 @@ export function getWorktreeLog(basePath: string, name: string): string {
  */
 export function mergeWorktreeToMain(basePath: string, name: string, commitMessage: string): string {
   const branch = worktreeBranchName(name);
-  const mainBranch = getMainBranch(basePath);
-  const current = runGit(basePath, ["branch", "--show-current"]);
+  const mainBranch = nativeDetectMainBranch(basePath);
+  const current = nativeGetCurrentBranch(basePath);
 
   if (current !== mainBranch) {
     throw new Error(`Must be on ${mainBranch} to merge. Currently on ${current}.`);
   }
 
-  runGit(basePath, ["merge", "--squash", branch]);
-  runGit(basePath, ["commit", "-m", commitMessage]);
+  const result = nativeMergeSquash(basePath, branch);
+  if (!result.success) {
+    throw new Error(`Merge conflicts detected in: ${result.conflicts.join(", ")}`);
+  }
+
+  nativeCommit(basePath, commitMessage);
 
   return commitMessage;
 }

@@ -46,6 +46,7 @@ export interface JobRow {
 export class MemoryStorage {
 	private db: SqlJsDatabase;
 	private dbPath: string;
+	private persistTimer: ReturnType<typeof setTimeout> | null = null;
 
 	private constructor(db: SqlJsDatabase, dbPath: string) {
 		this.db = db;
@@ -74,6 +75,16 @@ export class MemoryStorage {
 	private persist(): void {
 		const data = this.db.export();
 		writeFileSync(this.dbPath, Buffer.from(data));
+	}
+
+	private schedulePersist(): void {
+		if (this.persistTimer) {
+			clearTimeout(this.persistTimer);
+		}
+		this.persistTimer = setTimeout(() => {
+			this.persistTimer = null;
+			this.persist();
+		}, 500);
 	}
 
 	private initSchema(): void {
@@ -184,7 +195,7 @@ export class MemoryStorage {
 			}
 		}
 
-		this.persist();
+		this.schedulePersist();
 		return { inserted, updated, skipped };
 	}
 
@@ -221,7 +232,7 @@ export class MemoryStorage {
 			[token],
 		);
 
-		this.persist();
+		this.schedulePersist();
 
 		return rows.map((r) => ({
 			jobId: r.id,
@@ -246,7 +257,7 @@ export class MemoryStorage {
 			"UPDATE threads SET status = 'done', updated_at = datetime('now') WHERE thread_id = ?",
 			[threadId],
 		);
-		this.persist();
+		this.schedulePersist();
 	}
 
 	/**
@@ -261,7 +272,7 @@ export class MemoryStorage {
 			"UPDATE threads SET status = 'error', error_message = ?, updated_at = datetime('now') WHERE thread_id = ?",
 			[errorMessage, threadId],
 		);
-		this.persist();
+		this.schedulePersist();
 	}
 
 	/**
@@ -305,7 +316,7 @@ export class MemoryStorage {
 			[jobId, workerId, token, expiresAt],
 		);
 
-		this.persist();
+		this.schedulePersist();
 		return { jobId, ownershipToken: token };
 	}
 
@@ -317,7 +328,7 @@ export class MemoryStorage {
 			"UPDATE jobs SET status = 'done', updated_at = datetime('now') WHERE id = ? AND phase = 'stage2'",
 			[jobId],
 		);
-		this.persist();
+		this.schedulePersist();
 	}
 
 	/**
@@ -406,7 +417,7 @@ export class MemoryStorage {
 		this.db.run("DELETE FROM stage1_outputs");
 		this.db.run("DELETE FROM jobs");
 		this.db.run("DELETE FROM threads");
-		this.persist();
+		this.schedulePersist();
 	}
 
 	/**
@@ -422,7 +433,7 @@ export class MemoryStorage {
 			[cwd],
 		);
 		this.db.run("DELETE FROM threads WHERE cwd = ?", [cwd]);
-		this.persist();
+		this.schedulePersist();
 	}
 
 	/**
@@ -453,10 +464,14 @@ export class MemoryStorage {
 				[randomUUID(), t.thread_id],
 			);
 		}
-		this.persist();
+		this.schedulePersist();
 	}
 
 	close(): void {
+		if (this.persistTimer) {
+			clearTimeout(this.persistTimer);
+			this.persistTimer = null;
+		}
 		this.persist();
 		this.db.close();
 	}

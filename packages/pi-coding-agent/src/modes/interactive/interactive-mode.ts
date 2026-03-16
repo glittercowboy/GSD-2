@@ -83,6 +83,7 @@ import { appKey, appKeyHint, editorKey, formatKeyForDisplay, keyHint, rawKeyHint
 import { LoginDialogComponent } from "./components/login-dialog.js";
 import { ModelSelectorComponent } from "./components/model-selector.js";
 import { OAuthSelectorComponent } from "./components/oauth-selector.js";
+import { ProviderManagerComponent } from "./components/provider-manager.js";
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.js";
 import { SessionSelectorComponent } from "./components/session-selector.js";
 import { SelectSubmenu, SettingsSelectorComponent, THINKING_DESCRIPTIONS } from "./components/settings-selector.js";
@@ -998,9 +999,20 @@ export class InteractiveMode {
 		if (showDiagnostics) {
 			const skillDiagnostics = skillsResult.diagnostics;
 			if (skillDiagnostics.length > 0) {
-				const warningLines = this.formatDiagnostics(skillDiagnostics, metadata);
-				this.chatContainer.addChild(new Text(`${theme.fg("warning", "[Skill conflicts]")}\n${warningLines}`, 0, 0));
-				this.chatContainer.addChild(new Spacer(1));
+				const collisionDiags = skillDiagnostics.filter(d => d.type === "collision");
+				const issueDiags = skillDiagnostics.filter(d => d.type !== "collision");
+
+				if (collisionDiags.length > 0) {
+					const collisionLines = this.formatDiagnostics(collisionDiags, metadata);
+					this.chatContainer.addChild(new Text(`${theme.fg("warning", "[Skill conflicts]")}\n${collisionLines}`, 0, 0));
+					this.chatContainer.addChild(new Spacer(1));
+				}
+
+				if (issueDiags.length > 0) {
+					const issueLines = this.formatDiagnostics(issueDiags, metadata);
+					this.chatContainer.addChild(new Text(`${theme.fg("warning", "[Skill issues]")}\n${issueLines}`, 0, 0));
+					this.chatContainer.addChild(new Spacer(1));
+				}
 			}
 
 			const promptDiagnostics = promptsResult.diagnostics;
@@ -1717,7 +1729,7 @@ export class InteractiveMode {
 	/**
 	 * Show a notification for extensions.
 	 */
-	private showExtensionNotify(message: string, type?: "info" | "warning" | "error"): void {
+	private showExtensionNotify(message: string, type?: "info" | "warning" | "error" | "success"): void {
 		if (type === "error") {
 			this.showError(message);
 		} else if (type === "warning") {
@@ -1983,6 +1995,11 @@ export class InteractiveMode {
 			}
 			if (text === "/tree") {
 				this.showTreeSelector();
+				this.editor.setText("");
+				return;
+			}
+			if (text === "/provider") {
+				this.showProviderManager();
 				this.editor.setText("");
 				return;
 			}
@@ -3733,6 +3750,37 @@ export class InteractiveMode {
 		this.chatContainer.clear();
 		this.renderInitialMessages();
 		this.showStatus("Resumed session");
+	}
+
+	private showProviderManager(): void {
+		this.showSelector((done) => {
+			const component = new ProviderManagerComponent(
+				this.ui,
+				this.session.modelRegistry.authStorage,
+				this.session.modelRegistry,
+				() => {
+					done();
+					this.ui.requestRender();
+				},
+				async (provider: string) => {
+					this.showStatus(`Discovering models for ${provider}...`);
+					try {
+						const results = await this.session.modelRegistry.discoverModels([provider]);
+						const result = results[0];
+						if (result?.error) {
+							this.showError(`Discovery failed: ${result.error}`);
+						} else {
+							this.showStatus(`Discovered ${result?.models.length ?? 0} models from ${provider}`);
+						}
+					} catch (error) {
+						this.showError(error instanceof Error ? error.message : String(error));
+					}
+					done();
+					this.ui.requestRender();
+				},
+			);
+			return { component, focus: component };
+		});
 	}
 
 	private async showOAuthSelector(mode: "login" | "logout"): Promise<void> {
