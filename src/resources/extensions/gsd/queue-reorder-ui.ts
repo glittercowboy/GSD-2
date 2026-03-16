@@ -2,7 +2,9 @@
  * GSD Queue Reorder UI
  *
  * Interactive TUI overlay for reordering pending milestones.
- * ↑/↓ directly moves the selected item. Enter confirms.
+ * ↑/↓ navigates cursor. Space grabs/releases item for moving.
+ * While grabbed, ↑/↓ swaps the item with its neighbor.
+ * Enter confirms all changes. Esc cancels.
  * Conflicting depends_on entries are auto-removed on confirm.
  */
 
@@ -39,6 +41,7 @@ export async function showQueueReorder(
   return ctx.ui.custom<ReorderResult | null>((tui: TUI, theme: Theme, _kb, done) => {
     const items = [...pending];
     let cursor = 0;
+    let grabbed = false;
     let cachedLines: string[] | undefined;
     let validation: DependencyValidation;
 
@@ -106,13 +109,30 @@ export async function showQueueReorder(
         return;
       }
 
-      // ↑/↓ — directly move the selected item
+      // Space — toggle grab mode
+      if (data === " ") {
+        grabbed = !grabbed;
+        refresh();
+        return;
+      }
+
+      // ↑/↓ — move grabbed item OR navigate cursor
       if (matchesKey(data, Key.up)) {
-        swapItems(cursor, cursor - 1);
+        if (grabbed) {
+          swapItems(cursor, cursor - 1);
+        } else {
+          cursor = Math.max(0, cursor - 1);
+          refresh();
+        }
         return;
       }
       if (matchesKey(data, Key.down)) {
-        swapItems(cursor, cursor + 1);
+        if (grabbed) {
+          swapItems(cursor, cursor + 1);
+        } else {
+          cursor = Math.min(items.length - 1, cursor + 1);
+          refresh();
+        }
         return;
       }
 
@@ -136,7 +156,8 @@ export async function showQueueReorder(
       const push = (...rows: string[][]) => { for (const r of rows) lines.push(...r); };
       const add = (s: string) => truncateToWidth(s, width);
 
-      push(ui.bar(), ui.blank(), ui.header("  Queue Reorder"), ui.blank());
+      const headerText = grabbed ? "  Queue Reorder — Moving Item" : "  Queue Reorder";
+      push(ui.bar(), ui.blank(), ui.header(headerText), ui.blank());
 
       // Completed milestones (dimmed)
       if (completed.length > 0) {
@@ -148,8 +169,9 @@ export async function showQueueReorder(
         push(ui.blank());
       }
 
-      // Pending milestones — directly movable
-      lines.push(add(theme.fg("text", "  Queue:")));
+      // Pending milestones
+      const queueLabel = grabbed ? "  Queue (space to release, ↑/↓ to move):" : "  Queue (space to grab, ↑/↓ to navigate):";
+      lines.push(add(theme.fg("text", queueLabel)));
 
       const violatedPairs = new Set(
         validation.violations.filter(v => v.type === 'would_block').map(v => `${v.milestone}:${v.dependsOn}`),
@@ -164,7 +186,9 @@ export async function showQueueReorder(
         const num = i + 1;
         const label = item.title && item.title !== item.id ? `${item.id}  ${item.title}` : item.id;
 
-        if (isCursor) {
+        if (isCursor && grabbed) {
+          lines.push(add(`  ${theme.fg("warning", `▸▸ ${num}. ${label}`)}`));
+        } else if (isCursor) {
           lines.push(add(`  ${theme.fg("accent", `${GLYPH.cursor} ${num}. ${label}`)}`));
         } else {
           lines.push(add(`    ${theme.fg("text", `${num}. ${label}`)}`));
@@ -207,8 +231,13 @@ export async function showQueueReorder(
 
       push(ui.blank());
 
-      // Hints — keep short to avoid truncation
-      const hints: string[] = ["↑/↓ move"];
+      // Hints — context-sensitive based on grab state
+      const hints: string[] = [];
+      if (grabbed) {
+        hints.push("↑/↓ move item", "space release");
+      } else {
+        hints.push("↑/↓ navigate", "space grab");
+      }
       const hasDeps = liveDeps.get(items[cursor]?.id)?.some(d => !completedIds.has(d));
       if (hasDeps) hints.push("d del dep");
 
