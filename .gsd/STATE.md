@@ -1,9 +1,9 @@
 # GSD State
 
 **Active Milestone:** M004: SQLite Context Store — Surgical Prompt Injection
-**Active Slice:** S02: Markdown Importers + Auto-Migration
-**Phase:** execution
-**Requirements Status:** 13 active · 33 validated · 5 deferred · 4 out of scope
+**Active Slice:** S03: Surgical Prompt Injection + Dual-Write
+**Phase:** executing
+**Requirements Status:** 13 active · 35 validated · 5 deferred · 4 out of scope
 
 ## Milestone Registry
 - ✅ **M001:** Proactive Secret Management
@@ -18,4 +18,4 @@
 - None
 
 ## Next Action
-Execute T01 of S02 (port md-importer.ts and test suite).
+Execute T01: Add DB-aware helpers and rewire all prompt builders
