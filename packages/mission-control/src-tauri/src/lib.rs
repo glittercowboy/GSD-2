@@ -5,6 +5,7 @@ mod oauth;
 
 use bun_manager::BunState;
 use tauri::{Emitter, Manager};
+use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_updater::UpdaterExt;
 
 /// In-memory store for PKCE verifiers keyed by OAuth state token.
@@ -29,19 +30,24 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .register_uri_scheme_protocol("gsd", |app, request| {
-            let url = request.uri().to_string();
-            if url.starts_with("gsd://oauth/callback") {
-                let params = parse_oauth_params(&url);
-                let _ = app.app_handle().emit("oauth-callback", params);
-            }
-            tauri::http::Response::builder()
-                .status(200)
-                .header("Content-Type", "text/html")
-                .body(b"<html><body>Authentication complete. Return to GSD Mission Control.</body></html>".to_vec())
-                .unwrap()
-        })
+        .plugin(tauri_plugin_deep_link::init())
         .setup(|app| {
+            // Handle OAuth deep link callbacks (gsd://oauth/callback?code=...&state=...)
+            // tauri-plugin-deep-link registers the gsd:// scheme with the OS so the
+            // external browser can redirect back to the app after OAuth authorization.
+            app.deep_link().on_open_url({
+                let app_handle = app.handle().clone();
+                move |event: tauri_plugin_deep_link::OpenUrlEvent| {
+                    for url in event.urls() {
+                        let url_str = url.to_string();
+                        if url_str.starts_with("gsd://oauth/callback") {
+                            let params = parse_oauth_params(&url_str);
+                            let _ = app_handle.emit("oauth-callback", params);
+                        }
+                    }
+                }
+            });
+
             // Run dependency checks before any UI
             let dep_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
