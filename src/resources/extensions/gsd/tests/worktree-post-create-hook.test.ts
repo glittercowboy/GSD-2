@@ -27,12 +27,17 @@ function hookPath(base: string): string {
 }
 
 /** Create a cross-platform Node.js hook script. */
-function writeNodeHookScript(path: string, code: string): void {
-  const script = isWin
-    ? `@echo off\nnode -e "${code.replace(/"/g, '\\"')}"\n`
-    : `#!/usr/bin/env node\n${code}\n`;
-  writeFileSync(path, script);
-  chmodSync(path, 0o755);
+function writeNodeHookScript(filePath: string, code: string): void {
+  if (isWin) {
+    // Write the JS code to a companion .js file and have the .bat invoke it.
+    // node -e with multi-line code breaks on Windows because cmd.exe splits on newlines.
+    const jsPath = filePath.replace(/\.bat$/, ".js");
+    writeFileSync(jsPath, code);
+    writeFileSync(filePath, `@echo off\nnode "%~dp0${jsPath.split("\\").pop()}" %*\n`);
+  } else {
+    writeFileSync(filePath, `#!/usr/bin/env node\n${code}\n`);
+    chmodSync(filePath, 0o755);
+  }
 }
 
 // ─── runWorktreePostCreateHook ──────────────────────────────────────────────
