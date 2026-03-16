@@ -89,7 +89,7 @@ export async function inlineDependencySummaries(
 export async function inlineGsdRootFile(
   base: string, filename: string, label: string,
 ): Promise<string | null> {
-  const key = filename.replace(/\.md$/i, "").toUpperCase() as "PROJECT" | "DECISIONS" | "QUEUE" | "STATE" | "REQUIREMENTS";
+  const key = filename.replace(/\.md$/i, "").toUpperCase() as "PROJECT" | "DECISIONS" | "QUEUE" | "STATE" | "REQUIREMENTS" | "KNOWLEDGE";
   const absPath = resolveGsdRootFile(base, key);
   if (!existsSync(absPath)) return null;
   return inlineFileOptional(absPath, relGsdRootFile(key), label);
@@ -377,6 +377,8 @@ export async function buildResearchMilestonePrompt(mid: string, midTitle: string
   if (requirementsInline) inlined.push(requirementsInline);
   const decisionsInline = await inlineGsdRootFile(base, "decisions.md", "Decisions");
   if (decisionsInline) inlined.push(decisionsInline);
+  const knowledgeInlineRM = await inlineGsdRootFile(base, "knowledge.md", "Project Knowledge");
+  if (knowledgeInlineRM) inlined.push(knowledgeInlineRM);
   inlined.push(inlineTemplate("research", "Research"));
 
   const inlinedContext = `## Inlined Context (preloaded — do not re-read these files)\n\n${inlined.join("\n\n---\n\n")}`;
@@ -412,6 +414,8 @@ export async function buildPlanMilestonePrompt(mid: string, midTitle: string, ba
   if (requirementsInline) inlined.push(requirementsInline);
   const decisionsInline = await inlineGsdRootFile(base, "decisions.md", "Decisions");
   if (decisionsInline) inlined.push(decisionsInline);
+  const knowledgeInlinePM = await inlineGsdRootFile(base, "knowledge.md", "Project Knowledge");
+  if (knowledgeInlinePM) inlined.push(knowledgeInlinePM);
   inlined.push(inlineTemplate("roadmap", "Roadmap"));
   inlined.push(inlineTemplate("decisions", "Decisions"));
   inlined.push(inlineTemplate("plan", "Slice Plan"));
@@ -454,6 +458,8 @@ export async function buildResearchSlicePrompt(
   if (decisionsInline) inlined.push(decisionsInline);
   const requirementsInline = await inlineGsdRootFile(base, "requirements.md", "Requirements");
   if (requirementsInline) inlined.push(requirementsInline);
+  const knowledgeInlineRS = await inlineGsdRootFile(base, "knowledge.md", "Project Knowledge");
+  if (knowledgeInlineRS) inlined.push(knowledgeInlineRS);
   inlined.push(inlineTemplate("research", "Research"));
 
   const depContent = await inlineDependencySummaries(mid, sid, base);
@@ -494,6 +500,8 @@ export async function buildPlanSlicePrompt(
   if (decisionsInline) inlined.push(decisionsInline);
   const requirementsInline = await inlineGsdRootFile(base, "requirements.md", "Requirements");
   if (requirementsInline) inlined.push(requirementsInline);
+  const knowledgeInlinePS = await inlineGsdRootFile(base, "knowledge.md", "Project Knowledge");
+  if (knowledgeInlinePS) inlined.push(knowledgeInlinePS);
   inlined.push(inlineTemplate("plan", "Slice Plan"));
   inlined.push(inlineTemplate("task-plan", "Task Plan"));
 
@@ -561,9 +569,14 @@ export async function buildExecuteTaskPrompt(
   );
 
   const carryForwardSection = await buildCarryForwardSection(priorSummaries, base);
+
+  // Inline project knowledge if available
+  const knowledgeInlineET = await inlineGsdRootFile(base, "knowledge.md", "Project Knowledge");
+
   const inlinedTemplates = [
     inlineTemplate("task-summary", "Task Summary"),
     inlineTemplate("decisions", "Decisions"),
+    ...(knowledgeInlineET ? [knowledgeInlineET] : []),
   ].join("\n\n---\n\n");
 
   const taskSummaryPath = `${relSlicePath(base, mid, sid)}/tasks/${tid}-SUMMARY.md`;
@@ -602,6 +615,8 @@ export async function buildCompleteSlicePrompt(
   inlined.push(await inlineFile(slicePlanPath, slicePlanRel, "Slice Plan"));
   const requirementsInline = await inlineGsdRootFile(base, "requirements.md", "Requirements");
   if (requirementsInline) inlined.push(requirementsInline);
+  const knowledgeInlineCS = await inlineGsdRootFile(base, "knowledge.md", "Project Knowledge");
+  if (knowledgeInlineCS) inlined.push(knowledgeInlineCS);
 
   // Inline all task summaries for this slice
   const tDir = resolveTasksDir(base, mid, sid);
@@ -670,6 +685,8 @@ export async function buildCompleteMilestonePrompt(
   if (decisionsInline) inlined.push(decisionsInline);
   const projectInline = await inlineGsdRootFile(base, "project.md", "Project");
   if (projectInline) inlined.push(projectInline);
+  const knowledgeInlineCM = await inlineGsdRootFile(base, "knowledge.md", "Project Knowledge");
+  if (knowledgeInlineCM) inlined.push(knowledgeInlineCM);
   // Inline milestone context file (milestone-level, not GSD root)
   const contextPath = resolveMilestoneFile(base, mid, "CONTEXT");
   const contextRel = relMilestoneFile(base, mid, "CONTEXT");
@@ -795,6 +812,8 @@ export async function buildReassessRoadmapPrompt(
   if (requirementsInline) inlined.push(requirementsInline);
   const decisionsInline = await inlineGsdRootFile(base, "decisions.md", "Decisions");
   if (decisionsInline) inlined.push(decisionsInline);
+  const knowledgeInlineRA = await inlineGsdRootFile(base, "knowledge.md", "Project Knowledge");
+  if (knowledgeInlineRA) inlined.push(knowledgeInlineRA);
 
   const inlinedContext = `## Inlined Context (preloaded — do not re-read these files)\n\n${inlined.join("\n\n---\n\n")}`;
 
