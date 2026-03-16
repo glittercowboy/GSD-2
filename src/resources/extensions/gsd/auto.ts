@@ -226,6 +226,10 @@ let idleWatchdogHandle: ReturnType<typeof setInterval> | null = null;
 let dispatchGapHandle: ReturnType<typeof setTimeout> | null = null;
 const DISPATCH_GAP_TIMEOUT_MS = 5_000; // 5 seconds
 
+/** Prompt character measurement for token savings analysis (R051). */
+let lastPromptCharCount: number | undefined;
+let lastBaselineCharCount: number | undefined;
+
 /** SIGTERM handler registered while auto-mode is active — cleared on stop/pause. */
 let _sigtermHandler: (() => void) | null = null;
 
@@ -960,7 +964,7 @@ export async function handleAgentEnd(
       const hookStartedAt = Date.now();
       if (currentUnit) {
         const modelId = ctx.model?.id ?? "unknown";
-        snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId);
+        snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId, { promptCharCount: lastPromptCharCount, baselineCharCount: lastBaselineCharCount });
         saveActivityLog(ctx, basePath, currentUnit.type, currentUnit.id);
       }
       currentUnit = { type: hookUnit.unitType, id: hookUnit.unitId, startedAt: hookStartedAt };
@@ -1243,6 +1247,8 @@ async function dispatchNextUnit(
   // Parse cache is also cleared — doctor may have re-populated it with
   // stale data between handleAgentEnd and this dispatch call (Path B fix).
   invalidateAllCaches();
+  lastPromptCharCount = undefined;
+  lastBaselineCharCount = undefined;
 
   let state = await deriveState(basePath);
   let mid = state.activeMilestone?.id;
@@ -1271,7 +1277,7 @@ async function dispatchNextUnit(
     // Save final session before stopping
     if (currentUnit) {
       const modelId = ctx.model?.id ?? "unknown";
-      snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId);
+      snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId, { promptCharCount: lastPromptCharCount, baselineCharCount: lastBaselineCharCount });
       saveActivityLog(ctx, basePath, currentUnit.type, currentUnit.id);
     }
     sendDesktopNotification("GSD", "All milestones complete!", "success", "milestone");
@@ -1299,7 +1305,7 @@ async function dispatchNextUnit(
   if (!mid || !midTitle) {
     if (currentUnit) {
       const modelId = ctx.model?.id ?? "unknown";
-      snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId);
+      snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId, { promptCharCount: lastPromptCharCount, baselineCharCount: lastBaselineCharCount });
       saveActivityLog(ctx, basePath, currentUnit.type, currentUnit.id);
     }
     await stopAuto(ctx, pi);
@@ -1314,7 +1320,7 @@ async function dispatchNextUnit(
   if (state.phase === "complete") {
     if (currentUnit) {
       const modelId = ctx.model?.id ?? "unknown";
-      snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId);
+      snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId, { promptCharCount: lastPromptCharCount, baselineCharCount: lastBaselineCharCount });
       saveActivityLog(ctx, basePath, currentUnit.type, currentUnit.id);
     }
     // Clear completed-units.json for the finished milestone so it doesn't grow unbounded.
@@ -1351,7 +1357,7 @@ async function dispatchNextUnit(
   if (state.phase === "blocked") {
     if (currentUnit) {
       const modelId = ctx.model?.id ?? "unknown";
-      snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId);
+      snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId, { promptCharCount: lastPromptCharCount, baselineCharCount: lastBaselineCharCount });
       saveActivityLog(ctx, basePath, currentUnit.type, currentUnit.id);
     }
     await stopAuto(ctx, pi);
@@ -1459,7 +1465,7 @@ async function dispatchNextUnit(
   if (dispatchResult.action === "stop") {
     if (currentUnit) {
       const modelId = ctx.model?.id ?? "unknown";
-      snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId);
+      snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId, { promptCharCount: lastPromptCharCount, baselineCharCount: lastBaselineCharCount });
       saveActivityLog(ctx, basePath, currentUnit.type, currentUnit.id);
     }
     await stopAuto(ctx, pi);
@@ -1569,7 +1575,7 @@ async function dispatchNextUnit(
   if (lifetimeCount > MAX_LIFETIME_DISPATCHES) {
     if (currentUnit) {
       const modelId = ctx.model?.id ?? "unknown";
-      snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId);
+      snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId, { promptCharCount: lastPromptCharCount, baselineCharCount: lastBaselineCharCount });
     }
     saveActivityLog(ctx, basePath, unitType, unitId);
     const expected = diagnoseExpectedArtifact(unitType, unitId, basePath);
@@ -1583,7 +1589,7 @@ async function dispatchNextUnit(
   if (prevCount >= MAX_UNIT_DISPATCHES) {
     if (currentUnit) {
       const modelId = ctx.model?.id ?? "unknown";
-      snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId);
+      snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId, { promptCharCount: lastPromptCharCount, baselineCharCount: lastBaselineCharCount });
     }
     saveActivityLog(ctx, basePath, unitType, unitId);
 
@@ -1741,7 +1747,7 @@ async function dispatchNextUnit(
   // The session still holds the previous unit's data (newSession hasn't fired yet).
   if (currentUnit) {
     const modelId = ctx.model?.id ?? "unknown";
-    snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId);
+    snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId, { promptCharCount: lastPromptCharCount, baselineCharCount: lastBaselineCharCount });
     saveActivityLog(ctx, basePath, currentUnit.type, currentUnit.id);
 
     // Only mark the previous unit as completed if:
@@ -1835,6 +1841,26 @@ async function dispatchNextUnit(
   const repairBlock = buildObservabilityRepairBlock(observabilityIssues);
   if (repairBlock) {
     finalPrompt = `${finalPrompt}${repairBlock}`;
+  }
+
+  // ── Prompt char measurement (R051) ──
+  lastPromptCharCount = finalPrompt.length;
+  lastBaselineCharCount = undefined;
+  if (isDbAvailable()) {
+    try {
+      const { inlineGsdRootFile } = await import("./auto-prompts.js");
+      const [decisionsContent, requirementsContent, projectContent] = await Promise.all([
+        inlineGsdRootFile(basePath, "decisions.md", "Decisions"),
+        inlineGsdRootFile(basePath, "requirements.md", "Requirements"),
+        inlineGsdRootFile(basePath, "project.md", "Project"),
+      ]);
+      lastBaselineCharCount =
+        (decisionsContent?.length ?? 0) +
+        (requirementsContent?.length ?? 0) +
+        (projectContent?.length ?? 0);
+    } catch {
+      // Non-fatal — baseline measurement is best-effort
+    }
   }
 
   // Switch model if preferences specify one for this unit type
@@ -1980,7 +2006,7 @@ async function dispatchNextUnit(
 
     if (currentUnit) {
       const modelId = ctx.model?.id ?? "unknown";
-      snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId);
+      snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId, { promptCharCount: lastPromptCharCount, baselineCharCount: lastBaselineCharCount });
     }
     saveActivityLog(ctx, basePath, unitType, unitId);
 
@@ -2006,7 +2032,7 @@ async function dispatchNextUnit(
         timeoutAt: Date.now(),
       });
       const modelId = ctx.model?.id ?? "unknown";
-      snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId);
+      snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId, { promptCharCount: lastPromptCharCount, baselineCharCount: lastBaselineCharCount });
     }
     saveActivityLog(ctx, basePath, unitType, unitId);
 

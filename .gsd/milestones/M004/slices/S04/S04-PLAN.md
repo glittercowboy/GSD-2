@@ -44,7 +44,7 @@
 
 ## Tasks
 
-- [ ] **T01: Wire token measurement into metrics + auto + state** `est:25m`
+- [x] **T01: Wire token measurement into metrics + auto + state** `est:25m`
   - Why: Adds the production-code infrastructure for R051 (token measurement) and R052 (DB-first state derivation). Three files changed: `metrics.ts` gets the new fields + opts param, `auto.ts` gets measurement vars + reset + baseline computation + 11 call-site updates, `state.ts` gets DB-first content loading tier.
   - Files: `src/resources/extensions/gsd/metrics.ts`, `src/resources/extensions/gsd/auto.ts`, `src/resources/extensions/gsd/state.ts`
   - Do:

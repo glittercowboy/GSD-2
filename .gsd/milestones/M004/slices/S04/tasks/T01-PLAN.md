@@ -130,6 +130,13 @@ Add `promptCharCount`/`baselineCharCount` to `UnitMetrics`, wire measurement int
 - [ ] `_deriveStateImpl` queries DB artifacts table when available, falls back to native batch parser
 - [ ] `_getAdapter()` null-checked before use in state.ts
 
+## Observability Impact
+
+- **Signal added:** `promptCharCount` and `baselineCharCount` fields in every `UnitMetrics` record written to `.gsd/metrics.json` (the metrics ledger). Present only when measurement succeeded — both are `undefined`/absent when DB is unavailable or `inlineGsdRootFile` throws.
+- **Inspection:** `cat .gsd/metrics.json | node -e "const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')); d.units.forEach(u => { if(u.promptCharCount != null) console.log(u.id, u.promptCharCount, u.baselineCharCount) })"` — prints unit IDs with their char counts. Savings % = `(baseline - prompt) / baseline * 100`.
+- **Failure visibility:** `lastBaselineCharCount` stays `undefined` when DB is off or `inlineGsdRootFile` throws — the catch block is silent and non-fatal. Absence of `baselineCharCount` in ledger entries is the diagnostic signal.
+- **DB-first state loading:** When `_deriveStateImpl` uses the DB path, file cache population is logged implicitly via `dbContentLoaded = true`. If DB query fails, falls through to native batch parse silently.
+
 ## Verification
 
 - `npx tsc --noEmit` — zero errors
