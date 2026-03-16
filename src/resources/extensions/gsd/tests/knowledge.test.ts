@@ -10,11 +10,12 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { GSD_ROOT_FILES, resolveGsdRootFile } from '../paths.ts';
 import { inlineGsdRootFile } from '../auto-prompts.ts';
+import { appendKnowledge } from '../files.ts';
 
 // ─── KNOWLEDGE is registered in GSD_ROOT_FILES ─────────────────────────────
 
@@ -90,6 +91,71 @@ test('knowledge: inlineGsdRootFile returns null when KNOWLEDGE.md does not exist
 
   const result = await inlineGsdRootFile(tmp, 'knowledge.md', 'Project Knowledge');
   assert.strictEqual(result, null, 'should return null when file does not exist');
+
+  rmSync(tmp, { recursive: true, force: true });
+});
+
+// ─── appendKnowledge creates file and appends entries ──────────────────────
+
+test('knowledge: appendKnowledge creates KNOWLEDGE.md with rule when file does not exist', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'gsd-knowledge-'));
+  const gsdDir = join(tmp, '.gsd');
+  mkdirSync(gsdDir, { recursive: true });
+
+  await appendKnowledge(tmp, 'rule', 'Use real DB for integration tests', 'M001/S01');
+
+  const content = readFileSync(join(gsdDir, 'KNOWLEDGE.md'), 'utf-8');
+  assert.ok(content.includes('# Project Knowledge'), 'should have header');
+  assert.ok(content.includes('K001'), 'should have K001 id');
+  assert.ok(content.includes('Use real DB for integration tests'), 'should have rule text');
+  assert.ok(content.includes('M001/S01'), 'should have scope');
+
+  rmSync(tmp, { recursive: true, force: true });
+});
+
+test('knowledge: appendKnowledge appends to existing KNOWLEDGE.md with auto-incrementing ID', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'gsd-knowledge-'));
+  const gsdDir = join(tmp, '.gsd');
+  mkdirSync(gsdDir, { recursive: true });
+
+  // Create initial file with one rule
+  await appendKnowledge(tmp, 'rule', 'First rule', 'M001');
+  // Add second rule
+  await appendKnowledge(tmp, 'rule', 'Second rule', 'M001/S02');
+
+  const content = readFileSync(join(gsdDir, 'KNOWLEDGE.md'), 'utf-8');
+  assert.ok(content.includes('K001'), 'should have K001');
+  assert.ok(content.includes('K002'), 'should have K002');
+  assert.ok(content.includes('First rule'), 'should have first rule');
+  assert.ok(content.includes('Second rule'), 'should have second rule');
+
+  rmSync(tmp, { recursive: true, force: true });
+});
+
+test('knowledge: appendKnowledge handles pattern type', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'gsd-knowledge-'));
+  const gsdDir = join(tmp, '.gsd');
+  mkdirSync(gsdDir, { recursive: true });
+
+  await appendKnowledge(tmp, 'pattern', 'Middleware chain for auth', 'M001');
+
+  const content = readFileSync(join(gsdDir, 'KNOWLEDGE.md'), 'utf-8');
+  assert.ok(content.includes('P001'), 'should have P001 id');
+  assert.ok(content.includes('Middleware chain for auth'), 'should have pattern text');
+
+  rmSync(tmp, { recursive: true, force: true });
+});
+
+test('knowledge: appendKnowledge handles lesson type', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'gsd-knowledge-'));
+  const gsdDir = join(tmp, '.gsd');
+  mkdirSync(gsdDir, { recursive: true });
+
+  await appendKnowledge(tmp, 'lesson', 'API timeout on large payloads', 'M002');
+
+  const content = readFileSync(join(gsdDir, 'KNOWLEDGE.md'), 'utf-8');
+  assert.ok(content.includes('L001'), 'should have L001 id');
+  assert.ok(content.includes('API timeout on large payloads'), 'should have lesson text');
 
   rmSync(tmp, { recursive: true, force: true });
 });
