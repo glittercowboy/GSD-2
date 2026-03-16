@@ -1,7 +1,7 @@
 # GSD State
 
 **Active Milestone:** M004: SQLite Context Store — Surgical Prompt Injection
-**Active Slice:** S04: Token Measurement + State Derivation
+**Active Slice:** S05: Worktree DB Isolation
 **Phase:** executing
 **Requirements Status:** 12 active · 34 validated · 5 deferred · 4 out of scope
 
@@ -18,4 +18,4 @@
 - None
 
 ## Next Action
-Execute T01 of S04 (wire token measurement into metrics + auto + state).
+Execute S05 T01 (Wire DB copy/reconcile into auto-worktree.ts).
