@@ -76,7 +76,7 @@ npm test
   - Verify: `npx tsc --noEmit` returns zero errors; `grep -c "gsd_save_decision\|gsd_update_requirement\|gsd_save_summary" src/resources/extensions/gsd/index.ts` ≥ 3; `grep "inspect" src/resources/extensions/gsd/commands.ts` shows it in subcommands + handler + `handleInspect` + `formatInspectOutput`
   - Done when: tsc clean, all 3 tools present, `/gsd inspect` handler wired
 
-- [ ] **T02: Add gsd-tools.test.ts and gsd-inspect.test.ts** `est:20m`
+- [x] **T02: Add gsd-tools.test.ts and gsd-inspect.test.ts** `est:20m`
   - Why: Proves DB-first write contract for all 3 tools (ID assignment, markdown regeneration, DB rows, error paths) and validates formatInspectOutput output format.
   - Files: `src/resources/extensions/gsd/tests/gsd-tools.test.ts`, `src/resources/extensions/gsd/tests/gsd-inspect.test.ts`
   - Do:
