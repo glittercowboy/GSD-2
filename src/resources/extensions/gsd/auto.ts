@@ -1310,8 +1310,76 @@ async function dispatchNextUnit(
     unitDispatchCount.clear();
     unitRecoveryCount.clear();
     unitLifetimeDispatches.clear();
-    // Capture integration branch for the new milestone and update git service
-    captureIntegrationBranch(originalBasePath || basePath, mid, { commitDocs: loadEffectiveGSDPreferences()?.preferences?.git?.commit_docs });
+    // Clear completed-units.json for the finished milestone
+    try {
+      const file = completedKeysPath(basePath);
+      if (existsSync(file)) writeFileSync(file, JSON.stringify([]), "utf-8");
+      completedKeySet.clear();
+    } catch { /* non-fatal */ }
+
+    // ── Worktree lifecycle on milestone transition (#616) ──────────────
+    // When transitioning from M_old to M_new inside a worktree, we must:
+    // 1. Merge the completed milestone's worktree back to main
+    // 2. Re-derive state from the project root
+    // 3. Create a new worktree for the incoming milestone
+    // Without this, M_new runs inside M_old's worktree on the wrong branch,
+    // and artifact paths resolve against the wrong .gsd/ directory.
+    if (isInAutoWorktree(basePath) && originalBasePath && shouldUseWorktreeIsolation()) {
+      try {
+        const roadmapPath = resolveMilestoneFile(originalBasePath, currentMilestoneId, "ROADMAP");
+        if (roadmapPath) {
+          const roadmapContent = readFileSync(roadmapPath, "utf-8");
+          const mergeResult = mergeMilestoneToMain(originalBasePath, currentMilestoneId, roadmapContent);
+          ctx.ui.notify(
+            `Milestone ${currentMilestoneId} merged to main.${mergeResult.pushed ? " Pushed to remote." : ""}`,
+            "info",
+          );
+        } else {
+          // No roadmap found — teardown worktree without merge
+          teardownAutoWorktree(originalBasePath, currentMilestoneId);
+          ctx.ui.notify(`Exited worktree for ${currentMilestoneId} (no roadmap for merge).`, "info");
+        }
+      } catch (err) {
+        ctx.ui.notify(
+          `Milestone merge failed during transition: ${err instanceof Error ? err.message : String(err)}`,
+          "warning",
+        );
+        // Force cwd back to project root even if merge failed
+        if (originalBasePath) {
+          try { process.chdir(originalBasePath); } catch { /* best-effort */ }
+        }
+      }
+
+      // Update basePath to project root (mergeMilestoneToMain already chdir'd)
+      basePath = originalBasePath;
+      gitService = new GitServiceImpl(basePath, loadEffectiveGSDPreferences()?.preferences?.git ?? {});
+      invalidateAllCaches();
+
+      // Re-derive state from project root before creating new worktree
+      state = await deriveState(basePath);
+      mid = state.activeMilestone?.id;
+      midTitle = state.activeMilestone?.title;
+
+      // Create new worktree for the incoming milestone
+      if (mid) {
+        captureIntegrationBranch(basePath, mid, { commitDocs: loadEffectiveGSDPreferences()?.preferences?.git?.commit_docs });
+        try {
+          const wtPath = createAutoWorktree(basePath, mid);
+          basePath = wtPath;
+          gitService = new GitServiceImpl(basePath, loadEffectiveGSDPreferences()?.preferences?.git ?? {});
+          ctx.ui.notify(`Created auto-worktree for ${mid} at ${wtPath}`, "info");
+        } catch (err) {
+          ctx.ui.notify(
+            `Auto-worktree creation for ${mid} failed: ${err instanceof Error ? err.message : String(err)}. Continuing in project root.`,
+            "warning",
+          );
+        }
+      }
+    } else {
+      // Not in worktree — just capture integration branch for the new milestone
+      captureIntegrationBranch(originalBasePath || basePath, mid, { commitDocs: loadEffectiveGSDPreferences()?.preferences?.git?.commit_docs });
+    }
+
     // Prune completed milestone from queue order file
     const pendingIds = state.registry
       .filter(m => m.status !== "complete")
