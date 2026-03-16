@@ -130,8 +130,11 @@ const authStorage = AuthStorage.create(authFilePath)
 loadStoredEnvKeys(authStorage)
 migratePiCredentials(authStorage)
 
+const modelRegistry = new ModelRegistry(authStorage)
+const settingsManager = SettingsManager.create(agentDir)
+
 // Run onboarding wizard on first launch (no LLM provider configured)
-if (!isPrintMode && shouldRunOnboarding(authStorage)) {
+if (!isPrintMode && shouldRunOnboarding(authStorage, settingsManager.getDefaultProvider())) {
   await runOnboarding(authStorage)
 
   // Clean up stdin state left by @clack/prompts.
@@ -155,9 +158,6 @@ if (!isPrintMode && process.stdout.columns && process.stdout.columns < 40) {
     chalk.yellow(`[gsd] Terminal width is ${process.stdout.columns} columns (minimum recommended: 40). Output may be unreadable.\n`),
   )
 }
-
-const modelRegistry = new ModelRegistry(authStorage)
-const settingsManager = SettingsManager.create(agentDir)
 
 // --list-models: print available models and exit (no TTY needed)
 if (cliFlags.listModels !== undefined) {

@@ -6,6 +6,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- Onboarding wizard no longer repeats every launch for extension-based providers (e.g. pi-claude-cli) that may not require credentials in auth.json
+
 ## [2.19.0] - 2026-03-16
 
 ### Added

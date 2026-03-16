@@ -146,10 +146,13 @@ function isCancelError(p: ClackModule, err: unknown): boolean {
  *
  * Returns false (skip wizard) when:
  * - Any LLM provider is already available via auth.json, env vars, runtime overrides, or fallback auth
+ * - A default provider is already configured in settings (covers extension-based providers
+ *   that may not require credentials in auth.json)
  * - Not a TTY (piped input, subagent, CI)
  */
-export function shouldRunOnboarding(authStorage: AuthStorage): boolean {
+export function shouldRunOnboarding(authStorage: AuthStorage, settingsDefaultProvider?: string): boolean {
   if (!process.stdin.isTTY) return false
+  if (settingsDefaultProvider) return false
   // Check if any LLM provider has credentials
   const hasLlmAuth = LLM_PROVIDER_IDS.some(id => authStorage.hasAuth(id))
   return !hasLlmAuth
