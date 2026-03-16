@@ -44,8 +44,6 @@ Closes #
 - [ ] Safe to revert (no migrations, no state changes)
 - [ ] Requires steps — describe:
 
-## Milestone context
-<!-- If part of a milestone (M003, M004, etc.), fill in: -->
-- **Milestone**: <!-- e.g., M004 -->
-- **Slice**: <!-- e.g., S02 -->
-- **Target branch**: <!-- e.g., milestone/M004 or main -->
+## Target branch
+<!-- What branch does this PR target? -->
+- **Target**: <!-- e.g., milestone/2.15.x or main -->
