@@ -14,6 +14,7 @@ import {
   removeWorktree,
   worktreePath,
 } from "./worktree-manager.js";
+import { detectWorktreeName } from "./worktree.js";
 import {
   MergeConflictError,
 } from "./git-service.js";
@@ -222,6 +223,27 @@ export function enterAutoWorktree(basePath: string, milestoneId: string): string
  */
 export function getAutoWorktreeOriginalBase(): string | null {
   return originalBase;
+}
+
+export function getActiveAutoWorktreeContext(): {
+  originalBase: string;
+  worktreeName: string;
+  branch: string;
+} | null {
+  if (!originalBase) return null;
+  const cwd = process.cwd();
+  const resolvedBase = existsSync(originalBase) ? realpathSync(originalBase) : originalBase;
+  const wtDir = join(resolvedBase, ".gsd", "worktrees");
+  if (!cwd.startsWith(wtDir)) return null;
+  const worktreeName = detectWorktreeName(cwd);
+  if (!worktreeName) return null;
+  const branch = nativeGetCurrentBranch(cwd);
+  if (!branch.startsWith("milestone/")) return null;
+  return {
+    originalBase,
+    worktreeName,
+    branch,
+  };
 }
 
 // ─── Merge Milestone -> Main ───────────────────────────────────────────────

@@ -28,6 +28,7 @@ import { createBashTool, createWriteTool, createReadTool, createEditTool, isTool
 import { registerGSDCommand, loadToolApiKeys } from "./commands.js";
 import { registerExitCommand } from "./exit-command.js";
 import { registerWorktreeCommand, getWorktreeOriginalCwd, getActiveWorktreeName } from "./worktree-command.js";
+import { getActiveAutoWorktreeContext } from "./auto-worktree.js";
 import { saveFile, formatContinue, loadFile, parseContinue, parseSummary, loadActiveOverrides, formatOverridesSection } from "./files.js";
 import { loadPrompt } from "./prompt-loader.js";
 import { deriveState } from "./state.js";
@@ -287,6 +288,7 @@ export default function (pi: ExtensionAPI) {
     let worktreeBlock = "";
     const worktreeName = getActiveWorktreeName();
     const worktreeMainCwd = getWorktreeOriginalCwd();
+    const autoWorktree = getActiveAutoWorktreeContext();
     if (worktreeName && worktreeMainCwd) {
       worktreeBlock = [
         "",
@@ -303,6 +305,23 @@ export default function (pi: ExtensionAPI) {
         "",
         "All file operations, bash commands, and GSD state resolve against the worktree path above.",
         "Use /worktree merge to merge changes back. Use /worktree return to switch back to the main tree.",
+      ].join("\n");
+    } else if (autoWorktree) {
+      worktreeBlock = [
+        "",
+        "",
+        "[WORKTREE CONTEXT — OVERRIDES CURRENT WORKING DIRECTORY ABOVE]",
+        `IMPORTANT: Ignore the "Current working directory" shown earlier in this prompt.`,
+        `The actual current working directory is: ${process.cwd()}`,
+        "",
+        "You are working inside a GSD auto-worktree.",
+        `- Milestone worktree: ${autoWorktree.worktreeName}`,
+        `- Worktree path (this is the real cwd): ${process.cwd()}`,
+        `- Main project: ${autoWorktree.originalBase}`,
+        `- Branch: ${autoWorktree.branch}`,
+        "",
+        "All file operations, bash commands, and GSD state resolve against the worktree path above.",
+        "Write every .gsd artifact in the worktree path above, never in the main project tree.",
       ].join("\n");
     }
 
