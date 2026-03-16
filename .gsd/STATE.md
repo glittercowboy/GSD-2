@@ -1,8 +1,8 @@
 # GSD State
 
 **Active Milestone:** M004: SQLite Context Store — Surgical Prompt Injection
-**Active Slice:** S05: Worktree DB Isolation
-**Phase:** executing
+**Active Slice:** S06: Structured LLM Tools + /gsd inspect
+**Phase:** planning
 **Requirements Status:** 12 active · 34 validated · 5 deferred · 4 out of scope
 
 ## Milestone Registry
@@ -18,4 +18,4 @@
 - None
 
 ## Next Action
-Execute S05 T01 (Wire DB copy/reconcile into auto-worktree.ts).
+Execute S06/T01: Register 3 LLM tools in index.ts + wire /gsd inspect in commands.ts.
