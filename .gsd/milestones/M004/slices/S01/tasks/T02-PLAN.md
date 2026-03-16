@@ -52,6 +52,13 @@ Port the query/formatting layer (`context-store.ts`) and all three test files fr
 - Source: `/Users/lexchristopherson/Developer/gsd-2/.gsd/worktrees/memory-db/src/resources/extensions/gsd/tests/context-store.test.ts` (462 lines)
 - Source: `/Users/lexchristopherson/Developer/gsd-2/.gsd/worktrees/memory-db/src/resources/extensions/gsd/tests/worktree-db.test.ts` (442 lines)
 
+## Observability Impact
+
+- **context-store queries** — `queryDecisions()`, `queryRequirements()` silently return `[]` when DB unavailable; no crash, no log
+- **artifact queries** — `queryArtifact()`, `queryProject()` return `null` when DB unavailable or path not found
+- **Test validation** — 133 assertions across 3 test files verify provider chain, CRUD, views, queries, formatters, worktree copy/reconcile
+- **Inspection** — `getDbProvider()` returns `'node:sqlite'` or `'better-sqlite3'`; `isDbAvailable()` confirms connection state
+
 ## Expected Output
 
 - `src/resources/extensions/gsd/context-store.ts` — new file, 195 lines, query layer with filtering and formatters

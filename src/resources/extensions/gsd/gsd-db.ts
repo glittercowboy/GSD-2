@@ -5,9 +5,13 @@
 // Exposes a unified sync API for decisions and requirements storage.
 // Schema is initialized on first open with WAL mode for file-backed DBs.
 
+import { createRequire } from 'node:module';
 import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { Decision, Requirement } from './types.js';
+
+// Create a require function for loading native modules in ESM context
+const _require = createRequire(import.meta.url);
 
 // ─── Provider Abstraction ──────────────────────────────────────────────────
 
@@ -64,8 +68,7 @@ function loadProvider(): void {
   // Try node:sqlite first
   try {
     suppressSqliteWarning();
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const mod = require('node:sqlite');
+    const mod = _require('node:sqlite');
     if (mod.DatabaseSync) {
       providerModule = mod;
       providerName = 'node:sqlite';
@@ -77,8 +80,7 @@ function loadProvider(): void {
 
   // Try better-sqlite3
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const mod = require('better-sqlite3');
+    const mod = _require('better-sqlite3');
     if (typeof mod === 'function' || (mod && mod.default)) {
       providerModule = mod.default || mod;
       providerName = 'better-sqlite3';

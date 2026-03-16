@@ -64,7 +64,7 @@ npm run test:unit
   - Verify: `npx tsc --noEmit` — file compiles with no type errors
   - Done when: `gsd-db.ts` exists with tiered provider chain using bare `require()`, types.ts has both interfaces, TypeScript compiles clean
 
-- [ ] **T02: Port context-store.ts and all test files** `est:30m`
+- [x] **T02: Port context-store.ts and all test files** `est:30m`
   - Why: The query layer depends on gsd-db.ts. Tests prove the entire DB foundation works end-to-end. Without tests, the slice has no proof.
   - Files: `src/resources/extensions/gsd/context-store.ts`, `src/resources/extensions/gsd/tests/gsd-db.test.ts`, `src/resources/extensions/gsd/tests/context-store.test.ts`, `src/resources/extensions/gsd/tests/worktree-db.test.ts`
   - Do: Port context-store.ts from memory-db (195 lines, no changes needed). Port all three test files from memory-db. Ensure test imports reference the correct relative paths. Run all three new test files. Run existing test suite to confirm zero regressions. Run `tsc --noEmit`.
