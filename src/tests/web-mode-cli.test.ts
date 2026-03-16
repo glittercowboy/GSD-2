@@ -254,6 +254,158 @@ test('runWebCliBranch handles "web stop" subcommand without --web flag', async (
   }
 })
 
+// ─── Path argument tests ──────────────────────────────────────────────
+
+test('parseCliArgs captures --web <path>', () => {
+  const flags = cliWeb.parseCliArgs(['node', 'dist/loader.js', '--web', '/tmp/my-project'])
+  assert.equal(flags.web, true)
+  assert.equal(flags.webPath, '/tmp/my-project')
+  assert.deepEqual(flags.messages, [])
+})
+
+test('parseCliArgs captures --web with relative path', () => {
+  const flags = cliWeb.parseCliArgs(['node', 'dist/loader.js', '--web', '../other-project'])
+  assert.equal(flags.web, true)
+  assert.equal(flags.webPath, '../other-project')
+})
+
+test('parseCliArgs does not capture --web followed by a flag as path', () => {
+  const flags = cliWeb.parseCliArgs(['node', 'dist/loader.js', '--web', '--model', 'test'])
+  assert.equal(flags.web, true)
+  assert.equal(flags.webPath, undefined)
+  assert.equal(flags.model, 'test')
+})
+
+test('gsd web <path> is handled as web start with path', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'gsd-web-path-'))
+  const projectDir = join(tmp, 'my-project')
+  mkdirSync(projectDir, { recursive: true })
+  let launchedCwd = ''
+
+  try {
+    const flags = cliWeb.parseCliArgs(['node', 'dist/loader.js', 'web', projectDir])
+    assert.deepEqual(flags.messages, ['web', projectDir])
+
+    const result = await cliWeb.runWebCliBranch(flags, {
+      runWebMode: async (options) => {
+        launchedCwd = options.cwd
+        return {
+          mode: 'web',
+          ok: true,
+          cwd: options.cwd,
+          projectSessionsDir: options.projectSessionsDir,
+          host: '127.0.0.1',
+          port: 43124,
+          url: 'http://127.0.0.1:43124',
+          hostKind: 'source-dev',
+          hostPath: '/tmp/fake-web/package.json',
+          hostRoot: '/tmp/fake-web',
+        }
+      },
+    })
+
+    assert.equal(result.handled, true)
+    if (!result.handled) throw new Error('expected web branch to be handled')
+    assert.equal(result.exitCode, 0)
+    assert.equal(launchedCwd, projectDir)
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+})
+
+test('gsd web start <path> resolves path and launches', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'gsd-web-start-path-'))
+  const projectDir = join(tmp, 'another-project')
+  mkdirSync(projectDir, { recursive: true })
+  let launchedCwd = ''
+
+  try {
+    const flags = cliWeb.parseCliArgs(['node', 'dist/loader.js', 'web', 'start', projectDir])
+    assert.deepEqual(flags.messages, ['web', 'start', projectDir])
+
+    const result = await cliWeb.runWebCliBranch(flags, {
+      runWebMode: async (options) => {
+        launchedCwd = options.cwd
+        return {
+          mode: 'web',
+          ok: true,
+          cwd: options.cwd,
+          projectSessionsDir: options.projectSessionsDir,
+          host: '127.0.0.1',
+          port: 43125,
+          url: 'http://127.0.0.1:43125',
+          hostKind: 'source-dev',
+          hostPath: '/tmp/fake-web/package.json',
+          hostRoot: '/tmp/fake-web',
+        }
+      },
+    })
+
+    assert.equal(result.handled, true)
+    if (!result.handled) throw new Error('expected web branch to be handled')
+    assert.equal(result.exitCode, 0)
+    assert.equal(launchedCwd, projectDir)
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+})
+
+test('gsd --web <path> resolves path and launches', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'gsd-web-flag-path-'))
+  const projectDir = join(tmp, 'flagged-project')
+  mkdirSync(projectDir, { recursive: true })
+  let launchedCwd = ''
+
+  try {
+    const flags = cliWeb.parseCliArgs(['node', 'dist/loader.js', '--web', projectDir])
+    assert.equal(flags.web, true)
+    assert.equal(flags.webPath, projectDir)
+
+    const result = await cliWeb.runWebCliBranch(flags, {
+      runWebMode: async (options) => {
+        launchedCwd = options.cwd
+        return {
+          mode: 'web',
+          ok: true,
+          cwd: options.cwd,
+          projectSessionsDir: options.projectSessionsDir,
+          host: '127.0.0.1',
+          port: 43126,
+          url: 'http://127.0.0.1:43126',
+          hostKind: 'source-dev',
+          hostPath: '/tmp/fake-web/package.json',
+          hostRoot: '/tmp/fake-web',
+        }
+      },
+    })
+
+    assert.equal(result.handled, true)
+    if (!result.handled) throw new Error('expected web branch to be handled')
+    assert.equal(result.exitCode, 0)
+    assert.equal(launchedCwd, projectDir)
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+})
+
+test('gsd --web <nonexistent-path> fails with clear error', async () => {
+  let stderrOutput = ''
+
+  const flags = cliWeb.parseCliArgs(['node', 'dist/loader.js', '--web', '/tmp/nonexistent-gsd-test-path-xyz'])
+  const result = await cliWeb.runWebCliBranch(flags, {
+    stderr: { write: (chunk: string) => { stderrOutput += chunk; return true } },
+  })
+
+  assert.equal(result.handled, true)
+  if (!result.handled) throw new Error('expected web branch to be handled')
+  assert.equal(result.exitCode, 1)
+  if (result.action !== 'start') throw new Error('expected action=start')
+  assert.equal(result.status.ok, false)
+  if (result.status.ok) throw new Error('expected failed status')
+  assert.match(result.status.failureReason, /does not exist/)
+  assert.match(stderrOutput, /does not exist/)
+})
+
 test('launch failure surfaces status and reason before browser open', async () => {
   const tmp = mkdtempSync(join(tmpdir(), 'gsd-web-missing-host-'))
   let openedUrl = ''

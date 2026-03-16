@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readdirSync, renameSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { agentDir as defaultAgentDir, sessionsDir as defaultSessionsDir } from './app-paths.js'
 import { getProjectSessionsDir } from './project-sessions.js'
 import { launchWebMode, stopWebMode, type WebModeLaunchStatus, type WebModeStopResult } from './web-mode.js'
@@ -16,6 +16,8 @@ export interface CliFlags {
   tools?: string[]
   messages: string[]
   web?: boolean
+  /** Optional project path for web mode: `gsd --web <path>` or `gsd web start <path>` */
+  webPath?: string
   help?: boolean
   version?: boolean
 }
@@ -47,6 +49,10 @@ export function parseCliArgs(argv: string[]): CliFlags {
       flags.noSession = true
     } else if (arg === '--web') {
       flags.web = true
+      // Peek at next arg — if it looks like a path (not another flag), capture it
+      if (i + 1 < args.length && !args[i + 1].startsWith('-')) {
+        flags.webPath = args[++i]
+      }
     } else if (arg === '--model' && i + 1 < args.length) {
       flags.model = args[++i]
     } else if (arg === '--extension' && i + 1 < args.length) {
@@ -128,14 +134,60 @@ export async function runWebCliBranch(
     }
   }
 
-  // `gsd web start` is an alias for `gsd --web`
-  const isWebStart = flags.messages[0] === 'web' && (flags.messages[1] === 'start' || flags.messages[1] === undefined && false)
-  if (!flags.web && !isWebStart) {
+  // `gsd web [start] [path]` is an alias for `gsd --web [path]`
+  // Matches: `gsd web`, `gsd web start`, `gsd web start <path>`, `gsd web <path>`
+  const isWebSubcommand = flags.messages[0] === 'web' && flags.messages[1] !== 'stop'
+  if (!flags.web && !isWebSubcommand) {
     return { handled: false }
   }
 
   const stderr = deps.stderr ?? process.stderr
-  const currentCwd = (deps.cwd ?? (() => process.cwd()))()
+  const defaultCwd = (deps.cwd ?? (() => process.cwd()))()
+
+  // Resolve project path from multiple forms:
+  //   gsd --web <path>           → flags.webPath
+  //   gsd web start <path>       → messages[2]
+  //   gsd web <path>             → messages[1] (when not "start")
+  let webPath = flags.webPath
+  if (!webPath && isWebSubcommand) {
+    if (flags.messages[1] === 'start') {
+      webPath = flags.messages[2]
+    } else if (flags.messages[1]) {
+      webPath = flags.messages[1]
+    }
+  }
+
+  let currentCwd: string
+  if (webPath) {
+    currentCwd = resolve(defaultCwd, webPath)
+    const checkExists = existsSync
+    if (!checkExists(currentCwd)) {
+      stderr.write(`[gsd] Project path does not exist: ${currentCwd}\n`)
+      return {
+        handled: true,
+        exitCode: 1,
+        action: 'start',
+        status: {
+          mode: 'web',
+          ok: false,
+          cwd: currentCwd,
+          projectSessionsDir: '',
+          host: '127.0.0.1',
+          port: null,
+          url: null,
+          hostKind: 'unresolved',
+          hostPath: null,
+          hostRoot: null,
+          failureReason: `project path does not exist: ${currentCwd}`,
+        },
+        launchInputs: { cwd: currentCwd, projectSessionsDir: '', agentDir: deps.agentDir ?? defaultAgentDir },
+      }
+    }
+    stderr.write(`[gsd] Using project path: ${currentCwd}\n`)
+  } else {
+    currentCwd = defaultCwd
+  }
+
   const baseSessionsDir = deps.baseSessionsDir ?? defaultSessionsDir
   const agentDir = deps.agentDir ?? defaultAgentDir
   const projectSessionsDir = getProjectSessionsDir(currentCwd, baseSessionsDir)

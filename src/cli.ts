@@ -59,7 +59,7 @@ function writeHelp(stdout: WritableLike): void {
   stdout.write('Options:\n')
   stdout.write('  --mode <text|json|rpc>   Output mode (default: interactive)\n')
   stdout.write('  --print, -p              Single-shot print mode\n')
-  stdout.write('  --web                    Launch browser-only web mode\n')
+  stdout.write('  --web [path]             Launch browser-only web mode (optionally for a different project)\n')
   stdout.write('  --continue, -c           Resume the most recent session\n')
   stdout.write('  --model <id>             Override model (e.g. claude-opus-4-6)\n')
   stdout.write('  --no-session             Disable session persistence\n')
@@ -71,6 +71,7 @@ function writeHelp(stdout: WritableLike): void {
   stdout.write('\nSubcommands:\n')
   stdout.write('  config                   Re-run the setup wizard\n')
   stdout.write('  update                   Update GSD to the latest version\n')
+  stdout.write('  web [start] [path]       Launch web mode (optionally for a different project)\n')
   stdout.write('  web stop                 Stop the running web server\n')
 }
 
@@ -358,7 +359,7 @@ export async function runCli(argv = process.argv, deps: CliDeps = {}): Promise<n
     stderr.write('[gsd] Error: Interactive mode requires a terminal (TTY).\n')
     stderr.write('[gsd] Non-interactive alternatives:\n')
     stderr.write('[gsd]   gsd --print "your message"     Single-shot prompt\n')
-    stderr.write('[gsd]   gsd --web                     Browser-only web mode\n')
+    stderr.write('[gsd]   gsd --web [path]               Browser-only web mode\n')
     stderr.write('[gsd]   gsd --mode rpc               JSON-RPC over stdin/stdout\n')
     stderr.write('[gsd]   gsd --mode text "message"    Text output mode\n')
     return exitAndReturn(exit, 1)
