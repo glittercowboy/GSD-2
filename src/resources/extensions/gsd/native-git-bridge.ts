@@ -132,10 +132,10 @@ function loadNative(): typeof nativeModule {
 
 // ─── Fallback Helpers ──────────────────────────────────────────────────────
 
-/** Run a git command via execSync. Returns trimmed stdout. */
+/** Run a git command via execFileSync. Returns trimmed stdout. */
 function gitExec(basePath: string, args: string[], allowFailure = false): string {
   try {
-    return execSync(`git ${args.join(" ")}`, {
+    return execFileSync("git", args, {
       cwd: basePath,
       stdio: ["ignore", "pipe", "pipe"],
       encoding: "utf-8",
