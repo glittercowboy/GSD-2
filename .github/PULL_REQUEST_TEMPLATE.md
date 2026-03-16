@@ -44,6 +44,6 @@ Closes #
 - [ ] Safe to revert (no migrations, no state changes)
 - [ ] Requires steps — describe:
 
-## Target branch
+## Release context
 <!-- What branch does this PR target? -->
 - **Target**: <!-- e.g., milestone/2.15.x or main -->
