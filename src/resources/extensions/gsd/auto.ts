@@ -68,6 +68,7 @@ import {
 } from "./metrics.js";
 import { join } from "node:path";
 import { sep as pathSep } from "node:path";
+import { homedir } from "node:os";
 import { readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync, statSync } from "node:fs";
 import { execSync, execFileSync } from "node:child_process";
 import {
@@ -155,6 +156,33 @@ const unitRecoveryCount = new Map<string, number>();
 
 /** Persisted completed-unit keys — survives restarts. Loaded from .gsd/completed-units.json. */
 const completedKeySet = new Set<string>();
+
+/** Resource sync timestamp captured at auto-mode start. If the managed-resources
+ *  manifest changes mid-session (e.g. /gsd:update or dev edit + copy-resources),
+ *  templates on disk may expect variables the in-memory code doesn't provide.
+ *  Detect this and stop gracefully instead of crashing. */
+let resourceSyncedAtOnStart: number | null = null;
+
+function readResourceSyncedAt(): number | null {
+  const agentDir = process.env.GSD_CODING_AGENT_DIR || join(homedir(), ".gsd", "agent");
+  const manifestPath = join(agentDir, "managed-resources.json");
+  try {
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
+    return typeof manifest?.syncedAt === "number" ? manifest.syncedAt : null;
+  } catch {
+    return null;
+  }
+}
+
+function checkResourcesStale(): string | null {
+  if (resourceSyncedAtOnStart === null) return null;
+  const current = readResourceSyncedAt();
+  if (current === null) return null;
+  if (current !== resourceSyncedAtOnStart) {
+    return "GSD resources were updated since this session started. Restart gsd to load the new code.";
+  }
+  return null;
+}
 
 /**
  * Resolve whether auto-mode should use worktree isolation.
@@ -618,6 +646,7 @@ export async function startAuto(
   resetHookState();
   restoreHookState(base);
   autoStartTime = Date.now();
+  resourceSyncedAtOnStart = readResourceSyncedAt();
   completedUnits = [];
   currentUnit = null;
   currentMilestoneId = state.activeMilestone?.id ?? null;
@@ -1139,6 +1168,18 @@ async function dispatchNextUnit(
     _skipDepth = 0;
     ctx.ui.notify(`Skipped ${MAX_SKIP_DEPTH}+ completed units. Yielding to UI before continuing.`, "info");
     await new Promise(r => setTimeout(r, 200));
+  }
+
+  // Resource version guard: detect mid-session resource updates.
+  // Templates are read from disk on each dispatch but extension code is loaded
+  // once at startup. If resources were re-synced (e.g. /gsd:update, npm update,
+  // or dev copy-resources), templates may expect variables the in-memory code
+  // doesn't provide. Stop gracefully instead of crashing.
+  const staleMsg = checkResourcesStale();
+  if (staleMsg) {
+    await stopAuto(ctx, pi);
+    ctx.ui.notify(staleMsg, "error");
+    return;
   }
 
   // Clear all caches so deriveState sees fresh disk state (#431).
