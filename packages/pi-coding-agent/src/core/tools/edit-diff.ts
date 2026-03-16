@@ -113,40 +113,73 @@ export function stripBom(content: string): { bom: string; text: string } {
  * Generate a unified diff string with line numbers and context.
  *
  * Returns both the diff string and the first changed line number (in the new file).
+ * Only lines within `contextLines` of a change are included (like unified diff).
  */
 export function generateDiffString(
 	oldContent: string,
 	newContent: string,
-	_contextLines = 4,
+	contextLines = 4,
 ): { diff: string; firstChangedLine: number | undefined } {
 	const ops = buildLineDiff(oldContent, newContent);
-	const rendered: string[] = [];
 	let firstChangedLine: number | undefined;
+
+	// First pass: assign line numbers and find changed indices
+	const annotated: { op: LineDiffOp; oldLine: number; newLine: number }[] = [];
 	let oldLine = 1;
 	let newLine = 1;
-	const maxLine = Math.max(splitLines(oldContent).length, splitLines(newContent).length, 1);
-	const lineNumberWidth = String(maxLine).length;
+	const changedIndices: number[] = [];
 
-	for (const op of ops) {
-		if (op.type === "context") {
-			rendered.push(` ${String(newLine).padStart(lineNumberWidth, " ")} ${op.line}`);
-			oldLine += 1;
-			newLine += 1;
-			continue;
-		}
+	for (let idx = 0; idx < ops.length; idx++) {
+		const op = ops[idx];
+		annotated.push({ op, oldLine, newLine });
 
-		if (firstChangedLine === undefined) {
-			firstChangedLine = newLine;
+		if (op.type !== "context") {
+			changedIndices.push(idx);
+			if (firstChangedLine === undefined) {
+				firstChangedLine = newLine;
+			}
 		}
 
 		if (op.type === "remove") {
-			rendered.push(`-${String(oldLine).padStart(lineNumberWidth, " ")} ${op.line}`);
 			oldLine += 1;
-			continue;
+		} else if (op.type === "add") {
+			newLine += 1;
+		} else {
+			oldLine += 1;
+			newLine += 1;
 		}
+	}
 
-		rendered.push(`+${String(newLine).padStart(lineNumberWidth, " ")} ${op.line}`);
-		newLine += 1;
+	// Build set of indices to include (changes + surrounding context)
+	const includeSet = new Set<number>();
+	for (const ci of changedIndices) {
+		for (let k = Math.max(0, ci - contextLines); k <= Math.min(ops.length - 1, ci + contextLines); k++) {
+			includeSet.add(k);
+		}
+	}
+
+	const maxLine = Math.max(oldLine - 1, newLine - 1, 1);
+	const lineNumberWidth = String(maxLine).length;
+	const rendered: string[] = [];
+	let lastIncluded = -1;
+
+	for (let idx = 0; idx < annotated.length; idx++) {
+		if (!includeSet.has(idx)) continue;
+
+		// Insert separator when there's a gap between included regions
+		if (lastIncluded !== -1 && idx > lastIncluded + 1) {
+			rendered.push("...");
+		}
+		lastIncluded = idx;
+
+		const { op, oldLine: ol, newLine: nl } = annotated[idx];
+		if (op.type === "context") {
+			rendered.push(` ${String(nl).padStart(lineNumberWidth, " ")} ${op.line}`);
+		} else if (op.type === "remove") {
+			rendered.push(`-${String(ol).padStart(lineNumberWidth, " ")} ${op.line}`);
+		} else {
+			rendered.push(`+${String(nl).padStart(lineNumberWidth, " ")} ${op.line}`);
+		}
 	}
 
 	return {
@@ -177,9 +210,30 @@ function splitLines(text: string): string[] {
 	return lines;
 }
 
+/**
+ * Maximum number of cells (oldLines * newLines) before we switch from the
+ * full LCS DP algorithm to a simpler linear-scan diff. This prevents OOM
+ * on large files (e.g. 10k lines would need a 100M-cell matrix).
+ */
+const MAX_DP_CELLS = 4_000_000; // ~32 MB for 64-bit numbers
+
 function buildLineDiff(oldContent: string, newContent: string): LineDiffOp[] {
 	const oldLines = splitLines(oldContent);
 	const newLines = splitLines(newContent);
+
+	const cells = (oldLines.length + 1) * (newLines.length + 1);
+	if (cells > MAX_DP_CELLS) {
+		return buildLineDiffLinear(oldLines, newLines);
+	}
+
+	return buildLineDiffLCS(oldLines, newLines);
+}
+
+/**
+ * Full LCS-based diff using O(n*m) DP table. Produces optimal diffs but
+ * is only safe for files where n*m <= MAX_DP_CELLS.
+ */
+function buildLineDiffLCS(oldLines: string[], newLines: string[]): LineDiffOp[] {
 	const dp: number[][] = Array.from({ length: oldLines.length + 1 }, () =>
 		Array<number>(newLines.length + 1).fill(0),
 	);
@@ -223,6 +277,53 @@ function buildLineDiff(oldContent: string, newContent: string): LineDiffOp[] {
 	while (j < newLines.length) {
 		ops.push({ type: "add", line: newLines[j] });
 		j += 1;
+	}
+
+	return ops;
+}
+
+/**
+ * Linear-time fallback diff for large files. Matches common prefix/suffix,
+ * then treats the remaining middle as a bulk remove+add. Not optimal but
+ * O(n+m) in both time and space.
+ */
+function buildLineDiffLinear(oldLines: string[], newLines: string[]): LineDiffOp[] {
+	const ops: LineDiffOp[] = [];
+
+	// Match common prefix
+	let prefixLen = 0;
+	const minLen = Math.min(oldLines.length, newLines.length);
+	while (prefixLen < minLen && oldLines[prefixLen] === newLines[prefixLen]) {
+		prefixLen++;
+	}
+
+	// Match common suffix (not overlapping with prefix)
+	let suffixLen = 0;
+	while (
+		suffixLen < minLen - prefixLen &&
+		oldLines[oldLines.length - 1 - suffixLen] === newLines[newLines.length - 1 - suffixLen]
+	) {
+		suffixLen++;
+	}
+
+	// Emit prefix context
+	for (let i = 0; i < prefixLen; i++) {
+		ops.push({ type: "context", line: oldLines[i] });
+	}
+
+	// Emit removed lines from the middle
+	for (let i = prefixLen; i < oldLines.length - suffixLen; i++) {
+		ops.push({ type: "remove", line: oldLines[i] });
+	}
+
+	// Emit added lines from the middle
+	for (let j = prefixLen; j < newLines.length - suffixLen; j++) {
+		ops.push({ type: "add", line: newLines[j] });
+	}
+
+	// Emit suffix context
+	for (let i = oldLines.length - suffixLen; i < oldLines.length; i++) {
+		ops.push({ type: "context", line: oldLines[i] });
 	}
 
 	return ops;

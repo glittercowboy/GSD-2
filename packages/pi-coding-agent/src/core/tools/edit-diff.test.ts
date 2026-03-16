@@ -31,6 +31,35 @@ describe("edit-diff", () => {
 		assert.match(result.diff, /\+2 line two/);
 	});
 
+	it("respects contextLines and inserts separators for distant changes", () => {
+		const lines = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`);
+		const oldContent = lines.join("\n") + "\n";
+		const modified = [...lines];
+		modified[1] = "changed 2"; // line 2
+		modified[17] = "changed 18"; // line 18
+		const newContent = modified.join("\n") + "\n";
+
+		const result = generateDiffString(oldContent, newContent, 2);
+		// Should contain separator between the two distant change regions
+		assert.match(result.diff, /\.\.\./);
+		// Should NOT contain lines far from changes (e.g. line 10)
+		assert.doesNotMatch(result.diff, /line 10/);
+		// Should contain the changed lines
+		assert.match(result.diff, /changed 2/);
+		assert.match(result.diff, /changed 18/);
+	});
+
+	it("handles large files without OOM by falling back to linear diff", () => {
+		// Create files large enough to exceed the DP threshold
+		const lineCount = 3000;
+		const oldLines = Array.from({ length: lineCount }, (_, i) => `line ${i}`);
+		const newLines = [...oldLines];
+		newLines[1500] = "CHANGED";
+		const result = generateDiffString(oldLines.join("\n") + "\n", newLines.join("\n") + "\n");
+		assert.ok(result.firstChangedLine !== undefined);
+		assert.match(result.diff, /CHANGED/);
+	});
+
 	it("computes diffs for preview without native helpers", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "edit-diff-test-"));
 		try {
