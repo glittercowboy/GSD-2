@@ -48,6 +48,7 @@ import {
   pauseWorker, resumeWorker,
 } from "./parallel-orchestrator.js";
 import { formatEligibilityReport } from "./parallel-eligibility.js";
+import { mergeAllCompleted, mergeCompletedMilestone, formatMergeResults } from "./parallel-merge.js";
 import { resolveParallelConfig } from "./preferences.js";
 import { nativeBranchList, nativeDetectMainBranch, nativeBranchListMerged, nativeBranchDelete, nativeForEachRef, nativeUpdateRef } from "./native-git-bridge.js";
 
@@ -108,7 +109,7 @@ export function registerGSDCommand(pi: ExtensionAPI): void {
 
       if (parts[0] === "parallel" && parts.length <= 2) {
         const subPrefix = parts[1] ?? "";
-        return ["start", "status", "stop", "pause", "resume"]
+        return ["start", "status", "stop", "pause", "resume", "merge"]
           .filter((cmd) => cmd.startsWith(subPrefix))
           .map((cmd) => ({ value: `parallel ${cmd}`, label: cmd }));
       }
@@ -368,8 +369,27 @@ export function registerGSDCommand(pi: ExtensionAPI): void {
           return;
         }
 
+        if (subCmd === "merge") {
+          const mid = rest.trim() || undefined;
+          if (mid) {
+            // Merge a specific milestone
+            const result = await mergeCompletedMilestone(projectRoot(), mid);
+            pi.sendMessage({ content: formatMergeResults([result]) });
+            return;
+          }
+          // Merge all completed milestones
+          const workers = getWorkerStatuses();
+          if (workers.length === 0) {
+            pi.sendMessage({ content: "No parallel workers to merge." });
+            return;
+          }
+          const results = await mergeAllCompleted(projectRoot(), workers);
+          pi.sendMessage({ content: formatMergeResults(results) });
+          return;
+        }
+
         pi.sendMessage({
-          content: `Unknown parallel subcommand "${subCmd}". Usage: /gsd parallel [start|status|stop|pause|resume]`,
+          content: `Unknown parallel subcommand "${subCmd}". Usage: /gsd parallel [start|status|stop|pause|resume|merge]`,
         });
         return;
       }

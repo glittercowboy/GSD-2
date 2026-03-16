@@ -162,6 +162,40 @@ export async function startParallel(
   return { started, errors };
 }
 
+// ─── Worker Spawning ───────────────────────────────────────────────────
+
+/**
+ * Spawn a worker process for a milestone.
+ * The worker runs `gsd auto` in the milestone's worktree with
+ * GSD_MILESTONE_LOCK set to isolate state derivation.
+ *
+ * NOTE: This is a stub — actual process spawning requires the CLI
+ * entry point path and will be wired up in the auto-mode integration.
+ * For now, it validates the worker exists and returns false.
+ */
+export function spawnWorker(
+  basePath: string,
+  milestoneId: string,
+): boolean {
+  if (!state) return false;
+  const worker = state.workers.get(milestoneId);
+  if (!worker) return false;
+
+  // TODO: Implement actual worker spawning
+  // The worker process should be started with:
+  //   - cwd: worker.worktreePath
+  //   - env: { ...process.env, GSD_MILESTONE_LOCK: milestoneId }
+  //   - The CLI command equivalent of `/gsd auto`
+  //
+  // When implemented, this will:
+  // 1. Create the worktree via createAutoWorktree(basePath, milestoneId)
+  // 2. Fork/exec the CLI with GSD_MILESTONE_LOCK env var
+  // 3. Store the ChildProcess in worker.process
+  // 4. Set up exit handler to update worker.state on crash/completion
+
+  return false;
+}
+
 // ─── Stop ──────────────────────────────────────────────────────────────────
 
 /**
