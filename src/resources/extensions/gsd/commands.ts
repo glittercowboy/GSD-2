@@ -1109,14 +1109,15 @@ async function configureMode(ctx: ExtensionCommandContext, prefs: Record<string,
       "(keep current)",
     ],
   );
-  if (modeChoice && modeChoice !== "(keep current)") {
-    if (modeChoice.startsWith("solo")) {
+  const modeStr = typeof modeChoice === "string" ? modeChoice : "";
+  if (modeStr && modeStr !== "(keep current)") {
+    if (modeStr.startsWith("solo")) {
       prefs.mode = "solo";
       ctx.ui.notify(
         "Mode: solo — defaults: auto_push=true, push_branches=false, pre_merge_check=false, merge_strategy=squash, isolation=worktree, commit_docs=true, unique_milestone_ids=false",
         "info",
       );
-    } else if (modeChoice.startsWith("team")) {
+    } else if (modeStr.startsWith("team")) {
       prefs.mode = "team";
       ctx.ui.notify(
         "Mode: team — defaults: auto_push=false, push_branches=true, pre_merge_check=true, merge_strategy=squash, isolation=worktree, commit_docs=true, unique_milestone_ids=true",
