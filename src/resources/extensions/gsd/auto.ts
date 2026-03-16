@@ -760,22 +760,61 @@ export async function startAuto(
 
   if (!hasSurvivorBranch) {
     // No active work at all — start a new milestone via the discuss flow.
+    // After discussion completes, checkAutoStartAfterDiscuss() (fired from
+    // agent_end) will detect the new CONTEXT.md and restart auto mode.
+    // If the LLM didn't follow the discussion protocol (e.g. started editing
+    // files directly for a simple task), we re-derive state and either proceed
+    // with what was created or notify the user clearly (#609).
     if (!state.activeMilestone || state.phase === "complete") {
       const { showSmartEntry } = await import("./guided-flow.js");
       await showSmartEntry(ctx, pi, base, { step: requestedStepMode });
-      return;
+
+      // Re-derive state after discussion — the LLM may have created artifacts
+      // even if it didn't follow the full protocol.
+      invalidateAllCaches();
+      const postState = await deriveState(base);
+      if (postState.activeMilestone && postState.phase !== "complete" && postState.phase !== "pre-planning") {
+        state = postState;
+      } else if (postState.activeMilestone && postState.phase === "pre-planning") {
+        const contextFile = resolveMilestoneFile(base, postState.activeMilestone.id, "CONTEXT");
+        const hasContext = !!(contextFile && await loadFile(contextFile));
+        if (hasContext) {
+          state = postState;
+        } else {
+          ctx.ui.notify(
+            "Discussion completed but no milestone context was written. Run /gsd to try the discussion again, or /gsd auto after creating the milestone manually.",
+            "warning",
+          );
+          return;
+        }
+      } else {
+        return;
+      }
     }
 
     // Active milestone exists but has no roadmap — check if context exists.
     // If context was pre-written (multi-milestone planning), auto-mode can
     // research and plan it. If no context either, need user discussion.
     if (state.phase === "pre-planning") {
-      const contextFile = resolveMilestoneFile(base, state.activeMilestone.id, "CONTEXT");
+      const mid = state.activeMilestone!.id;
+      const contextFile = resolveMilestoneFile(base, mid, "CONTEXT");
       const hasContext = !!(contextFile && await loadFile(contextFile));
       if (!hasContext) {
         const { showSmartEntry } = await import("./guided-flow.js");
         await showSmartEntry(ctx, pi, base, { step: requestedStepMode });
-        return;
+
+        // Same re-derive pattern as above
+        invalidateAllCaches();
+        const postState = await deriveState(base);
+        if (postState.activeMilestone && postState.phase !== "pre-planning") {
+          state = postState;
+        } else {
+          ctx.ui.notify(
+            "Discussion completed but milestone context is still missing. Run /gsd to try again.",
+            "warning",
+          );
+          return;
+        }
       }
       // Has context, no roadmap — auto-mode will research + plan it
     }
@@ -889,7 +928,7 @@ export async function startAuto(
   ctx.ui.notify(`${modeLabel} started. ${scopeMsg}`, "info");
 
   // Secrets collection gate — collect pending secrets before first dispatch
-  const mid = state.activeMilestone.id;
+  const mid = state.activeMilestone!.id;
   try {
     const manifestStatus = await getManifestStatus(base, mid);
     if (manifestStatus && manifestStatus.pending.length > 0) {
