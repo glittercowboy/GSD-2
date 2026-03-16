@@ -106,6 +106,7 @@ export function snapshotUnitMetrics(
   unitId: string,
   startedAt: number,
   model: string,
+  extras?: { tier?: string; modelDowngraded?: boolean },
 ): UnitMetrics | null {
   if (!ledger) return null;
 
@@ -158,6 +159,8 @@ export function snapshotUnitMetrics(
     toolCalls,
     assistantMessages,
     userMessages,
+    ...(extras?.tier ? { tier: extras.tier } : {}),
+    ...(extras?.modelDowngraded !== undefined ? { modelDowngraded: extras.modelDowngraded } : {}),
   };
 
   ledger.units.push(unit);

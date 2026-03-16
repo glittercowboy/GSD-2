@@ -149,3 +149,33 @@ test("budget pressure at 90% downgrades light stays light", () => {
   const result = classifyUnitComplexity("complete-slice", "M001/S01", "/tmp/fake", 0.95);
   assert.equal(result.tier, "light");
 });
+
+// ─── Phase 4: Task Plan Introspection ────────────────────────────────────────
+
+test("execute-task with multiple complexity keywords classifies as heavy", () => {
+  const metadata: TaskMetadata = { complexityKeywords: ["migration", "security"] };
+  const result = classifyUnitComplexity("execute-task", "M001/S01/T01", "/tmp/fake", undefined, metadata);
+  assert.equal(result.tier, "heavy");
+  assert.match(result.reason, /migration/);
+  assert.match(result.reason, /security/);
+});
+
+test("execute-task with single complexity keyword classifies as standard", () => {
+  const metadata: TaskMetadata = { complexityKeywords: ["performance"] };
+  const result = classifyUnitComplexity("execute-task", "M001/S01/T01", "/tmp/fake", undefined, metadata);
+  assert.equal(result.tier, "standard");
+  assert.match(result.reason, /performance/);
+});
+
+test("execute-task with many code blocks classifies as heavy", () => {
+  const metadata: TaskMetadata = { codeBlockCount: 6 };
+  const result = classifyUnitComplexity("execute-task", "M001/S01/T01", "/tmp/fake", undefined, metadata);
+  assert.equal(result.tier, "heavy");
+  assert.match(result.reason, /code blocks/);
+});
+
+test("execute-task with few code blocks stays standard", () => {
+  const metadata: TaskMetadata = { codeBlockCount: 2 };
+  const result = classifyUnitComplexity("execute-task", "M001/S01/T01", "/tmp/fake", undefined, metadata);
+  assert.equal(result.tier, "standard");
+});

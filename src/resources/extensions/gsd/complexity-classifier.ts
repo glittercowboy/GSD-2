@@ -1,10 +1,11 @@
 // GSD Extension — Complexity Classifier
 // Classifies unit complexity for dynamic model routing.
-// Pure heuristics — no LLM calls. Sub-millisecond classification.
+// Pure heuristics + adaptive learning — no LLM calls. Sub-millisecond classification.
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { gsdRoot } from "./paths.js";
+import { getAdaptiveTierAdjustment } from "./routing-history.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -22,6 +23,8 @@ export interface TaskMetadata {
   isNewFile?: boolean;
   tags?: string[];
   estimatedLines?: number;
+  codeBlockCount?: number;      // number of fenced code blocks in plan
+  complexityKeywords?: string[]; // detected complexity signals
 }
 
 // ─── Unit Type → Default Tier Mapping ────────────────────────────────────────
@@ -87,6 +90,14 @@ export function classifyUnitComplexity(
     }
   }
 
+  // Adaptive learning: check if history suggests bumping the tier
+  const tags = metadata?.tags ?? extractTaskMetadata(unitId, basePath).tags;
+  const adaptiveAdjustment = getAdaptiveTierAdjustment(unitType, tier, tags);
+  if (adaptiveAdjustment && tierOrdinal(adaptiveAdjustment) > tierOrdinal(tier)) {
+    reason = `${reason} (adaptive: high failure rate at ${tier})`;
+    tier = adaptiveAdjustment;
+  }
+
   const result: ClassificationResult = { tier, reason, downgraded: false };
   return applyBudgetPressure(result, budgetPct);
 }
@@ -137,6 +148,19 @@ function analyzeTaskComplexity(
   }
   if (meta.estimatedLines && meta.estimatedLines >= 500) {
     return { tier: "heavy", reason: `~${meta.estimatedLines} lines estimated` };
+  }
+
+  // Heavy signals from complexity keywords (Phase 4)
+  if (meta.complexityKeywords && meta.complexityKeywords.length >= 2) {
+    return { tier: "heavy", reason: `complex: ${meta.complexityKeywords.join(", ")}` };
+  }
+  if (meta.codeBlockCount && meta.codeBlockCount >= 5) {
+    return { tier: "heavy", reason: `${meta.codeBlockCount} code blocks in plan` };
+  }
+
+  // Standard signals from single complexity keyword
+  if (meta.complexityKeywords && meta.complexityKeywords.length === 1) {
+    return { tier: "standard", reason: `${meta.complexityKeywords[0]} task` };
   }
 
   // Light signals (simple tasks)
@@ -227,6 +251,22 @@ function extractTaskMetadata(unitId: string, basePath: string): TaskMetadata {
     if (estimateMatch) {
       meta.estimatedLines = parseInt(estimateMatch[1], 10);
     }
+
+    // Phase 4: Deeper introspection signals
+
+    // Count fenced code blocks (```) — more code blocks = more complex implementation
+    const codeBlockMatches = content.match(/^```/gm);
+    meta.codeBlockCount = codeBlockMatches ? Math.floor(codeBlockMatches.length / 2) : 0;
+
+    // Detect complexity keywords that suggest harder tasks
+    const complexityKeywords: string[] = [];
+    if (content.match(/\b(migration|migrate|schema change)\b/i)) complexityKeywords.push("migration");
+    if (content.match(/\b(architect|design pattern|system design)\b/i)) complexityKeywords.push("architecture");
+    if (content.match(/\b(security|auth|encrypt|credential|vulnerability)\b/i)) complexityKeywords.push("security");
+    if (content.match(/\b(performance|optimize|cache|index)\b/i)) complexityKeywords.push("performance");
+    if (content.match(/\b(concurrent|parallel|race condition|mutex|lock)\b/i)) complexityKeywords.push("concurrency");
+    if (content.match(/\b(backward.?compat|breaking change|deprecat)\b/i)) complexityKeywords.push("compatibility");
+    meta.complexityKeywords = complexityKeywords;
   } catch {
     // Non-fatal — metadata extraction is best-effort
   }

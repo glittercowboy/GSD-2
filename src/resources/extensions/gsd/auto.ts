@@ -44,6 +44,7 @@ import { sendDesktopNotification } from "./notifications.js";
 import type { GSDPreferences } from "./preferences.js";
 import { classifyUnitComplexity, tierLabel } from "./complexity-classifier.js";
 import { resolveModelForComplexity } from "./model-router.js";
+import { initRoutingHistory, resetRoutingHistory, recordOutcome } from "./routing-history.js";
 import {
   checkPostUnitHooks,
   getActiveHook,
@@ -205,6 +206,9 @@ let pendingCrashRecovery: string | null = null;
 let autoStartTime: number = 0;
 let completedUnits: { type: string; id: string; startedAt: number; finishedAt: number }[] = [];
 let currentUnit: { type: string; id: string; startedAt: number } | null = null;
+
+/** Track dynamic routing decision for the current unit (for metrics) */
+let currentUnitRouting: { tier: string; modelDowngraded: boolean } | null = null;
 
 /** Track current milestone to detect transitions */
 let currentMilestoneId: string | null = null;
@@ -418,6 +422,7 @@ export async function stopAuto(ctx?: ExtensionContext, pi?: ExtensionAPI): Promi
   }
 
   resetMetrics();
+  resetRoutingHistory();
   resetHookState();
   if (basePath) clearPersistedHookState(basePath);
   active = false;
@@ -711,6 +716,9 @@ export async function startAuto(
   // Initialize metrics — loads existing ledger from disk
   initMetrics(base);
 
+  // Initialize routing history for adaptive learning
+  initRoutingHistory(base);
+
   // Snapshot installed skills so we can detect new ones after research
   if (resolveSkillDiscoveryMode() !== "off") {
     snapshotSkills();
@@ -913,7 +921,7 @@ export async function handleAgentEnd(
       const hookStartedAt = Date.now();
       if (currentUnit) {
         const modelId = ctx.model?.id ?? "unknown";
-        snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId);
+        snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId, currentUnitRouting ?? undefined);
         saveActivityLog(ctx, basePath, currentUnit.type, currentUnit.id);
       }
       currentUnit = { type: hookUnit.unitType, id: hookUnit.unitId, startedAt: hookStartedAt };
@@ -1129,7 +1137,10 @@ function updateProgressWidget(
   unitId: string,
   state: GSDState,
 ): void {
-  _updateProgressWidget(ctx, unitType, unitId, state, widgetStateAccessors);
+  const badge = currentUnitRouting?.tier
+    ? ({ light: "L", standard: "S", heavy: "H" }[currentUnitRouting.tier] ?? undefined)
+    : undefined;
+  _updateProgressWidget(ctx, unitType, unitId, state, widgetStateAccessors, badge);
 }
 
 /** State accessors for the widget — closures over module globals. */
@@ -1224,7 +1235,7 @@ async function dispatchNextUnit(
     // Save final session before stopping
     if (currentUnit) {
       const modelId = ctx.model?.id ?? "unknown";
-      snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId);
+      snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId, currentUnitRouting ?? undefined);
       saveActivityLog(ctx, basePath, currentUnit.type, currentUnit.id);
     }
     sendDesktopNotification("GSD", "All milestones complete!", "success", "milestone");
@@ -1252,7 +1263,7 @@ async function dispatchNextUnit(
   if (!mid || !midTitle) {
     if (currentUnit) {
       const modelId = ctx.model?.id ?? "unknown";
-      snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId);
+      snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId, currentUnitRouting ?? undefined);
       saveActivityLog(ctx, basePath, currentUnit.type, currentUnit.id);
     }
     await stopAuto(ctx, pi);
@@ -1267,7 +1278,7 @@ async function dispatchNextUnit(
   if (state.phase === "complete") {
     if (currentUnit) {
       const modelId = ctx.model?.id ?? "unknown";
-      snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId);
+      snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId, currentUnitRouting ?? undefined);
       saveActivityLog(ctx, basePath, currentUnit.type, currentUnit.id);
     }
     // Clear completed-units.json for the finished milestone so it doesn't grow unbounded.
@@ -1304,7 +1315,7 @@ async function dispatchNextUnit(
   if (state.phase === "blocked") {
     if (currentUnit) {
       const modelId = ctx.model?.id ?? "unknown";
-      snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId);
+      snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId, currentUnitRouting ?? undefined);
       saveActivityLog(ctx, basePath, currentUnit.type, currentUnit.id);
     }
     await stopAuto(ctx, pi);
@@ -1412,7 +1423,7 @@ async function dispatchNextUnit(
   if (dispatchResult.action === "stop") {
     if (currentUnit) {
       const modelId = ctx.model?.id ?? "unknown";
-      snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId);
+      snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId, currentUnitRouting ?? undefined);
       saveActivityLog(ctx, basePath, currentUnit.type, currentUnit.id);
     }
     await stopAuto(ctx, pi);
@@ -1522,7 +1533,7 @@ async function dispatchNextUnit(
   if (lifetimeCount > MAX_LIFETIME_DISPATCHES) {
     if (currentUnit) {
       const modelId = ctx.model?.id ?? "unknown";
-      snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId);
+      snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId, currentUnitRouting ?? undefined);
     }
     saveActivityLog(ctx, basePath, unitType, unitId);
     const expected = diagnoseExpectedArtifact(unitType, unitId, basePath);
@@ -1536,7 +1547,7 @@ async function dispatchNextUnit(
   if (prevCount >= MAX_UNIT_DISPATCHES) {
     if (currentUnit) {
       const modelId = ctx.model?.id ?? "unknown";
-      snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId);
+      snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId, currentUnitRouting ?? undefined);
     }
     saveActivityLog(ctx, basePath, unitType, unitId);
 
@@ -1694,8 +1705,18 @@ async function dispatchNextUnit(
   // The session still holds the previous unit's data (newSession hasn't fired yet).
   if (currentUnit) {
     const modelId = ctx.model?.id ?? "unknown";
-    snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId);
+    snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId, currentUnitRouting ?? undefined);
     saveActivityLog(ctx, basePath, currentUnit.type, currentUnit.id);
+
+    // Record routing outcome for adaptive learning
+    if (currentUnitRouting) {
+      const isRetry = currentUnit.type === unitType && currentUnit.id === unitId;
+      recordOutcome(
+        currentUnit.type,
+        currentUnitRouting.tier as "light" | "standard" | "heavy",
+        !isRetry, // success = not being retried
+      );
+    }
 
     // Only mark the previous unit as completed if:
     // 1. We're not about to re-dispatch the same unit (retry scenario)
@@ -1802,6 +1823,7 @@ async function dispatchNextUnit(
     const routingConfig = resolveDynamicRoutingConfig();
     let effectiveModelConfig = modelConfig;
     let routingTierLabel = "";
+    currentUnitRouting = null;
 
     if (routingConfig.enabled) {
       // Compute budget pressure if budget ceiling is set
@@ -1837,6 +1859,7 @@ async function dispatchNextUnit(
           }
         }
         routingTierLabel = ` [${tierLabel(classification.tier)}]`;
+        currentUnitRouting = { tier: classification.tier, modelDowngraded: routing.wasDowngraded };
       }
     }
 
@@ -1978,7 +2001,7 @@ async function dispatchNextUnit(
 
     if (currentUnit) {
       const modelId = ctx.model?.id ?? "unknown";
-      snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId);
+      snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId, currentUnitRouting ?? undefined);
     }
     saveActivityLog(ctx, basePath, unitType, unitId);
 
@@ -2004,7 +2027,7 @@ async function dispatchNextUnit(
         timeoutAt: Date.now(),
       });
       const modelId = ctx.model?.id ?? "unknown";
-      snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId);
+      snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId, currentUnitRouting ?? undefined);
     }
     saveActivityLog(ctx, basePath, unitType, unitId);
 
