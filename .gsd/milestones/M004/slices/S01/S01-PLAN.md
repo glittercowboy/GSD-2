@@ -57,7 +57,7 @@ npm run test:unit
 
 ## Tasks
 
-- [ ] **T01: Port gsd-db.ts and add types** `est:30m`
+- [x] **T01: Port gsd-db.ts and add types** `est:30m`
   - Why: The DB layer is the foundation — everything else depends on it. The `Decision` and `Requirement` interfaces must exist before any DB code can compile.
   - Files: `src/resources/extensions/gsd/types.ts`, `src/resources/extensions/gsd/gsd-db.ts`
   - Do: Append `Decision` and `Requirement` interfaces to types.ts (copy from memory-db types.ts lines ~270–308). Port gsd-db.ts from memory-db worktree (750 lines). Adapt: replace `import { createRequire } from 'node:module'` and `const _require = createRequire(import.meta.url)` with bare `require()` calls — match `native-git-bridge.ts` pattern (line 36: `const mod = require("@gsd/native")`). Keep all CRUD wrappers, schema init, provider chain, WAL mode, `copyWorktreeDb`, `reconcileWorktreeDb`, `transaction()`, `normalizeRow()`.
