@@ -112,6 +112,13 @@ export class GSDVisualizerOverlay {
       return;
     }
 
+    if (matchesKey(data, Key.shift("tab"))) {
+      this.activeTab = (this.activeTab - 1 + TAB_COUNT) % TAB_COUNT;
+      this.invalidate();
+      this.tui.requestRender();
+      return;
+    }
+
     if (matchesKey(data, Key.tab)) {
       this.activeTab = (this.activeTab + 1) % TAB_COUNT;
       this.invalidate();
@@ -300,7 +307,7 @@ export class GSDVisualizerOverlay {
     const lines = this.wrapInBox(visibleContent, width);
 
     // Footer hint
-    const hint = th.fg("dim", "Tab/1-7 switch · / filter · ↑↓ scroll · g/G top/end · esc close");
+    const hint = th.fg("dim", "Tab/Shift+Tab/1-7 switch · / filter · ↑↓ scroll · g/G top/end · esc close");
     const hintVis = visibleWidth(hint);
     const hintPad = Math.max(0, Math.floor((width - hintVis) / 2));
     lines.push(" ".repeat(hintPad) + hint);

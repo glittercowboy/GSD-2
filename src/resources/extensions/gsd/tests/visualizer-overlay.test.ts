@@ -1,5 +1,5 @@
 // Tests for GSD visualizer overlay.
-// Verifies filter mode, tab switching, and export key handling.
+// Verifies filter mode, tab switching, including reverse tab navigation, and export key handling.
 
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -81,6 +81,11 @@ assertTrue(
   "tab key wraps around TAB_COUNT",
 );
 
+assertTrue(
+  overlaySrc.includes('Key.shift("tab")') || overlaySrc.includes("Key.shift('tab')"),
+  "supports Shift+Tab for reverse tab switching",
+);
+
 console.log("\n=== Overlay: Export Key Interception ===");
 
 assertTrue(
@@ -101,8 +106,8 @@ assertTrue(
 console.log("\n=== Overlay: Footer ===");
 
 assertTrue(
-  overlaySrc.includes("Tab/1-7"),
-  "footer hint shows 1-7 tab range",
+  overlaySrc.includes("Tab/Shift+Tab/1-7"),
+  "footer hint shows Tab, Shift+Tab, and 1-7 tab range",
 );
 
 assertTrue(
