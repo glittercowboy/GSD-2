@@ -487,12 +487,17 @@ export async function stopAuto(ctx?: ExtensionContext, pi?: ExtensionAPI): Promi
   deregisterSigtermHandler();
 
   // ── Auto-worktree: exit worktree and reset basePath on stop ──
+  // Preserve the milestone branch so the next /gsd auto can re-enter
+  // where it left off. The branch is only deleted during milestone
+  // completion (mergeMilestoneToMain) after the work has been squash-merged.
   if (currentMilestoneId && isInAutoWorktree(basePath)) {
     try {
-      teardownAutoWorktree(originalBasePath, currentMilestoneId);
+      // Auto-commit any dirty state before leaving so work isn't lost
+      try { autoCommitCurrentBranch(basePath, "stop", currentMilestoneId); } catch { /* non-fatal */ }
+      teardownAutoWorktree(originalBasePath, currentMilestoneId, { preserveBranch: true });
       basePath = originalBasePath;
       gitService = new GitServiceImpl(basePath, loadEffectiveGSDPreferences()?.preferences?.git ?? {});
-      ctx?.ui.notify("Exited auto-worktree.", "info");
+      ctx?.ui.notify("Exited auto-worktree (branch preserved for resume).", "info");
     } catch (err) {
       ctx?.ui.notify(
         `Auto-worktree teardown failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -740,68 +745,102 @@ export async function startAuto(
 
   let state = await deriveState(base);
 
-  // No active work at all — start a new milestone via the discuss flow.
-  // After discussion completes, checkAutoStartAfterDiscuss() (fired from
-  // agent_end) will detect the new CONTEXT.md and restart auto mode.
-  // If the LLM didn't follow the discussion protocol (e.g. started editing
-  // files directly for a simple task), we re-derive state and either proceed
-  // with what was created or notify the user clearly (#609).
-  if (!state.activeMilestone || state.phase === "complete") {
-    const { showSmartEntry } = await import("./guided-flow.js");
-    await showSmartEntry(ctx, pi, base, { step: requestedStepMode });
-
-    // Re-derive state after discussion — the LLM may have created artifacts
-    // even if it didn't follow the full protocol.
-    invalidateAllCaches();
-    const postState = await deriveState(base);
-    if (postState.activeMilestone && postState.phase !== "complete" && postState.phase !== "pre-planning") {
-      // Discussion produced enough artifacts to proceed — fall through
-      // to auto mode activation below instead of returning.
-      state = postState;
-    } else if (postState.activeMilestone && postState.phase === "pre-planning") {
-      // Milestone directory exists but no context — check if context was written
-      const contextFile = resolveMilestoneFile(base, postState.activeMilestone.id, "CONTEXT");
-      const hasContext = !!(contextFile && await loadFile(contextFile));
-      if (hasContext) {
-        state = postState;
-        // Fall through — auto mode will research + plan it
-      } else {
-        ctx.ui.notify(
-          "Discussion completed but no milestone context was written. Run /gsd to try the discussion again, or /gsd auto after creating the milestone manually.",
-          "warning",
-        );
-        return;
-      }
-    } else {
-      return;
+  // ── Milestone branch recovery (#601) ─────────────────────────────────────
+  // When auto-mode was previously stopped, the milestone branch is preserved
+  // but the worktree is removed. The project root (integration branch) may
+  // not have the roadmap/artifacts — they live on the milestone branch.
+  // If state looks like pre-planning but a milestone branch exists with prior
+  // work, skip the early-return checks and let worktree setup + dispatch
+  // handle it correctly from the branch's state.
+  let hasSurvivorBranch = false;
+  if (
+    state.activeMilestone &&
+    (state.phase === "pre-planning" || state.phase === "needs-discussion") &&
+    shouldUseWorktreeIsolation() &&
+    !detectWorktreeName(base) &&
+    !base.includes(`${pathSep}.gsd${pathSep}worktrees${pathSep}`)
+  ) {
+    const milestoneBranch = `milestone/${state.activeMilestone.id}`;
+    const { nativeBranchExists } = await import("./native-git-bridge.js");
+    hasSurvivorBranch = nativeBranchExists(base, milestoneBranch);
+    if (hasSurvivorBranch) {
+      ctx.ui.notify(
+        `Found prior session branch ${milestoneBranch}. Resuming.`,
+        "info",
+      );
     }
   }
 
-  // Active milestone exists but has no roadmap — check if context exists.
-  // If context was pre-written (multi-milestone planning), auto-mode can
-  // research and plan it. If no context either, need user discussion.
-  if (state.phase === "pre-planning") {
-    const mid = state.activeMilestone!.id;
-    const contextFile = resolveMilestoneFile(base, mid, "CONTEXT");
-    const hasContext = !!(contextFile && await loadFile(contextFile));
-    if (!hasContext) {
+  if (!hasSurvivorBranch) {
+    // No active work at all — start a new milestone via the discuss flow.
+    // After discussion completes, checkAutoStartAfterDiscuss() (fired from
+    // agent_end) will detect the new CONTEXT.md and restart auto mode.
+    // If the LLM didn't follow the discussion protocol (e.g. started editing
+    // files directly for a simple task), we re-derive state and either proceed
+    // with what was created or notify the user clearly (#609).
+    if (!state.activeMilestone || state.phase === "complete") {
       const { showSmartEntry } = await import("./guided-flow.js");
       await showSmartEntry(ctx, pi, base, { step: requestedStepMode });
 
-      // Same re-derive pattern as above
+      // Re-derive state after discussion — the LLM may have created artifacts
+      // even if it didn't follow the full protocol.
       invalidateAllCaches();
       const postState = await deriveState(base);
-      if (postState.activeMilestone && postState.phase !== "pre-planning") {
+      if (postState.activeMilestone && postState.phase !== "complete" && postState.phase !== "pre-planning") {
         state = postState;
+      } else if (postState.activeMilestone && postState.phase === "pre-planning") {
+        const contextFile = resolveMilestoneFile(base, postState.activeMilestone.id, "CONTEXT");
+        const hasContext = !!(contextFile && await loadFile(contextFile));
+        if (hasContext) {
+          state = postState;
+        } else {
+          ctx.ui.notify(
+            "Discussion completed but no milestone context was written. Run /gsd to try the discussion again, or /gsd auto after creating the milestone manually.",
+            "warning",
+          );
+          return;
+        }
       } else {
-        ctx.ui.notify(
-          "Discussion completed but milestone context is still missing. Run /gsd to try again.",
-          "warning",
-        );
         return;
       }
     }
-    // Has context, no roadmap — auto-mode will research + plan it
+
+    // Active milestone exists but has no roadmap — check if context exists.
+    // If context was pre-written (multi-milestone planning), auto-mode can
+    // research and plan it. If no context either, need user discussion.
+    if (state.phase === "pre-planning") {
+      const mid = state.activeMilestone!.id;
+      const contextFile = resolveMilestoneFile(base, mid, "CONTEXT");
+      const hasContext = !!(contextFile && await loadFile(contextFile));
+      if (!hasContext) {
+        const { showSmartEntry } = await import("./guided-flow.js");
+        await showSmartEntry(ctx, pi, base, { step: requestedStepMode });
+
+        // Same re-derive pattern as above
+        invalidateAllCaches();
+        const postState = await deriveState(base);
+        if (postState.activeMilestone && postState.phase !== "pre-planning") {
+          state = postState;
+        } else {
+          ctx.ui.notify(
+            "Discussion completed but milestone context is still missing. Run /gsd to try again.",
+            "warning",
+          );
+          return;
+        }
+      }
+      // Has context, no roadmap — auto-mode will research + plan it
+    }
+  }
+
+  // At this point activeMilestone is guaranteed non-null: either
+  // hasSurvivorBranch is true (which requires activeMilestone) or
+  // the !activeMilestone early-return above would have fired.
+  if (!state.activeMilestone) {
+    // Unreachable — satisfies TypeScript's null check
+    const { showSmartEntry } = await import("./guided-flow.js");
+    await showSmartEntry(ctx, pi, base, { step: requestedStepMode });
+    return;
   }
 
   active = true;
@@ -2863,3 +2902,108 @@ export {
   skipExecuteTask,
   buildLoopRemediationSteps,
 } from "./auto-recovery.js";
+
+/**
+ * Dispatch a hook unit directly, bypassing normal pre-dispatch hooks.
+ * Used for manual hook triggers via /gsd run-hook.
+ */
+export async function dispatchHookUnit(
+  ctx: ExtensionContext,
+  pi: ExtensionAPI,
+  hookName: string,
+  triggerUnitType: string,
+  triggerUnitId: string,
+  hookPrompt: string,
+  hookModel: string | undefined,
+  targetBasePath: string,
+): Promise<boolean> {
+  // Ensure auto-mode is active
+  if (!active) {
+    // Initialize auto-mode state minimally
+    active = true;
+    stepMode = true;
+    cmdCtx = ctx as ExtensionCommandContext;
+    basePath = targetBasePath;
+    autoStartTime = Date.now();
+    currentUnit = null;
+    completedUnits = [];
+  }
+
+  const hookUnitType = `hook/${hookName}`;
+  const hookStartedAt = Date.now();
+  
+  // Set up the trigger unit as the "current" unit so post-unit hooks can reference it
+  currentUnit = { type: triggerUnitType, id: triggerUnitId, startedAt: hookStartedAt };
+  
+  // Create a new session for the hook
+  const result = await cmdCtx!.newSession();
+  if (result.cancelled) {
+    await stopAuto(ctx, pi);
+    return false;
+  }
+
+  // Update current unit to the hook unit
+  currentUnit = { type: hookUnitType, id: triggerUnitId, startedAt: hookStartedAt };
+  
+  // Write runtime record
+  writeUnitRuntimeRecord(basePath, hookUnitType, triggerUnitId, hookStartedAt, {
+    phase: "dispatched",
+    wrapupWarningSent: false,
+    timeoutAt: null,
+    lastProgressAt: hookStartedAt,
+    progressCount: 0,
+    lastProgressKind: "dispatch",
+  });
+
+  // Switch model if specified
+  if (hookModel) {
+    const availableModels = ctx.modelRegistry.getAvailable();
+    const match = availableModels.find(m =>
+      m.id === hookModel || `${m.provider}/${m.id}` === hookModel,
+    );
+    if (match) {
+      try {
+        await pi.setModel(match);
+      } catch { /* non-fatal — use current model */ }
+    }
+  }
+
+  // Write lock
+  const sessionFile = ctx.sessionManager.getSessionFile();
+  writeLock(lockBase(), hookUnitType, triggerUnitId, completedUnits.length, sessionFile);
+
+  // Set up timeout
+  clearUnitTimeout();
+  const supervisor = resolveAutoSupervisorConfig();
+  const hookHardTimeoutMs = (supervisor.hard_timeout_minutes ?? 30) * 60 * 1000;
+  unitTimeoutHandle = setTimeout(async () => {
+    unitTimeoutHandle = null;
+    if (!active) return;
+    if (currentUnit) {
+      writeUnitRuntimeRecord(basePath, hookUnitType, triggerUnitId, hookStartedAt, {
+        phase: "timeout",
+        timeoutAt: Date.now(),
+      });
+    }
+    ctx.ui.notify(
+      `Hook ${hookName} exceeded ${supervisor.hard_timeout_minutes ?? 30}min timeout. Pausing auto-mode.`,
+      "warning",
+    );
+    resetHookState();
+    await pauseAuto(ctx, pi);
+  }, hookHardTimeoutMs);
+
+  // Update status
+  ctx.ui.setStatus("gsd-auto", stepMode ? "next" : "auto");
+  ctx.ui.notify(`Running post-unit hook: ${hookName}`, "info");
+
+  // Send the hook prompt
+  console.log(`[dispatchHookUnit] Sending prompt of length ${hookPrompt.length}`);
+  console.log(`[dispatchHookUnit] Prompt preview: ${hookPrompt.substring(0, 200)}...`);
+  pi.sendMessage(
+    { customType: "gsd-auto", content: hookPrompt, display: true },
+    { triggerTurn: true },
+  );
+  
+  return true;
+}
