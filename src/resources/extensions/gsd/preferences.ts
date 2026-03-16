@@ -1167,6 +1167,13 @@ export function validatePreferences(preferences: GSDPreferences): {
       if (typeof g.commit_docs === "boolean") git.commit_docs = g.commit_docs;
       else errors.push("git.commit_docs must be a boolean");
     }
+    if (g.worktree_post_create !== undefined) {
+      if (typeof g.worktree_post_create === "string" && g.worktree_post_create.trim()) {
+        git.worktree_post_create = g.worktree_post_create.trim();
+      } else {
+        errors.push("git.worktree_post_create must be a non-empty string (path to script)");
+      }
+    }
     // Deprecated: merge_to_main is ignored (branchless architecture).
     if (g.merge_to_main !== undefined) {
       warnings.push("git.merge_to_main is deprecated — milestone-level merge is now always used. Remove this setting.");

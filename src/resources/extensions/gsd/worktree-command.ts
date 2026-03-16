@@ -13,6 +13,7 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@gsd/pi-coding-agent";
 import { loadPrompt } from "./prompt-loader.js";
 import { autoCommitCurrentBranch } from "./worktree.js";
+import { runWorktreePostCreateHook } from "./auto-worktree.js";
 import { showConfirm } from "../shared/confirm-ui.js";
 import { gsdRoot, milestonesDir } from "./paths.js";
 import {
@@ -359,6 +360,12 @@ async function handleCreate(
     // Create from the main tree, not from inside another worktree
     const mainBase = originalCwd ?? basePath;
     const info = createWorktree(mainBase, name);
+
+    // Run user-configured post-create hook (#597) — e.g. copy .env, symlink assets
+    const hookError = runWorktreePostCreateHook(mainBase, info.path);
+    if (hookError) {
+      ctx.ui.notify(hookError, "warning");
+    }
 
     // Track original cwd before switching
     if (!originalCwd) originalCwd = basePath;

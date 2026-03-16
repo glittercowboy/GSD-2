@@ -150,7 +150,33 @@ git:
   commit_type: feat           # override conventional commit prefix
   main_branch: main           # primary branch name
   commit_docs: true           # commit .gsd/ artifacts to git (set false to keep local)
+  worktree_post_create: .gsd/hooks/post-worktree-create  # script to run after worktree creation
 ```
+
+#### `git.worktree_post_create`
+
+Script to run after a worktree is created (both auto-mode and manual `/worktree`). Useful for copying `.env` files, symlinking asset directories, or running setup commands that worktrees don't inherit from the main tree.
+
+```yaml
+git:
+  worktree_post_create: .gsd/hooks/post-worktree-create
+```
+
+The script receives two environment variables:
+- `SOURCE_DIR` — the original project root
+- `WORKTREE_DIR` — the newly created worktree path
+
+Example hook script (`.gsd/hooks/post-worktree-create`):
+
+```bash
+#!/bin/bash
+# Copy environment files and symlink assets into the new worktree
+cp "$SOURCE_DIR/.env" "$WORKTREE_DIR/.env"
+cp "$SOURCE_DIR/.env.local" "$WORKTREE_DIR/.env.local" 2>/dev/null || true
+ln -sf "$SOURCE_DIR/assets" "$WORKTREE_DIR/assets"
+```
+
+The path can be absolute or relative to the project root. The script runs with a 30-second timeout. Failure is non-fatal — GSD logs a warning and continues.
 
 ### `notifications`
 
