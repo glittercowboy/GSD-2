@@ -242,6 +242,15 @@ let currentUnit: { type: string; id: string; startedAt: number } | null = null;
 /** Track dynamic routing decision for the current unit (for metrics) */
 let currentUnitRouting: { tier: string; modelDowngraded: boolean } | null = null;
 
+/**
+ * Model captured at auto-mode start. Used to prevent model bleed between
+ * concurrent GSD instances sharing the same global settings.json (#650).
+ * When preferences don't specify a model for a unit type, this ensures
+ * the session's original model is re-applied instead of reading from
+ * the shared global settings (which another instance may have overwritten).
+ */
+let autoModeStartModel: { provider: string; id: string } | null = null;
+
 /** Track current milestone to detect transitions */
 let currentMilestoneId: string | null = null;
 let lastBudgetAlertLevel: BudgetAlertLevel = 0;
@@ -552,6 +561,7 @@ export async function stopAuto(ctx?: ExtensionContext, pi?: ExtensionAPI): Promi
   lastBudgetAlertLevel = 0;
   unitLifetimeDispatches.clear();
   currentUnit = null;
+  autoModeStartModel = null;
   currentMilestoneId = null;
   originalBasePath = "";
   completedUnits = [];
@@ -952,6 +962,14 @@ export async function startAuto(
 
   // Initialize routing history for adaptive learning
   initRoutingHistory(base);
+
+  // Capture the session's current model at auto-mode start (#650).
+  // This prevents model bleed when multiple GSD instances share the
+  // same global settings.json — each instance remembers its own model.
+  const currentModel = ctx.model;
+  if (currentModel) {
+    autoModeStartModel = { provider: currentModel.provider, id: currentModel.id };
+  }
 
   // Snapshot installed skills so we can detect new ones after research
   if (resolveSkillDiscoveryMode() !== "off") {
@@ -2429,6 +2447,22 @@ async function dispatchNextUnit(
     }
 
     // modelSet=false is already handled by the "all fallbacks exhausted" warning above
+  } else if (autoModeStartModel) {
+    // No model preference for this unit type — re-apply the model captured
+    // at auto-mode start to prevent bleed from the shared global settings.json
+    // when multiple GSD instances run concurrently (#650).
+    const availableModels = ctx.modelRegistry.getAvailable();
+    const startModel = availableModels.find(
+      m => m.provider === autoModeStartModel!.provider && m.id === autoModeStartModel!.id,
+    );
+    if (startModel) {
+      const ok = await pi.setModel(startModel, { persist: false });
+      if (!ok) {
+        // Fallback: try matching just by ID across providers
+        const byId = availableModels.find(m => m.id === autoModeStartModel!.id);
+        if (byId) await pi.setModel(byId, { persist: false });
+      }
+    }
   }
 
   // Start progress-aware supervision: a soft warning, an idle watchdog, and
