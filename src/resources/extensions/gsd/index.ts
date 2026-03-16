@@ -699,12 +699,7 @@ export default function (pi: ExtensionAPI) {
         }
       }
 
-<<<<<<< HEAD
-      (ctx as any).log(`Auto-mode paused due to provider error${errorDetail}`);
-      await pauseAuto(ctx, pi);
-=======
       await pauseAutoForProviderError(ctx.ui, errorDetail, () => pauseAuto(ctx, pi));
->>>>>>> upstream/main
       return;
     }
 

@@ -11,3 +11,11 @@ Running multiple `git` commands in parallel (e.g., `git checkout` and `git add` 
 ## Conflict Marker Search: Use Anchored Patterns
 
 `rg "<<<<<<|>>>>>>|======" packages/` matches comment divider lines (`// ====...`). Use anchored patterns `rg "^<<<<<<<|^>>>>>>>|^=======$"` to match only real conflict markers.
+
+## GSD Extension Web Import Graph
+
+Web code (`src/web/`) only imports from `native-git-bridge.ts` — NOT from auto.ts, index.ts, commands.ts, state.ts, preferences.ts, types.ts, or git-service.ts. When resolving merge conflicts in GSD extension core modules, check `rg 'from.*extensions/gsd/' src/web/` to verify whether fork additions actually have web consumers before spending time re-adding them.
+
+## Upstream Cache API Consolidation
+
+Upstream replaced per-module cache clears (`clearParseCache` from files.ts, `clearPathCache` from paths.ts, `invalidateStateCache` from state.ts) with `invalidateAllCaches()` from `cache.ts`. The individual exports may no longer exist. Any code importing them needs migration to the centralized API.

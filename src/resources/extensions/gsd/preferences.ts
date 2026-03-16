@@ -4,13 +4,9 @@ import { isAbsolute, join } from "node:path";
 import { getAgentDir } from "@gsd/pi-coding-agent";
 import { parse as parseYaml } from "yaml";
 import type { GitPreferences } from "./git-service.js";
-<<<<<<< HEAD
-import type { PostUnitHookConfig, PreDispatchHookConfig } from "./types.js";
-=======
 import type { PostUnitHookConfig, PreDispatchHookConfig, BudgetEnforcementMode, NotificationPreferences, TokenProfile, InlineLevel, PhaseSkipPreferences } from "./types.js";
 import type { DynamicRoutingConfig } from "./model-router.js";
 import { defaultRoutingConfig } from "./model-router.js";
->>>>>>> upstream/main
 import { VALID_BRANCH_NAME } from "./git-service.js";
 
 const GLOBAL_PREFERENCES_PATH = join(homedir(), ".gsd", "preferences.md");
@@ -171,13 +167,10 @@ export interface GSDPreferences {
   git?: GitPreferences;
   post_unit_hooks?: PostUnitHookConfig[];
   pre_dispatch_hooks?: PreDispatchHookConfig[];
-<<<<<<< HEAD
-=======
   dynamic_routing?: DynamicRoutingConfig;
   token_profile?: TokenProfile;
   phases?: PhaseSkipPreferences;
   auto_visualize?: boolean;
->>>>>>> upstream/main
 }
 
 export interface LoadedGSDPreferences {
@@ -767,8 +760,6 @@ function mergePreferences(base: GSDPreferences, override: GSDPreferences): GSDPr
       : undefined,
     post_unit_hooks: mergePostUnitHooks(base.post_unit_hooks, override.post_unit_hooks),
     pre_dispatch_hooks: mergePreDispatchHooks(base.pre_dispatch_hooks, override.pre_dispatch_hooks),
-<<<<<<< HEAD
-=======
     dynamic_routing: (base.dynamic_routing || override.dynamic_routing)
       ? { ...(base.dynamic_routing ?? {}), ...(override.dynamic_routing ?? {}) } as DynamicRoutingConfig
       : undefined,
@@ -776,7 +767,6 @@ function mergePreferences(base: GSDPreferences, override: GSDPreferences): GSDPr
     phases: (base.phases || override.phases)
       ? { ...(base.phases ?? {}), ...(override.phases ?? {}) }
       : undefined,
->>>>>>> upstream/main
   };
 }
 
@@ -892,8 +882,6 @@ export function validatePreferences(preferences: GSDPreferences): {
     }
   }
 
-<<<<<<< HEAD
-=======
   // ─── Budget Enforcement ──────────────────────────────────────────────
   if (preferences.budget_enforcement !== undefined) {
     const validModes = new Set(["warn", "pause", "halt"]);
@@ -982,7 +970,6 @@ export function validatePreferences(preferences: GSDPreferences): {
     }
   }
 
->>>>>>> upstream/main
   // ─── Post-Unit Hooks ─────────────────────────────────────────────────
   if (preferences.post_unit_hooks && Array.isArray(preferences.post_unit_hooks)) {
     const validHooks: PostUnitHookConfig[] = [];
@@ -990,11 +977,7 @@ export function validatePreferences(preferences: GSDPreferences): {
     const knownUnitTypes = new Set([
       "research-milestone", "plan-milestone", "research-slice", "plan-slice",
       "execute-task", "complete-slice", "replan-slice", "reassess-roadmap",
-<<<<<<< HEAD
-      "run-uat", "fix-merge", "complete-milestone",
-=======
       "run-uat", "complete-milestone",
->>>>>>> upstream/main
     ]);
     for (const hook of preferences.post_unit_hooks) {
       if (!hook || typeof hook !== "object") {
@@ -1060,11 +1043,7 @@ export function validatePreferences(preferences: GSDPreferences): {
     const knownUnitTypes = new Set([
       "research-milestone", "plan-milestone", "research-slice", "plan-slice",
       "execute-task", "complete-slice", "replan-slice", "reassess-roadmap",
-<<<<<<< HEAD
-      "run-uat", "fix-merge", "complete-milestone",
-=======
       "run-uat", "complete-milestone",
->>>>>>> upstream/main
     ]);
     const validActions = new Set(["modify", "skip", "replace"]);
     for (const hook of preferences.pre_dispatch_hooks) {
@@ -1123,8 +1102,6 @@ export function validatePreferences(preferences: GSDPreferences): {
     }
   }
 
-<<<<<<< HEAD
-=======
   // ─── Dynamic Routing ─────────────────────────────────────────────────
   if (preferences.dynamic_routing !== undefined) {
     if (typeof preferences.dynamic_routing === "object" && preferences.dynamic_routing !== null) {
@@ -1175,7 +1152,6 @@ export function validatePreferences(preferences: GSDPreferences): {
     }
   }
 
->>>>>>> upstream/main
   // ─── Git Preferences ───────────────────────────────────────────────────
   if (preferences.git && typeof preferences.git === "object") {
     const git: Record<string, unknown> = {};
@@ -1335,8 +1311,6 @@ export function resolvePreDispatchHooks(): PreDispatchHookConfig[] {
   return (prefs?.preferences.pre_dispatch_hooks ?? [])
     .filter(h => h.enabled !== false);
 }
-<<<<<<< HEAD
-=======
 
 /**
  * Validate a model ID string.
@@ -1395,4 +1369,3 @@ export function updatePreferencesModels(models: GSDModelConfigV2): void {
 
   writeFileSync(prefsPath, content, "utf-8");
 }
->>>>>>> upstream/main

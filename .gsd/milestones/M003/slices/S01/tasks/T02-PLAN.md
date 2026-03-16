@@ -104,6 +104,14 @@ Resolve the 7 hardest conflicted files — the GSD extension core modules where 
 - Fork's pre-merge versions accessible via `git show HEAD:src/resources/extensions/gsd/<file>` or saved to `/tmp/fork-ref/`
 - Upstream's version accessible via `git checkout upstream/main -- <file>`
 
+## Observability Impact
+
+- **Conflict marker sweep** (diagnostic): `rg "<<<<<<|>>>>>>|======" src/resources/extensions/gsd/{auto,index,commands,state,preferences,types,git-service}.ts` — must return empty after this task. Non-empty means a file wasn't fully resolved.
+- **Remaining unresolved files** (diagnostic): `git diff --name-only --diff-filter=U` — this task should reduce the unresolved count by 7. If count doesn't decrease, files weren't staged.
+- **Fork web export presence** (diagnostic): `rg "web|bridge|WebMode" src/resources/extensions/gsd/index.ts` — verifies fork-only web hooks were preserved after taking upstream base.
+- **Duplicate export detection** (diagnostic): `rg "formatHookStatus" src/resources/extensions/gsd/auto.ts` — must return empty; export lives in `post-unit-hooks.ts` only.
+- **Failure state**: If conflict markers remain, subsequent build tasks (T04) will fail with TypeScript syntax errors pointing to `<<<<<<<` lines.
+
 ## Expected Output
 
 - All 7 GSD extension core modules resolved and staged

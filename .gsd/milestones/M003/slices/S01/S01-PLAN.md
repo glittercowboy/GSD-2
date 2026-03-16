@@ -48,7 +48,7 @@
   - Verify: `rg "<<<<<<|>>>>>>|======" .github/ native/ packages/ CHANGELOG.md .gitignore package.json src/resources/extensions/gsd/prompts/ src/resources/extensions/gsd/tests/ src/tests/` → empty
   - Done when: All non-GSD-extension-source and non-CLI-entry-point conflicts are resolved. ~35 files handled.
 
-- [ ] **T02: Resolve GSD extension core module conflicts** `est:2h`
+- [x] **T02: Resolve GSD extension core module conflicts** `est:2h`
   - Why: Handles the 7 hardest conflict files — the GSD extension core modules where upstream performed structural rewrites (auto.ts decomposition, preferences rewrite, git-service slimming) while the fork added web-mode integrations. Each needs "take upstream + re-apply fork additions."
   - Files: `src/resources/extensions/gsd/auto.ts`, `src/resources/extensions/gsd/index.ts`, `src/resources/extensions/gsd/commands.ts`, `src/resources/extensions/gsd/state.ts`, `src/resources/extensions/gsd/preferences.ts`, `src/resources/extensions/gsd/types.ts`, `src/resources/extensions/gsd/git-service.ts`
   - Do: For each file: (1) save fork version via `git show HEAD:<path>` for reference, (2) take upstream via `git checkout upstream/main -- <path>`, (3) diff fork version to identify fork-only additions (web imports, web code paths, web types), (4) surgically re-add fork-specific code onto upstream's version, (5) `git add`. Special attention to auto.ts: upstream already has dispatch gap watchdog and post-unit-hooks — do NOT re-add fork's duplicates. Check if upstream uses `invalidateAllCaches` from `cache.ts` vs fork's per-module cache clears.

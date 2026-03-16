@@ -69,12 +69,6 @@ function projectRoot(): string {
 
 export function registerGSDCommand(pi: ExtensionAPI): void {
   pi.registerCommand("gsd", {
-<<<<<<< HEAD
-    description: "GSD — Get Shit Done: /gsd next|auto|stop|status|queue|prefs|hooks|doctor|migrate|remote",
-
-    getArgumentCompletions: (prefix: string) => {
-      const subcommands = ["next", "auto", "stop", "status", "queue", "discuss", "prefs", "hooks", "doctor", "migrate", "remote"];
-=======
     description: "GSD — Get Shit Done: /gsd help|next|auto|stop|pause|status|visualize|queue|quick|capture|triage|history|undo|skip|export|cleanup|mode|prefs|config|hooks|run-hook|skill-health|doctor|forensics|migrate|remote|steer|knowledge",
     getArgumentCompletions: (prefix: string) => {
       const subcommands = [
@@ -83,7 +77,6 @@ export function registerGSDCommand(pi: ExtensionAPI): void {
         "history", "undo", "skip", "export", "cleanup", "mode", "prefs",
         "config", "hooks", "run-hook", "skill-health", "doctor", "forensics", "migrate", "remote", "steer", "inspect", "knowledge",
       ];
->>>>>>> upstream/main
       const parts = prefix.trim().split(/\s+/);
 
       if (parts.length <= 1) {
@@ -384,12 +377,6 @@ Examples:
         return;
       }
 
-      if (trimmed === "hooks") {
-        const { formatHookStatus } = await import("./post-unit-hooks.js");
-        ctx.ui.notify(formatHookStatus(), "info");
-        return;
-      }
-
       if (trimmed === "migrate" || trimmed.startsWith("migrate ")) {
         const { handleMigrate } = await import("./migrate/command.js");
         await handleMigrate(trimmed.replace(/^migrate\s*/, "").trim(), ctx, pi);
@@ -413,11 +400,7 @@ Examples:
       }
 
       ctx.ui.notify(
-<<<<<<< HEAD
-        `Unknown: /gsd ${trimmed}. Use /gsd, /gsd next, /gsd auto, /gsd stop, /gsd status, /gsd queue, /gsd discuss, /gsd prefs [global|project|status|wizard|setup], /gsd hooks, /gsd doctor [audit|fix|heal] [M###/S##], /gsd migrate <path>, or /gsd remote [slack|discord|status|disconnect].`,
-=======
         `Unknown: /gsd ${trimmed}. Run /gsd help for available commands.`,
->>>>>>> upstream/main
         "warning",
       );
     },

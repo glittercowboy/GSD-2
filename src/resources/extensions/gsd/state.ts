@@ -29,13 +29,6 @@ import {
   resolveGsdRootFile,
   gsdRoot,
 } from './paths.js';
-<<<<<<< HEAD
-import { getActiveSliceBranch } from './worktree.js';
-import { milestoneIdSort, findMilestoneIds } from './guided-flow.js';
-import { nativeBatchParseGsdFiles, type BatchParsedFile } from './native-parser-bridge.js';
-
-import { join, resolve } from 'path';
-=======
 
 import { milestoneIdSort, findMilestoneIds } from './guided-flow.js';
 import { nativeBatchParseGsdFiles, type BatchParsedFile } from './native-parser-bridge.js';
@@ -43,7 +36,6 @@ import { isDbAvailable, _getAdapter } from './gsd-db.js';
 
 import { join, resolve } from 'path';
 import { debugCount, debugTime } from './debug-logger.js';
->>>>>>> upstream/main
 
 // ─── Query Functions ───────────────────────────────────────────────────────
 
@@ -126,14 +118,10 @@ export async function deriveState(basePath: string): Promise<GSDState> {
     return _stateCache.result;
   }
 
-<<<<<<< HEAD
-  const result = await _deriveStateImpl(basePath);
-=======
   const stopTimer = debugTime("derive-state-impl");
   const result = await _deriveStateImpl(basePath);
   stopTimer({ phase: result.phase, milestone: result.activeMilestone?.id });
   debugCount("deriveStateCalls");
->>>>>>> upstream/main
   _stateCache = { basePath, result, timestamp: Date.now() };
   return result;
 }
@@ -148,52 +136,6 @@ async function _deriveStateImpl(basePath: string): Promise<GSDState> {
   const fileContentCache = new Map<string, string>();
   const gsdDir = gsdRoot(basePath);
 
-<<<<<<< HEAD
-  const batchFiles = nativeBatchParseGsdFiles(gsdDir);
-  if (batchFiles) {
-    for (const f of batchFiles) {
-      // Reconstruct the full file content from parsed components so downstream
-      // parsers (parseRoadmap, parseSummary, etc.) receive the same input they
-      // expect from loadFile(). Files with frontmatter get it re-serialized;
-      // files without get just the body.
-      const absPath = resolve(gsdDir, f.path);
-      const hasMetadata = Object.keys(f.metadata).length > 0;
-      if (hasMetadata) {
-        // Re-serialize frontmatter as simple YAML key: value lines
-        const fmLines: string[] = ['---'];
-        for (const [key, value] of Object.entries(f.metadata)) {
-          if (Array.isArray(value)) {
-            if (value.length === 0) {
-              fmLines.push(`${key}: []`);
-            } else if (typeof value[0] === 'object' && value[0] !== null) {
-              fmLines.push(`${key}:`);
-              for (const obj of value) {
-                const entries = Object.entries(obj as Record<string, unknown>);
-                if (entries.length > 0) {
-                  fmLines.push(`  - ${entries[0][0]}: ${entries[0][1]}`);
-                  for (let i = 1; i < entries.length; i++) {
-                    fmLines.push(`    ${entries[i][0]}: ${entries[i][1]}`);
-                  }
-                }
-              }
-            } else {
-              fmLines.push(`${key}:`);
-              for (const item of value) {
-                fmLines.push(`  - ${item}`);
-              }
-            }
-          } else {
-            fmLines.push(`${key}: ${value}`);
-          }
-        }
-        fmLines.push('---');
-        fileContentCache.set(absPath, fmLines.join('\n') + '\n\n' + f.body);
-      } else {
-        fileContentCache.set(absPath, f.body);
-      }
-    }
-  }
-=======
   // ── DB-first content loading ──
   // When the DB is available, load artifact content from the artifacts table
   // (indexed SELECT instead of O(N) file I/O). Falls back to native Rust batch
@@ -226,7 +168,6 @@ async function _deriveStateImpl(basePath: string): Promise<GSDState> {
     }
   }
   }
->>>>>>> upstream/main
 
   /**
    * Load file content from batch cache first, falling back to disk read.

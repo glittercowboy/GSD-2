@@ -234,8 +234,6 @@ export interface HookDispatchResult {
   unitId: string;
 }
 
-<<<<<<< HEAD
-=======
 // ─── Budget & Notification Types ──────────────────────────────────────────
 
 export type BudgetEnforcementMode = 'warn' | 'pause' | 'halt';
@@ -277,7 +275,6 @@ export interface NotificationPreferences {
   on_attention?: boolean;      // notify when manual attention needed
 }
 
->>>>>>> upstream/main
 // ─── Pre-Dispatch Hook Types ──────────────────────────────────────────────
 
 export interface PreDispatchHookConfig {
@@ -337,8 +334,6 @@ export interface HookStatusEntry {
   /** Current cycle counts for active triggers. */
   activeCycles: Record<string, number>;
 }
-<<<<<<< HEAD
-=======
 
 // ─── Database Types (Decisions & Requirements) ────────────────────────────
 
@@ -368,4 +363,3 @@ export interface Requirement {
   full_content: string;     // full requirement text
   superseded_by: string | null;  // ID of superseding requirement, or null
 }
->>>>>>> upstream/main
