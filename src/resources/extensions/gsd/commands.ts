@@ -628,13 +628,39 @@ function serializePreferencesToFrontmatter(prefs: Record<string, unknown>): stri
 
 // ─── Tool Config Wizard ───────────────────────────────────────────────────────
 
-const TOOL_KEYS = [
+/**
+ * Tool API key configurations.
+ * This is the source of truth for tool credentials - used by both the config wizard
+ * and session startup to load keys from auth.json into environment variables.
+ */
+export const TOOL_KEYS = [
   { id: "tavily",   env: "TAVILY_API_KEY",   label: "Tavily Search",     hint: "tavily.com/app/api-keys" },
   { id: "brave",    env: "BRAVE_API_KEY",     label: "Brave Search",      hint: "brave.com/search/api" },
   { id: "context7", env: "CONTEXT7_API_KEY",  label: "Context7 Docs",     hint: "context7.com/dashboard" },
   { id: "jina",     env: "JINA_API_KEY",      label: "Jina Page Extract", hint: "jina.ai/api" },
   { id: "groq",     env: "GROQ_API_KEY",      label: "Groq Voice",        hint: "console.groq.com" },
 ] as const;
+
+/**
+ * Load tool API keys from auth.json into environment variables.
+ * Called at session startup to ensure tools have access to their credentials.
+ */
+export function loadToolApiKeys(): void {
+  try {
+    const authPath = join(process.env.HOME ?? "", ".gsd", "agent", "auth.json");
+    if (!existsSync(authPath)) return;
+
+    const auth = AuthStorage.create(authPath);
+    for (const tool of TOOL_KEYS) {
+      const cred = auth.get(tool.id);
+      if (cred && "key" in cred && cred.key && !process.env[tool.env]) {
+        process.env[tool.env] = cred.key;
+      }
+    }
+  } catch {
+    // Failed to load tool keys — ignore, they can still be set via env vars
+  }
+}
 
 function getConfigAuthStorage(): InstanceType<typeof AuthStorage> {
   const authPath = join(process.env.HOME ?? "", ".gsd", "agent", "auth.json");
