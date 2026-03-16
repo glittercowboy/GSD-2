@@ -92,6 +92,7 @@ import {
   getAutoWorktreePath,
   getAutoWorktreeOriginalBase,
   mergeMilestoneToMain,
+  autoWorktreeBranch,
 } from "./auto-worktree.js";
 import { showNextAction } from "../shared/next-action-ui.js";
 import {
@@ -1329,6 +1330,32 @@ async function dispatchNextUnit(
       } catch (err) {
         ctx.ui.notify(
           `Milestone merge failed: ${err instanceof Error ? err.message : String(err)}`,
+          "warning",
+        );
+      }
+    } else if (currentMilestoneId && !isInAutoWorktree(basePath)) {
+      // Branch isolation mode (#603): no worktree, but we may be on a milestone/* branch.
+      // Squash-merge back to the integration branch (or main) before stopping.
+      try {
+        const currentBranch = getCurrentBranch(basePath);
+        const milestoneBranch = autoWorktreeBranch(currentMilestoneId);
+        if (currentBranch === milestoneBranch) {
+          const roadmapPath = resolveMilestoneFile(basePath, currentMilestoneId, "ROADMAP");
+          if (roadmapPath) {
+            const roadmapContent = readFileSync(roadmapPath, "utf-8");
+            // mergeMilestoneToMain handles: auto-commit, checkout integration branch,
+            // squash merge, commit, optional push, branch deletion.
+            const mergeResult = mergeMilestoneToMain(basePath, currentMilestoneId, roadmapContent);
+            gitService = new GitServiceImpl(basePath, loadEffectiveGSDPreferences()?.preferences?.git ?? {});
+            ctx.ui.notify(
+              `Milestone ${currentMilestoneId} merged (branch mode).${mergeResult.pushed ? " Pushed to remote." : ""}`,
+              "info",
+            );
+          }
+        }
+      } catch (err) {
+        ctx.ui.notify(
+          `Milestone merge failed (branch mode): ${err instanceof Error ? err.message : String(err)}`,
           "warning",
         );
       }
