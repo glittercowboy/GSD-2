@@ -96,6 +96,7 @@ import {
   getAutoWorktreeOriginalBase,
   mergeMilestoneToMain,
 } from "./auto-worktree.js";
+import { pruneQueueOrder } from "./queue-order.js";
 import { showNextAction } from "../shared/next-action-ui.js";
 import {
   resolveExpectedArtifactPath,
@@ -234,6 +235,9 @@ const DISPATCH_GAP_TIMEOUT_MS = 5_000; // 5 seconds
 /** SIGTERM handler registered while auto-mode is active — cleared on stop/pause. */
 let _sigtermHandler: (() => void) | null = null;
 
+/** Tool calls currently being executed — prevents false idle detection during long-running tools. */
+const inFlightTools = new Set<string>();
+
 type BudgetAlertLevel = 0 | 75 | 90 | 100;
 
 export function getBudgetAlertLevel(budgetPct: number): BudgetAlertLevel {
@@ -299,6 +303,57 @@ export function isAutoPaused(): boolean {
   return paused;
 }
 
+/**
+ * Mark a tool execution as in-flight. Called from index.ts on tool_execution_start.
+ * Prevents the idle watchdog from declaring the agent idle while tools are executing.
+ */
+export function markToolStart(toolCallId: string): void {
+  if (!active) return;
+  inFlightTools.add(toolCallId);
+}
+
+/**
+ * Mark a tool execution as completed. Called from index.ts on tool_execution_end.
+ */
+export function markToolEnd(toolCallId: string): void {
+  inFlightTools.delete(toolCallId);
+}
+
+/**
+ * Return the base path to use for the auto.lock file.
+ * Always uses the original project root (not the worktree) so that
+ * a second terminal can discover and stop a running auto-mode session.
+ */
+function lockBase(): string {
+  return originalBasePath || basePath;
+}
+
+/**
+ * Attempt to stop a running auto-mode session from a different process.
+ * Reads the lock file at the project root, checks if the PID is alive,
+ * and sends SIGTERM to gracefully stop it.
+ *
+ * Returns true if a remote session was found and signaled, false otherwise.
+ */
+export function stopAutoRemote(projectRoot: string): { found: boolean; pid?: number; error?: string } {
+  const lock = readCrashLock(projectRoot);
+  if (!lock) return { found: false };
+
+  if (!isLockProcessAlive(lock)) {
+    // Stale lock — clean it up
+    clearLock(projectRoot);
+    return { found: false };
+  }
+
+  // Send SIGTERM — the auto-mode process has a handler that clears the lock and exits
+  try {
+    process.kill(lock.pid, "SIGTERM");
+    return { found: true, pid: lock.pid };
+  } catch (err) {
+    return { found: false, error: (err as Error).message };
+  }
+}
+
 export function isStepMode(): boolean {
   return stepMode;
 }
@@ -316,6 +371,7 @@ function clearUnitTimeout(): void {
     clearInterval(idleWatchdogHandle);
     idleWatchdogHandle = null;
   }
+  inFlightTools.clear();
   clearDispatchGapWatchdog();
 }
 
@@ -377,7 +433,7 @@ function startDispatchGapWatchdog(ctx: ExtensionContext, pi: ExtensionAPI): void
 export async function stopAuto(ctx?: ExtensionContext, pi?: ExtensionAPI): Promise<void> {
   if (!active && !paused) return;
   clearUnitTimeout();
-  if (basePath) clearLock(basePath);
+  if (lockBase()) clearLock(lockBase());
   clearSkillSnapshot();
   _dispatching = false;
   _skipDepth = 0;
@@ -430,6 +486,7 @@ export async function stopAuto(ctx?: ExtensionContext, pi?: ExtensionAPI): Promi
   stepMode = false;
   unitDispatchCount.clear();
   unitRecoveryCount.clear();
+  inFlightTools.clear();
   lastBudgetAlertLevel = 0;
   unitLifetimeDispatches.clear();
   currentUnit = null;
@@ -461,7 +518,7 @@ export async function stopAuto(ctx?: ExtensionContext, pi?: ExtensionAPI): Promi
 export async function pauseAuto(ctx?: ExtensionContext, _pi?: ExtensionAPI): Promise<void> {
   if (!active) return;
   clearUnitTimeout();
-  if (basePath) clearLock(basePath);
+  if (lockBase()) clearLock(lockBase());
 
   // Remove SIGTERM handler registered at auto-mode start
   deregisterSigtermHandler();
@@ -534,24 +591,24 @@ export async function startAuto(
       }
     }
 
-    // Re-register SIGTERM handler for the resumed session
-    registerSigtermHandler(basePath);
+    // Re-register SIGTERM handler for the resumed session (use original base for lock)
+    registerSigtermHandler(lockBase());
 
     ctx.ui.setStatus("gsd-auto", stepMode ? "next" : "auto");
     ctx.ui.setFooter(hideFooter);
     ctx.ui.notify(stepMode ? "Step-mode resumed." : "Auto-mode resumed.", "info");
     // Restore hook state from disk in case session was interrupted
-    restoreHookState(base);
+    restoreHookState(basePath);
     // Rebuild disk state before resuming — user interaction during pause may have changed files
-    try { await rebuildState(base); } catch { /* non-fatal */ }
+    try { await rebuildState(basePath); } catch { /* non-fatal */ }
     try {
-      const report = await runGSDDoctor(base, { fix: true });
+      const report = await runGSDDoctor(basePath, { fix: true });
       if (report.fixesApplied.length > 0) {
         ctx.ui.notify(`Resume: applied ${report.fixesApplied.length} fix(es) to state.`, "info");
       }
     } catch { /* non-fatal */ }
     // Self-heal: clear stale runtime records where artifacts already exist
-    await selfHealRuntimeRecords(base, ctx, completedKeySet);
+    await selfHealRuntimeRecords(basePath, ctx, completedKeySet);
     invalidateAllCaches();
     await dispatchNextUnit(ctx, pi);
     return;
@@ -564,17 +621,21 @@ export async function startAuto(
   }
 
   // Ensure .gitignore has baseline patterns
-  ensureGitignore(base);
+  const commitDocs = loadEffectiveGSDPreferences()?.preferences?.git?.commit_docs;
+  ensureGitignore(base, { commitDocs });
   untrackRuntimeFiles(base);
 
   // Bootstrap .gsd/ if it doesn't exist
   const gsdDir = join(base, ".gsd");
   if (!existsSync(gsdDir)) {
     mkdirSync(join(gsdDir, "milestones"), { recursive: true });
-    try {
-      nativeAddPaths(base, [".gsd", ".gitignore"]);
-      nativeCommit(base, "chore: init gsd");
-    } catch { /* nothing to commit */ }
+    // Only commit .gsd/ init when commit_docs is not explicitly false
+    if (commitDocs !== false) {
+      try {
+        nativeAddPaths(base, [".gsd", ".gitignore"]);
+        nativeCommit(base, "chore: init gsd");
+      } catch { /* nothing to commit */ }
+    }
   }
 
   // Initialize GitServiceImpl — basePath is set and git repo confirmed
@@ -665,7 +726,7 @@ export async function startAuto(
   // of the repo's default (main/master). Idempotent when the branch is the
   // same; updates the record when started from a different branch (#300).
   if (currentMilestoneId) {
-    captureIntegrationBranch(base, currentMilestoneId);
+    captureIntegrationBranch(base, currentMilestoneId, { commitDocs });
     setActiveMilestoneId(base, currentMilestoneId);
   }
 
@@ -702,8 +763,8 @@ export async function startAuto(
         gitService = new GitServiceImpl(basePath, loadEffectiveGSDPreferences()?.preferences?.git ?? {});
         ctx.ui.notify(`Created auto-worktree at ${wtPath}`, "info");
       }
-      // Re-register SIGTERM handler with the new basePath
-      registerSigtermHandler(basePath);
+      // Re-register SIGTERM handler with the original basePath (lock lives there)
+      registerSigtermHandler(originalBasePath);
     } catch (err) {
       // Worktree creation is non-fatal — continue in the project root.
       ctx.ui.notify(
@@ -962,7 +1023,7 @@ export async function handleAgentEnd(
         return;
       }
       const sessionFile = ctx.sessionManager.getSessionFile();
-      writeLock(basePath, hookUnit.unitType, hookUnit.unitId, completedUnits.length, sessionFile);
+      writeLock(lockBase(), hookUnit.unitType, hookUnit.unitId, completedUnits.length, sessionFile);
       // Persist hook state so cycle counts survive crashes
       persistHookState(basePath);
 
@@ -1224,7 +1285,12 @@ async function dispatchNextUnit(
     unitRecoveryCount.clear();
     unitLifetimeDispatches.clear();
     // Capture integration branch for the new milestone and update git service
-    captureIntegrationBranch(originalBasePath || basePath, mid);
+    captureIntegrationBranch(originalBasePath || basePath, mid, { commitDocs: loadEffectiveGSDPreferences()?.preferences?.git?.commit_docs });
+    // Prune completed milestone from queue order file
+    const pendingIds = state.registry
+      .filter(m => m.status !== "complete")
+      .map(m => m.id);
+    pruneQueueOrder(basePath, pendingIds);
   }
   if (mid) {
     currentMilestoneId = mid;
@@ -1781,7 +1847,7 @@ async function dispatchNextUnit(
   // Pi appends entries incrementally via appendFileSync, so on crash the
   // session file survives with every tool call up to the crash point.
   const sessionFile = ctx.sessionManager.getSessionFile();
-  writeLock(basePath, unitType, unitId, completedUnits.length, sessionFile);
+  writeLock(lockBase(), unitType, unitId, completedUnits.length, sessionFile);
 
   // On crash recovery, prepend the full recovery briefing
   // On retry (stuck detection), prepend deep diagnostic from last attempt
@@ -1987,6 +2053,16 @@ async function dispatchNextUnit(
     const runtime = readUnitRuntimeRecord(basePath, unitType, unitId);
     if (!runtime) return;
     if (Date.now() - runtime.lastProgressAt < idleTimeoutMs) return;
+
+    // Agent has tool calls currently executing (await_job, long bash, etc.) —
+    // not idle, just waiting for tool completion.
+    if (inFlightTools.size > 0) {
+      writeUnitRuntimeRecord(basePath, unitType, unitId, currentUnit.startedAt, {
+        lastProgressAt: Date.now(),
+        lastProgressKind: "tool-in-flight",
+      });
+      return;
+    }
 
     // Before triggering recovery, check if the agent is actually producing
     // work on disk.  `git status --porcelain` is cheap and catches any

@@ -5,7 +5,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { gsdRoot } from "./paths.js";
-import type { ComplexityTier } from "./complexity-classifier.js";
+import type { ComplexityTier } from "./types.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
