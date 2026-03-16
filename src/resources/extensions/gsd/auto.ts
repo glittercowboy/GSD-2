@@ -781,6 +781,16 @@ export async function startAuto(
     }
   }
 
+  // At this point activeMilestone is guaranteed non-null: either
+  // hasSurvivorBranch is true (which requires activeMilestone) or
+  // the !activeMilestone early-return above would have fired.
+  if (!state.activeMilestone) {
+    // Unreachable — satisfies TypeScript's null check
+    const { showSmartEntry } = await import("./guided-flow.js");
+    await showSmartEntry(ctx, pi, base, { step: requestedStepMode });
+    return;
+  }
+
   active = true;
   stepMode = requestedStepMode;
   verbose = verboseMode;
