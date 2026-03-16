@@ -1270,6 +1270,7 @@ async function dispatchNextUnit(
     if (currentMilestoneId && isInAutoWorktree(basePath) && originalBasePath) {
       try {
         const roadmapPath = resolveMilestoneFile(originalBasePath, currentMilestoneId, "ROADMAP");
+        if (!roadmapPath) throw new Error(`Cannot resolve ROADMAP file for milestone ${currentMilestoneId}`);
         const roadmapContent = readFileSync(roadmapPath, "utf-8");
         const mergeResult = mergeMilestoneToMain(originalBasePath, currentMilestoneId, roadmapContent);
         basePath = originalBasePath;
@@ -1355,7 +1356,7 @@ async function dispatchNextUnit(
   const contextThreshold = prefs?.context_pause_threshold ?? 0; // 0 = disabled by default
   if (contextThreshold > 0 && cmdCtx) {
     const contextUsage = cmdCtx.getContextUsage();
-    if (contextUsage && contextUsage.percent >= contextThreshold) {
+    if (contextUsage && contextUsage.percent !== null && contextUsage.percent >= contextThreshold) {
       const msg = `Context window at ${contextUsage.percent}% (threshold: ${contextThreshold}%). Pausing to prevent truncated output.`;
       ctx.ui.notify(`${msg} Run /gsd auto to continue (will start fresh session).`, "warning");
       sendDesktopNotification("GSD", `Context ${contextUsage.percent}% — paused`, "warning", "attention");
@@ -1406,6 +1407,13 @@ async function dispatchNextUnit(
     }
     await stopAuto(ctx, pi);
     ctx.ui.notify(dispatchResult.reason, dispatchResult.level);
+    return;
+  }
+
+  if (dispatchResult.action !== "dispatch") {
+    // skip action — yield and re-dispatch
+    await new Promise(r => setImmediate(r));
+    await dispatchNextUnit(ctx, pi);
     return;
   }
 

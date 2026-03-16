@@ -417,7 +417,7 @@ async function handlePrefsWizard(
       const title = `Model for ${phase} phase${current ? ` (current: ${current})` : ""}:`;
       const choice = await ctx.ui.select(title, modelOptions);
 
-      if (choice && choice !== "(keep current)") {
+      if (choice && typeof choice === "string" && choice !== "(keep current)") {
         if (choice === "(clear)") {
           delete models[phase];
         } else {
@@ -662,7 +662,7 @@ export function loadToolApiKeys(): void {
   }
 }
 
-function getConfigAuthStorage(): InstanceType<typeof AuthStorage> {
+function getConfigAuthStorage(): AuthStorage {
   const authPath = join(process.env.HOME ?? "", ".gsd", "agent", "auth.json");
   mkdirSync(dirname(authPath), { recursive: true });
   return AuthStorage.create(authPath);
@@ -689,7 +689,7 @@ async function handleConfig(ctx: ExtensionCommandContext): Promise<void> {
   let changed = false;
   while (true) {
     const choice = await ctx.ui.select("Configure which tool? Press Escape when done.", options);
-    if (!choice || choice === "(done)") break;
+    if (!choice || typeof choice !== "string" || choice === "(done)") break;
 
     const toolIdx = TOOL_KEYS.findIndex(t => choice.startsWith(t.label));
     if (toolIdx === -1) break;
