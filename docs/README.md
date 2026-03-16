@@ -9,6 +9,7 @@ Welcome to the GSD documentation. This covers everything from getting started to
 | [Getting Started](./getting-started.md) | Installation, first run, and basic usage |
 | [Auto Mode](./auto-mode.md) | How autonomous execution works — the state machine, crash recovery, and steering |
 | [Commands Reference](./commands.md) | All commands, keyboard shortcuts, and CLI flags |
+| [Remote Questions](./remote-questions.md) | Discord and Slack integration for headless auto-mode |
 | [Configuration](./configuration.md) | Preferences, model selection, git settings, and token profiles |
 | [Token Optimization](./token-optimization.md) | Token profiles, context compression, complexity routing, and adaptive learning (v2.17) |
 | [Cost Management](./cost-management.md) | Budget ceilings, cost tracking, projections, and enforcement modes |
