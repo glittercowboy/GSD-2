@@ -264,11 +264,29 @@ export function isInAutoWorktree(basePath: string): boolean {
 }
 
 /**
- * Get the filesystem path for an auto-worktree, or null if it doesn't exist.
+ * Get the filesystem path for an auto-worktree, or null if it doesn't exist
+ * or is not a valid git worktree.
+ *
+ * Validates that the path is a real git worktree (has a .git file with a
+ * gitdir: pointer) rather than just a stray directory. This prevents
+ * mis-detection of leftover directories as active worktrees (#695).
  */
 export function getAutoWorktreePath(basePath: string, milestoneId: string): string | null {
   const p = worktreePath(basePath, milestoneId);
-  return existsSync(p) ? p : null;
+  if (!existsSync(p)) return null;
+
+  // Validate this is a real git worktree, not a stray directory.
+  // A git worktree has a .git *file* (not directory) containing "gitdir: <path>".
+  const gitPath = join(p, ".git");
+  if (!existsSync(gitPath)) return null;
+  try {
+    const content = readFileSync(gitPath, "utf8").trim();
+    if (!content.startsWith("gitdir: ")) return null;
+  } catch {
+    return null;
+  }
+
+  return p;
 }
 
 /**
@@ -281,6 +299,21 @@ export function enterAutoWorktree(basePath: string, milestoneId: string): string
   const p = worktreePath(basePath, milestoneId);
   if (!existsSync(p)) {
     throw new Error(`Auto-worktree for ${milestoneId} does not exist at ${p}`);
+  }
+
+  // Validate this is a real git worktree, not a stray directory (#695)
+  const gitPath = join(p, ".git");
+  if (!existsSync(gitPath)) {
+    throw new Error(`Auto-worktree path ${p} exists but is not a git worktree (no .git)`);
+  }
+  try {
+    const content = readFileSync(gitPath, "utf8").trim();
+    if (!content.startsWith("gitdir: ")) {
+      throw new Error(`Auto-worktree path ${p} has a .git but it is not a worktree gitdir pointer`);
+    }
+  } catch (err) {
+    if (err instanceof Error && err.message.includes("worktree")) throw err;
+    throw new Error(`Auto-worktree path ${p} exists but .git is unreadable`);
   }
 
   const previousCwd = process.cwd();
