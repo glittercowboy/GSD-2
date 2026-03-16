@@ -43,6 +43,9 @@ jobs:
       - name: Check GSD milestones are complete
         run: npm run check:milestones
 
+      - name: Check GSD milestone IDs are unique
+        run: npm run check:milestone-ids
+
   windows-portability:
     runs-on: windows-latest
 
