@@ -730,8 +730,17 @@ export class Editor implements Component, Focusable {
 			return;
 		}
 
-		// Regular characters
+		// Regular characters — reject partial escape sequence remnants that can
+		// occur when event loop latency causes the StdinBuffer to split an escape
+		// sequence (e.g. \x1b flushed as ESC, then "[D" arrives as text).
 		if (data.charCodeAt(0) >= 32) {
+			if (data[0] === "[" && data.length >= 2 && data.length <= 8) {
+				const last = data[data.length - 1]!;
+				// CSI navigation remnants: [A-F (arrows/home/end), [H, [Z (shift-tab), [<n>~ (func keys)
+				if (/^[A-FHZ]$/.test(last) || last === "~") {
+					return; // Drop CSI remnant (e.g. "[D", "[C", "[5~")
+				}
+			}
 			this.insertCharacter(data);
 		}
 	}
@@ -2053,6 +2062,10 @@ https://github.com/EsotericSoftware/spine-runtimes/actions/runs/19536643416/job/
 			this.autocompleteDebounceTimer = null;
 		}
 		this.lastAutocompleteLookupPrefix = null;
+	}
+
+	public dispose(): void {
+		this.clearAutocompleteDebounce();
 	}
 
 	public isShowingAutocomplete(): boolean {

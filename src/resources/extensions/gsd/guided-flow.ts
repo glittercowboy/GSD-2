@@ -131,7 +131,9 @@ export function checkAutoStartAfterDiscuss(): boolean {
   try { unlinkSync(manifestPath); } catch { /* may not exist for single-milestone */ }
 
   pendingAutoStart = null;
-  startAuto(ctx, pi, basePath, false, { step }).catch(() => {});
+  startAuto(ctx, pi, basePath, false, { step }).catch((err) => {
+    if (process.env.GSD_DEBUG) console.error('[gsd] auto start error:', err);
+  });
   return true;
 }
 
@@ -1112,7 +1114,7 @@ export async function showSmartEntry(
         inlineTemplate("uat", "UAT"),
       ].join("\n\n---\n\n");
       dispatchWorkflow(pi, loadPrompt("guided-complete-slice", {
-        milestoneId, sliceId, sliceTitle, inlinedTemplates: completeSliceTemplates,
+        workingDirectory: basePath, milestoneId, sliceId, sliceTitle, inlinedTemplates: completeSliceTemplates,
       }));
     } else if (choice === "status") {
       const { fireStatusViaCommand } = await import("./commands.js");

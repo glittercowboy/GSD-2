@@ -25,7 +25,7 @@ import type {
 } from "@gsd/pi-coding-agent";
 import { createBashTool, createWriteTool, createReadTool, createEditTool, isToolCallEventType } from "@gsd/pi-coding-agent";
 
-import { registerGSDCommand } from "./commands.js";
+import { registerGSDCommand, loadToolApiKeys } from "./commands.js";
 import { registerExitCommand } from "./exit-command.js";
 import { registerWorktreeCommand, getWorktreeOriginalCwd, getActiveWorktreeName } from "./worktree-command.js";
 import { saveFile, formatContinue, loadFile, parseContinue, parseSummary } from "./files.js";
@@ -53,6 +53,7 @@ import { join } from "node:path";
 import { existsSync } from "node:fs";
 import { shortcutDesc } from "../shared/terminal.js";
 import { Text } from "@gsd/pi-tui";
+import { pauseAutoForProviderError } from "./provider-error-pause.js";
 
 // ── Depth verification state ──────────────────────────────────────────────
 let depthVerificationDone = false;
@@ -187,7 +188,7 @@ export default function (pi: ExtensionAPI) {
   };
   pi.registerTool(dynamicEdit as any);
 
-  // ── session_start: render branded GSD header + remote channel status ──
+  // ── session_start: render branded GSD header + load tool keys + remote status ──
   pi.on("session_start", async (_event, ctx) => {
     // Theme access throws in RPC mode (no TUI) — header is decorative, skip it
     try {
@@ -202,6 +203,9 @@ export default function (pi: ExtensionAPI) {
     } catch {
       // RPC mode — no TUI, skip header rendering
     }
+
+    // Load tool API keys from auth.json into environment
+    loadToolApiKeys();
 
     // Notify remote questions status if configured
     try {
@@ -385,8 +389,7 @@ export default function (pi: ExtensionAPI) {
         }
       }
 
-      (ctx as any).log(`Auto-mode paused due to provider error${errorDetail}`);
-      await pauseAuto(ctx, pi);
+      await pauseAutoForProviderError(ctx.ui, errorDetail, () => pauseAuto(ctx, pi));
       return;
     }
 
