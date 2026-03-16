@@ -63,7 +63,7 @@ Observable behaviors:
 
 ## Tasks
 
-- [ ] **T01: Wire DB copy/reconcile into auto-worktree.ts** `est:30m`
+- [x] **T01: Wire DB copy/reconcile into auto-worktree.ts** `est:30m`
   - Why: Closes R053 (DB copy on worktree creation) and R054 (DB reconcile on milestone merge) for the auto-mode path
   - Files: `src/resources/extensions/gsd/auto-worktree.ts`
   - Do: Add static imports of `copyWorktreeDb`, `reconcileWorktreeDb`, `isDbAvailable` from `./gsd-db.js`. In `copyPlanningArtifacts`, after the top-level planning files loop, add a `gsd.db` copy block guarded by `existsSync(srcDb)` (not `isDbAvailable()` — DB may not be open during creation). In `mergeMilestoneToMain`, add a reconcile block between step 1 (auto-commit) and step 3 (process.chdir) — while `worktreeCwd` is still valid. Guard with `isDbAvailable()`. Both blocks: try/catch, non-fatal.

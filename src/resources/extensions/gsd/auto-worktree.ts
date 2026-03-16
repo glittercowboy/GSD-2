@@ -8,6 +8,7 @@
 
 import { existsSync, cpSync, readFileSync, realpathSync, utimesSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { copyWorktreeDb, reconcileWorktreeDb, isDbAvailable } from "./gsd-db.js";
 import { execSync, execFileSync } from "node:child_process";
 import {
   createWorktree,
@@ -143,6 +144,15 @@ function copyPlanningArtifacts(srcBase: string, wtPath: string): void {
       } catch { /* non-fatal */ }
     }
   }
+
+  // Copy gsd.db if present in source
+  const srcDb = join(srcGsd, "gsd.db");
+  const destDb = join(dstGsd, "gsd.db");
+  if (existsSync(srcDb)) {
+    try {
+      copyWorktreeDb(srcDb, destDb);
+    } catch { /* non-fatal */ }
+  }
 }
 
 /**
@@ -277,6 +287,15 @@ export function mergeMilestoneToMain(
 
   // 1. Auto-commit dirty state in worktree before leaving
   autoCommitDirtyState(worktreeCwd);
+
+  // Reconcile worktree DB into main DB before leaving worktree context
+  if (isDbAvailable()) {
+    try {
+      const worktreeDbPath = join(worktreeCwd, ".gsd", "gsd.db");
+      const mainDbPath = join(originalBasePath_, ".gsd", "gsd.db");
+      reconcileWorktreeDb(mainDbPath, worktreeDbPath);
+    } catch { /* non-fatal */ }
+  }
 
   // 2. Parse roadmap for slice listing
   const roadmap = parseRoadmap(roadmapContent);
