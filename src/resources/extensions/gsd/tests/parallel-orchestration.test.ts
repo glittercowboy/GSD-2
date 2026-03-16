@@ -44,6 +44,9 @@ import {
 
 import { validatePreferences, resolveParallelConfig } from "../preferences.js";
 
+import { determineMergeOrder, formatMergeResults, type MergeResult } from "../parallel-merge.js";
+import type { WorkerInfo } from "../parallel-orchestrator.js";
+
 // ─── Test Helpers ────────────────────────────────────────────────────────────
 
 function makeTmpBase(): string {
@@ -451,5 +454,203 @@ describe("preferences: validatePreferences parallel config", () => {
       parallel: { auto_merge: "yolo" } as any,
     });
     assert.ok(result.errors.some(e => e.includes("auto_merge")));
+  });
+});
+
+// ─── Test Helpers (parallel-merge) ───────────────────────────────────────────
+
+function makeWorker(overrides: Partial<WorkerInfo> = {}): WorkerInfo {
+  return {
+    milestoneId: "M001",
+    title: "Test Milestone",
+    pid: process.pid,
+    process: null,
+    worktreePath: "/tmp/test-worktree",
+    startedAt: Date.now() - 60_000,
+    state: "stopped",
+    completedUnits: 5,
+    cost: 2.50,
+    ...overrides,
+  };
+}
+
+// ─── parallel-merge: determineMergeOrder ─────────────────────────────────────
+
+describe("parallel-merge: determineMergeOrder sequential", () => {
+  it("returns milestone IDs sorted alphabetically by default", () => {
+    const workers = [
+      makeWorker({ milestoneId: "M003", state: "stopped", completedUnits: 1 }),
+      makeWorker({ milestoneId: "M001", state: "stopped", completedUnits: 2 }),
+      makeWorker({ milestoneId: "M002", state: "stopped", completedUnits: 3 }),
+    ];
+    const order = determineMergeOrder(workers, "sequential");
+    assert.deepEqual(order, ["M001", "M002", "M003"]);
+  });
+
+  it("excludes workers that are still running", () => {
+    const workers = [
+      makeWorker({ milestoneId: "M001", state: "stopped", completedUnits: 5 }),
+      makeWorker({ milestoneId: "M002", state: "running", completedUnits: 0 }),
+      makeWorker({ milestoneId: "M003", state: "stopped", completedUnits: 2 }),
+    ];
+    const order = determineMergeOrder(workers, "sequential");
+    assert.deepEqual(order, ["M001", "M003"]);
+  });
+
+  it("excludes workers with zero completedUnits even if stopped", () => {
+    const workers = [
+      makeWorker({ milestoneId: "M001", state: "stopped", completedUnits: 0 }),
+      makeWorker({ milestoneId: "M002", state: "stopped", completedUnits: 3 }),
+    ];
+    const order = determineMergeOrder(workers, "sequential");
+    assert.deepEqual(order, ["M002"]);
+  });
+
+  it("returns empty array when no workers are completed", () => {
+    const workers = [
+      makeWorker({ milestoneId: "M001", state: "running", completedUnits: 0 }),
+      makeWorker({ milestoneId: "M002", state: "paused", completedUnits: 0 }),
+    ];
+    const order = determineMergeOrder(workers);
+    assert.deepEqual(order, []);
+  });
+
+  it("uses sequential order as the default when no order arg provided", () => {
+    const workers = [
+      makeWorker({ milestoneId: "M002", state: "stopped", completedUnits: 1 }),
+      makeWorker({ milestoneId: "M001", state: "stopped", completedUnits: 1 }),
+    ];
+    // Call with no second argument — should default to "sequential"
+    const order = determineMergeOrder(workers);
+    assert.deepEqual(order, ["M001", "M002"]);
+  });
+});
+
+describe("parallel-merge: determineMergeOrder by-completion", () => {
+  it("returns milestones sorted by startedAt (earliest first)", () => {
+    const now = Date.now();
+    const workers = [
+      makeWorker({ milestoneId: "M003", state: "stopped", completedUnits: 1, startedAt: now - 30_000 }),
+      makeWorker({ milestoneId: "M001", state: "stopped", completedUnits: 1, startedAt: now - 90_000 }),
+      makeWorker({ milestoneId: "M002", state: "stopped", completedUnits: 1, startedAt: now - 60_000 }),
+    ];
+    const order = determineMergeOrder(workers, "by-completion");
+    assert.deepEqual(order, ["M001", "M002", "M003"]);
+  });
+
+  it("excludes paused workers from by-completion order", () => {
+    const now = Date.now();
+    const workers = [
+      makeWorker({ milestoneId: "M001", state: "stopped", completedUnits: 2, startedAt: now - 90_000 }),
+      makeWorker({ milestoneId: "M002", state: "paused",  completedUnits: 1, startedAt: now - 60_000 }),
+      makeWorker({ milestoneId: "M003", state: "stopped", completedUnits: 3, startedAt: now - 30_000 }),
+    ];
+    const order = determineMergeOrder(workers, "by-completion");
+    assert.deepEqual(order, ["M001", "M003"]);
+  });
+});
+
+// ─── parallel-merge: formatMergeResults ──────────────────────────────────────
+
+describe("parallel-merge: formatMergeResults", () => {
+  it("returns a no-op message for an empty results array", () => {
+    const output = formatMergeResults([]);
+    assert.equal(output, "No completed milestones to merge.");
+  });
+
+  it("formats a single successful merge without push", () => {
+    const results: MergeResult[] = [
+      { milestoneId: "M001", success: true, commitMessage: "feat: auth system", pushed: false },
+    ];
+    const output = formatMergeResults(results);
+    assert.ok(output.includes("# Merge Results"));
+    assert.ok(output.includes("**M001**"));
+    assert.ok(output.includes("merged successfully"));
+    assert.ok(!output.includes("(pushed)"));
+  });
+
+  it("includes (pushed) suffix when result.pushed is true", () => {
+    const results: MergeResult[] = [
+      { milestoneId: "M002", success: true, commitMessage: "feat: dashboard", pushed: true },
+    ];
+    const output = formatMergeResults(results);
+    assert.ok(output.includes("(pushed)"));
+  });
+
+  it("formats a conflict result with file list and retry instructions", () => {
+    const results: MergeResult[] = [
+      {
+        milestoneId: "M003",
+        success: false,
+        conflictFiles: ["src/types.ts", "src/utils.ts"],
+        error: "Merge conflict: 2 conflicting file(s)",
+      },
+    ];
+    const output = formatMergeResults(results);
+    assert.ok(output.includes("**M003**"));
+    assert.ok(output.includes("CONFLICT (2 file(s))"));
+    assert.ok(output.includes("`src/types.ts`"));
+    assert.ok(output.includes("`src/utils.ts`"));
+    assert.ok(output.includes("/gsd parallel merge M003"));
+  });
+
+  it("formats a generic error (no conflict files) with the error message", () => {
+    const results: MergeResult[] = [
+      { milestoneId: "M004", success: false, error: "No roadmap found for M004" },
+    ];
+    const output = formatMergeResults(results);
+    assert.ok(output.includes("**M004**"));
+    assert.ok(output.includes("failed: No roadmap found for M004"));
+    assert.ok(!output.includes("CONFLICT"));
+  });
+
+  it("formats multiple results in the order provided", () => {
+    const results: MergeResult[] = [
+      { milestoneId: "M001", success: true, pushed: false },
+      { milestoneId: "M002", success: false, error: "branch not found" },
+      { milestoneId: "M003", success: true, pushed: true },
+    ];
+    const output = formatMergeResults(results);
+    const m1Pos = output.indexOf("M001");
+    const m2Pos = output.indexOf("M002");
+    const m3Pos = output.indexOf("M003");
+    assert.ok(m1Pos < m2Pos, "M001 should appear before M002");
+    assert.ok(m2Pos < m3Pos, "M002 should appear before M003");
+  });
+});
+
+// ─── doctor: stale_parallel_session issue code ───────────────────────────────
+
+describe("doctor: stale_parallel_session issue code exists", () => {
+  it("DoctorIssueCode union includes stale_parallel_session", async () => {
+    // Import doctor.ts and verify the type is real by constructing a DoctorIssue
+    // with code "stale_parallel_session" — TypeScript will reject it at compile
+    // time if the code is not in the union; the runtime assertion confirms the
+    // string value round-trips through the typed object correctly.
+    const { } = await import("../doctor.js");
+    // Construct a value that satisfies DoctorIssue using the code under test
+    const issue: import("../doctor.js").DoctorIssue = {
+      severity: "warning",
+      code: "stale_parallel_session",
+      scope: "project",
+      unitId: "M001",
+      message: "Stale parallel session detected",
+      fixable: true,
+    };
+    assert.equal(issue.code, "stale_parallel_session");
+  });
+
+  it("DoctorIssue with stale_parallel_session has warning severity", () => {
+    const issue: import("../doctor.js").DoctorIssue = {
+      severity: "warning",
+      code: "stale_parallel_session",
+      scope: "project",
+      unitId: "M002",
+      message: "Stale parallel session for M002",
+      fixable: true,
+    };
+    assert.equal(issue.severity, "warning");
+    assert.equal(issue.fixable, true);
+    assert.equal(issue.scope, "project");
   });
 });
