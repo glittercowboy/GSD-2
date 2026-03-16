@@ -125,6 +125,13 @@ This is the acceptance gate for S02 — downstream slices depend on this test to
 - T01 output: 20 surface subcommands, 9 passthrough subcommands, 1 help subcommand = 30 total
 - T02 output: all 20 surfaces have sections, targets, and IMPLEMENTED entries
 
+## Observability Impact
+
+- **Primary signal:** `npx tsx --test src/tests/web-command-parity-contract.test.ts` — the exhaustive GSD outcome map (30 entries) is itself the diagnostic surface. Any new subcommand added upstream without a matching test entry causes a size-mismatch assertion failure.
+- **Inspection:** A future agent can read `EXPECTED_GSD_OUTCOMES` in the test file to see the authoritative mapping of every GSD subcommand to its browser dispatch kind (surface/prompt/local).
+- **Failure visibility:** A silent-fallthrough regression (e.g., a surface subcommand accidentally returning `kind: "prompt"`) triggers a named subtest failure identifying the exact subcommand and expected vs actual kind.
+- **Contract wiring:** The surface wiring subtest proves that dispatch→open-request→surface-state pipeline works end-to-end for all 20 GSD surfaces — a section or target routing regression is caught here before it reaches the UI.
+
 ## Expected Output
 
 - `src/tests/web-command-parity-contract.test.ts` — expanded with 3-4 new test blocks covering GSD dispatch exhaustiveness, edge cases, and contract surface wiring. File grows from ~330 lines to ~500-550 lines. All tests pass.

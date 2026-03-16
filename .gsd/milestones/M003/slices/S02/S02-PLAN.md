@@ -58,7 +58,7 @@
   - Verify: `npm run build && npm run build:web-host` — both exit 0
   - Done when: both builds succeed, every new `BrowserSlashCommandSurface` member has a corresponding section, target, store entry, and component stub
 
-- [ ] **T03: Update parity contract test with exhaustive GSD dispatch coverage** `est:30m`
+- [x] **T03: Update parity contract test with exhaustive GSD dispatch coverage** `est:30m`
   - Why: The acceptance gate — the parity test must prove every GSD subcommand dispatches correctly with no silent fallthrough. This is what S04-S07 rely on.
   - Files: `src/tests/web-command-parity-contract.test.ts`
   - Do: Add test that collects all registered GSD subcommands from `commands.ts` and asserts each dispatches to a defined outcome. Add `EXPECTED_GSD_OUTCOMES` map classifying every subcommand as `"surface"`, `"prompt"` (bridge passthrough), or `"local"` (help). Assert surface outcomes produce correct surface names. Assert passthrough outcomes preserve the exact input text. Assert `/gsd help` produces inline help. Assert bare `/gsd` passes through. Assert `/export` (built-in) and `/gsd export` remain distinct. Assert unknown `/gsd xyz` passes through.
