@@ -22,7 +22,7 @@ import {
   loadEffectiveGSDPreferences,
   resolveAllSkillReferences,
 } from "./preferences.js";
-import { loadFile, saveFile } from "./files.js";
+import { loadFile, saveFile, appendOverride } from "./files.js";
 import {
   formatDoctorIssuesForPrompt,
   formatDoctorReport,
@@ -36,6 +36,7 @@ import { handleRemote } from "../remote-questions/remote-command.js";
 import { handleHistory } from "./history.js";
 import { handleUndo } from "./undo.js";
 import { handleExport } from "./export.js";
+import { nativeBranchList, nativeDetectMainBranch, nativeBranchListMerged, nativeBranchDelete, nativeForEachRef, nativeUpdateRef } from "./native-git-bridge.js";
 
 function dispatchDoctorHeal(pi: ExtensionAPI, scope: string | undefined, reportText: string, structuredIssues: string): void {
   const workflowPath = process.env.GSD_WORKFLOW_PATH ?? join(process.env.HOME ?? "~", ".pi", "GSD-WORKFLOW.md");
@@ -57,12 +58,12 @@ function dispatchDoctorHeal(pi: ExtensionAPI, scope: string | undefined, reportT
 
 export function registerGSDCommand(pi: ExtensionAPI): void {
   pi.registerCommand("gsd", {
-    description: "GSD — Get Shit Done: /gsd next|auto|stop|pause|status|queue|history|undo|skip|export|cleanup|prefs|config|hooks|doctor|migrate|remote",
+    description: "GSD — Get Shit Done: /gsd next|auto|stop|pause|status|queue|history|undo|skip|export|cleanup|prefs|config|hooks|doctor|migrate|remote|steer",
     getArgumentCompletions: (prefix: string) => {
       const subcommands = [
         "next", "auto", "stop", "pause", "status", "queue", "discuss",
         "history", "undo", "skip", "export", "cleanup", "prefs",
-        "config", "hooks", "doctor", "migrate", "remote",
+        "config", "hooks", "doctor", "migrate", "remote", "steer",
       ];
       const parts = prefix.trim().split(/\s+/);
 
@@ -248,6 +249,15 @@ export function registerGSDCommand(pi: ExtensionAPI): void {
         return;
       }
 
+      if (trimmed.startsWith("steer ")) {
+        await handleSteer(trimmed.replace(/^steer\s+/, "").trim(), ctx, pi);
+        return;
+      }
+      if (trimmed === "steer") {
+        ctx.ui.notify("Usage: /gsd steer <description of change>. Example: /gsd steer Use Postgres instead of SQLite", "warning");
+        return;
+      }
+
       if (trimmed === "migrate" || trimmed.startsWith("migrate ")) {
         const { handleMigrate } = await import("./migrate/command.js");
         await handleMigrate(trimmed.replace(/^migrate\s*/, "").trim(), ctx, pi);
@@ -266,7 +276,7 @@ export function registerGSDCommand(pi: ExtensionAPI): void {
       }
 
       ctx.ui.notify(
-        `Unknown: /gsd ${trimmed}. Use /gsd next|auto|stop|pause|status|queue|discuss|history|undo|skip <unit>|export|cleanup|prefs|config|hooks|doctor|migrate|remote.`,
+        `Unknown: /gsd ${trimmed}. Use /gsd next|auto|stop|pause|status|queue|discuss|history|undo|skip <unit>|export|cleanup|prefs|config|hooks|doctor|migrate|remote|steer <change>.`,
         "warning",
       );
     },
@@ -417,7 +427,7 @@ async function handlePrefsWizard(
       const title = `Model for ${phase} phase${current ? ` (current: ${current})` : ""}:`;
       const choice = await ctx.ui.select(title, modelOptions);
 
-      if (choice && choice !== "(keep current)") {
+      if (choice && typeof choice === "string" && choice !== "(keep current)") {
         if (choice === "(clear)") {
           delete models[phase];
         } else {
@@ -628,7 +638,12 @@ function serializePreferencesToFrontmatter(prefs: Record<string, unknown>): stri
 
 // ─── Tool Config Wizard ───────────────────────────────────────────────────────
 
-const TOOL_KEYS = [
+/**
+ * Tool API key configurations.
+ * This is the source of truth for tool credentials - used by both the config wizard
+ * and session startup to load keys from auth.json into environment variables.
+ */
+export const TOOL_KEYS = [
   { id: "tavily",   env: "TAVILY_API_KEY",   label: "Tavily Search",     hint: "tavily.com/app/api-keys" },
   { id: "brave",    env: "BRAVE_API_KEY",     label: "Brave Search",      hint: "brave.com/search/api" },
   { id: "context7", env: "CONTEXT7_API_KEY",  label: "Context7 Docs",     hint: "context7.com/dashboard" },
@@ -636,7 +651,28 @@ const TOOL_KEYS = [
   { id: "groq",     env: "GROQ_API_KEY",      label: "Groq Voice",        hint: "console.groq.com" },
 ] as const;
 
-function getConfigAuthStorage(): InstanceType<typeof AuthStorage> {
+/**
+ * Load tool API keys from auth.json into environment variables.
+ * Called at session startup to ensure tools have access to their credentials.
+ */
+export function loadToolApiKeys(): void {
+  try {
+    const authPath = join(process.env.HOME ?? "", ".gsd", "agent", "auth.json");
+    if (!existsSync(authPath)) return;
+
+    const auth = AuthStorage.create(authPath);
+    for (const tool of TOOL_KEYS) {
+      const cred = auth.get(tool.id);
+      if (cred && cred.type === "api_key" && cred.key && !process.env[tool.env]) {
+        process.env[tool.env] = cred.key;
+      }
+    }
+  } catch {
+    // Failed to load tool keys — ignore, they can still be set via env vars
+  }
+}
+
+function getConfigAuthStorage(): AuthStorage {
   const authPath = join(process.env.HOME ?? "", ".gsd", "agent", "auth.json");
   mkdirSync(dirname(authPath), { recursive: true });
   return AuthStorage.create(authPath);
@@ -663,7 +699,7 @@ async function handleConfig(ctx: ExtensionCommandContext): Promise<void> {
   let changed = false;
   while (true) {
     const choice = await ctx.ui.select("Configure which tool? Press Escape when done.", options);
-    if (!choice || choice === "(done)") break;
+    if (!choice || typeof choice !== "string" || choice === "(done)") break;
 
     const toolIdx = TOOL_KEYS.findIndex(t => choice.startsWith(t.label));
     if (toolIdx === -1) break;
@@ -842,12 +878,9 @@ async function handleDryRun(ctx: ExtensionCommandContext, basePath: string): Pro
 // ─── Branch cleanup handler ──────────────────────────────────────────────────
 
 async function handleCleanupBranches(ctx: ExtensionCommandContext, basePath: string): Promise<void> {
-  const { execFileSync } = await import("node:child_process");
-
   let branches: string[];
   try {
-    const output = execFileSync("git", ["branch", "--list", "gsd/*"], { cwd: basePath, timeout: 10000, encoding: "utf-8" });
-    branches = output.split("\n").map(b => b.trim().replace(/^\* /, "")).filter(Boolean);
+    branches = nativeBranchList(basePath, "gsd/*");
   } catch {
     ctx.ui.notify("No GSD branches found.", "info");
     return;
@@ -858,18 +891,11 @@ async function handleCleanupBranches(ctx: ExtensionCommandContext, basePath: str
     return;
   }
 
-  let mainBranch: string;
-  try {
-    mainBranch = execFileSync("git", ["symbolic-ref", "refs/remotes/origin/HEAD", "--short"], { cwd: basePath, timeout: 5000, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] })
-      .trim().replace("origin/", "");
-  } catch {
-    mainBranch = "main";
-  }
+  const mainBranch = nativeDetectMainBranch(basePath);
 
   let merged: string[];
   try {
-    const output = execFileSync("git", ["branch", "--merged", mainBranch, "--list", "gsd/*"], { cwd: basePath, timeout: 10000, encoding: "utf-8" });
-    merged = output.split("\n").map(b => b.trim()).filter(Boolean);
+    merged = nativeBranchListMerged(basePath, mainBranch, "gsd/*");
   } catch {
     merged = [];
   }
@@ -882,7 +908,7 @@ async function handleCleanupBranches(ctx: ExtensionCommandContext, basePath: str
   let deleted = 0;
   for (const branch of merged) {
     try {
-      execFileSync("git", ["branch", "-d", branch], { cwd: basePath, timeout: 5000, stdio: "ignore" });
+      nativeBranchDelete(basePath, branch, false);
       deleted++;
     } catch { /* skip branches that can't be deleted */ }
   }
@@ -893,12 +919,9 @@ async function handleCleanupBranches(ctx: ExtensionCommandContext, basePath: str
 // ─── Snapshot cleanup handler ─────────────────────────────────────────────────
 
 async function handleCleanupSnapshots(ctx: ExtensionCommandContext, basePath: string): Promise<void> {
-  const { execFileSync } = await import("node:child_process");
-
   let refs: string[];
   try {
-    const output = execFileSync("git", ["for-each-ref", "refs/gsd/snapshots/", "--format=%(refname)"], { cwd: basePath, timeout: 10000, encoding: "utf-8" });
-    refs = output.split("\n").filter(Boolean);
+    refs = nativeForEachRef(basePath, "refs/gsd/snapshots/");
   } catch {
     ctx.ui.notify("No snapshot refs found.", "info");
     return;
@@ -922,11 +945,54 @@ async function handleCleanupSnapshots(ctx: ExtensionCommandContext, basePath: st
     const sorted = labelRefs.sort();
     for (const old of sorted.slice(0, -5)) {
       try {
-        execFileSync("git", ["update-ref", "-d", old], { cwd: basePath, timeout: 5000, stdio: "ignore" });
+        nativeUpdateRef(basePath, old);
         pruned++;
       } catch { /* skip */ }
     }
   }
 
   ctx.ui.notify(`Pruned ${pruned} old snapshot refs. ${refs.length - pruned} remain.`, "success");
+}
+
+async function handleSteer(change: string, ctx: ExtensionCommandContext, pi: ExtensionAPI): Promise<void> {
+  const basePath = process.cwd();
+  const state = await deriveState(basePath);
+  const mid = state.activeMilestone?.id ?? "none";
+  const sid = state.activeSlice?.id ?? "none";
+  const tid = state.activeTask?.id ?? "none";
+  const appliedAt = `${mid}/${sid}/${tid}`;
+  await appendOverride(basePath, change, appliedAt);
+
+  if (isAutoActive()) {
+    pi.sendMessage({
+      customType: "gsd-hard-steer",
+      content: [
+        "HARD STEER — User override registered.",
+        "",
+        `**Override:** ${change}`,
+        "",
+        "This override has been saved to `.gsd/OVERRIDES.md` and will be injected into all future task prompts.",
+        "A document rewrite unit will run before the next task to propagate this change across all active plan documents.",
+        "",
+        "If you are mid-task, finish your current work respecting this override. The next dispatched unit will be a document rewrite.",
+      ].join("\n"),
+      display: false,
+    }, { triggerTurn: true });
+    ctx.ui.notify(`Override registered: "${change}". Will be applied before next task dispatch.`, "info");
+  } else {
+    pi.sendMessage({
+      customType: "gsd-hard-steer",
+      content: [
+        "HARD STEER — User override registered.",
+        "",
+        `**Override:** ${change}`,
+        "",
+        "This override has been saved to `.gsd/OVERRIDES.md`.",
+        "Before continuing, read `.gsd/OVERRIDES.md` and update the current plan documents to reflect this change.",
+        "Focus on: active slice plan, incomplete task plans, and DECISIONS.md.",
+      ].join("\n"),
+      display: false,
+    }, { triggerTurn: true });
+    ctx.ui.notify(`Override registered: "${change}". Update plan documents to reflect this change.`, "info");
+  }
 }

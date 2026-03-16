@@ -11,7 +11,14 @@ import type { ExtensionContext } from "@gsd/pi-coding-agent";
 import {
   clearUnitRuntimeRecord,
 } from "./unit-runtime.js";
-import { runGit } from "./git-service.js";
+import {
+  nativeConflictFiles,
+  nativeCommit,
+  nativeCheckoutTheirs,
+  nativeAddPaths,
+  nativeMergeAbort,
+  nativeResetHard,
+} from "./native-git-bridge.js";
 import {
   resolveMilestonePath,
   resolveSlicePath,
@@ -26,6 +33,7 @@ import {
   buildTaskFileName,
   resolveMilestoneFile,
   clearPathCache,
+  resolveGsdRootFile,
 } from "./paths.js";
 import { parseRoadmap } from "./files.js";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, renameSync } from "node:fs";
@@ -78,6 +86,8 @@ export function resolveExpectedArtifactPath(unitType: string, unitId: string, ba
       const dir = resolveMilestonePath(base, mid);
       return dir ? join(dir, buildMilestoneFileName(mid, "SUMMARY")) : null;
     }
+    case "rewrite-docs":
+      return null;
     default:
       return null;
   }
@@ -93,13 +103,20 @@ export function resolveExpectedArtifactPath(unitType: string, unitId: string, ba
  * skipped writing the UAT file (see #176).
  */
 export function verifyExpectedArtifact(unitType: string, unitId: string, base: string): boolean {
-  // Clear stale directory listing cache so artifact checks see fresh disk state (#431)
-  clearPathCache();
-
   // Hook units have no standard artifact — always pass. Their lifecycle
   // is managed by the hook engine, not the artifact verification system.
   if (unitType.startsWith("hook/")) return true;
 
+  // Clear stale directory listing cache so artifact checks see fresh disk state (#431).
+  // Moved after hook check to avoid unnecessary cache clears for hook units.
+  clearPathCache();
+
+  if (unitType === "rewrite-docs") {
+    const overridesPath = resolveGsdRootFile(base, "OVERRIDES");
+    if (!existsSync(overridesPath)) return true;
+    const content = readFileSync(overridesPath, "utf-8");
+    return !content.includes("**Scope:** active");
+  }
 
   const absPath = resolveExpectedArtifactPath(unitType, unitId, base);
   // Unit types with no verifiable artifact always pass (e.g. replan-slice).
@@ -149,7 +166,12 @@ export function verifyExpectedArtifact(unitType: string, unitId: string, base: s
           const roadmap = parseRoadmap(roadmapContent);
           const slice = roadmap.slices.find(s => s.id === sid);
           if (slice && !slice.done) return false;
-        } catch (e) { /* corrupt roadmap — be lenient and treat as verified */ void e; }
+        } catch {
+          // Corrupt/unparseable roadmap — fail verification so the unit
+          // re-runs and has a chance to fix the roadmap. Silently passing
+          // here could advance past an incomplete slice.
+          return false;
+        }
       }
     }
   }
@@ -201,6 +223,8 @@ export function diagnoseExpectedArtifact(unitType: string, unitId: string, base:
       return `Slice ${sid} marked [x] in ${relMilestoneFile(base, mid!, "ROADMAP")} + summary + UAT written`;
     case "replan-slice":
       return `${relSliceFile(base, mid!, sid!, "REPLAN")} + updated ${relSliceFile(base, mid!, sid!, "PLAN")}`;
+    case "rewrite-docs":
+      return "Active overrides resolved in .gsd/OVERRIDES.md + plan documents updated";
     case "reassess-roadmap":
       return `${relSliceFile(base, mid!, sid!, "ASSESSMENT")} (roadmap reassessment)`;
     case "run-uat":
@@ -251,6 +275,11 @@ export function skipExecuteTask(
       const re = new RegExp(`^(- \\[) \\] (\\*\\*${escapedTid}:)`, "m");
       if (re.test(planContent)) {
         writeFileSync(planAbs, planContent.replace(re, "$1x] $2"), "utf-8");
+      } else {
+        // Regex didn't match — checkbox format differs from expected pattern.
+        // Return false so callers know the plan was NOT updated and can
+        // fall through to other recovery strategies instead of assuming success.
+        return false;
       }
     }
   }
@@ -274,7 +303,8 @@ export function persistCompletedKey(base: string, key: string): void {
       keys = JSON.parse(readFileSync(file, "utf-8"));
     }
   } catch (e) { /* corrupt file — start fresh */ void e; }
-  if (!keys.includes(key)) {
+  const keySet = new Set(keys);
+  if (!keySet.has(key)) {
     keys.push(key);
     // Atomic write: tmp file + rename prevents partial writes on crash
     const tmpFile = file + ".tmp";
@@ -288,9 +318,15 @@ export function removePersistedKey(base: string, key: string): void {
   const file = completedKeysPath(base);
   try {
     if (existsSync(file)) {
-      let keys: string[] = JSON.parse(readFileSync(file, "utf-8"));
-      keys = keys.filter(k => k !== key);
-      writeFileSync(file, JSON.stringify(keys), "utf-8");
+      const keys: string[] = JSON.parse(readFileSync(file, "utf-8"));
+      const filtered = keys.filter(k => k !== key);
+      // Only write if the key was actually present
+      if (filtered.length !== keys.length) {
+        // Atomic write: tmp file + rename prevents partial writes on crash
+        const tmpFile = file + ".tmp";
+        writeFileSync(tmpFile, JSON.stringify(filtered), "utf-8");
+        renameSync(tmpFile, file);
+      }
     }
   } catch (e) { /* non-fatal: removePersistedKey failure */ void e; }
 }
@@ -322,11 +358,11 @@ export function reconcileMergeState(basePath: string, ctx: ExtensionContext): bo
   const hasSquashMsg = existsSync(squashMsgPath);
   if (!hasMergeHead && !hasSquashMsg) return false;
 
-  const unmerged = runGit(basePath, ["diff", "--name-only", "--diff-filter=U"], { allowFailure: true });
-  if (!unmerged || !unmerged.trim()) {
+  const conflictedFiles = nativeConflictFiles(basePath);
+  if (conflictedFiles.length === 0) {
     // All conflicts resolved — finalize the merge/squash commit
     try {
-      runGit(basePath, ["commit", "--no-edit"], { allowFailure: false });
+      nativeCommit(basePath, "");  // --no-edit equivalent: use empty message placeholder
       const mode = hasMergeHead ? "merge" : "squash commit";
       ctx.ui.notify(`Finalized leftover ${mode} from prior session.`, "info");
     } catch {
@@ -334,25 +370,21 @@ export function reconcileMergeState(basePath: string, ctx: ExtensionContext): bo
     }
   } else {
     // Still conflicted — try auto-resolving .gsd/ state file conflicts (#530)
-    const conflictedFiles = unmerged.trim().split("\n").filter(Boolean);
     const gsdConflicts = conflictedFiles.filter(f => f.startsWith(".gsd/"));
     const codeConflicts = conflictedFiles.filter(f => !f.startsWith(".gsd/"));
 
     if (gsdConflicts.length > 0 && codeConflicts.length === 0) {
       // All conflicts are in .gsd/ state files — auto-resolve by accepting theirs
       let resolved = true;
-      for (const gsdFile of gsdConflicts) {
-        try {
-          runGit(basePath, ["checkout", "--theirs", "--", gsdFile], { allowFailure: false });
-          runGit(basePath, ["add", "--", gsdFile], { allowFailure: false });
-        } catch {
-          resolved = false;
-          break;
-        }
+      try {
+        nativeCheckoutTheirs(basePath, gsdConflicts);
+        nativeAddPaths(basePath, gsdConflicts);
+      } catch {
+        resolved = false;
       }
       if (resolved) {
         try {
-          runGit(basePath, ["commit", "--no-edit"], { allowFailure: false });
+          nativeCommit(basePath, "chore: auto-resolve .gsd/ state file conflicts");
           ctx.ui.notify(
             `Auto-resolved ${gsdConflicts.length} .gsd/ state file conflict(s) from prior merge.`,
             "info",
@@ -363,11 +395,11 @@ export function reconcileMergeState(basePath: string, ctx: ExtensionContext): bo
       }
       if (!resolved) {
         if (hasMergeHead) {
-          runGit(basePath, ["merge", "--abort"], { allowFailure: true });
+          try { nativeMergeAbort(basePath); } catch { /* best-effort */ }
         } else if (hasSquashMsg) {
           try { unlinkSync(squashMsgPath); } catch { /* best-effort */ }
         }
-        runGit(basePath, ["reset", "--hard", "HEAD"], { allowFailure: true });
+        try { nativeResetHard(basePath); } catch { /* best-effort */ }
         ctx.ui.notify(
           "Detected leftover merge state — auto-resolve failed, cleaned up. Re-deriving state.",
           "warning",
@@ -376,11 +408,11 @@ export function reconcileMergeState(basePath: string, ctx: ExtensionContext): bo
     } else {
       // Code conflicts present — abort and reset
       if (hasMergeHead) {
-        runGit(basePath, ["merge", "--abort"], { allowFailure: true });
+        try { nativeMergeAbort(basePath); } catch { /* best-effort */ }
       } else if (hasSquashMsg) {
         try { unlinkSync(squashMsgPath); } catch { /* best-effort */ }
       }
-      runGit(basePath, ["reset", "--hard", "HEAD"], { allowFailure: true });
+      try { nativeResetHard(basePath); } catch { /* best-effort */ }
       ctx.ui.notify(
         "Detected leftover merge state with unresolved conflicts — cleaned up. Re-deriving state.",
         "warning",
@@ -412,8 +444,12 @@ export async function selfHealRuntimeRecords(
       const { unitType, unitId } = record;
       const artifactPath = resolveExpectedArtifactPath(unitType, unitId, base);
 
-      // Case 1: Artifact exists — unit completed but closeout didn't finish
-      if (artifactPath && existsSync(artifactPath)) {
+      // Case 1: Artifact exists — unit completed but closeout didn't finish.
+      // Use verifyExpectedArtifact (not just existsSync) so that execute-task
+      // also checks the plan checkbox is marked [x]. Without this, a task
+      // whose summary exists but checkbox is unchecked would be incorrectly
+      // marked as completed, causing deriveState to re-dispatch it endlessly.
+      if (artifactPath && existsSync(artifactPath) && verifyExpectedArtifact(unitType, unitId, base)) {
         clearUnitRuntimeRecord(base, unitType, unitId);
         // Also persist completion key if missing
         const key = `${unitType}/${unitId}`;
