@@ -14,8 +14,10 @@ import {
   removeWorktree,
   worktreePath,
 } from "./worktree-manager.js";
+import { detectWorktreeName } from "./worktree.js";
 import {
   MergeConflictError,
+  readIntegrationBranch,
 } from "./git-service.js";
 import { parseRoadmap } from "./files.js";
 import { loadEffectiveGSDPreferences } from "./preferences.js";
@@ -90,7 +92,12 @@ export function autoWorktreeBranch(milestoneId: string): string {
  */
 export function createAutoWorktree(basePath: string, milestoneId: string): string {
   const branch = autoWorktreeBranch(milestoneId);
-  const info = createWorktree(basePath, milestoneId, { branch });
+
+  // Use the integration branch recorded in META.json as the start point.
+  // This ensures the worktree branch is created from the branch the user
+  // was on when they started the milestone (e.g. f-setup-gsd-2), not main.
+  const integrationBranch = readIntegrationBranch(basePath, milestoneId) ?? undefined;
+  const info = createWorktree(basePath, milestoneId, { branch, startPoint: integrationBranch });
 
   // Copy .gsd/ planning artifacts from the source repo into the new worktree.
   // Worktrees are fresh git checkouts — untracked files don't carry over.
@@ -224,6 +231,27 @@ export function getAutoWorktreeOriginalBase(): string | null {
   return originalBase;
 }
 
+export function getActiveAutoWorktreeContext(): {
+  originalBase: string;
+  worktreeName: string;
+  branch: string;
+} | null {
+  if (!originalBase) return null;
+  const cwd = process.cwd();
+  const resolvedBase = existsSync(originalBase) ? realpathSync(originalBase) : originalBase;
+  const wtDir = join(resolvedBase, ".gsd", "worktrees");
+  if (!cwd.startsWith(wtDir)) return null;
+  const worktreeName = detectWorktreeName(cwd);
+  if (!worktreeName) return null;
+  const branch = nativeGetCurrentBranch(cwd);
+  if (!branch.startsWith("milestone/")) return null;
+  return {
+    originalBase,
+    worktreeName,
+    branch,
+  };
+}
+
 // ─── Merge Milestone -> Main ───────────────────────────────────────────────
 
 /**
@@ -279,11 +307,12 @@ export function mergeMilestoneToMain(
   const previousCwd = process.cwd();
   process.chdir(originalBasePath_);
 
-  // 4. Resolve main branch from preferences
+  // 4. Resolve integration branch — prefer milestone metadata, fall back to preferences / "main"
   const prefs = loadEffectiveGSDPreferences()?.preferences?.git ?? {};
-  const mainBranch = prefs.main_branch || "main";
+  const integrationBranch = readIntegrationBranch(originalBasePath_, milestoneId);
+  const mainBranch = integrationBranch ?? prefs.main_branch ?? "main";
 
-  // 5. Checkout main
+  // 5. Checkout integration branch
   nativeCheckoutBranch(originalBasePath_, mainBranch);
 
   // 6. Build rich commit message
