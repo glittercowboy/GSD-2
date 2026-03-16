@@ -206,25 +206,25 @@ function clearCompletedKeyTracking(base: string): void {
 
 function readRoadmapContentForMilestoneMerge(
   activeBasePath: string,
-  originalBasePath_: string,
+  originalBasePath: string,
   milestoneId: string,
 ): string {
   const roadmapPath = resolveMilestoneFile(activeBasePath, milestoneId, "ROADMAP")
-    ?? resolveMilestoneFile(originalBasePath_, milestoneId, "ROADMAP");
+    ?? resolveMilestoneFile(originalBasePath, milestoneId, "ROADMAP");
   if (!roadmapPath) throw new Error(`Cannot resolve ROADMAP file for milestone ${milestoneId}`);
   return readFileSync(roadmapPath, "utf-8");
 }
 
-function ensureAutoWorktreeForMilestone(originalBasePath_: string, milestoneId: string): string {
-  const existingWtPath = getAutoWorktreePath(originalBasePath_, milestoneId);
+function ensureAutoWorktreeForMilestone(originalBasePath: string, milestoneId: string): string {
+  const existingWtPath = getAutoWorktreePath(originalBasePath, milestoneId);
   return existingWtPath
-    ? enterAutoWorktree(originalBasePath_, milestoneId)
-    : createAutoWorktree(originalBasePath_, milestoneId);
+    ? enterAutoWorktree(originalBasePath, milestoneId)
+    : createAutoWorktree(originalBasePath, milestoneId);
 }
 
 export async function completeAutoWorktreeMilestoneCeremony(
   activeBasePath: string,
-  originalBasePath_: string,
+  originalBasePath: string,
   completedMilestoneId: string,
   nextMilestoneId: string | null,
 ): Promise<{
@@ -234,12 +234,12 @@ export async function completeAutoWorktreeMilestoneCeremony(
 }> {
   const roadmapContent = readRoadmapContentForMilestoneMerge(
     activeBasePath,
-    originalBasePath_,
+    originalBasePath,
     completedMilestoneId,
   );
-  const mergeResult = mergeMilestoneToMain(originalBasePath_, completedMilestoneId, roadmapContent);
+  const mergeResult = mergeMilestoneToMain(originalBasePath, completedMilestoneId, roadmapContent);
 
-  let nextBasePath = originalBasePath_;
+  let nextBasePath = originalBasePath;
   invalidateAllCaches();
   let state = await deriveState(nextBasePath);
   const refreshedMilestoneId = state.activeMilestone?.id ?? null;
@@ -250,7 +250,7 @@ export async function completeAutoWorktreeMilestoneCeremony(
     shouldUseWorktreeIsolation() &&
     !detectWorktreeName(nextBasePath)
   ) {
-    nextBasePath = ensureAutoWorktreeForMilestone(originalBasePath_, nextMilestoneId);
+    nextBasePath = ensureAutoWorktreeForMilestone(originalBasePath, nextMilestoneId);
     invalidateAllCaches();
     state = await deriveState(nextBasePath);
   }
@@ -1304,22 +1304,28 @@ async function dispatchNextUnit(
   let mid = state.activeMilestone?.id;
   let midTitle = state.activeMilestone?.title;
   let justCompletedMilestoneId: string | null = null;
+  let milestoneTransition = mid && currentMilestoneId && mid !== currentMilestoneId
+    ? { from: currentMilestoneId, to: mid }
+    : null;
 
-  if (mid && currentMilestoneId && mid !== currentMilestoneId && originalBasePath && isInAutoWorktree(basePath)) {
-    const completedMilestoneId = currentMilestoneId;
+  if (milestoneTransition && originalBasePath && isInAutoWorktree(basePath)) {
+    const completedMilestoneId = milestoneTransition.from;
     try {
       clearCompletedKeyTracking(basePath);
       const ceremony = await completeAutoWorktreeMilestoneCeremony(
         basePath,
         originalBasePath,
         completedMilestoneId,
-        mid,
+        milestoneTransition.to,
       );
       justCompletedMilestoneId = completedMilestoneId;
       basePath = ceremony.activeBasePath;
       state = ceremony.state;
       mid = state.activeMilestone?.id;
       midTitle = state.activeMilestone?.title;
+      milestoneTransition = mid && currentMilestoneId && mid !== currentMilestoneId
+        ? { from: currentMilestoneId, to: mid }
+        : null;
       gitService = new GitServiceImpl(basePath, loadEffectiveGSDPreferences()?.preferences?.git ?? {});
       ctx.ui.notify(
         `Milestone ${completedMilestoneId} merged to main.${ceremony.mergeResult.pushed ? " Pushed to remote." : ""}${mid && mid !== completedMilestoneId ? ` Advancing to ${mid}: ${midTitle}.` : ""}`,
@@ -1336,20 +1342,20 @@ async function dispatchNextUnit(
   }
 
   // Detect milestone transition
-  if (mid && currentMilestoneId && mid !== currentMilestoneId) {
+  if (milestoneTransition) {
     if (!justCompletedMilestoneId) {
       ctx.ui.notify(
-        `Milestone ${currentMilestoneId} complete. Advancing to ${mid}: ${midTitle}.`,
+        `Milestone ${milestoneTransition.from} complete. Advancing to ${milestoneTransition.to}: ${midTitle}.`,
         "info",
       );
     }
-    sendDesktopNotification("GSD", `Milestone ${currentMilestoneId} complete!`, "success", "milestone");
+    sendDesktopNotification("GSD", `Milestone ${milestoneTransition.from} complete!`, "success", "milestone");
     // Reset stuck detection for new milestone
     unitDispatchCount.clear();
     unitRecoveryCount.clear();
     unitLifetimeDispatches.clear();
     // Capture integration branch for the new milestone and update git service
-    captureIntegrationBranch(originalBasePath || basePath, mid, { commitDocs: loadEffectiveGSDPreferences()?.preferences?.git?.commit_docs });
+    captureIntegrationBranch(originalBasePath || basePath, milestoneTransition.to, { commitDocs: loadEffectiveGSDPreferences()?.preferences?.git?.commit_docs });
   }
   if (mid) {
     currentMilestoneId = mid;

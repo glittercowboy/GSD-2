@@ -14,7 +14,7 @@ function run(cmd: string, cwd: string): string {
 }
 
 function createTempRepo(): string {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), "auto-ms-handoff-")));
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "auto-milestone-handoff-")));
   run("git init", dir);
   run("git config user.email test@test.com", dir);
   run("git config user.name Test", dir);
