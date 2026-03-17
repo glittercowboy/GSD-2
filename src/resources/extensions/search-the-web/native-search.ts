@@ -157,6 +157,9 @@ export function registerNativeSearchHooks(pi: NativeSearchPI): { getIsAnthropic:
     tools.push({
       type: "web_search_20250305",
       name: "web_search",
+      // Limit searches per turn to prevent the model from looping on
+      // web_search calls without synthesizing results (#817).
+      max_uses: 5,
     });
 
     return payload;
