@@ -2,17 +2,17 @@
   "schemaVersion": 1,
   "taskId": "T02",
   "unitId": "M006-tbhsp8/S01/T02",
-  "timestamp": 1773774936637,
+  "timestamp": 1773777109067,
   "passed": false,
   "discoverySource": "package-json",
   "checks": [
     {
       "command": "npm run test",
       "exitCode": 1,
-      "durationMs": 47606,
+      "durationMs": 31919,
       "verdict": "fail"
     }
   ],
-  "retryAttempt": 3,
+  "retryAttempt": 1,
   "maxRetries": 2
 }
