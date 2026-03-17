@@ -2241,7 +2241,54 @@ async function dispatchNextUnit(
 
     const incomplete = state.registry.filter(m => m.status !== "complete");
     if (incomplete.length === 0) {
-      // Genuinely all complete
+      // Genuinely all complete — merge milestone branch to main before stopping (#962)
+      if (s.currentMilestoneId && isInAutoWorktree(s.basePath) && s.originalBasePath) {
+        try {
+          const roadmapPath = resolveMilestoneFile(s.originalBasePath, s.currentMilestoneId, "ROADMAP");
+          if (roadmapPath) {
+            const roadmapContent = readFileSync(roadmapPath, "utf-8");
+            const mergeResult = mergeMilestoneToMain(s.originalBasePath, s.currentMilestoneId, roadmapContent);
+            s.basePath = s.originalBasePath;
+            s.gitService = new GitServiceImpl(s.basePath, loadEffectiveGSDPreferences()?.preferences?.git ?? {});
+            ctx.ui.notify(
+              `Milestone ${ s.currentMilestoneId } merged to main.${mergeResult.pushed ? " Pushed to remote." : ""}`,
+              "info",
+            );
+          }
+        } catch (err) {
+          ctx.ui.notify(
+            `Milestone merge failed: ${err instanceof Error ? err.message : String(err)}`,
+            "warning",
+          );
+          if (s.originalBasePath) {
+            s.basePath = s.originalBasePath;
+            try { process.chdir(s.basePath); } catch { /* best-effort */ }
+          }
+        }
+      } else if (s.currentMilestoneId && !isInAutoWorktree(s.basePath) && getIsolationMode() !== "none") {
+        // Branch isolation mode: squash-merge milestone branch back before stopping
+        try {
+          const currentBranch = getCurrentBranch(s.basePath);
+          const milestoneBranch = autoWorktreeBranch(s.currentMilestoneId);
+          if (currentBranch === milestoneBranch) {
+            const roadmapPath = resolveMilestoneFile(s.basePath, s.currentMilestoneId, "ROADMAP");
+            if (roadmapPath) {
+              const roadmapContent = readFileSync(roadmapPath, "utf-8");
+              const mergeResult = mergeMilestoneToMain(s.basePath, s.currentMilestoneId, roadmapContent);
+              s.gitService = new GitServiceImpl(s.basePath, loadEffectiveGSDPreferences()?.preferences?.git ?? {});
+              ctx.ui.notify(
+                `Milestone ${ s.currentMilestoneId } merged (branch mode).${mergeResult.pushed ? " Pushed to remote." : ""}`,
+                "info",
+              );
+            }
+          }
+        } catch (err) {
+          ctx.ui.notify(
+            `Milestone merge failed (branch mode): ${err instanceof Error ? err.message : String(err)}`,
+            "warning",
+          );
+        }
+      }
       sendDesktopNotification("GSD", "All milestones complete!", "success", "milestone");
       await stopAuto(ctx, pi, "All milestones complete");
     } else if (state.phase === "blocked") {
