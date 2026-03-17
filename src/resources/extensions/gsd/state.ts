@@ -290,19 +290,26 @@ async function _deriveStateImpl(basePath: string): Promise<GSDState> {
 
     if (complete) {
       // All slices done — check validation and summary state
+      const summaryFile = resolveMilestoneFile(basePath, mid, "SUMMARY");
       const validationFile = resolveMilestoneFile(basePath, mid, "VALIDATION");
       const validationContent = validationFile ? await cachedLoadFile(validationFile) : null;
       const validationTerminal = validationContent ? isValidationTerminal(validationContent) : false;
-      const summaryFile = resolveMilestoneFile(basePath, mid, "SUMMARY");
 
-      if (!validationTerminal && !activeMilestoneFound) {
-        // No terminal validation yet → validating-milestone
+      if (summaryFile) {
+        // Summary exists → milestone is complete regardless of validation state.
+        // The summary is the terminal artifact (#864).
+        registry.push({ id: mid, title, status: 'complete' });
+      } else if (!validationTerminal && !activeMilestoneFound) {
+        // No summary and no terminal validation → validating-milestone
         activeMilestone = { id: mid, title };
         activeRoadmap = roadmap;
         activeMilestoneFound = true;
         registry.push({ id: mid, title, status: 'active' });
-      } else if (!summaryFile && !activeMilestoneFound) {
-        // Validated but no summary written yet → completing-milestone
+      } else if (!validationTerminal && activeMilestoneFound) {
+        // No summary and no terminal validation, but another milestone is already active
+        registry.push({ id: mid, title, status: 'pending' });
+      } else if (!activeMilestoneFound) {
+        // Terminal validation but no summary → completing-milestone
         activeMilestone = { id: mid, title };
         activeRoadmap = roadmap;
         activeMilestoneFound = true;
