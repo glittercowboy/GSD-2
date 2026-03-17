@@ -70,7 +70,7 @@ This milestone is complete only when all are true:
 - [x] **S05: Knowledge and captures/triage page** `risk:medium` `depends:[S02]`
   > After this: dedicated page showing KNOWLEDGE.md entries and CAPTURES.md with pending/triaged/resolved status and action controls.
 
-- [ ] **S06: Extended settings and model management surface** `risk:medium` `depends:[S02]`
+- [x] **S06: Extended settings and model management surface** `risk:medium` `depends:[S02]`
   > After this: settings command surface shows dynamic model routing config, provider fallback chain, budget allocation, and all preference fields.
 
 - [ ] **S07: Remaining command surfaces** `risk:medium` `depends:[S02]`

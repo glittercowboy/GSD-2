@@ -67,8 +67,8 @@ This file is the explicit capability and coverage contract for the project.
 - Source: user
 - Primary owning slice: M003/S06
 - Supporting slices: M003/S02
-- Validation: unmapped
-- Notes: Upstream has model-router.ts, complexity-classifier.ts, context-budget.ts, fallback-resolver.ts, model-discovery.ts, provider-manager TUI component.
+- Validation: Structurally verified by `npm run build` (types compile), `npm run build:web-host` (API route and components in production build), `npx tsx --test web-command-parity-contract.test.ts` (114/118 pass, no regression). API route at `/api/settings-data` returns combined SettingsData JSON with preferences, routingConfig, budgetAllocation, routingHistory, and projectTotals from 5 upstream modules. Three panel components (PrefsPanel, ModelRoutingPanel, BudgetPanel) render real data for gsd-prefs/gsd-mode/gsd-config sections. Full live-runtime validation deferred to S08 parity audit.
+- Notes: S06 delivered the settings surface with read-only panels. Preferences editing (TUI wizard equivalent) is not included — surface is read-only. Budget computeBudgets() uses hardcoded 200K context window default.
 
 ### R108 — Each of the remaining /gsd subcommands opens a browser-native surface with appropriate controls, feedback, and state visibility.
 - Class: core-capability
@@ -368,7 +368,7 @@ This file is the explicit capability and coverage contract for the project.
 | R104 | failure-visibility | active | M003/S04 | M003/S02 | Pipeline verified by `src/tests/web-diagnostics-contract.test.ts` (28/28 pass). API routes: GET `/api/doctor?scope=X` returns DoctorReport JSON; POST `/api/doctor` applies fixes and returns DoctorFixResult. Panel renders issue list with severity/scope badges, fixable count, and Apply Fixes button. Both builds pass. Awaits live browser UAT for full validation. |
 | R105 | operability | active | M003/S04 | M003/S02 | Pipeline verified by `src/tests/web-diagnostics-contract.test.ts` (28/28 pass). API route GET `/api/skill-health` returns SkillHealthReport JSON. Panel renders skill table with pass rates, token trends, staleness warnings, declining flags, and suggestions. Both builds pass. Awaits live browser UAT for full validation. |
 | R106 | core-capability | validated | M003/S05 | M003/S02 | Verified by S05: `/api/knowledge` GET returns parsed KNOWLEDGE.md entries with type classification; `/api/captures` GET returns capture entries with status/counts; POST validates and resolves captures with field-level 400 errors; KnowledgeCapturesPanel renders Knowledge tab (type badges) and Captures tab (status badges, classification labels, triage action buttons); `/gsd knowledge`, `/gsd capture`, `/gsd triage` dispatch to real panel. `npm run build` and `npm run build:web-host` pass. |
-| R107 | core-capability | active | M003/S06 | M003/S02 | unmapped |
+| R107 | core-capability | active | M003/S06 | M003/S02 | Structurally verified by `npm run build` (types compile), `npm run build:web-host` (API route and components in production build), `npx tsx --test web-command-parity-contract.test.ts` (114/118 pass, no regression). API route at `/api/settings-data` returns combined SettingsData JSON with preferences, routingConfig, budgetAllocation, routingHistory, and projectTotals from 5 upstream modules. Three panel components (PrefsPanel, ModelRoutingPanel, BudgetPanel) render real data for gsd-prefs/gsd-mode/gsd-config sections. Full live-runtime validation deferred to S08 parity audit. |
 | R108 | core-capability | active | M003/S07 | M003/S02 | unmapped |
 | R109 | quality-attribute | active | M003/S08 | M003/S03, M003/S04, M003/S05, M003/S06, M003/S07 | unmapped |
 | R110 | quality-attribute | active | M003/S09 | M003/S01 | unmapped |
