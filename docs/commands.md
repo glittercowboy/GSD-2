@@ -18,6 +18,7 @@
 | `/gsd forensics` | Post-mortem investigation of auto-mode failures — structured root-cause analysis with log inspection |
 | `/gsd cleanup` | Clean up GSD state files and stale worktrees |
 | `/gsd visualize` | Open workflow visualizer (progress, deps, metrics, timeline) |
+| `/gsd export --html` | Generate self-contained HTML report for current or completed milestone |
 | `/gsd knowledge` | Add persistent project knowledge (rule, pattern, or lesson) |
 | `/gsd help` | Categorized command reference with descriptions for all GSD subcommands |
 
@@ -130,6 +131,7 @@ echo "Build a CLI tool" | gsd headless new-milestone --context -
 | Flag | Description |
 |------|-------------|
 | `--timeout N` | Overall timeout in milliseconds (default: 300000 / 5 min) |
+| `--max-restarts N` | Auto-restart on crash with exponential backoff (default: 3). Set 0 to disable |
 | `--json` | Stream all events as JSONL to stdout |
 | `--model ID` | Override the model for the headless session |
 | `--context <file>` | Context file for `new-milestone` (use `-` for stdin) |

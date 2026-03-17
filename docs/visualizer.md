@@ -87,6 +87,16 @@ Ordered by execution time, showing the full history of auto-mode dispatches.
 
 The visualizer refreshes data from disk every 2 seconds, so it stays current if opened alongside a running auto-mode session.
 
+## HTML Export (v2.26)
+
+For shareable reports outside the terminal, use `/gsd export --html`. This generates a self-contained HTML file in `.gsd/reports/` with the same data as the TUI visualizer — progress tree, dependency graph (SVG DAG), cost/token bar charts, execution timeline, changelog, and knowledge base. All CSS and JS are inlined — no external dependencies. Printable to PDF from any browser.
+
+An auto-generated `index.html` shows all reports with progression metrics across milestones.
+
+```yaml
+auto_report: true    # auto-generate after milestone completion (default)
+```
+
 ## Configuration
 
 ```yaml

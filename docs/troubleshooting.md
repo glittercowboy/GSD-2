@@ -50,9 +50,17 @@ It checks:
 
 ### Provider errors during auto mode
 
-**Symptoms:** Auto mode pauses with a provider error (rate limit, auth failure, etc.).
+**Symptoms:** Auto mode pauses with a provider error (rate limit, server error, auth failure).
 
-**Fix:** GSD automatically resumes after rate limit cooldowns with exponential backoff (up to 5 minutes). For auth failures, GSD tries fallback models if configured:
+**How GSD handles it (v2.26):**
+
+| Error type | Auto-resume? | Delay |
+|-----------|-------------|-------|
+| Rate limit (429, "too many requests") | ✅ Yes | retry-after header or 60s |
+| Server error (500, 502, 503, "overloaded") | ✅ Yes | 30s |
+| Auth/billing ("unauthorized", "invalid key") | ❌ No | Manual resume |
+
+For transient errors, GSD pauses briefly and resumes automatically. For permanent errors, configure fallback models:
 
 ```yaml
 models:
@@ -61,6 +69,8 @@ models:
     fallbacks:
       - openrouter/minimax/minimax-m2.5
 ```
+
+**Headless mode:** `gsd headless auto` auto-restarts the entire process on crash (default 3 attempts with exponential backoff). Combined with provider error auto-resume, this enables true overnight unattended execution.
 
 ### Budget ceiling reached
 

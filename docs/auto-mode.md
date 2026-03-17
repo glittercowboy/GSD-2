@@ -62,9 +62,31 @@ When your project has independent milestones, you can run them simultaneously. E
 
 A lock file tracks the current unit. If the session dies, the next `/gsd auto` reads the surviving session file, synthesizes a recovery briefing from every tool call that made it to disk, and resumes with full context.
 
-### Rate Limit Recovery
+**Headless auto-restart (v2.26):** When running `gsd headless auto`, crashes trigger automatic restart with exponential backoff (5s → 10s → 30s cap, default 3 attempts). Configure with `--max-restarts N`. SIGINT/SIGTERM bypasses restart. Combined with crash recovery, this enables true overnight "run until done" execution.
 
-When a provider hits a rate limit, GSD waits with exponential backoff (up to 5 minutes) and automatically resumes auto-mode after the cooldown period. No manual intervention needed — the session continues from where it left off.
+### Provider Error Recovery
+
+GSD classifies provider errors and auto-resumes when safe:
+
+| Error type | Examples | Action |
+|-----------|----------|--------|
+| **Rate limit** | 429, "too many requests" | Auto-resume after retry-after header or 60s |
+| **Server error** | 500, 502, 503, "overloaded", "api_error" | Auto-resume after 30s |
+| **Permanent** | "unauthorized", "invalid key", "billing" | Pause indefinitely (requires manual resume) |
+
+No manual intervention needed for transient errors — the session pauses briefly and continues automatically.
+
+### Incremental Memory (v2.26)
+
+GSD maintains a `KNOWLEDGE.md` file — an append-only register of project-specific rules, patterns, and lessons learned. The agent reads it at the start of every unit and appends to it when discovering recurring issues, non-obvious patterns, or rules that future sessions should follow. This gives auto-mode cross-session memory that survives context window boundaries.
+
+### Context Pressure Monitor (v2.26)
+
+When context usage reaches 70%, GSD sends a wrap-up signal to the agent, nudging it to finish durable output (commit, write summaries) before the context window fills. This prevents sessions from hitting the hard context limit mid-task with no artifacts written.
+
+### Meaningful Commit Messages (v2.26)
+
+Commits are generated from task summaries — not generic "complete task" messages. Each commit message reflects what was actually built, giving clean `git log` output that reads like a changelog.
 
 ### Stuck Detection
 
@@ -102,6 +124,40 @@ See [Cost Management](./cost-management.md).
 ### Adaptive Replanning
 
 After each slice completes, the roadmap is reassessed. If the work revealed new information that changes the plan, slices are reordered, added, or removed before continuing. This can be skipped with the `balanced` or `budget` token profiles.
+
+### Verification Enforcement (v2.26)
+
+Configure shell commands that run automatically after every task execution:
+
+```yaml
+verification_commands:
+  - npm run lint
+  - npm run test
+verification_auto_fix: true    # auto-retry on failure (default)
+verification_max_retries: 2    # max retry attempts (default: 2)
+```
+
+Failures trigger auto-fix retries — the agent sees the verification output and attempts to fix the issues before advancing. This ensures code quality gates are enforced mechanically, not by LLM compliance.
+
+### Slice Discussion Gate (v2.26)
+
+For projects where you want human review before each slice begins:
+
+```yaml
+require_slice_discussion: true
+```
+
+Auto-mode pauses before each slice, presenting the slice context for discussion. After you confirm, execution continues. Useful for high-stakes projects where you want to review the plan before the agent builds.
+
+### HTML Reports (v2.26)
+
+After a milestone completes, GSD auto-generates a self-contained HTML report in `.gsd/reports/`. Reports include project summary, progress tree, slice dependency graph (SVG DAG), cost/token metrics with bar charts, execution timeline, changelog, and knowledge base. No external dependencies — all CSS and JS are inlined.
+
+```yaml
+auto_report: true    # enabled by default
+```
+
+Generate manually anytime with `/gsd export --html`.
 
 ## Controlling Auto Mode
 

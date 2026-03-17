@@ -414,7 +414,8 @@ auto_report: true
 | `skill_rules`          | Situational rules for skill routing                                                                   |
 | `skill_staleness_days` | Skills unused for N days get deprioritized (default: 60, 0 = disabled)                                |
 | `unique_milestone_ids` | Uses unique milestone names to avoid clashes when working in teams of people                          |
-| `git.isolation`        | `worktree` (default) or `none` — disable worktree isolation for projects that don't need it           |
+| `git.isolation`        | `worktree` (default), `branch`, or `none` — disable worktree isolation for projects that don't need it           |
+| `git.manage_gitignore` | Set `false` to prevent GSD from modifying `.gitignore`                                                           |
 | `verification_commands`| Array of shell commands to run after task execution (e.g., `["npm run lint", "npm run test"]`)        |
 | `verification_auto_fix`| Auto-retry on verification failures (default: true)                                                   |
 | `verification_max_retries` | Max retries for verification failures (default: 2)                                               |
