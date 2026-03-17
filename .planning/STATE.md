@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Native Desktop
 status: in_progress
-stopped_at: Completed 20.1-01-PLAN.md
-last_updated: "2026-03-17T12:17:03.289Z"
+stopped_at: Completed 20.1-04-PLAN.md — Code Explorer modal with CodeMirror 6
+last_updated: "2026-03-17T12:22:54.214Z"
 last_activity: "2026-03-14 — Plan 19-01 complete: 4 RED test stub files created (workspace-api, project-archiving, project-home-screen, project-tab-bar); 747 passing tests unaffected; WORKSPACE-01..05 test coverage established"
 progress:
   total_phases: 11
   completed_phases: 9
   total_plans: 54
-  completed_plans: 50
+  completed_plans: 52
   percent: 93
 ---
 
@@ -502,7 +502,7 @@ Phase: 19 of 20 (Project Workspace) — In Progress (1 of 5 plans done)
 Plan: 1 of 5 complete (plan 01 done — 4 Nyquist Wave 0 RED test stubs created)
 Status: Phase 19 in progress. Next: Phase 19-02 workspace-api implementation.
 Last activity: 2026-03-14 — Plan 19-01 complete: 4 RED test stub files created (workspace-api, project-archiving, project-home-screen, project-tab-bar); 747 passing tests unaffected; WORKSPACE-01..05 test coverage established
-Stopped at: Completed 20.1-01-PLAN.md
+Stopped at: Completed 20.1-04-PLAN.md — Code Explorer modal with CodeMirror 6
 
 Progress: [█████████░] 89% (40/45 plans complete)
 
@@ -646,6 +646,10 @@ Progress: [█████████░] 89% (40/45 plans complete)
 - [Phase 20.1]: pendingForkRef uses stateRef.current (pre-update sessions) for previousIds comparison; chat_complete auto-naming bug fixed (was using out-of-scope 'current', now uses stateRef.current)
 - [Phase 20.1]: projectName derived as const in AppShell before dashboard return, shared by Sidebar and SingleColumnView
 - [Phase 20.1]: layout.test.tsx TabLayout import removed (component deleted); replaced with SingleColumnView/AppShell projectName source-text tests
+- [Phase 20.1-02]: PreviewPanel uses useState so preview-panel.test.tsx migrated to static source-text inspection (consistent with Phase 12-01 pattern)
+- [Phase 20.1-02]: PreviewPanelWithState calls usePreview() internally (no initialPort prop) — server management self-contained in preview component tree
+- [Phase 20.1-02]: Direct localhost:PORT/ used as iframe src (not /api/preview/ proxy) for full interactivity without CORS restrictions
+- [Phase 20.1]: CodeMirror EditorView recreated per filePath — simplest approach for language switching; handleFsRequest allowedRoot param backward-compatible; save is explicit Ctrl+S not auto-save
 
 ### Blockers/Concerns
 
