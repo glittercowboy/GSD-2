@@ -77,7 +77,7 @@ function projectRoot(): string {
 
 export function registerGSDCommand(pi: ExtensionAPI): void {
   pi.registerCommand("gsd", {
-    description: "GSD — Get Shit Done: /gsd help|next|auto|stop|pause|status|visualize|queue|quick|capture|triage|dispatch|history|undo|skip|export|cleanup|mode|prefs|config|hooks|run-hook|skill-health|doctor|forensics|migrate|remote|steer|knowledge|new-milestone|parallel",
+    description: "GSD — Get Shit Done: /gsd help|next|auto|stop|pause|status|visualize|queue|quick|capture|triage|dispatch|history|undo|skip|export|cleanup|mode|prefs|config|hooks|run-hook|skill-health|doctor|forensics|migrate|remote|steer|knowledge|new-milestone|parallel|update",
     getArgumentCompletions: (prefix: string) => {
       const subcommands = [
         { cmd: "help", desc: "Categorized command reference with descriptions" },
@@ -113,6 +113,7 @@ export function registerGSDCommand(pi: ExtensionAPI): void {
         { cmd: "knowledge", desc: "Add persistent project knowledge (rule, pattern, or lesson)" },
         { cmd: "new-milestone", desc: "Create a milestone from a specification document (headless)" },
         { cmd: "parallel", desc: "Parallel milestone orchestration (start, status, stop, merge)" },
+        { cmd: "update", desc: "Update GSD to the latest version" },
       ];
       const parts = prefix.trim().split(/\s+/);
 
@@ -575,6 +576,11 @@ Examples:
         return;
       }
 
+      if (trimmed === "update") {
+        await handleUpdate(ctx);
+        return;
+      }
+
       if (trimmed === "") {
         // Bare /gsd defaults to step mode
         await startAuto(ctx, pi, projectRoot(), false, { step: true });
@@ -630,6 +636,7 @@ function showHelp(ctx: ExtensionCommandContext): void {
     "  /gsd migrate        Upgrade .gsd/ structures to new format",
     "  /gsd remote         Control remote auto-mode  [slack|discord|status|disconnect]",
     "  /gsd inspect        Show SQLite DB diagnostics (schema, row counts, recent entries)",
+    "  /gsd update         Update GSD to the latest version via npm",
   ];
   ctx.ui.notify(lines.join("\n"), "info");
 }
@@ -2089,5 +2096,50 @@ Examples:
 
   if (!success) {
     ctx.ui.notify("Failed to dispatch hook. Auto-mode may have been cancelled.", "error");
+  }
+}
+
+// ─── Self-update handler ────────────────────────────────────────────────────
+
+async function handleUpdate(ctx: ExtensionCommandContext): Promise<void> {
+  const { execSync } = await import("node:child_process");
+  const { compareSemver } = await import("../../../update-check.js");
+
+  const NPM_PACKAGE = "gsd-pi";
+  const current = process.env.GSD_VERSION || "0.0.0";
+
+  ctx.ui.notify(`Current version: v${current}\nChecking npm registry...`, "info");
+
+  let latest: string;
+  try {
+    latest = execSync(`npm view ${NPM_PACKAGE} version`, {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    ctx.ui.notify("Failed to reach npm registry. Check your network connection.", "error");
+    return;
+  }
+
+  if (compareSemver(latest, current) <= 0) {
+    ctx.ui.notify(`Already up to date (v${current}).`, "info");
+    return;
+  }
+
+  ctx.ui.notify(`Updating: v${current} → v${latest}...`, "info");
+
+  try {
+    execSync(`npm install -g ${NPM_PACKAGE}@latest`, {
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    ctx.ui.notify(
+      `Updated to v${latest}. Restart your GSD session to use the new version.`,
+      "info",
+    );
+  } catch {
+    ctx.ui.notify(
+      `Update failed. Try manually: npm install -g ${NPM_PACKAGE}@latest`,
+      "error",
+    );
   }
 }
