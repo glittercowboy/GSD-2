@@ -91,7 +91,7 @@ export function buildMemoryLLMCall(ctx: ExtensionContext): LLMCallFn | null {
       const { completeSimple } = await import('@gsd/pi-ai');
       const result: AssistantMessage = await completeSimple(selectedModel, {
         systemPrompt: system,
-        messages: [{ role: 'user', content: [{ type: 'text', text: user }] }],
+        messages: [{ role: 'user', content: [{ type: 'text', text: user }], timestamp: Date.now() }],
       }, {
         maxTokens: 2048,
         temperature: 0,
