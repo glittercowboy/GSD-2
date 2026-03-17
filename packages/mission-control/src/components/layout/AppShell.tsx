@@ -68,7 +68,9 @@ export function AppShell() {
 
   // Multi-project tab state (WORKSPACE-04)
   const [openProjects, setOpenProjects] = useState<OpenProject[]>([]);
-  const [activeProjectPath, setActiveProjectPath] = useState<string | null>(null);
+  const [activeProjectPath, setActiveProjectPath] = useState<string | null>(() => {
+    try { return localStorage.getItem("gsd-mc-last-path"); } catch { return null; }
+  });
 
   // Load settings to get budget_ceiling for cost tracking
   const { settings } = useSettings();
@@ -112,7 +114,7 @@ export function AppShell() {
     dismissBoundaryViolation,
     stuckSessionId,
     reconnectSession,
-  } = useSessionManager("ws://localhost:4011", { budgetCeiling });
+  } = useSessionManager("ws://localhost:4001", { budgetCeiling });
 
   // handleBuilderSend: classify intent before dispatching in Builder mode (BUILDER-04)
   const handleBuilderSend = useCallback(async (message: string) => {
@@ -158,7 +160,7 @@ export function AppShell() {
   const { headingRef } = usePanelFocus((kind) => setActiveView({ kind }));
 
   const { overlay: discussOverlay, reviewResults, handleFix, dismissReview, chatModeState } = useChatMode(
-    "ws://localhost:4011",
+    "ws://localhost:4001",
     sendMessage,
   );
 
@@ -438,7 +440,6 @@ export function AppShell() {
             onClearRoutingBadge={() => setRoutingBadgeState(null)}
             onClearPhaseGate={() => setPhaseGateState(null)}
             onSendDirectMessage={sendMessage}
-            projectName={projectName}
             stuckSessionId={stuckSessionId}
             onReconnectSession={reconnectSession}
           />

@@ -12,7 +12,6 @@ import { AssetsView } from "@/components/views/AssetsView";
 import { ReviewViewWithAnimation } from "@/components/views/ReviewView";
 import { RoutingBadge } from "@/components/chat/RoutingBadge";
 import { PhaseGateCard } from "@/components/chat/PhaseGateCard";
-import { FolderOpen } from "lucide-react";
 import type { ViewType } from "@/lib/view-types";
 import type { PlanningState } from "@/server/types";
 import type { ChatMessage, ReviewResults } from "@/server/chat-types";
@@ -74,8 +73,6 @@ interface SingleColumnViewProps {
   onClearPhaseGate?: () => void;
   /** Send message bypassing Builder mode classification (for PhaseGate skip path) */
   onSendDirectMessage?: (message: string) => void;
-  /** Phase 20.1: Project name to display in the right panel header bar above all views */
-  projectName?: string;
   /** Phase 20.1-03: Session ID stuck in processing state after reconnect */
   stuckSessionId?: string | null;
   /** Phase 20.1-03: Callback to reconnect to a stuck session */
@@ -113,7 +110,6 @@ export function SingleColumnView({
   onClearRoutingBadge,
   onClearPhaseGate,
   onSendDirectMessage,
-  projectName,
   stuckSessionId,
   onReconnectSession,
 }: SingleColumnViewProps) {
@@ -124,12 +120,6 @@ export function SingleColumnView({
       tabIndex={-1}
       ref={headingRef as React.RefObject<HTMLElement | null>}
     >
-      {projectName && (
-        <div className="flex items-center gap-2 px-4 py-1.5 border-b border-navy-600 bg-navy-900 shrink-0">
-          <FolderOpen className="h-3 w-3 text-slate-500" />
-          <span className="text-xs font-mono text-slate-400 truncate">{projectName}</span>
-        </div>
-      )}
       <div key={activeView.kind} className="animate-in fade-in duration-200 flex-1 min-h-0 overflow-hidden">
       {activeView.kind === "chat" && (
         <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>

@@ -96,8 +96,7 @@ export function Sidebar({
       {!collapsed && (
         <div className="flex flex-col px-2">
           {projectName && (
-            <div className="flex items-center gap-2 px-2 py-2 border-b border-navy-600 mb-1">
-              <FolderOpen className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+            <div className="flex items-center px-2 py-2 border-b border-navy-600 mb-1">
               <span className="truncate text-xs font-mono font-medium text-slate-300" title={projectName}>{projectName}</span>
             </div>
           )}

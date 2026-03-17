@@ -36,20 +36,16 @@ describe("AppShell", () => {
   });
 });
 
-describe("SingleColumnView project name header (source-text)", () => {
-  it("accepts projectName prop in interface", () => {
+describe("SingleColumnView layout (source-text)", () => {
+  it("does not have project name header bar (A1 polish: removed from right panel)", () => {
     const src = readFileSync(join(import.meta.dir, "../src/components/layout/SingleColumnView.tsx"), "utf8");
-    expect(src).toContain("projectName?: string");
+    // A1: FolderOpen icon and projectName header removed from right panel
+    expect(src).not.toContain("FolderOpen");
   });
 
-  it("renders FolderOpen icon in header bar", () => {
+  it("has animate-in fade-in on view switch", () => {
     const src = readFileSync(join(import.meta.dir, "../src/components/layout/SingleColumnView.tsx"), "utf8");
-    expect(src).toContain("FolderOpen");
-  });
-
-  it("header bar uses font-mono text styling", () => {
-    const src = readFileSync(join(import.meta.dir, "../src/components/layout/SingleColumnView.tsx"), "utf8");
-    expect(src).toContain("text-xs font-mono text-slate-400");
+    expect(src).toContain("animate-in fade-in");
   });
 });
 
@@ -59,7 +55,7 @@ describe("AppShell projectName derivation (source-text)", () => {
     expect(src).toContain("const projectName =");
   });
 
-  it("passes projectName to SingleColumnView", () => {
+  it("passes projectName to Sidebar", () => {
     const src = readFileSync(join(import.meta.dir, "../src/components/layout/AppShell.tsx"), "utf8");
     expect(src).toContain("projectName={projectName}");
   });

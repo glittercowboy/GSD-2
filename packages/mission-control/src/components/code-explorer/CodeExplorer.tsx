@@ -8,6 +8,7 @@ import { X, Copy, Save } from "lucide-react";
 import { FileTree } from "./FileTree";
 import { FileEditor } from "./FileEditor";
 import { useCodeExplorer } from "./useCodeExplorer";
+import { useGitStatus } from "./useGitStatus";
 
 interface CodeExplorerProps {
   isOpen: boolean;
@@ -17,6 +18,7 @@ interface CodeExplorerProps {
 
 export function CodeExplorer({ isOpen, onClose, projectRoot }: CodeExplorerProps) {
   const { selectedFile, selectFile } = useCodeExplorer();
+  const gitStatus = useGitStatus(projectRoot, isOpen);
   const [fileContent, setFileContent] = useState("");
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -184,6 +186,7 @@ export function CodeExplorer({ isOpen, onClose, projectRoot }: CodeExplorerProps
                 projectRoot={projectRoot}
                 onSelectFile={selectFile}
                 selectedFile={selectedFile}
+                gitStatus={gitStatus}
               />
             ) : (
               <div className="p-4 text-xs text-slate-500">No project open</div>

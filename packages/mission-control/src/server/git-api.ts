@@ -1,10 +1,15 @@
 /**
- * Git log API for commit history.
+ * Git log API for commit history and porcelain status.
  * Returns GSD-relevant commits (docs, feat, fix, refactor prefixes).
+ * Also provides /api/git/status for Code Explorer git coloring.
  * Follows route dispatcher pattern from fs-api.ts.
  */
 
-import { spawn as nodeSpawn } from "node:child_process";
+import { spawn as nodeSpawn, exec } from "node:child_process";
+import { promisify } from "node:util";
+import { resolve } from "node:path";
+
+const execAsync = promisify(exec);
 
 export interface GitCommit {
   hash: string;
@@ -69,6 +74,42 @@ function getGitLog(repoRoot: string, limit: number): Promise<GitCommit[]> {
   });
 }
 
+export interface GitFileStatus {
+  path: string;   // absolute path with forward slashes
+  status: string; // 'M' modified, 'A' added/staged, '??' untracked, 'D' deleted, 'R' renamed
+}
+
+/**
+ * Run git status --porcelain in the given root directory.
+ * Returns [] if not a git repo or git is not available.
+ */
+export async function getGitStatus(root: string): Promise<GitFileStatus[]> {
+  if (!root) return [];
+  try {
+    const resolvedRoot = resolve(root);
+    const { stdout } = await execAsync("git status --porcelain -u", {
+      cwd: resolvedRoot,
+      timeout: 3000,
+    });
+    const files: GitFileStatus[] = [];
+    for (const line of stdout.split("\n")) {
+      if (!line.trim()) continue;
+      const statusCode = line.slice(0, 2).trim();
+      const rawPath = line.slice(3).trim();
+      // Handle renames: "R old -> new" — take the new path
+      const filePath = rawPath.includes(" -> ") ? rawPath.split(" -> ")[1] : rawPath;
+      // Remove quotes if present (git quotes paths with spaces)
+      const cleanPath = filePath.replace(/^"|"$/g, "");
+      const absPath = resolve(resolvedRoot, cleanPath).replace(/\\/g, "/");
+      files.push({ path: absPath, status: statusCode });
+    }
+    return files;
+  } catch {
+    // Not a git repo, git not installed, or timeout
+    return [];
+  }
+}
+
 /**
  * HTTP request handler for /api/git/* routes.
  * Returns Response or null if route not matched.
@@ -87,6 +128,13 @@ export async function handleGitRequest(
 
     const commits = await getGitLog(repoRoot, safeLimit);
     return Response.json({ commits });
+  }
+
+  // GET /api/git/status?root=<path>
+  if (pathname === "/api/git/status" && req.method === "GET") {
+    const root = searchParams.get("root") ?? repoRoot;
+    const files = await getGitStatus(root);
+    return Response.json({ files });
   }
 
   return null;
