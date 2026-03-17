@@ -63,7 +63,7 @@
   - Verify: trigger GSD provider select; verify option list renders; click an option; verify GSD advances (check Power Mode terminal or SSE output to confirm keystroke received)
   - Done when: option list renders, clicking sends correct delta keystrokes + Enter, GSD advances, post-submission shows static confirmation
 
-- [ ] **T02: TuiTextPrompt and TuiPasswordPrompt components** `est:1h`
+- [x] **T02: TuiTextPrompt and TuiPasswordPrompt components** `est:1h`
   - Why: API key entry and text prompts are critical first-run flows for non-technical users
   - Files: `web/components/gsd/chat-mode.tsx`
   - Do: (1) Build `TuiTextPrompt` with props `{ prompt: TuiPrompt; onSubmit: (data: string) => void }`: render `prompt.label` + `<Input>` from `@/components/ui/input`; auto-focus on mount via `useEffect`; on Enter call `onSubmit(value + "\r")` + set `submitted = true`; after submission show `"✓ Submitted"`. (2) Build `TuiPasswordPrompt` same pattern but `<Input type="password" />`; add eye-toggle button for show/hide; after submission show `"{prompt.label} — entered ✓"` — NEVER show the value. (3) Complete `ChatBubble` prompt dispatch: `kind === 'select'` → `TuiSelectPrompt`; `kind === 'text'` → `TuiTextPrompt`; `kind === 'password'` → `TuiPasswordPrompt`. Render prompt component only when `message.prompt` is present and `message.complete === false` (active prompt). (4) Thread `onSubmit → ChatPane.sendInput` through props (prop drilling 2 levels is fine at this depth).

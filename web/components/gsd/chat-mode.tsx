@@ -1,8 +1,9 @@
 "use client"
 
 import { useEffect, useRef, useCallback, useState, KeyboardEvent } from "react"
-import { MessagesSquare, SendHorizonal, Check } from "lucide-react"
+import { MessagesSquare, SendHorizonal, Check, Eye, EyeOff } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { Input } from "@/components/ui/input"
 import { PtyChatParser, ChatMessage, TuiPrompt } from "@/lib/pty-chat-parser"
 
 /**
@@ -387,6 +388,222 @@ function TuiSelectPrompt({
   )
 }
 
+/* ─── TuiTextPrompt ─── */
+
+/**
+ * Renders a GSD text prompt as a native labeled input field.
+ *
+ * Submitting sends the typed value + "\r" to the PTY (carriage return = Enter).
+ * After submission shows a static "✓ Submitted" confirmation (value not echoed).
+ *
+ * Observability:
+ *   - Logs "[TuiTextPrompt] mounted kind=text label=%s" on mount
+ *   - Logs "[TuiTextPrompt] submitted label=%s" on submit
+ *   - data-testid="tui-text-prompt" on container
+ *   - data-testid="tui-prompt-submitted" on post-submission element
+ */
+function TuiTextPrompt({
+  prompt,
+  onSubmit,
+}: {
+  prompt: TuiPrompt
+  onSubmit: (data: string) => void
+}) {
+  const [value, setValue] = useState("")
+  const [submitted, setSubmitted] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    console.log("[TuiTextPrompt] mounted kind=text label=%s", prompt.label)
+    inputRef.current?.focus()
+  }, [prompt.label])
+
+  const handleSubmit = useCallback(() => {
+    if (submitted) return
+    console.log("[TuiTextPrompt] submitted label=%s", prompt.label)
+    setSubmitted(true)
+    onSubmit(value + "\r")
+  }, [submitted, value, prompt.label, onSubmit])
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === "Enter") {
+        e.preventDefault()
+        handleSubmit()
+      }
+    },
+    [handleSubmit],
+  )
+
+  if (submitted) {
+    return (
+      <div
+        data-testid="tui-prompt-submitted"
+        className="mt-2 flex items-center gap-1.5 rounded-lg bg-primary/10 px-3 py-2 text-sm text-primary"
+      >
+        <Check className="h-3.5 w-3.5 flex-shrink-0" />
+        <span className="font-medium">✓ Submitted</span>
+      </div>
+    )
+  }
+
+  return (
+    <div
+      data-testid="tui-text-prompt"
+      className="mt-2 rounded-xl border border-border/60 bg-background/60 p-3 shadow-sm"
+    >
+      {prompt.label && (
+        <p className="mb-2 text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
+          {prompt.label}
+        </p>
+      )}
+      <div className="flex gap-2">
+        <Input
+          ref={inputRef}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder="Type your answer…"
+          className="flex-1 h-8 text-sm"
+          aria-label={prompt.label || "Text input"}
+        />
+        <button
+          onClick={handleSubmit}
+          disabled={!value.trim()}
+          className={cn(
+            "flex h-8 items-center justify-center rounded-lg px-3 text-xs font-medium transition-all",
+            value.trim()
+              ? "bg-primary text-primary-foreground hover:bg-primary/90 active:scale-95 shadow-sm"
+              : "bg-muted text-muted-foreground/40 cursor-not-allowed",
+          )}
+        >
+          Submit
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/* ─── TuiPasswordPrompt ─── */
+
+/**
+ * Renders a GSD password/API-key prompt as a native masked input field.
+ *
+ * Submitting sends the typed value + "\r" to the PTY.
+ * The entered value is NEVER shown in the DOM, logs, or post-submission text.
+ * After submission shows "{label} — entered ✓" with no value echo.
+ *
+ * Observability:
+ *   - Logs "[TuiPasswordPrompt] mounted kind=password label=%s" on mount
+ *   - Logs "[TuiPasswordPrompt] submitted label=%s" on submit (value not logged)
+ *   - data-testid="tui-password-prompt" on container
+ *   - data-testid="tui-prompt-submitted" on post-submission element
+ */
+function TuiPasswordPrompt({
+  prompt,
+  onSubmit,
+}: {
+  prompt: TuiPrompt
+  onSubmit: (data: string) => void
+}) {
+  const [value, setValue] = useState("")
+  const [submitted, setSubmitted] = useState(false)
+  const [showPassword, setShowPassword] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    console.log("[TuiPasswordPrompt] mounted kind=password label=%s", prompt.label)
+    inputRef.current?.focus()
+  }, [prompt.label])
+
+  const handleSubmit = useCallback(() => {
+    if (submitted) return
+    // Value intentionally not logged — redaction constraint
+    console.log("[TuiPasswordPrompt] submitted label=%s", prompt.label)
+    setSubmitted(true)
+    onSubmit(value + "\r")
+  }, [submitted, value, prompt.label, onSubmit])
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === "Enter") {
+        e.preventDefault()
+        handleSubmit()
+      }
+    },
+    [handleSubmit],
+  )
+
+  if (submitted) {
+    const displayLabel = prompt.label || "Value"
+    return (
+      <div
+        data-testid="tui-prompt-submitted"
+        className="mt-2 flex items-center gap-1.5 rounded-lg bg-primary/10 px-3 py-2 text-sm text-primary"
+      >
+        <Check className="h-3.5 w-3.5 flex-shrink-0" />
+        <span className="font-medium">{displayLabel} — entered ✓</span>
+      </div>
+    )
+  }
+
+  return (
+    <div
+      data-testid="tui-password-prompt"
+      className="mt-2 rounded-xl border border-border/60 bg-background/60 p-3 shadow-sm"
+    >
+      {prompt.label && (
+        <p className="mb-2 text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
+          {prompt.label}
+        </p>
+      )}
+      <div className="flex gap-2">
+        <div className="relative flex-1">
+          <Input
+            ref={inputRef}
+            type={showPassword ? "text" : "password"}
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="Enter value…"
+            className="h-8 pr-9 text-sm"
+            aria-label={prompt.label || "Password input"}
+            autoComplete="off"
+          />
+          <button
+            type="button"
+            onClick={() => setShowPassword((s) => !s)}
+            tabIndex={-1}
+            aria-label={showPassword ? "Hide input" : "Show input"}
+            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground/50 hover:text-muted-foreground transition-colors"
+          >
+            {showPassword ? (
+              <EyeOff className="h-3.5 w-3.5" />
+            ) : (
+              <Eye className="h-3.5 w-3.5" />
+            )}
+          </button>
+        </div>
+        <button
+          onClick={handleSubmit}
+          disabled={!value}
+          className={cn(
+            "flex h-8 items-center justify-center rounded-lg px-3 text-xs font-medium transition-all",
+            value
+              ? "bg-primary text-primary-foreground hover:bg-primary/90 active:scale-95 shadow-sm"
+              : "bg-muted text-muted-foreground/40 cursor-not-allowed",
+          )}
+        >
+          Submit
+        </button>
+      </div>
+      <p className="mt-1.5 text-[10px] text-muted-foreground/50">
+        Value is transmitted securely and not stored in chat history.
+      </p>
+    </div>
+  )
+}
+
 /* ─── StreamingCursor ─── */
 
 function StreamingCursor() {
@@ -444,6 +661,18 @@ function ChatBubble({
     !message.complete &&
     onSubmitPrompt != null
 
+  const hasTextPrompt =
+    message.prompt?.kind === "text" &&
+    !message.complete &&
+    onSubmitPrompt != null
+
+  const hasPasswordPrompt =
+    message.prompt?.kind === "password" &&
+    !message.complete &&
+    onSubmitPrompt != null
+
+  const hasAnyPrompt = hasSelectPrompt || hasTextPrompt || hasPasswordPrompt
+
   return (
     <div className="flex justify-start gap-3">
       <div className="mt-1 flex-shrink-0 flex h-7 w-7 items-center justify-center rounded-full bg-card border border-border">
@@ -451,9 +680,21 @@ function ChatBubble({
       </div>
       <div className="max-w-[82%] min-w-0 rounded-2xl rounded-tl-md border border-border/60 bg-card px-4 py-3 shadow-sm">
         <MarkdownContent content={message.content} />
-        {!message.complete && !hasSelectPrompt && <StreamingCursor />}
+        {!message.complete && !hasAnyPrompt && <StreamingCursor />}
         {hasSelectPrompt && (
           <TuiSelectPrompt
+            prompt={message.prompt!}
+            onSubmit={onSubmitPrompt!}
+          />
+        )}
+        {hasTextPrompt && (
+          <TuiTextPrompt
+            prompt={message.prompt!}
+            onSubmit={onSubmitPrompt!}
+          />
+        )}
+        {hasPasswordPrompt && (
+          <TuiPasswordPrompt
             prompt={message.prompt!}
             onSubmit={onSubmitPrompt!}
           />
