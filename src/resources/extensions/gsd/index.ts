@@ -59,7 +59,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { shortcutDesc } from "../shared/terminal.js";
 import { Text } from "@gsd/pi-tui";
-import { pauseAutoForProviderError } from "./provider-error-pause.js";
+import { pauseAutoForProviderError, classifyProviderError } from "./provider-error-pause.js";
 import { toPosixPath } from "../shared/path-display.js";
 import { isParallelActive, shutdownParallel } from "./parallel-orchestrator.js";
 
@@ -817,18 +817,22 @@ export default function (pi: ExtensionAPI) {
         }
       }
 
-      // Detect rate-limit errors and extract retry delay for auto-resume
-      const isRateLimit = /rate.?limit|too many requests|429/i.test(errorMsg);
-      const retryAfterMs = ("retryAfterMs" in lastMsg && typeof lastMsg.retryAfterMs === "number")
+      // Classify the error: transient (auto-resume) vs permanent (manual resume)
+      const classification = classifyProviderError(errorMsg);
+
+      // Extract explicit retry-after from the message or response metadata
+      const explicitRetryAfterMs = ("retryAfterMs" in lastMsg && typeof lastMsg.retryAfterMs === "number")
         ? lastMsg.retryAfterMs
-        : (() => { const m = errorMsg.match(/reset in (\d+)s/i); return m ? Number(m[1]) * 1000 : undefined; })();
+        : undefined;
+      const retryAfterMs = explicitRetryAfterMs ?? classification.suggestedDelayMs;
 
       await pauseAutoForProviderError(ctx.ui, errorDetail, () => pauseAuto(ctx, pi), {
-        isRateLimit,
+        isRateLimit: classification.isRateLimit,
+        isTransient: classification.isTransient,
         retryAfterMs,
         resume: () => {
           pi.sendMessage(
-            { customType: "gsd-auto-timeout-recovery", content: "Continue execution \u2014 rate limit window elapsed.", display: false },
+            { customType: "gsd-auto-timeout-recovery", content: "Continue execution \u2014 provider error recovery delay elapsed.", display: false },
             { triggerTurn: true },
           );
         },
