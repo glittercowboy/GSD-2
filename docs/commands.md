@@ -74,9 +74,12 @@ See [Parallel Orchestration](./parallel-orchestration.md) for full documentation
 | `Ctrl+Alt+G` | Toggle dashboard overlay |
 | `Ctrl+Alt+V` | Toggle voice transcription |
 | `Ctrl+Alt+B` | Show background shell processes |
+| `Ctrl+V` / `Alt+V` | Paste image from clipboard (screenshot → vision input) |
 | `Escape` | Pause auto mode (preserves conversation) |
 
 > **Note:** In terminals without Kitty keyboard protocol support (macOS Terminal.app, JetBrains IDEs), slash-command fallbacks are shown instead of `Ctrl+Alt` shortcuts.
+>
+> **Tip:** If `Ctrl+V` is intercepted by your terminal (e.g. Warp), use `Alt+V` instead for clipboard image paste.
 
 ## CLI Flags
 
