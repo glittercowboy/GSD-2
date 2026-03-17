@@ -3751,6 +3751,20 @@ export async function dispatchDirectPhase(
           ctx.ui.notify("Cannot dispatch research-slice: no active slice.", "warning");
           return;
         }
+
+        // When require_slice_discussion is enabled, pause auto-mode before
+        // each new slice so the user can discuss requirements first (#789).
+        const sliceContextFile = resolveSliceFile(base, mid, sid, "CONTEXT");
+        const requireDiscussion = loadEffectiveGSDPreferences()?.preferences?.phases?.require_slice_discussion;
+        if (requireDiscussion && !sliceContextFile) {
+          ctx.ui.notify(
+            `Slice ${sid} requires discussion before planning. Run /gsd discuss to discuss this slice, then /gsd auto to resume.`,
+            "info",
+          );
+          await pauseAuto(ctx, pi);
+          return;
+        }
+
         unitType = "research-slice";
         unitId = `${mid}/${sid}`;
         prompt = await buildResearchSlicePrompt(mid, midTitle, sid, sTitle, base);
