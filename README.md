@@ -556,7 +556,13 @@ Anthropic, OpenAI, Google (Gemini), OpenRouter, GitHub Copilot, Amazon Bedrock, 
 
 If you have a **Claude Max**, **Codex**, or **GitHub Copilot** subscription, you can use those directly — Pi handles the OAuth flow. No API key needed.
 
-> **Note:** Using OAuth tokens from subscription plans (e.g. Claude Max) outside their native applications may not be explicitly permitted by the provider's Terms of Service. GSD supports API key authentication for all providers as an alternative. Use at your own discretion.
+> **⚠️ Important:** Using OAuth tokens from subscription plans outside their native applications may violate the provider's Terms of Service. In particular:
+>
+> - **Google Gemini** — Using Gemini CLI or Antigravity OAuth tokens in third-party tools has resulted in **Google account suspensions**. This affects your entire Google account, not just the Gemini service. **Use a Gemini API key instead.**
+> - **Claude Max** — Anthropic's ToS may not explicitly permit OAuth use outside Claude's own applications.
+> - **GitHub Copilot** — Usage outside GitHub's own tools may be restricted by your subscription terms.
+>
+> GSD supports API key authentication for all providers as the safe alternative. **We strongly recommend using API keys over OAuth for Google Gemini.**
 
 ### OpenRouter
 
