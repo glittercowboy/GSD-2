@@ -32,6 +32,17 @@ GSD ships with bundled skills. Load the relevant skill file with the `read` tool
 | macOS or iOS apps - SwiftUI, Xcode, App Store | `~/.gsd/agent/skills/swiftui/SKILL.md` |
 | Debugging - complex bugs, failing tests, root-cause investigation after standard approaches fail | `~/.gsd/agent/skills/debug-like-expert/SKILL.md` |
 
+## Glossary
+
+### Proof Levels
+
+- **Contract proof**: Verified by unit tests or fixtures only. No runtime environment required. Suitable for pure logic, data transformations, parsers, and anything that can be validated in isolation.
+- **Integration proof**: Verified through the real entrypoint or runtime path. Requires the actual system to be running. Suitable for API endpoints, CLI commands, database operations, and cross-boundary flows.
+
+### Demoability
+
+- **Demoable**: A stakeholder can see real product progress. This means observable behavior — UI rendering, CLI output, API response — not just passing tests. Test artifacts (shell commands, file checks) satisfy this only when they produce visible output a non-developer could evaluate.
+
 ## Hard Rules
 
 - Never ask the user to do work the agent can execute or verify itself.
