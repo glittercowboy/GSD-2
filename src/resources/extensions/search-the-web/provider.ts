@@ -34,6 +34,15 @@ export function getBraveApiKey(): string {
   return process.env.BRAVE_API_KEY || ''
 }
 
+/** Standard headers for Brave Search API requests. */
+export function braveHeaders(): Record<string, string> {
+  return {
+    "Accept": "application/json",
+    "Accept-Encoding": "gzip",
+    "X-Subscription-Token": getBraveApiKey(),
+  }
+}
+
 /** Returns the Ollama API key from the environment, or empty string if not set. */
 export function getOllamaApiKey(): string {
   return process.env.OLLAMA_API_KEY || ''

@@ -20,7 +20,7 @@ import { LRUTTLCache } from "./cache.js";
 import { fetchWithRetryTimed, fetchWithRetry, classifyError, type RateLimitInfo } from "./http.js";
 import { normalizeQuery, toDedupeKey, detectFreshness } from "./url-utils.js";
 import { formatSearchResults, type SearchResultFormatted, type FormatSearchOptions } from "./format.js";
-import { getTavilyApiKey, getOllamaApiKey, resolveSearchProvider } from "./provider.js";
+import { getTavilyApiKey, getOllamaApiKey, getBraveApiKey, braveHeaders, resolveSearchProvider } from "./provider.js";
 import { normalizeTavilyResult, mapFreshnessToTavily, type TavilySearchResponse } from "./tavily.js";
 
 // =============================================================================
@@ -116,18 +116,6 @@ const summarizerCache = new LRUTTLCache<string>({ max: 50, ttlMs: 900_000 });
 // =============================================================================
 // Brave API helpers
 // =============================================================================
-
-function getBraveApiKey(): string {
-  return process.env.BRAVE_API_KEY || "";
-}
-
-function braveHeaders(): Record<string, string> {
-  return {
-    "Accept": "application/json",
-    "Accept-Encoding": "gzip",
-    "X-Subscription-Token": getBraveApiKey(),
-  };
-}
 
 /**
  * Normalize a Brave result into our formatted result type.
