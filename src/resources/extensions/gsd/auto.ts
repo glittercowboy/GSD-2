@@ -1504,7 +1504,16 @@ export async function handleAgentEnd(
       if (currentUnit) {
         const modelId = ctx.model?.id ?? "unknown";
         snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId, { promptCharCount: lastPromptCharCount, baselineCharCount: lastBaselineCharCount, ...(currentUnitRouting ?? {}) });
-        saveActivityLog(ctx, basePath, currentUnit.type, currentUnit.id);
+        const hookActivityFile = saveActivityLog(ctx, basePath, currentUnit.type, currentUnit.id);
+        if (hookActivityFile) {
+          try {
+            const { buildMemoryLLMCall, extractMemoriesFromUnit } = await import('./memory-extractor.js');
+            const llmCallFn = buildMemoryLLMCall(ctx);
+            if (llmCallFn) {
+              extractMemoriesFromUnit(hookActivityFile, currentUnit.type, currentUnit.id, llmCallFn).catch(() => {});
+            }
+          } catch { /* non-fatal */ }
+        }
       }
       currentUnit = { type: hookUnit.unitType, id: hookUnit.unitId, startedAt: hookStartedAt };
       writeUnitRuntimeRecord(basePath, hookUnit.unitType, hookUnit.unitId, hookStartedAt, {
@@ -1646,7 +1655,16 @@ export async function handleAgentEnd(
             if (currentUnit) {
               const modelId = ctx.model?.id ?? "unknown";
               snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId);
-              saveActivityLog(ctx, basePath, currentUnit.type, currentUnit.id);
+              const triageActivityFile = saveActivityLog(ctx, basePath, currentUnit.type, currentUnit.id);
+              if (triageActivityFile) {
+                try {
+                  const { buildMemoryLLMCall, extractMemoriesFromUnit } = await import('./memory-extractor.js');
+                  const llmCallFn = buildMemoryLLMCall(ctx);
+                  if (llmCallFn) {
+                    extractMemoriesFromUnit(triageActivityFile, currentUnit.type, currentUnit.id, llmCallFn).catch(() => {});
+                  }
+                } catch { /* non-fatal */ }
+              }
             }
 
             // Dispatch triage as a new unit (early-dispatch-and-return)
@@ -1724,7 +1742,16 @@ export async function handleAgentEnd(
       if (currentUnit) {
         const modelId = ctx.model?.id ?? "unknown";
         snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId);
-        saveActivityLog(ctx, basePath, currentUnit.type, currentUnit.id);
+        const qtActivityFile = saveActivityLog(ctx, basePath, currentUnit.type, currentUnit.id);
+        if (qtActivityFile) {
+          try {
+            const { buildMemoryLLMCall, extractMemoriesFromUnit } = await import('./memory-extractor.js');
+            const llmCallFn = buildMemoryLLMCall(ctx);
+            if (llmCallFn) {
+              extractMemoriesFromUnit(qtActivityFile, currentUnit.type, currentUnit.id, llmCallFn).catch(() => {});
+            }
+          } catch { /* non-fatal */ }
+        }
       }
 
       // Dispatch quick-task as a new unit
@@ -2686,7 +2713,18 @@ async function dispatchNextUnit(
   if (currentUnit) {
     const modelId = ctx.model?.id ?? "unknown";
     snapshotUnitMetrics(ctx, currentUnit.type, currentUnit.id, currentUnit.startedAt, modelId, { promptCharCount: lastPromptCharCount, baselineCharCount: lastBaselineCharCount, ...(currentUnitRouting ?? {}) });
-    saveActivityLog(ctx, basePath, currentUnit.type, currentUnit.id);
+    const activityFile = saveActivityLog(ctx, basePath, currentUnit.type, currentUnit.id);
+
+    // Fire-and-forget memory extraction from completed unit
+    if (activityFile) {
+      try {
+        const { buildMemoryLLMCall, extractMemoriesFromUnit } = await import('./memory-extractor.js');
+        const llmCallFn = buildMemoryLLMCall(ctx);
+        if (llmCallFn) {
+          extractMemoriesFromUnit(activityFile, currentUnit.type, currentUnit.id, llmCallFn).catch(() => {});
+        }
+      } catch { /* non-fatal */ }
+    }
 
     // Record routing outcome for adaptive learning
     if (currentUnitRouting) {

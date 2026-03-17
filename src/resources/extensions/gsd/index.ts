@@ -566,6 +566,19 @@ export default function (pi: ExtensionAPI) {
       }
     }
 
+    // Inject auto-learned project memories
+    let memoryBlock = "";
+    try {
+      const { getActiveMemoriesRanked, formatMemoriesForPrompt } = await import("./memory-store.js");
+      const memories = getActiveMemoriesRanked(30);
+      if (memories.length > 0) {
+        const formatted = formatMemoriesForPrompt(memories, 2000);
+        if (formatted) {
+          memoryBlock = `\n\n${formatted}`;
+        }
+      }
+    } catch { /* non-fatal */ }
+
     // Detect skills installed during this auto-mode session
     let newSkillsBlock = "";
     if (hasSkillSnapshot()) {
@@ -625,7 +638,7 @@ export default function (pi: ExtensionAPI) {
       ].join("\n");
     }
 
-    const fullSystem = `${event.systemPrompt}\n\n[SYSTEM CONTEXT — GSD]\n\n${systemContent}${preferenceBlock}${agentInstructionsBlock}${knowledgeBlock}${newSkillsBlock}${worktreeBlock}`;
+    const fullSystem = `${event.systemPrompt}\n\n[SYSTEM CONTEXT — GSD]\n\n${systemContent}${preferenceBlock}${agentInstructionsBlock}${knowledgeBlock}${memoryBlock}${newSkillsBlock}${worktreeBlock}`;
     stopContextTimer({
       systemPromptSize: fullSystem.length,
       injectionSize: injection?.length ?? 0,
