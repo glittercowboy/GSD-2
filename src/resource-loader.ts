@@ -4,6 +4,7 @@ import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rm
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { compareSemver } from './update-check.js'
+import { discoverExtensionEntryPaths } from './extension-discovery.js'
 
 // Resolve resources directory — prefer dist/resources/ (stable, set at build time)
 // over src/resources/ (live working tree, changes with git branch).
@@ -25,64 +26,7 @@ interface ManagedResourceManifest {
   syncedAt?: number
 }
 
-function isExtensionFile(name: string): boolean {
-  return name.endsWith('.ts') || name.endsWith('.js')
-}
-
-function resolveExtensionEntries(dir: string): string[] {
-  const packageJsonPath = join(dir, 'package.json')
-  if (existsSync(packageJsonPath)) {
-    try {
-      const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf-8'))
-      const declared = pkg?.pi?.extensions
-      if (Array.isArray(declared)) {
-        const resolved = declared
-          .filter((entry: unknown): entry is string => typeof entry === 'string')
-          .map((entry: string) => resolve(dir, entry))
-          .filter((entry: string) => existsSync(entry))
-        if (resolved.length > 0) {
-          return resolved
-        }
-      }
-    } catch {
-      // Ignore malformed manifests and fall back to index.ts/index.js discovery.
-    }
-  }
-
-  const indexTs = join(dir, 'index.ts')
-  if (existsSync(indexTs)) {
-    return [indexTs]
-  }
-
-  const indexJs = join(dir, 'index.js')
-  if (existsSync(indexJs)) {
-    return [indexJs]
-  }
-
-  return []
-}
-
-export function discoverExtensionEntryPaths(extensionsDir: string): string[] {
-  if (!existsSync(extensionsDir)) {
-    return []
-  }
-
-  const discovered: string[] = []
-  for (const entry of readdirSync(extensionsDir, { withFileTypes: true })) {
-    const entryPath = join(extensionsDir, entry.name)
-
-    if ((entry.isFile() || entry.isSymbolicLink()) && isExtensionFile(entry.name)) {
-      discovered.push(entryPath)
-      continue
-    }
-
-    if (entry.isDirectory() || entry.isSymbolicLink()) {
-      discovered.push(...resolveExtensionEntries(entryPath))
-    }
-  }
-
-  return discovered
-}
+export { discoverExtensionEntryPaths } from './extension-discovery.js'
 
 function getExtensionKey(entryPath: string, extensionsDir: string): string {
   const relPath = relative(extensionsDir, entryPath)

@@ -2,8 +2,8 @@
 // GSD Startup Loader
 // Copyright (c) 2026 Jeremy McSpadden <jeremy@fluxlabs.net>
 import { fileURLToPath } from 'url'
-import { dirname, resolve, join, delimiter } from 'path'
-import { existsSync, readFileSync, readdirSync, mkdirSync, symlinkSync, cpSync } from 'fs'
+import { dirname, resolve, join, relative, delimiter } from 'path'
+import { existsSync, readFileSync, mkdirSync, symlinkSync, cpSync } from 'fs'
 
 // Fast-path: handle --version/-v and --help/-h before importing any heavy
 // dependencies. This avoids loading the entire pi-coding-agent barrel import
@@ -35,6 +35,7 @@ if (firstArg === '--help' || firstArg === '-h') {
 
 import { agentDir, appRoot } from './app-paths.js'
 import { serializeBundledExtensionPaths } from './bundled-extension-paths.js'
+import { discoverExtensionEntryPaths } from './extension-discovery.js'
 import { renderLogo } from './logo.js'
 
 // pkg/ is a shim directory: contains gsd's piConfig (package.json) and pi's
@@ -108,37 +109,14 @@ const resourcesDir = existsSync(distRes) ? distRes : srcRes
 process.env.GSD_WORKFLOW_PATH = join(resourcesDir, 'GSD-WORKFLOW.md')
 
 // GSD_BUNDLED_EXTENSION_PATHS — dynamically discovered bundled extension entry points.
-// Scans the bundled resources directory to find all extensions, then maps paths to
-// agentDir (~/.gsd/agent/extensions/) where initResources() will sync them.
-//
-// Discovery rules (mirroring resource-loader.ts discoverExtensionEntryPaths):
-//   - Top-level .ts/.js files → extension entry point
-//   - Directories with index.ts or index.js → extension entry point
-//   - Directories without either (e.g. shared/, remote-questions/) → skipped
-//
-// Previously this was a hardcoded list that required manual updates whenever
-// extensions were added or removed — causing merge conflicts in forks and
-// falling out of sync with what buildResourceLoader() discovers at runtime.
+// Uses the shared discoverExtensionEntryPaths() to scan the bundled resources
+// directory, then remaps discovered paths to agentDir (~/.gsd/agent/extensions/)
+// where initResources() will sync them.
 const bundledExtDir = join(resourcesDir, 'extensions')
 const agentExtDir = join(agentDir, 'extensions')
-const discoveredExtensionPaths: string[] = []
-
-if (existsSync(bundledExtDir)) {
-  for (const entry of readdirSync(bundledExtDir, { withFileTypes: true })) {
-    if (entry.isFile() && (entry.name.endsWith('.ts') || entry.name.endsWith('.js'))) {
-      discoveredExtensionPaths.push(join(agentExtDir, entry.name))
-    } else if (entry.isDirectory()) {
-      const srcIndex = existsSync(join(bundledExtDir, entry.name, 'index.ts'))
-        ? 'index.ts'
-        : existsSync(join(bundledExtDir, entry.name, 'index.js'))
-          ? 'index.js'
-          : null
-      if (srcIndex) {
-        discoveredExtensionPaths.push(join(agentExtDir, entry.name, srcIndex))
-      }
-    }
-  }
-}
+const discoveredExtensionPaths = discoverExtensionEntryPaths(bundledExtDir).map(
+  (entryPath) => join(agentExtDir, relative(bundledExtDir, entryPath)),
+)
 
 process.env.GSD_BUNDLED_EXTENSION_PATHS = serializeBundledExtensionPaths(discoveredExtensionPaths)
 
