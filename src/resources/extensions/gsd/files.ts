@@ -716,7 +716,9 @@ export async function saveFile(path: string, content: string): Promise<void> {
     await fs.rename(tmpPath, path);
   } catch (err) {
     // Clean up orphaned temp file on rename failure
-    await fs.unlink(tmpPath).catch(() => {});
+    await fs.unlink(tmpPath).catch((unlinkErr) => {
+      if (process.env.GSD_DEBUG) console.error(`[gsd] temp file cleanup failed for ${tmpPath}:`, unlinkErr);
+    });
     throw err;
   }
 }

@@ -37,7 +37,9 @@ export async function closeoutUnit(
       const { buildMemoryLLMCall, extractMemoriesFromUnit } = await import('./memory-extractor.js');
       const llmCallFn = buildMemoryLLMCall(ctx);
       if (llmCallFn) {
-        extractMemoriesFromUnit(activityFile, unitType, unitId, llmCallFn).catch(() => {});
+        extractMemoriesFromUnit(activityFile, unitType, unitId, llmCallFn).catch((err) => {
+          if (process.env.GSD_DEBUG) console.error(`[gsd] memory extraction failed for ${unitType}/${unitId}:`, err);
+        });
       }
     } catch { /* non-fatal */ }
   }
