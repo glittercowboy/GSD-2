@@ -6,6 +6,35 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.24.0] - 2026-03-16
+
+### Added
+- **Parallel milestone orchestration** — run multiple workers across phases simultaneously
+- Dashboard view for parallel workers with 80% budget alert
+- Headless `new-milestone` command for programmatic milestone creation
+- Interactive update prompt on startup when a new version is available
+- Symlink-based development workflow for `src/resources/`
+- Descriptions added to `/gsd` autocomplete commands
+- `validate-milestone` phase and dispatch
+
+### Fixed
+- Sync `completed-units.json` across worktree boundaries
+- Worktree artifact verification uses correct base path
+- Auto-resume auto-mode after rate limit cooldown
+- Raise `maxDelayMs` default from 60s to 300s for better rate-limit handling
+- Downgrade `missing_tasks_dir` to warning for completed slices
+- Prevent stale state loop on auto-mode restart with existing worktree
+- Always sync bundled resources and clean stale files
+- Add stop reason to every auto-mode stop
+- Skip redundant checkout in worktree merge when main already current
+- Prevent runaway execute-task when task plan missing after failed research
+- Fix read-only file permissions after cpSync from Nix store
+- Fix parallel sendMessage calls missing required fields
+- Strip clack UI from postinstall, keep silent Playwright download
+
+### Changed
+- Lazy-load LLM provider SDKs to reduce startup time
+
 ## [2.23.0] - 2026-03-16
 
 ### Added
@@ -890,7 +919,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 - License updated to MIT
 
-[Unreleased]: https://github.com/gsd-build/gsd-2/compare/v2.23.0...HEAD
+[Unreleased]: https://github.com/gsd-build/gsd-2/compare/v2.24.0...HEAD
+[2.24.0]: https://github.com/gsd-build/gsd-2/compare/v2.23.0...v2.24.0
 [2.23.0]: https://github.com/gsd-build/gsd-2/compare/v2.22.0...v2.23.0
 [2.21.0]: https://github.com/gsd-build/gsd-2/compare/v2.20.0...v2.21.0
 [2.19.0]: https://github.com/gsd-build/gsd-2/compare/v2.18.0...v2.19.0

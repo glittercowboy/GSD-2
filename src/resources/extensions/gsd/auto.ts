@@ -197,7 +197,23 @@ function syncStateToProjectRoot(worktreePath: string, projectRoot: string, miles
     }
   } catch { /* non-fatal */ }
 
-  // 3. Runtime records — unit dispatch state used by selfHealRuntimeRecords().
+  // 3. Merge completed-units.json (set-union of both locations)
+  // Prevents already-completed units from being re-dispatched after crash/restart.
+  const srcKeysFile = join(wtGsd, "completed-units.json");
+  const dstKeysFile = join(prGsd, "completed-units.json");
+  if (existsSync(srcKeysFile)) {
+    try {
+      const srcKeys: string[] = JSON.parse(readFileSync(srcKeysFile, "utf8"));
+      let dstKeys: string[] = [];
+      if (existsSync(dstKeysFile)) {
+        try { dstKeys = JSON.parse(readFileSync(dstKeysFile, "utf8")); } catch { /* ignore corrupt dst */ }
+      }
+      const merged = [...new Set([...dstKeys, ...srcKeys])];
+      writeFileSync(dstKeysFile, JSON.stringify(merged, null, 2));
+    } catch { /* non-fatal */ }
+  }
+
+  // 4. Runtime records — unit dispatch state used by selfHealRuntimeRecords().
   // Without this, a crash during a unit leaves the runtime record only in the
   // worktree. If the next session resolves basePath before worktree re-entry,
   // selfHeal can't find or clear the stale record (#769).
@@ -1102,6 +1118,13 @@ export async function startAuto(
       }
       // Re-register SIGTERM handler with the original basePath (lock lives there)
       registerSigtermHandler(originalBasePath);
+
+      // After worktree entry, load completed keys from BOTH locations (project root
+      // + worktree) so the in-memory set is the union. Prevents re-dispatch of units
+      // completed in either location after crash/restart (#769).
+      if (basePath !== originalBasePath) {
+        loadPersistedKeys(basePath, completedKeySet);
+      }
     } catch (err) {
       // Worktree creation is non-fatal — continue in the project root.
       ctx.ui.notify(

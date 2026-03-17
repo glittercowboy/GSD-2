@@ -201,6 +201,81 @@ function buildDiscussPrompt(nextId: string, preamble: string, _basePath: string)
   });
 }
 
+/**
+ * Build the discuss prompt for headless milestone creation.
+ * Uses the discuss-headless prompt template with seed context injected.
+ */
+function buildHeadlessDiscussPrompt(nextId: string, seedContext: string, _basePath: string): string {
+  const milestoneRel = `.gsd/milestones/${nextId}`;
+  const inlinedTemplates = [
+    inlineTemplate("project", "Project"),
+    inlineTemplate("requirements", "Requirements"),
+    inlineTemplate("context", "Context"),
+    inlineTemplate("roadmap", "Roadmap"),
+    inlineTemplate("decisions", "Decisions"),
+  ].join("\n\n---\n\n");
+  return loadPrompt("discuss-headless", {
+    milestoneId: nextId,
+    seedContext,
+    contextPath: `${milestoneRel}/${nextId}-CONTEXT.md`,
+    roadmapPath: `${milestoneRel}/${nextId}-ROADMAP.md`,
+    inlinedTemplates,
+  });
+}
+
+/**
+ * Bootstrap a .gsd/ project from scratch for headless use.
+ * Ensures git repo, .gsd/ structure, gitignore, and preferences all exist.
+ */
+function bootstrapGsdProject(basePath: string): void {
+  if (!nativeIsRepo(basePath)) {
+    const mainBranch = loadEffectiveGSDPreferences()?.preferences?.git?.main_branch || "main";
+    nativeInit(basePath, mainBranch);
+  }
+
+  const root = gsdRoot(basePath);
+  mkdirSync(join(root, "milestones"), { recursive: true });
+  mkdirSync(join(root, "runtime"), { recursive: true });
+
+  const commitDocs = loadEffectiveGSDPreferences()?.preferences?.git?.commit_docs;
+  ensureGitignore(basePath, { commitDocs });
+  ensurePreferences(basePath);
+  untrackRuntimeFiles(basePath);
+}
+
+/**
+ * Headless milestone creation from a seed specification document.
+ * Bootstraps the project if needed, generates the next milestone ID,
+ * and dispatches the headless discuss prompt (no Q&A rounds).
+ */
+export async function showHeadlessMilestoneCreation(
+  ctx: ExtensionCommandContext,
+  pi: ExtensionAPI,
+  basePath: string,
+  seedContext: string,
+): Promise<void> {
+  // Ensure .gsd/ is bootstrapped
+  bootstrapGsdProject(basePath);
+
+  // Generate next milestone ID
+  const existingIds = findMilestoneIds(basePath);
+  const prefs = loadEffectiveGSDPreferences();
+  const nextId = nextMilestoneId(existingIds, prefs?.preferences?.unique_milestone_ids ?? false);
+
+  // Create milestone directory
+  const milestoneDir = join(basePath, ".gsd", "milestones", nextId, "slices");
+  mkdirSync(milestoneDir, { recursive: true });
+
+  // Build and dispatch the headless discuss prompt
+  const prompt = buildHeadlessDiscussPrompt(nextId, seedContext, basePath);
+
+  // Set pending auto start (auto-mode triggers on "Milestone X ready." via checkAutoStartAfterDiscuss)
+  pendingAutoStart = { ctx, pi, basePath, milestoneId: nextId };
+
+  // Dispatch
+  dispatchWorkflow(pi, prompt);
+}
+
 export function findMilestoneIds(basePath: string): string[] {
   const dir = milestonesDir(basePath);
   try {
@@ -795,7 +870,7 @@ export async function showDiscuss(
     const draftFile = resolveMilestoneFile(basePath, mid, "CONTEXT-DRAFT");
     const draftContent = draftFile ? await loadFile(draftFile) : null;
 
-    const choice = await showNextAction(ctx as any, {
+    const choice = await showNextAction(ctx, {
       title: `GSD — ${mid}: ${milestoneTitle}`,
       summary: ["This milestone has a draft context from a prior discussion.", "It needs a dedicated discussion before auto-planning can begin."],
       actions: [
@@ -872,7 +947,7 @@ export async function showDiscuss(
       recommended: i === 0,
     }));
 
-    const choice = await showNextAction(ctx as any, {
+    const choice = await showNextAction(ctx, {
       title: "GSD — Discuss a slice",
       summary: [
         `${mid}: ${milestoneTitle}`,
@@ -981,7 +1056,7 @@ export async function showSmartEntry(
   const crashLock = readCrashLock(basePath);
   if (crashLock) {
     clearLock(basePath);
-    const resume = await showNextAction(ctx as any, {
+    const resume = await showNextAction(ctx, {
       title: "GSD — Interrupted Session Detected",
       summary: [formatCrashInfo(crashLock)],
       actions: [
@@ -1041,7 +1116,7 @@ export async function showSmartEntry(
         basePath
       ));
     } else {
-      const choice = await showNextAction(ctx as any, {
+      const choice = await showNextAction(ctx, {
         title: "GSD — Get Shit Done",
         summary: ["No active milestone."],
         actions: [
@@ -1071,7 +1146,7 @@ export async function showSmartEntry(
 
   // ── All milestones complete → New milestone ──────────────────────────
   if (state.phase === "complete") {
-    const choice = await showNextAction(ctx as any, {
+    const choice = await showNextAction(ctx, {
       title: `GSD — ${milestoneId}: ${milestoneTitle}`,
       summary: ["All milestones complete."],
       actions: [
@@ -1112,7 +1187,7 @@ export async function showSmartEntry(
     const draftFile = resolveMilestoneFile(basePath, milestoneId, "CONTEXT-DRAFT");
     const draftContent = draftFile ? await loadFile(draftFile) : null;
 
-    const choice = await showNextAction(ctx as any, {
+    const choice = await showNextAction(ctx, {
       title: `GSD — ${milestoneId}: ${milestoneTitle}`,
       summary: ["This milestone has a draft context from a prior discussion.", "It needs a dedicated discussion before auto-planning can begin."],
       actions: [
@@ -1203,7 +1278,7 @@ export async function showSmartEntry(
         },
       ];
 
-      const choice = await showNextAction(ctx as any, {
+      const choice = await showNextAction(ctx, {
         title: `GSD — ${milestoneId}: ${milestoneTitle}`,
         summary: [hasContext ? "Context captured. Ready to create roadmap." : "New milestone — no roadmap yet."],
         actions,
@@ -1240,7 +1315,7 @@ export async function showSmartEntry(
       } else if (choice === "discard_milestone") {
         const mDir = resolveMilestonePath(basePath, milestoneId);
         if (!mDir) return;
-        const confirmed = await showConfirm(ctx as any, {
+        const confirmed = await showConfirm(ctx, {
           title: "Discard milestone?",
           message: `This will permanently delete ${milestoneId} and all its contents.`,
           confirmLabel: "Discard",
@@ -1267,7 +1342,7 @@ export async function showSmartEntry(
         },
       ];
 
-      const choice = await showNextAction(ctx as any, {
+      const choice = await showNextAction(ctx, {
         title: `GSD — ${milestoneId}: ${milestoneTitle}`,
         summary: ["Roadmap exists. Ready to execute."],
         actions,
@@ -1325,7 +1400,7 @@ export async function showSmartEntry(
       ? `${sliceId}: ${sliceTitle} (${summaryParts.join(", ")})`
       : `${sliceId}: ${sliceTitle} — ready for planning.`;
 
-    const choice = await showNextAction(ctx as any, {
+    const choice = await showNextAction(ctx, {
       title: `GSD — ${milestoneId} / ${sliceId}: ${sliceTitle}`,
       summary: [summaryLine],
       actions,
@@ -1356,7 +1431,7 @@ export async function showSmartEntry(
 
   // ── All tasks done → Complete slice ──────────────────────────────────
   if (state.phase === "summarizing") {
-    const choice = await showNextAction(ctx as any, {
+    const choice = await showNextAction(ctx, {
       title: `GSD — ${milestoneId} / ${sliceId}: ${sliceTitle}`,
       summary: ["All tasks complete. Ready for slice summary."],
       actions: [
@@ -1400,7 +1475,7 @@ export async function showSmartEntry(
     const hasInterrupted = !!(continueFile && await loadFile(continueFile)) ||
       !!(sDir && await loadFile(join(sDir, "continue.md")));
 
-    const choice = await showNextAction(ctx as any, {
+    const choice = await showNextAction(ctx, {
       title: `GSD — ${milestoneId} / ${sliceId}: ${sliceTitle}`,
       summary: [
         hasInterrupted
