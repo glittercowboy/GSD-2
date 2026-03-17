@@ -210,6 +210,35 @@ export function AppShell() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatModeState.mode]);
 
+  // Drag-to-resize: mouse handler for the panel divider
+  const handleResizeMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = chatWidth;
+    const MIN_CHAT = 280;
+    const MAX_CHAT = 600;
+    const onMove = (ev: MouseEvent) => {
+      const delta = ev.clientX - startX;
+      setChatWidth(Math.min(MAX_CHAT, Math.max(MIN_CHAT, startWidth + delta)));
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }, [chatWidth]);
+
+  // Viewport-driven width: when browser agent reports a viewport size, resize chat column accordingly
+  useEffect(() => {
+    if (!browserViewportWidth || !containerRef.current) return;
+    const MIN_CHAT = 280;
+    const MAX_CHAT = 600;
+    const available = containerRef.current.clientWidth;
+    const targetChat = available - browserViewportWidth - 6; // 6px for drag handle
+    setChatWidth(Math.min(MAX_CHAT, Math.max(MIN_CHAT, targetChat)));
+  }, [browserViewportWidth]);
+
   // Initializing: show loading logo centered
   if (mode === "initializing") {
     return (
@@ -329,35 +358,6 @@ export function AppShell() {
       </>
     );
   }
-
-  // Drag-to-resize: mouse handler for the panel divider
-  const handleResizeMouseDown = (e: React.MouseEvent) => {
-    e.preventDefault();
-    const startX = e.clientX;
-    const startWidth = chatWidth;
-    const MIN_CHAT = 280;
-    const MAX_CHAT = 600;
-    const onMove = (ev: MouseEvent) => {
-      const delta = ev.clientX - startX;
-      setChatWidth(Math.min(MAX_CHAT, Math.max(MIN_CHAT, startWidth + delta)));
-    };
-    const onUp = () => {
-      document.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseup", onUp);
-    };
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp);
-  };
-
-  // Viewport-driven width: when browser agent reports a viewport size, resize chat column accordingly
-  useEffect(() => {
-    if (!browserViewportWidth || !containerRef.current) return;
-    const MIN_CHAT = 280;
-    const MAX_CHAT = 600;
-    const available = containerRef.current.clientWidth;
-    const targetChat = available - browserViewportWidth - 6; // 6px for drag handle
-    setChatWidth(Math.min(MAX_CHAT, Math.max(MIN_CHAT, targetChat)));
-  }, [browserViewportWidth]);
 
   // Phase 20.1: derive projectName once, share with Sidebar and SingleColumnView
   const projectName = activeProjectPath
