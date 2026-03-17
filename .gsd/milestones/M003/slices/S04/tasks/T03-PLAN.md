@@ -89,6 +89,12 @@ Create a contract test file that validates the full diagnostics pipeline: type e
 - `src/tests/web-command-parity-contract.test.ts` — reference pattern for test structure (node:test, describe/it blocks)
 - `src/tests/web-recovery-diagnostics-contract.test.ts` — reference pattern for diagnostics contract tests
 
+## Observability Impact
+
+- **New signal:** `npx tsx --test src/tests/web-diagnostics-contract.test.ts` — 28 tests across 5 blocks validate the full S04 diagnostics pipeline (type exports, contract state, dispatch routing, section mapping, store methods). Any future type/contract regression surfaces here as a clear assertion failure with field-level detail.
+- **Inspection:** Test output is structured by `describe` block — inspect a specific pipeline stage (e.g., "diagnostics dispatch→surface pipeline") to isolate contract breakage layer.
+- **Failure visibility:** Type-level assertions (Block 1) catch interface drift; state assertions (Block 2) catch initial-state regressions; dispatch/section assertions (Blocks 3–4) catch routing breakage; compile-time type aliases (Block 5) catch store method removal at build time.
+
 ## Expected Output
 
 - `src/tests/web-diagnostics-contract.test.ts` — new file (~150-200 lines) with 5 test blocks validating the full S04 pipeline

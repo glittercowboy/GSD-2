@@ -57,7 +57,7 @@
   - Verify: `npm run build:web-host` succeeds. The three gsd-* sections now render panel components instead of placeholder text.
   - Done when: Opening `/gsd forensics`, `/gsd doctor`, `/gsd skill-health` renders real panel components that fetch from API routes.
 
-- [ ] **T03: Contract tests and build verification** `est:25m`
+- [x] **T03: Contract tests and build verification** `est:25m`
   - Why: Proves the full pipeline works — dispatch → surface → fetch → render — and catches regressions in existing dispatch.
   - Files: `src/tests/web-diagnostics-contract.test.ts`
   - Do: Create contract test file with: (1) import tests that verify diagnostics-types.ts exports expected interfaces, (2) service response shape tests that import each service function and validate return types (or mock child-process output and validate parsing), (3) dispatch pipeline tests that verify `/gsd forensics` → `gsd-forensics` surface → diagnostics panel component wiring, (4) doctor fix action test, (5) verify DoctorIssueCode type coverage. Follow the pattern from web-command-parity-contract.test.ts and web-recovery-diagnostics-contract.test.ts.
