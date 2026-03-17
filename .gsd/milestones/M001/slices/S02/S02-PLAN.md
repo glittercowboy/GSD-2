@@ -42,7 +42,7 @@
   - Verify: `npm run test:unit -- --test-name-pattern "verification-evidence"`
   - Done when: All evidence writer tests pass, module compiles cleanly
 
-- [ ] **T02: Wire evidence writing into auto.ts and update template and prompt** `est:20m`
+- [x] **T02: Wire evidence writing into auto.ts and update template and prompt** `est:20m`
   - Why: Connects the evidence module to the runtime pipeline and gives agents the template to populate evidence tables. Covers R003 integration.
   - Files: `src/resources/extensions/gsd/auto.ts`, `src/resources/extensions/gsd/templates/task-summary.md`, `src/resources/extensions/gsd/prompts/execute-task.md`
   - Do: In the gate block in auto.ts (~line 1512), after `runVerificationGate()` returns, add a call to `writeVerificationJSON(result, tasksDir, tid)` where tasksDir is resolved from the already-parsed mid/sid using `resolveSlicePath`. Use `mkdirSync` with `{ recursive: true }` if the tasks dir doesn't exist. Add `## Verification Evidence` section to the task summary template between `## Verification` and `## Diagnostics`. Add instruction in execute-task prompt telling the agent to populate the evidence table from gate stderr output.

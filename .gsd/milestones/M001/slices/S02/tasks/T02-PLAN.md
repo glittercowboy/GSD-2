@@ -83,3 +83,11 @@ Key constraints from S01 Forward Intelligence:
 - `src/resources/extensions/gsd/auto.ts` — modified with import + ~8-line evidence write block inside the gate
 - `src/resources/extensions/gsd/templates/task-summary.md` — modified with `## Verification Evidence` section
 - `src/resources/extensions/gsd/prompts/execute-task.md` — modified with evidence table instruction
+
+## Observability Impact
+
+- **New signal: T##-VERIFY.json artifacts.** After every execute-task gate run, a JSON file is written to the task's directory (e.g., `.gsd/milestones/M001/slices/S02/tasks/T03-VERIFY.json`). Future agents can `cat` this file to inspect `schemaVersion`, `passed`, and per-check `verdict` fields without re-running the gate.
+- **New stderr line on evidence write failure.** If `writeVerificationJSON` fails (e.g., disk full, bad path), the message `verification-evidence: write error — <message>` appears in stderr. The gate still completes — evidence write failures are non-fatal.
+- **Template change.** Task summaries now include a `## Verification Evidence` section with a table. Agents populate this from gate output. Absence of this section in a summary is detectable by downstream validators.
+- **Prompt change.** Step 8 in execute-task.md instructs agents to fill the evidence table. This is visible in the prompt text itself — `grep "evidence" prompts/execute-task.md` confirms.
+- **Inspection:** `grep -n writeVerificationJSON auto.ts` shows 2 hits (import + call). `ls tasks/T##-VERIFY.json` after a gate run confirms artifact creation.

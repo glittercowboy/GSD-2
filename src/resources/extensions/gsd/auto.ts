@@ -21,6 +21,7 @@ import type { BudgetEnforcementMode, GSDState } from "./types.js";
 import { loadFile, parseRoadmap, getManifestStatus, resolveAllOverrides, parsePlan } from "./files.js";
 import { loadPrompt } from "./prompt-loader.js";
 import { runVerificationGate } from "./verification-gate.js";
+import { writeVerificationJSON } from "./verification-evidence.js";
 export { inlinePriorMilestoneSummary } from "./files.js";
 import { collectSecretsFromManifest } from "../get-secrets-from-user.js";
 import {
@@ -1531,6 +1532,20 @@ export async function handleAgentEnd(
             process.stderr.write(`  ${f.command} exited ${f.exitCode}\n`);
             if (f.stderr) process.stderr.write(`  stderr: ${f.stderr.slice(0, 500)}\n`);
           }
+        }
+      }
+
+      // Write verification evidence JSON artifact
+      if (parts.length >= 3) {
+        try {
+          const [mid, sid, tid] = parts;
+          const sDir = resolveSlicePath(basePath, mid, sid);
+          if (sDir) {
+            const tasksDir = join(sDir, "tasks");
+            writeVerificationJSON(result, tasksDir, tid, currentUnit.id);
+          }
+        } catch (evidenceErr) {
+          process.stderr.write(`verification-evidence: write error — ${(evidenceErr as Error).message}\n`);
         }
       }
     } catch (err) {
