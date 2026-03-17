@@ -221,6 +221,20 @@ Plans:
   4. The landing page loads, shows download buttons linking to the latest GitHub Release artifacts, and is readable on a mobile browser
 **Plans**: TBD
 
+### Phase 20.2: Browser Agent Native Preview (INSERTED)
+**Goal:** GSD's Playwright browser tool use runs headless when launched from Mission Control, and browser screenshots are relayed into the preview panel in real time — eliminating the external Chromium window
+**Requirements**: BROWSER-01, BROWSER-02, BROWSER-03
+**Depends on:** Phase 20
+**Success Criteria** (what must be TRUE):
+  1. No external Chromium window appears when GSD uses browser tools from Mission Control — the `GSD_BROWSER_HEADLESS=1` env var triggers headless mode
+  2. Browser screenshots from `browser_navigate`, `browser_screenshot`, and other browser tools appear as live images in the preview panel
+  3. The preview panel auto-toggles between live iframe mode (dev server) and browser agent view (headless screenshots), returning to iframe mode after 10 seconds of inactivity
+**Plans:** 2 plans
+
+Plans:
+- [ ] 20.2-01-PLAN.md — Headless mode env var + screenshot extraction from tool results (BROWSER-01, BROWSER-02)
+- [ ] 20.2-02-PLAN.md — Pipeline relay + usePreview hook + PreviewPanel browser agent view (BROWSER-02, BROWSER-03)
+
 ### Phase 20.1: Mission Control M2 Polish (INSERTED)
 **Goal:** Fix 10 identified bugs/regressions in the shipped M2 app (preview panel crash, logo blur, missing project name, broken session fork, stale refresh state) and add Code Explorer — a VSCode-style modal file browser with CodeMirror 6 editor
 **Requirements**: POLISH-01 through POLISH-09
@@ -240,7 +254,7 @@ Plans:
 ## Progress
 
 **Execution Order:**
-12 → 13 / 14 / 15 (parallel after 12) → 16 / 17 (after 15) → 18 (after 13, 14, 16, 17) → 19 (after 18) → 20 (after 15, 19) → 20.1 (after 20)
+12 → 13 / 14 / 15 (parallel after 12) → 16 / 17 (after 15) → 18 (after 13, 14, 16, 17) → 19 (after 18) → 20 (after 15, 19) → 20.1 (after 20) → 20.2 (after 20)
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
@@ -270,3 +284,4 @@ Plans:
 | 19. Project Workspace | 5/5 | Complete    | 2026-03-14 | — |
 | 20. Installer + Distribution | 3/3 | Complete    | 2026-03-15 | — |
 | 20.1 M2 Polish (INSERTED) | 5/6 | In Progress|  | — |
+| 20.2 Browser Agent Native Preview (INSERTED) | 0/2 | Planned |  | — |
