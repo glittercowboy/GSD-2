@@ -928,6 +928,7 @@ export async function startAuto(
     ctx.ui.notify(`Debug logging enabled → ${getDebugLogPath()}`, "info");
   }
 
+  invalidateAllCaches();
   let state = await deriveState(base);
 
   // ── Stale worktree state recovery (#654) ─────────────────────────────────
@@ -981,6 +982,7 @@ export async function startAuto(
     // files directly for a simple task), we re-derive state and either proceed
     // with what was created or notify the user clearly (#609).
     if (!state.activeMilestone || state.phase === "complete") {
+      debugLog("smart-entry-gate", { reason: "no-active-milestone-or-complete", phase: state.phase, activeMilestone: state.activeMilestone?.id ?? null, hasSurvivorBranch });
       const { showSmartEntry } = await import("./guided-flow.js");
       await showSmartEntry(ctx, pi, base, { step: requestedStepMode });
 
@@ -1015,6 +1017,7 @@ export async function startAuto(
       const contextFile = resolveMilestoneFile(base, mid, "CONTEXT");
       const hasContext = !!(contextFile && await loadFile(contextFile));
       if (!hasContext) {
+        debugLog("smart-entry-gate", { reason: "pre-planning-no-context", phase: state.phase, milestoneId: mid });
         const { showSmartEntry } = await import("./guided-flow.js");
         await showSmartEntry(ctx, pi, base, { step: requestedStepMode });
 
@@ -1040,6 +1043,7 @@ export async function startAuto(
   // the !activeMilestone early-return above would have fired.
   if (!state.activeMilestone) {
     // Unreachable — satisfies TypeScript's null check
+    debugLog("smart-entry-gate", { reason: "unreachable-null-milestone", phase: state.phase, hasSurvivorBranch });
     const { showSmartEntry } = await import("./guided-flow.js");
     await showSmartEntry(ctx, pi, base, { step: requestedStepMode });
     return;

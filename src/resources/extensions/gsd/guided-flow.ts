@@ -12,6 +12,7 @@ import { loadFile, parseRoadmap } from "./files.js";
 import { loadPrompt, inlineTemplate } from "./prompt-loader.js";
 import { deriveState } from "./state.js";
 import { startAuto } from "./auto.js";
+import { debugLog } from "./debug-logger.js";
 import { readCrashLock, clearLock, formatCrashInfo } from "./crash-recovery.js";
 import { listUnitRuntimeRecords, clearUnitRuntimeRecord } from "./unit-runtime.js";
 import { resolveExpectedArtifactPath } from "./auto.js";
@@ -136,7 +137,11 @@ export function checkAutoStartAfterDiscuss(): boolean {
   pendingAutoStart = null;
   startAuto(ctx, pi, basePath, false, { step }).catch((err) => {
     ctx.ui.notify(`Auto-start failed: ${err instanceof Error ? err.message : String(err)}`, "warning");
-    if (process.env.GSD_DEBUG) console.error('[gsd] auto start error:', err);
+    debugLog("auto-start-after-discuss-error", {
+      error: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack : undefined,
+      milestoneId,
+    });
   });
   return true;
 }
