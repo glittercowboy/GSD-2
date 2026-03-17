@@ -308,7 +308,10 @@ function WorkspaceChrome() {
                     onExpandTerminal={() => setIsTerminalExpanded(true)}
                   />
                 )}
-                {activeView === "power" && <DualTerminal />}
+                {/* DualTerminal always mounted so PTY sessions pre-initialize on boot */}
+                <div className={cn("h-full", activeView !== "power" && "hidden")}>
+                  <DualTerminal />
+                </div>
                 {activeView === "roadmap" && <Roadmap />}
                 {activeView === "files" && <FilesView />}
                 {activeView === "activity" && <ActivityView />}
