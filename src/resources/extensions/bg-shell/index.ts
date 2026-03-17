@@ -65,7 +65,8 @@ import {
 } from "./output-formatter.js";
 import { waitForReady } from "./readiness-detector.js";
 import { queryShellEnv, sendAndWait, runOnSession } from "./interaction.js";
-import { formatUptime, formatTokenCount, resolveBgShellPersistenceCwd } from "./utilities.js";
+import { formatUptime, resolveBgShellPersistenceCwd } from "./utilities.js";
+import { formatTokenCount } from "../shared/format-utils.js";
 import { BgManagerOverlay } from "./overlay.js";
 import { toPosixPath } from "../shared/path-display.js";
 

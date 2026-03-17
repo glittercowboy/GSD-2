@@ -19,6 +19,9 @@ import type { ExtensionContext } from "@gsd/pi-coding-agent";
 import { gsdRoot } from "./paths.js";
 import { getAndClearSkills } from "./skill-telemetry.js";
 
+// Re-export from shared — canonical implementation lives in format-utils.
+export { formatTokenCount } from "../shared/format-utils.js";
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface TokenCounts {
@@ -463,11 +466,6 @@ export function formatCostProjection(
   return result;
 }
 
-export function formatTokenCount(count: number): string {
-  if (count < 1000) return `${count}`;
-  if (count < 1_000_000) return `${(count / 1000).toFixed(1)}k`;
-  return `${(count / 1_000_000).toFixed(2)}M`;
-}
 
 // ─── Disk I/O ─────────────────────────────────────────────────────────────────
 

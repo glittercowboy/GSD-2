@@ -21,6 +21,15 @@ export function formatDuration(ms: number): string {
   return `${h}h ${rm}m`;
 }
 
+// ─── Token Count Formatting ──────────────────────────────────────────────────
+
+/** Format a token count as a compact human-readable string (e.g. 1.5k, 1.50M). */
+export function formatTokenCount(count: number): string {
+  if (count < 1000) return `${count}`;
+  if (count < 1_000_000) return `${(count / 1000).toFixed(1)}k`;
+  return `${(count / 1_000_000).toFixed(2)}M`;
+}
+
 // ─── Layout Helpers ───────────────────────────────────────────────────────────
 
 /** Pad a string with trailing spaces to fill `width` (ANSI-aware). */
