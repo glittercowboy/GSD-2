@@ -15,6 +15,8 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { SingleColumnView } from "@/components/layout/SingleColumnView";
 import { PreviewPanelWithState } from "@/components/preview/PreviewPanelWithState";
+import { CodeExplorer } from "@/components/code-explorer/CodeExplorer";
+import { useCodeExplorer } from "@/components/code-explorer/useCodeExplorer";
 import { PermissionModal } from "@/components/modals/PermissionModal";
 import { FolderPickerModal } from "@/components/modals/FolderPickerModal";
 import { LoadingLogo } from "@/components/session/LoadingLogo";
@@ -74,6 +76,9 @@ export function AppShell() {
     ? settings.merged.budget_ceiling
     : null;
 
+  // Code Explorer modal state (POLISH-09)
+  const { isOpen: codeExplorerOpen, openExplorer, closeExplorer } = useCodeExplorer();
+
   // Builder mode — read from settings (BUILDER-01)
   const { builderMode } = useBuilderMode();
 
@@ -105,6 +110,8 @@ export function AppShell() {
     resetCrash,
     boundaryViolation,
     dismissBoundaryViolation,
+    stuckSessionId,
+    reconnectSession,
   } = useSessionManager("ws://localhost:4011", { budgetCeiling });
 
   // handleBuilderSend: classify intent before dispatching in Builder mode (BUILDER-04)
@@ -156,7 +163,7 @@ export function AppShell() {
   );
 
   // Live preview state — Cmd+P keyboard binding handled inside usePreview
-  const { open: previewOpen, port: previewPort, viewport, setOpen: setPreviewOpen, setViewport } = usePreview();
+  const { open: previewOpen, viewport, setOpen: setPreviewOpen, setViewport } = usePreview();
 
   // Session ref — tracks last read session data for partial viewport writes
   const sessionRef = useRef<MissionControlSession | null>(null);
@@ -431,6 +438,8 @@ export function AppShell() {
             onClearPhaseGate={() => setPhaseGateState(null)}
             onSendDirectMessage={sendMessage}
             projectName={projectName}
+            stuckSessionId={stuckSessionId}
+            onReconnectSession={reconnectSession}
           />
           {mode === "resume" && continueHere && (
             <ResumeCard
@@ -446,7 +455,6 @@ export function AppShell() {
         {previewOpen && (
           <div className="flex-1 min-w-0 h-full border-l border-navy-600">
             <PreviewPanelWithState
-              initialPort={previewPort}
               initialViewport={viewport}
               onClose={() => setPreviewOpen(false)}
               onViewportChange={setViewport}

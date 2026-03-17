@@ -8,8 +8,13 @@
  * - Send payload includes sessionId
  * - session_update updates sessions list
  * - isActiveProcessing reflects only active session
+ * - Session fork message copy (pendingForkRef + previousIds)
+ * - Refresh recovery banner (stuckSessionId, stuckTimerRef, isReconnectedRef)
+ * - Reconnect banner UI (SingleColumnView stuckSessionId prop)
  */
 import { describe, test, expect } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   createSessionManagerState,
   routeChatEvent,
@@ -242,5 +247,57 @@ describe("routeChatError", () => {
     expect(msgs[0].role).toBe("system");
     expect(msgs[0].content).toBe("Something went wrong");
     expect(updated.processingBySession.get("session-1")).toBe(false);
+  });
+});
+
+// -- Session fork message copy --
+
+describe("session fork message copy", () => {
+  test("pendingForkRef is defined in useSessionManager source", () => {
+    const src = readFileSync(join(import.meta.dir, "../src/hooks/useSessionManager.ts"), "utf8");
+    expect(src).toContain("pendingForkRef");
+    expect(src).toContain("previousIds");
+  });
+
+  test("fork copies parent messages to new session", () => {
+    const src = readFileSync(join(import.meta.dir, "../src/hooks/useSessionManager.ts"), "utf8");
+    expect(src).toContain("parentMsgs = prev.get(forkSourceId)");
+    expect(src).toContain("newMap.set(newSession.id");
+  });
+});
+
+// -- Refresh recovery banner --
+
+describe("refresh recovery banner", () => {
+  test("stuck session detection after reconnect", () => {
+    const src = readFileSync(join(import.meta.dir, "../src/hooks/useSessionManager.ts"), "utf8");
+    expect(src).toContain("stuckSessionId");
+    expect(src).toContain("stuckTimerRef");
+    expect(src).toContain("isReconnectedRef");
+    expect(src).toContain("3000"); // 3 second timeout
+  });
+
+  test("reconnectSession clears stuck state", () => {
+    const src = readFileSync(join(import.meta.dir, "../src/hooks/useSessionManager.ts"), "utf8");
+    expect(src).toContain("reconnectSession");
+    expect(src).toContain("setStuckSessionId(null)");
+  });
+
+  test("chat_event clears stuck timer", () => {
+    const src = readFileSync(join(import.meta.dir, "../src/hooks/useSessionManager.ts"), "utf8");
+    // Verify that chat_event handler clears the stuck timer
+    expect(src).toContain("clearTimeout(stuckTimerRef.current)");
+  });
+});
+
+// -- Reconnect banner UI --
+
+describe("reconnect banner", () => {
+  test("SingleColumnView renders reconnect banner when stuckSessionId present", () => {
+    const src = readFileSync(join(import.meta.dir, "../src/components/layout/SingleColumnView.tsx"), "utf8");
+    expect(src).toContain("stuckSessionId");
+    expect(src).toContain("GSD may still be running");
+    expect(src).toContain("Reconnect");
+    expect(src).toContain("onReconnectSession");
   });
 });

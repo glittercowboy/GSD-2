@@ -76,6 +76,10 @@ interface SingleColumnViewProps {
   onSendDirectMessage?: (message: string) => void;
   /** Phase 20.1: Project name to display in the right panel header bar above all views */
   projectName?: string;
+  /** Phase 20.1-03: Session ID stuck in processing state after reconnect */
+  stuckSessionId?: string | null;
+  /** Phase 20.1-03: Callback to reconnect to a stuck session */
+  onReconnectSession?: (sessionId: string) => void;
 }
 
 export function SingleColumnView({
@@ -110,6 +114,8 @@ export function SingleColumnView({
   onClearPhaseGate,
   onSendDirectMessage,
   projectName,
+  stuckSessionId,
+  onReconnectSession,
 }: SingleColumnViewProps) {
   return (
     // tabIndex={-1} enables programmatic focus after Ctrl+1-5 panel switch (KEYS-06)
@@ -141,6 +147,44 @@ export function SingleColumnView({
                 onSendDirectMessage?.(msg);
               }}
             />
+          )}
+          {/* Reconnect banner — shown when session is stuck in processing after page reload (20.1-03) */}
+          {stuckSessionId && (
+            <div
+              role="alert"
+              style={{
+                background: '#1A2332',
+                borderBottom: '1px solid #F59E0B',
+                padding: '8px 16px',
+                fontSize: '13px',
+                fontFamily: 'JetBrains Mono, monospace',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '8px',
+                flexShrink: 0,
+                color: '#F59E0B',
+              }}
+            >
+              <span>GSD may still be running. Reconnect to attach to the session.</span>
+              <button
+                type="button"
+                onClick={() => onReconnectSession?.(stuckSessionId)}
+                style={{
+                  background: '#F59E0B',
+                  color: '#0F1419',
+                  border: 'none',
+                  borderRadius: '4px',
+                  padding: '4px 12px',
+                  cursor: 'pointer',
+                  fontFamily: 'inherit',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                }}
+              >
+                Reconnect
+              </button>
+            </div>
           )}
           <div style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
             <ChatView
