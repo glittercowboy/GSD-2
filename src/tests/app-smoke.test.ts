@@ -95,15 +95,14 @@ test("loader sets all 4 GSD_ env vars and PI_PACKAGE_DIR", async () => {
   assert.ok(loaderSrc.includes("join(delimiter)"), "loader uses platform delimiter for NODE_PATH");
 
   // Verify extension discovery mechanism is in place
-  // loader.ts now dynamically discovers extensions via readdirSync instead of
-  // hardcoding paths — verify the discovery infrastructure exists
-  assert.ok(loaderSrc.includes("readdirSync"), "loader uses readdirSync for extension discovery");
+  // loader.ts uses shared discoverExtensionEntryPaths() from extension-discovery.ts
+  assert.ok(loaderSrc.includes("discoverExtensionEntryPaths"), "loader uses discoverExtensionEntryPaths for extension discovery");
   assert.ok(loaderSrc.includes("bundledExtDir"), "loader defines bundledExtDir for scanning");
   assert.ok(loaderSrc.includes("discoveredExtensionPaths"), "loader collects discovered paths");
 
   // Verify that the env var is populated at runtime by checking the actual
   // extensions directory has discoverable entry points
-  const { discoverExtensionEntryPaths } = await import("../resource-loader.ts");
+  const { discoverExtensionEntryPaths } = await import("../extension-discovery.ts");
   const bundledExtensionsDir = join(projectRoot, existsSync(join(projectRoot, "dist", "resources"))
     ? "dist" : "src", "resources", "extensions");
   const discovered = discoverExtensionEntryPaths(bundledExtensionsDir);
