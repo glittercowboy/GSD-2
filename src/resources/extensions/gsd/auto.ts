@@ -212,6 +212,19 @@ function syncStateToProjectRoot(worktreePath: string, projectRoot: string, miles
       writeFileSync(dstKeysFile, JSON.stringify(merged, null, 2));
     } catch { /* non-fatal */ }
   }
+
+  // 4. Runtime records — unit dispatch state used by selfHealRuntimeRecords().
+  // Without this, a crash during a unit leaves the runtime record only in the
+  // worktree. If the next session resolves basePath before worktree re-entry,
+  // selfHeal can't find or clear the stale record (#769).
+  try {
+    const srcRuntime = join(wtGsd, "runtime", "units");
+    const dstRuntime = join(prGsd, "runtime", "units");
+    if (existsSync(srcRuntime)) {
+      mkdirSync(dstRuntime, { recursive: true });
+      cpSync(srcRuntime, dstRuntime, { recursive: true, force: true });
+    }
+  } catch { /* non-fatal */ }
 }
 
 // ─── State ────────────────────────────────────────────────────────────────────
@@ -1148,11 +1161,12 @@ export async function startAuto(
     }
   }
 
-  // Initialize metrics — loads existing ledger from disk
-  initMetrics(base);
+  // Initialize metrics — loads existing ledger from disk.
+  // Use basePath (not base) so worktree-mode reads the worktree ledger (#769).
+  initMetrics(basePath);
 
   // Initialize routing history for adaptive learning
-  initRoutingHistory(base);
+  initRoutingHistory(basePath);
 
   // Capture the session's current model at auto-mode start (#650).
   // This prevents model bleed when multiple GSD instances share the
@@ -1203,8 +1217,10 @@ export async function startAuto(
     );
   }
 
-  // Self-heal: clear stale runtime records where artifacts already exist
-  await selfHealRuntimeRecords(base, ctx, completedKeySet);
+  // Self-heal: clear stale runtime records where artifacts already exist.
+  // Use basePath (not base) — in worktree mode, basePath points to the worktree
+  // where runtime records and artifacts actually live (#769).
+  await selfHealRuntimeRecords(basePath, ctx, completedKeySet);
 
   // Self-heal: remove stale .git/index.lock from prior crash.
   // A stale lock file blocks all git operations (commit, merge, checkout).
