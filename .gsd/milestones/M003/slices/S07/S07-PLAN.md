@@ -55,7 +55,7 @@
   - Verify: `npm run build` succeeds with all new types resolved
   - Done when: All 7 data-shape interfaces exist in `remaining-command-types.ts`, `CommandSurfaceRemainingState` is in the contract with initial state factory, and build passes
 
-- [ ] **T02: Build read-only child-process services and API routes for history, inspect, hooks, and export** `est:45m`
+- [x] **T02: Build read-only child-process services and API routes for history, inspect, hooks, and export** `est:45m`
   - Why: Four surfaces need server-side data that requires calling upstream extension modules via child process. Each follows the established forensics-service.ts pattern exactly.
   - Files: `src/web/history-service.ts` (NEW), `src/web/inspect-service.ts` (NEW), `src/web/hooks-service.ts` (NEW), `src/web/export-service.ts` (NEW), `web/app/api/history/route.ts` (NEW), `web/app/api/inspect/route.ts` (NEW), `web/app/api/hooks/route.ts` (NEW), `web/app/api/export-data/route.ts` (NEW)
   - Do: Build 4 services using execFile + resolve-ts.mjs child-process pattern from forensics-service.ts. Each service resolves the upstream module path, spawns a child that imports via pathToFileURL, calls the relevant function, and writes JSON to stdout. Routes are thin GET handlers matching the forensics route pattern.
