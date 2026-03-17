@@ -51,3 +51,11 @@ The test resolver's `.js→.ts` rewrite must NOT apply to imports containing `/d
 ## Auto-Commit May Not Include Code Changes
 
 GSD auto-commit runs after task summaries are written. If the executor writes a summary but doesn't actually modify the source files (e.g., T02 in M006/S01), the commit only captures the summary markdown. Always verify prior task outputs exist in the actual codebase, not just in the summary file. Use `git diff <commit>..HEAD --stat` to check what was actually committed.
+
+## GSD TUI Select Option Detection Must Precede isPromptLine
+
+GSD's shared UI uses `›` as the cursor glyph (`INDENT.cursor = "› "`). After ANSI stripping, a selected option renders as `  › N. Label`. The `›` character is also a `PROMPT_MARKER` in PtyChatParser. If you run `isPromptLine` before TUI option detection, selected option lines get mishandled as prompt boundaries. Always check `SELECT_OPTION_SELECTED_RE` before `isPromptLine` in any PTY line handler.
+
+## GSD Test Fixtures in web/lib/ Break tsc --noEmit
+
+The `web/tsconfig.json` includes `**/*.ts`, so any test fixture or scratch file in `web/lib/` that uses top-level `await` or `.ts` import extensions will produce tsc errors. Either exclude test files from tsconfig or run fixtures with `npx tsx` directly and delete them after use. The fixture is for manual verification only — it's not part of the permanent test suite.

@@ -1,5 +1,6 @@
 /**
- * PtyChatParser — ANSI stripper, message segmenter, and role classifier.
+ * PtyChatParser — ANSI stripper, message segmenter, role classifier,
+ * TUI prompt detector, and completion signal emitter.
  *
  * Accepts raw PTY byte chunks from the /api/terminal/stream SSE feed
  * ({ type: "output", data: string } payloads) and produces a structured
@@ -10,6 +11,13 @@
  * - Deterministic given the same input sequence
  * - Logs structural signals only — never raw PTY content (may contain secrets)
  * - Debug-level console.debug under [pty-chat-parser] prefix
+ *
+ * TUI detection patterns (after ANSI stripping):
+ * - Select list: lines starting with "  › N." (selected) or "    N." (unselected)
+ *   Uses GSD's shared UI cursor glyph "›"
+ * - Checkbox: lines starting with "  › [x]" or "  › [ ]" (multi-select)
+ * - Password/text: @clack/prompts "◆  " or "?" prefix + label ending with ":"
+ * - Completion: main prompt (❯ / › / > / $) reappears after ≥2s of no output
  */
 
 // ─── Public Types ─────────────────────────────────────────────────────────────
@@ -18,12 +26,12 @@ export type MessageRole = "user" | "assistant" | "system"
 
 export interface TuiPrompt {
   kind: "select" | "text" | "password"
-  /** For select prompts: the list of option labels */
-  options: string[]
-  /** For select prompts: the currently highlighted option index */
-  selectedIndex: number
   /** The prompt label / question text */
   label: string
+  /** For select prompts: the list of option labels */
+  options: string[]
+  /** For select prompts: the currently highlighted option index (0-based) */
+  selectedIndex: number
 }
 
 export interface CompletionSignal {
@@ -140,6 +148,70 @@ function isSystemLine(line: string): boolean {
   return SYSTEM_LINE_PATTERNS.some((r) => r.test(trimmed))
 }
 
+// ─── TUI Prompt Detection ─────────────────────────────────────────────────────
+
+/**
+ * GSD's shared UI uses "›" as cursor glyph (GLYPH.cursor = "›")
+ * After ANSI stripping, a selected option renders as:
+ *   "  › N. Label"  (with leading spaces from INDENT.option)
+ * An unselected option renders as:
+ *   "    N. Label"  (4 spaces instead of cursor)
+ * Description lines render indented (5 spaces): "     Some description"
+ *
+ * Checkbox selected:  "  › [x] Label"
+ * Checkbox unselected: "  › [ ] Label" or "    [ ] Label"
+ *
+ * A select block starts with a bar line (──────) or header line and
+ * contains ≥2 numbered option lines within a short time window.
+ */
+
+/** Matches a GSD selected option line: "  › N. Label" */
+const SELECT_OPTION_SELECTED_RE = /^\s{0,4}›\s+(\d+)\.\s+(.+)/
+
+/** Matches a GSD unselected option line: "    N. Label" */
+const SELECT_OPTION_UNSELECTED_RE = /^\s{3,6}(\d+)\.\s+(.+)/
+
+/** Matches a GSD checkbox option: "  › [x] Label" or "  › [ ] Label" */
+const CHECKBOX_SELECTED_RE = /^\s{0,4}›\s+\[([x ])\]\s+(.+)/i
+
+/** Matches a GSD separator bar line: all ─ characters */
+const BAR_LINE_RE = /^[─━─\-─]+$/
+
+/**
+ * Matches @clack/prompts password prompt lines:
+ * - "◆  Some label:" (clack uses ◆ as question marker)
+ * - "?  Some label:" (alternative clack style)
+ * - "▲  Some label:" (another clack variant)
+ */
+const CLACK_PASSWORD_RE = /^[◆▲?]\s{1,3}(.+(?:API\s*key|password|token|secret)[^:]*):?\s*$/i
+
+/**
+ * Matches GSD text input prompts — @clack style or bare labeled prompts:
+ * - "◆  Enter project name:"
+ * - "?  What is your name?"
+ */
+const CLACK_TEXT_RE = /^[◆▲?]\s{1,3}(.+[?:])\s*$/
+
+/**
+ * Matches hints line rendered by GSD's shared UI:
+ * "  ↑/↓ to move  |  enter to select"
+ * These appear below select lists and help confirm a select block is active.
+ */
+const HINTS_RE = /↑|↓|arrow|enter to select|space to toggle/i
+
+/** Minimum option lines needed to recognise a select block */
+const MIN_SELECT_OPTIONS = 2
+
+/** Max ms to accumulate select option lines before committing the block */
+const SELECT_WINDOW_MS = 300
+
+/**
+ * Minimum milliseconds of silence (no PTY output) after the main prompt
+ * re-appears before a CompletionSignal is emitted.
+ * Conservative: false positives (premature close) are worse than negatives.
+ */
+const COMPLETION_DEBOUNCE_MS = 2000
+
 // ─── UUID Utility ─────────────────────────────────────────────────────────────
 
 function newId(): string {
@@ -151,6 +223,21 @@ function newId(): string {
     const r = (Math.random() * 16) | 0
     return (c === "x" ? r : (r & 0x3) | 0x8).toString(16)
   })
+}
+
+// ─── Select Block Accumulator ─────────────────────────────────────────────────
+
+interface SelectOption {
+  index: number    // 1-based as rendered by GSD
+  label: string
+  selected: boolean
+}
+
+interface SelectBlock {
+  label: string           // question/header text above the options
+  options: SelectOption[]
+  windowTimer: ReturnType<typeof setTimeout> | null
+  firstLineAt: number
 }
 
 // ─── PtyChatParser ────────────────────────────────────────────────────────────
@@ -181,6 +268,38 @@ export class PtyChatParser {
   /** The message currently being built (not yet complete) */
   private _activeMessage: ChatMessage | null = null
 
+  // ── TUI state ────────────────────────────────────────────────────────────────
+
+  /**
+   * Pending select block accumulator.
+   * Lives until either: enough options arrive and the window closes,
+   * or the window timer fires with too few options.
+   */
+  private _pendingSelect: SelectBlock | null = null
+
+  /**
+   * The last "question / header" line text seen before option lines start.
+   * Reset when a new bar line appears.
+   */
+  private _lastHeaderText = ""
+
+  /**
+   * Timestamp of the last PTY input received — used for completion debounce.
+   */
+  private _lastInputAt = 0
+
+  /**
+   * Set to true when main prompt line appears; cleared if more output arrives
+   * before COMPLETION_DEBOUNCE_MS expires. Timer fires the signal.
+   */
+  private _completionTimer: ReturnType<typeof setTimeout> | null = null
+
+  /**
+   * Whether we have already emitted a completion signal since the last
+   * non-trivial output — guards against double-fire.
+   */
+  private _completionEmitted = false
+
   constructor(source = "default") {
     this._source = source
   }
@@ -191,6 +310,12 @@ export class PtyChatParser {
    * Feed a raw PTY chunk (may contain ANSI codes, partial lines, etc.)
    */
   feed(chunk: string): void {
+    this._lastInputAt = Date.now()
+    // Any new content resets pending completion — we're still receiving output
+    if (this._completionTimer) {
+      clearTimeout(this._completionTimer)
+      this._completionTimer = null
+    }
     this._buffer += chunk
     this._process()
   }
@@ -210,7 +335,7 @@ export class PtyChatParser {
   }
 
   /**
-   * Subscribe to completion signals (GSD returned to idle prompt).
+   * Subscribe to completion signals (GSD returned to idle prompt after ≥2s silence).
    * Returns an unsubscribe function.
    */
   onCompletionSignal(cb: CompletionCallback): Unsubscribe {
@@ -223,6 +348,14 @@ export class PtyChatParser {
     this._buffer = ""
     this._messages = []
     this._activeMessage = null
+    this._pendingSelect = null
+    this._lastHeaderText = ""
+    this._lastInputAt = 0
+    this._completionEmitted = false
+    if (this._completionTimer) {
+      clearTimeout(this._completionTimer)
+      this._completionTimer = null
+    }
     console.debug("[pty-chat-parser] reset source=%s", this._source)
   }
 
@@ -257,8 +390,60 @@ export class PtyChatParser {
       return
     }
 
+    // ── Separator bar (─────) — signals UI block boundary ───────────────────
+    if (BAR_LINE_RE.test(trimmed)) {
+      // Commit any pending select block
+      this._commitSelectBlock()
+      // Reset header text — next non-bar line may be a new question
+      this._lastHeaderText = ""
+      // Append to active assistant content
+      if (this._activeMessage && !this._activeMessage.complete && this._activeMessage.role === "assistant") {
+        this._appendToActive(line + "\n")
+      }
+      return
+    }
+
+    // ── TUI option lines — must be checked BEFORE isPromptLine ─────────────
+    // Reason: the GSD UI cursor glyph "›" is also a PROMPT_MARKER, so a
+    // selected-option line like "  › 1. Describe it now" would be mistakenly
+    // handled as a prompt boundary if isPromptLine ran first.
+
+    // Checkbox option line: "  › [x] Label" / "  › [ ] Label"
+    const checkboxMatch = CHECKBOX_SELECTED_RE.exec(line)
+    if (checkboxMatch) {
+      this._handleCheckboxOption(checkboxMatch[1], checkboxMatch[2])
+      return
+    }
+
+    // Selected option line: "  › N. Label"
+    const selectedMatch = SELECT_OPTION_SELECTED_RE.exec(line)
+    if (selectedMatch) {
+      this._handleSelectOption(parseInt(selectedMatch[1], 10), selectedMatch[2], true)
+      return
+    }
+
+    // Unselected option line: "    N. Label" (3–6 leading spaces, no ›)
+    // Guard: must look like a numbered option — not a description indent line
+    const unselectedMatch = SELECT_OPTION_UNSELECTED_RE.exec(line)
+    if (unselectedMatch && !SELECT_OPTION_SELECTED_RE.test(line)) {
+      this._handleSelectOption(parseInt(unselectedMatch[1], 10), unselectedMatch[2], false)
+      return
+    }
+
+    // Hints line (↑/↓ navigation hints) — end of a select block
+    if (HINTS_RE.test(trimmed)) {
+      this._commitSelectBlock()
+      if (this._activeMessage && !this._activeMessage.complete && this._activeMessage.role === "assistant") {
+        this._appendToActive(line + "\n")
+      }
+      return
+    }
+
     // ── Prompt line → boundary ───────────────────────────────────────────────
     if (isPromptLine(trimmed)) {
+      // Commit any pending select block before closing this turn
+      this._commitSelectBlock()
+
       // Complete any active message
       if (this._activeMessage) {
         this._completeActive()
@@ -270,18 +455,8 @@ export class PtyChatParser {
         )
       }
 
-      // Emit a completion signal — GSD is back at idle prompt
-      const signal: CompletionSignal = {
-        source: this._source,
-        timestamp: Date.now(),
-      }
-      console.debug(
-        "[pty-chat-parser] completion signal emitted source=%s",
-        this._source,
-      )
-      for (const cb of this._completionSubscribers) {
-        try { cb(signal) } catch { /* subscriber error */ }
-      }
+      // Schedule completion signal with debounce
+      this._scheduleCompletionSignal()
 
       // Start a new user message (the text after the prompt marker is user input)
       const userText = trimmed.replace(PROMPT_MARKERS[0], "")
@@ -314,6 +489,29 @@ export class PtyChatParser {
       return
     }
 
+    // ── @clack/prompts TUI prompts ───────────────────────────────────────────
+
+    // Password prompt: @clack/prompts "◆  Paste your Anthropic API key:"
+    const passwordMatch = CLACK_PASSWORD_RE.exec(trimmed)
+    if (passwordMatch) {
+      this._handlePasswordPrompt(passwordMatch[1])
+      return
+    }
+
+    // Text prompt: @clack/prompts "◆  Enter project name:"
+    const textMatch = CLACK_TEXT_RE.exec(trimmed)
+    if (textMatch) {
+      this._handleTextPrompt(textMatch[1])
+      return
+    }
+
+    // ── Question/header line (before options) ────────────────────────────────
+    // GSD renders a header line or question text above select options.
+    // Capture it so we can use it as the TuiPrompt.label when options arrive.
+    if (this._looksLikeQuestionHeader(line)) {
+      this._lastHeaderText = trimmed
+    }
+
     // ── Regular content line → assistant ────────────────────────────────────
     if (
       this._activeMessage === null ||
@@ -329,6 +527,186 @@ export class PtyChatParser {
       )
     }
     this._appendToActive(line + "\n")
+  }
+
+  // ── TUI Prompt Handlers ─────────────────────────────────────────────────────
+
+  private _handleSelectOption(num: number, label: string, isSelected: boolean): void {
+    const cleanLabel = label.trim()
+
+    if (!this._pendingSelect) {
+      // Start a new accumulation block
+      this._pendingSelect = {
+        label: this._lastHeaderText,
+        options: [],
+        windowTimer: null,
+        firstLineAt: Date.now(),
+      }
+      // Set window timer — if not enough options arrive, discard
+      this._pendingSelect.windowTimer = setTimeout(() => {
+        this._commitSelectBlock()
+      }, SELECT_WINDOW_MS)
+    }
+
+    // Upsert option by its 1-based index
+    const block = this._pendingSelect
+    const existing = block.options.find((o) => o.index === num)
+    if (existing) {
+      existing.label = cleanLabel
+      existing.selected = isSelected
+    } else {
+      block.options.push({ index: num, label: cleanLabel, selected: isSelected })
+    }
+  }
+
+  private _handleCheckboxOption(checked: string, label: string): void {
+    const isSelected = checked.toLowerCase() === "x"
+    // Reuse select option logic — checkboxes map to select with multiple selection
+    // For simplicity, we detect checkbox as a variant of select
+    this._handleSelectOption(this._pendingSelect?.options.length ?? 0 + 1, label, isSelected)
+  }
+
+  private _handlePasswordPrompt(label: string): void {
+    // Ensure there's an active assistant message to attach the prompt to
+    if (!this._activeMessage || this._activeMessage.complete || this._activeMessage.role !== "assistant") {
+      this._activeMessage = this._startMessage("assistant", "")
+    }
+    const prompt: TuiPrompt = {
+      kind: "password",
+      label: label.trim(),
+      options: [],
+      selectedIndex: 0,
+    }
+    this._activeMessage.prompt = prompt
+    this._notify(this._activeMessage)
+    console.debug(
+      "[pty-chat-parser] tui prompt detected kind=password source=%s",
+      this._source,
+    )
+  }
+
+  private _handleTextPrompt(label: string): void {
+    // Ensure there's an active assistant message to attach the prompt to
+    if (!this._activeMessage || this._activeMessage.complete || this._activeMessage.role !== "assistant") {
+      this._activeMessage = this._startMessage("assistant", "")
+    }
+    const prompt: TuiPrompt = {
+      kind: "text",
+      label: label.trim(),
+      options: [],
+      selectedIndex: 0,
+    }
+    this._activeMessage.prompt = prompt
+    this._notify(this._activeMessage)
+    console.debug(
+      "[pty-chat-parser] tui prompt detected kind=text label=%s source=%s",
+      label.trim(),
+      this._source,
+    )
+  }
+
+  private _commitSelectBlock(): void {
+    if (!this._pendingSelect) return
+
+    const block = this._pendingSelect
+    this._pendingSelect = null
+
+    if (block.windowTimer) {
+      clearTimeout(block.windowTimer)
+    }
+
+    if (block.options.length < MIN_SELECT_OPTIONS) {
+      // Not enough options — treat as regular content, not a select prompt
+      return
+    }
+
+    // Sort options by their 1-based index
+    block.options.sort((a, b) => a.index - b.index)
+
+    const selectedOpt = block.options.find((o) => o.selected)
+    const selectedIndex = selectedOpt
+      ? block.options.indexOf(selectedOpt)
+      : 0
+
+    const prompt: TuiPrompt = {
+      kind: "select",
+      label: block.label,
+      options: block.options.map((o) => o.label),
+      selectedIndex,
+    }
+
+    // Ensure there's an active assistant message to attach the prompt to
+    if (!this._activeMessage || this._activeMessage.complete || this._activeMessage.role !== "assistant") {
+      this._activeMessage = this._startMessage("assistant", "")
+    }
+    this._activeMessage.prompt = prompt
+    this._notify(this._activeMessage)
+
+    console.debug(
+      "[pty-chat-parser] tui prompt detected kind=select options=%d selectedIndex=%d source=%s",
+      prompt.options.length,
+      selectedIndex,
+      this._source,
+    )
+  }
+
+  /**
+   * Returns true if a stripped line looks like a question/header text that
+   * precedes a select list. Criteria: non-empty, not a system line, not an
+   * option line, and appeared after a bar separator.
+   */
+  private _looksLikeQuestionHeader(line: string): boolean {
+    const trimmed = line.trim()
+    if (trimmed.length === 0) return false
+    if (BAR_LINE_RE.test(trimmed)) return false
+    if (isSystemLine(trimmed)) return false
+    if (SELECT_OPTION_SELECTED_RE.test(line)) return false
+    if (SELECT_OPTION_UNSELECTED_RE.test(line)) return false
+    if (CHECKBOX_SELECTED_RE.test(line)) return false
+    // Only capture as header if we just saw a bar (header text is fresh)
+    // — otherwise this rule would capture any assistant content
+    return this._lastHeaderText === "" || this._pendingSelect !== null
+  }
+
+  // ── Completion Signal ────────────────────────────────────────────────────────
+
+  /**
+   * Schedule a CompletionSignal to fire after COMPLETION_DEBOUNCE_MS of silence.
+   * Any subsequent PTY input in feed() cancels and resets the timer (see feed()).
+   */
+  private _scheduleCompletionSignal(): void {
+    if (this._completionTimer) {
+      clearTimeout(this._completionTimer)
+    }
+    this._completionEmitted = false
+
+    const scheduledAt = Date.now()
+    this._completionTimer = setTimeout(() => {
+      this._completionTimer = null
+      if (this._completionEmitted) return
+
+      const elapsed = Date.now() - scheduledAt
+      this._completionEmitted = true
+
+      const signal: CompletionSignal = {
+        source: this._source,
+        timestamp: Date.now(),
+      }
+      console.debug(
+        "[pty-chat-parser] completion signal emitted source=%s debounce=%dms",
+        this._source,
+        elapsed,
+      )
+      for (const cb of this._completionSubscribers) {
+        try { cb(signal) } catch { /* subscriber error */ }
+      }
+    }, COMPLETION_DEBOUNCE_MS)
+
+    console.debug(
+      "[pty-chat-parser] completion signal scheduled (debounce=%dms) source=%s",
+      COMPLETION_DEBOUNCE_MS,
+      this._source,
+    )
   }
 
   // ── Message Lifecycle ───────────────────────────────────────────────────────

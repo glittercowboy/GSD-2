@@ -46,3 +46,23 @@ Extend `PtyChatParser` with two capabilities: (1) detect ink/TUI interactive pro
 - For password fields, GSD's pi agent asks for API keys during onboarding. These look like: `? Anthropic API key: ` with the cursor at the end. The password kind should mask display but pass input through.
 - Be conservative with completion signals — false positives (premature close) are worse than false negatives (panel stays open slightly too long). Require at least 2 seconds of no output + prompt reappearance before emitting.
 - `selectedIndex` is updated reactively so the TUI select UI in S03 can show the current highlighted option as the user navigates with keyboard arrows.
+
+## Observability Impact
+
+### New Runtime Signals
+
+- `[pty-chat-parser] tui prompt detected kind=select options=N source=...` — fires when a select-list block is assembled
+- `[pty-chat-parser] tui prompt detected kind=text label=... source=...` — fires when a text/password prompt line is matched
+- `[pty-chat-parser] completion signal emitted source=...` — existing signal, now guarded by 2-second debounce
+- `[pty-chat-parser] completion signal suppressed (debounce) source=...` — fires when prompt reappears but debounce window hasn't elapsed
+
+### Inspection Surfaces
+
+- `parser.getMessages()` from DevTools: inspect `msg.prompt` — `kind`, `label`, `options`, `selectedIndex` all visible
+- `parser.getMessages().filter(m => m.prompt)` — quickly isolate all messages that received a TUI prompt annotation
+
+### Failure Shapes
+
+- `prompt` is `undefined` when it should be `'select'`: the select-block accumulation window expired before enough option lines arrived — lower `SELECT_WINDOW_MS` or inspect raw PTY output with `window.__chatParser?.getMessages()[N].content`
+- Completion signal fires too early: debounce timer is too short; inspect `[pty-chat-parser] completion signal` logs to see timestamp delta relative to last output
+- `options` array is empty on a select prompt: ANSI strip is removing the `›` cursor prefix before option detection fires — check `stripAnsi()` output

@@ -47,7 +47,7 @@
   - Verify: `npx tsc --noEmit` exits 0; feed a fixture string containing ANSI codes and assert `getMessages()[0].content` has no `\x1b` characters
   - Done when: parser instantiates, `feed()` accepts ANSI bytes, `getMessages()` returns clean role-classified messages, TypeScript clean
 
-- [ ] **T02: TUI prompt detector and completion signal emitter** `est:2h`
+- [x] **T02: TUI prompt detector and completion signal emitter** `est:2h`
   - Why: Without prompt detection, TUI interactions stay as raw terminal noise; without completion signals, action panels never auto-close
   - Files: `web/lib/pty-chat-parser.ts` (extend T01 output)
   - Do: (1) Inspect real GSD PTY output for ink prompt patterns — ink select lists render as multiple lines prefixed with `◯`/`●` or `›`/` ` after ANSI stripping; text prompts end with `: ` + cursor; password prompts match `API key:`, `password:`, `Enter.*key` (case-insensitive). (2) Implement select detector: after stripping, scan for 2+ consecutive lines starting with bullet-like prefix — extract options array and `selectedIndex` from highlighted line. (3) Implement text prompt detector: line ending with `: ` or `? ` not followed by a bullet pattern. (4) Implement password detector: line matching password/key patterns. (5) Define `CompletionSignal: { source: string; timestamp: number }`. (6) Implement completion heuristic: 2s debounce — if no new output arrives AND the last stripped line contains the GSD input prompt marker, emit `CompletionSignal`. (7) Add `onCompletionSignal(cb)` with subscriber/unsubscribe. (8) Set `message.prompt` on the active message when a prompt is detected; clear it when input is received.
