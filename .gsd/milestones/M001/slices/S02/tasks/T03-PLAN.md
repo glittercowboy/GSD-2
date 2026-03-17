@@ -81,6 +81,12 @@ Also add integration-style tests that verify the full chain: VerificationResult 
 - `src/resources/extensions/gsd/verification-evidence.ts` — T01's `writeVerificationJSON` and `formatEvidenceTable` functions
 - Pattern reference: lines 280–300 of observability-validator.ts show the `missing_diagnostics_section` / `diagnostics_placeholder_only` pattern to copy
 
+## Observability Impact
+
+- **New validator rules:** `evidence_block_missing` and `evidence_block_placeholder` warnings appear in gate stderr when a task summary lacks `## Verification Evidence` or has only placeholder content. Inspect with: `grep -E "evidence_block_(missing|placeholder)" <gate-output>`.
+- **Regression safety:** Existing `missing_diagnostics_section` / `diagnostics_placeholder_only` rules unchanged — verified by running the full `verification-gate` test suite.
+- **Failure visibility:** If the evidence section validator has a bug (e.g., false positive), the symptom is spurious warnings in gate output. The `ruleId` field in each warning uniquely identifies the source rule for debugging.
+
 ## Expected Output
 
 - `src/resources/extensions/gsd/observability-validator.ts` — modified with 2 new validation rules (~15 lines added)

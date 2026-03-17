@@ -49,7 +49,7 @@
   - Verify: `npm run test:unit -- --test-name-pattern "verification-gate"` (28 tests still pass), `npx --yes tsx src/resources/extensions/gsd/auto.ts` compiles
   - Done when: Gate block calls writeVerificationJSON, template has evidence section, prompt has evidence instruction
 
-- [ ] **T03: Add evidence block validator rule and integration tests** `est:20m`
+- [x] **T03: Add evidence block validator rule and integration tests** `est:20m`
   - Why: Closes R004 — the validator rejects summaries without evidence blocks, making the gate truly mandatory.
   - Files: `src/resources/extensions/gsd/observability-validator.ts`, `src/resources/extensions/gsd/tests/verification-evidence.test.ts`
   - Do: Add `evidence_block_missing` and `evidence_block_placeholder` rules to `validateTaskSummaryContent()` following the exact pattern of the existing `missing_diagnostics_section` / `diagnostics_placeholder_only` rules — use `getSection(content, "Verification Evidence", 2)` and `sectionLooksPlaceholderOnly()`. Severity: `"warning"` (matching existing rules). Add tests to the existing evidence test file verifying: summary with evidence section passes, summary without it triggers warning, summary with placeholder-only triggers warning.
