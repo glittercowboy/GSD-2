@@ -1070,7 +1070,26 @@ async function configureModels(ctx: ExtensionCommandContext, prefs: Record<strin
 
   const availableModels = ctx.modelRegistry.getAvailable();
   if (availableModels.length > 0) {
-    const modelOptions = availableModels.map(m => `${m.id} · ${m.provider}`);
+    // Group models by provider, sorted alphabetically
+    const byProvider = new Map<string, typeof availableModels>();
+    for (const m of availableModels) {
+      let group = byProvider.get(m.provider);
+      if (!group) {
+        group = [];
+        byProvider.set(m.provider, group);
+      }
+      group.push(m);
+    }
+    const providers = Array.from(byProvider.keys()).sort((a, b) => a.localeCompare(b));
+
+    const modelOptions: string[] = [];
+    for (const provider of providers) {
+      const group = byProvider.get(provider)!;
+      modelOptions.push(`─── ${provider} (${group.length}) ───`);
+      for (const m of group) {
+        modelOptions.push(`${m.id} · ${m.provider}`);
+      }
+    }
     modelOptions.push("(keep current)", "(clear)");
 
     for (const phase of modelPhases) {
