@@ -75,6 +75,7 @@ const KNOWN_PREFERENCE_KEYS = new Set<string>([
   "token_profile",
   "phases",
   "auto_visualize",
+  "auto_report",
   "parallel",
   "verification_commands",
   "verification_auto_fix",
@@ -175,6 +176,8 @@ export interface GSDPreferences {
   token_profile?: TokenProfile;
   phases?: PhaseSkipPreferences;
   auto_visualize?: boolean;
+  /** Generate HTML report snapshot after each milestone completion. Default: true. Set false to disable. */
+  auto_report?: boolean;
   parallel?: import("./types.js").ParallelConfig;
   verification_commands?: string[];
   verification_auto_fix?: boolean;
@@ -333,7 +336,7 @@ function resolveSkillReference(ref: string, cwd: string): SkillResolution {
     try {
       const entries = readdirSync(dir, { withFileTypes: true });
       for (const entry of entries) {
-        if (!entry.isDirectory()) continue;
+        if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
         if (entry.name === expanded) {
           const skillFile = join(dir, entry.name, "SKILL.md");
           if (existsSync(skillFile)) {
