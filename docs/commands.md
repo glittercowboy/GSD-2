@@ -108,8 +108,8 @@ gsd headless
 # Run a single unit
 gsd headless next
 
-# Machine-readable output
-gsd headless --json status
+# Instant JSON snapshot — no LLM, ~50ms
+gsd headless query
 
 # With timeout for CI
 gsd headless --timeout 600000 auto
@@ -139,6 +139,46 @@ echo "Build a CLI tool" | gsd headless new-milestone --context -
 **Exit codes:** `0` = complete, `1` = error or timeout, `2` = blocked.
 
 Any `/gsd` subcommand works as a positional argument — `gsd headless status`, `gsd headless doctor`, `gsd headless dispatch execute`, etc.
+
+### `gsd headless query`
+
+Returns a single JSON object with the full project snapshot — no LLM session, no RPC child, instant response (~50ms). This is the recommended way for orchestrators and scripts to inspect GSD state.
+
+```bash
+gsd headless query | jq '.state.phase'
+# "executing"
+
+gsd headless query | jq '.next'
+# {"action":"dispatch","unitType":"execute-task","unitId":"M001/S01/T03"}
+
+gsd headless query | jq '.cost.total'
+# 4.25
+```
+
+**Output schema:**
+
+```json
+{
+  "state": {
+    "phase": "executing",
+    "activeMilestone": { "id": "M001", "title": "..." },
+    "activeSlice": { "id": "S01", "title": "..." },
+    "activeTask": { "id": "T01", "title": "..." },
+    "registry": [{ "id": "M001", "status": "active" }, ...],
+    "progress": { "milestones": { "done": 0, "total": 2 }, "slices": { "done": 1, "total": 3 } },
+    "blockers": []
+  },
+  "next": {
+    "action": "dispatch",
+    "unitType": "execute-task",
+    "unitId": "M001/S01/T01"
+  },
+  "cost": {
+    "workers": [{ "milestoneId": "M001", "cost": 1.50, "state": "running", ... }],
+    "total": 1.50
+  }
+}
+```
 
 ## MCP Server Mode
 

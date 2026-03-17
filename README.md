@@ -236,14 +236,14 @@ gsd headless --timeout 600000
 # One unit at a time (cron-friendly)
 gsd headless next
 
-# Machine-readable status
-gsd headless --json status
+# Instant JSON snapshot (no LLM, ~50ms)
+gsd headless query
 
 # Force a specific pipeline phase
 gsd headless dispatch plan
 ```
 
-Headless auto-responds to interactive prompts, detects completion, and exits with structured codes: `0` complete, `1` error/timeout, `2` blocked. Pair with [remote questions](./docs/remote-questions.md) to route decisions to Slack or Discord when human input is needed.
+Headless auto-responds to interactive prompts, detects completion, and exits with structured codes: `0` complete, `1` error/timeout, `2` blocked. Use `gsd headless query` for instant, machine-readable state inspection — returns phase, next dispatch preview, and parallel worker costs as a single JSON object without spawning an LLM session. Pair with [remote questions](./docs/remote-questions.md) to route decisions to Slack or Discord when human input is needed.
 
 ### First launch
 
@@ -280,6 +280,7 @@ On first run, GSD launches a branded setup wizard that walks you through LLM pro
 | `gsd config`            | Re-run the setup wizard (LLM provider + tool keys)              |
 | `gsd update`            | Update GSD to the latest version                                |
 | `gsd headless [cmd]`    | Run `/gsd` commands without TUI (CI, cron, scripts)             |
+| `gsd headless query`    | Instant JSON snapshot — state, next dispatch, costs (no LLM)    |
 | `gsd --continue` (`-c`) | Resume the most recent session for the current directory        |
 | `gsd sessions`          | Interactive session picker — browse and resume any saved session |
 
