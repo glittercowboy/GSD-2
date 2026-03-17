@@ -22,8 +22,10 @@
  * - isNativeApp: show "No web preview" empty state
  * - dualLeftPort/dualRightPort: independent server ports for dual mode
  * - onDualLeftPortChange/onDualRightPortChange: callbacks for dual mode selectors
+ * - browserScreenshot: when set, shows browser agent view instead of iframe
+ * - onClearBrowserScreenshot: callback to clear browser agent view
  */
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { X } from "lucide-react";
 import { ViewportSwitcher } from "./ViewportSwitcher";
 import { DeviceFrame } from "./DeviceFrame";
@@ -48,6 +50,9 @@ export interface PreviewPanelProps {
   dualRightPort?: number | null;
   onDualLeftPortChange?: (port: number | null) => void;
   onDualRightPortChange?: (port: number | null) => void;
+  // Browser agent screenshot relay
+  browserScreenshot?: { screenshot: string; url: string; title: string } | null;
+  onClearBrowserScreenshot?: () => void;
 }
 
 export function PreviewPanel({
@@ -67,11 +72,20 @@ export function PreviewPanel({
   dualRightPort,
   onDualLeftPortChange,
   onDualRightPortChange,
+  browserScreenshot = null,
+  onClearBrowserScreenshot,
 }: PreviewPanelProps) {
   // Desktop sub-tab: which server is active in desktop view
   const [desktopActiveServer, setDesktopActiveServer] = useState<number | null>(
     activeFrontendPort
   );
+
+  // Sync desktopActiveServer when activeFrontendPort arrives after async scan (Fix 4)
+  useEffect(() => {
+    if (desktopActiveServer === null && activeFrontendPort !== null) {
+      setDesktopActiveServer(activeFrontendPort);
+    }
+  }, [activeFrontendPort]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // Manual port input state for empty state
   const [manualPortInput, setManualPortInput] = useState("");
@@ -116,8 +130,15 @@ export function PreviewPanel({
             Live Preview
           </span>
 
-          {/* Server selector or empty state controls */}
-          {scanning ? (
+          {/* Browser Agent mode badge */}
+          {browserScreenshot && (
+            <span className="text-xs font-mono px-2 py-0.5 rounded bg-amber-500/20 text-amber-400 border border-amber-500/30">
+              Browser Agent
+            </span>
+          )}
+
+          {/* Server selector or empty state controls — hidden during browser agent view */}
+          {!browserScreenshot && (scanning ? (
             <span className="text-xs text-slate-400 font-mono">Scanning...</span>
           ) : servers.length === 0 ? (
             <div className="flex items-center gap-2">
@@ -151,7 +172,7 @@ export function PreviewPanel({
             // Tablet/Mobile: show only frontend servers
             renderServerSelector(activeFrontendPort, onSelectFrontendPort, frontendServers.length > 0 ? frontendServers : servers)
           ) : null /* Dual mode: per-frame selectors shown in content area */
-          }
+          )}
         </div>
 
         <div className="flex items-center gap-2">
@@ -169,8 +190,8 @@ export function PreviewPanel({
         </div>
       </div>
 
-      {/* Desktop sub-tabs — shown when multiple servers and viewport=desktop */}
-      {viewport === "desktop" && servers.length > 1 && (
+      {/* Desktop sub-tabs — shown when multiple servers and viewport=desktop and no browser agent view */}
+      {!browserScreenshot && viewport === "desktop" && servers.length > 1 && (
         <div className="flex border-b border-navy-700 px-3 flex-shrink-0 overflow-x-auto">
           {servers.map((s) => (
             <button
@@ -194,7 +215,32 @@ export function PreviewPanel({
 
       {/* Content area */}
       <div className="flex-1 min-h-0 relative bg-[#0a0d12]">
-        {isNativeApp ? (
+        {browserScreenshot ? (
+          /* Browser agent view — shows what GSD's headless Chromium is looking at */
+          <div className="absolute inset-0 flex flex-col">
+            {/* URL bar */}
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-navy-800 border-b border-navy-700 flex-shrink-0">
+              <div className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+              <span className="text-xs font-mono text-slate-300 truncate flex-1">
+                {browserScreenshot.url || "about:blank"}
+              </span>
+              {browserScreenshot.title && (
+                <span className="text-xs text-slate-500 truncate max-w-[200px]">
+                  {browserScreenshot.title}
+                </span>
+              )}
+            </div>
+            {/* Screenshot */}
+            <div className="flex-1 min-h-0 overflow-auto bg-black flex items-start justify-center">
+              <img
+                src={`data:image/jpeg;base64,${browserScreenshot.screenshot}`}
+                alt="Browser agent view"
+                className="max-w-full h-auto"
+                style={{ imageRendering: "auto" }}
+              />
+            </div>
+          </div>
+        ) : isNativeApp ? (
           <div className="absolute inset-0 flex items-center justify-center text-center text-slate-500">
             <p className="text-sm">No web preview available for native apps</p>
           </div>
@@ -203,12 +249,13 @@ export function PreviewPanel({
           <div className="absolute inset-0 overflow-auto">
             <div className="flex items-start justify-center gap-6 p-6">
               {/* Pixel/Android frame — left */}
+              {/* key resets ErrorBoundary when the port changes (Fix: dual mode no-key bug) */}
               <div className="flex flex-col items-center gap-2">
                 {renderServerSelector(
                   effectiveDualLeft,
                   (port) => onDualLeftPortChange?.(port),
                 )}
-                <ErrorBoundaryFrame>
+                <ErrorBoundaryFrame key={effectiveDualLeft ?? "left"}>
                   <DeviceFrame
                     device="pixel"
                     src={effectiveDualLeft ? `http://localhost:${effectiveDualLeft}/` : undefined}
@@ -218,12 +265,13 @@ export function PreviewPanel({
               </div>
 
               {/* iPhone/iOS frame — right */}
+              {/* key resets ErrorBoundary when the port changes (Fix: dual mode no-key bug) */}
               <div className="flex flex-col items-center gap-2">
                 {renderServerSelector(
                   effectiveDualRight,
                   (port) => onDualRightPortChange?.(port),
                 )}
-                <ErrorBoundaryFrame>
+                <ErrorBoundaryFrame key={effectiveDualRight ?? "right"}>
                   <DeviceFrame
                     device="iphone"
                     src={effectiveDualRight ? `http://localhost:${effectiveDualRight}/` : undefined}
@@ -235,35 +283,53 @@ export function PreviewPanel({
           </div>
         ) : (
           /* Single viewport: absolute fill + centered for tablet/mobile max-width */
-          <ErrorBoundaryFrame>
-            <iframe
-              src={
+          /* key={viewport} forces ErrorBoundaryFrame remount on viewport switch.            */
+          /* The iframe is only rendered when a real src is available — rendering with       */
+          /* src=undefined causes an undefined→URL navigation that loads the app into the   */
+          /* iframe, and the subsequent unmount (on next viewport switch) triggers the       */
+          /* browser's beforeunload dialog. Guard prevents that lifecycle entirely.         */
+          <ErrorBoundaryFrame key={viewport}>
+            {(() => {
+              const src =
                 viewport === "desktop"
                   ? effectiveDesktopServer
                     ? `http://localhost:${effectiveDesktopServer}/`
-                    : undefined
+                    : null
                   : activeFrontendPort
                   ? `http://localhost:${activeFrontendPort}/`
-                  : undefined
+                  : null;
+
+              if (!src) {
+                return (
+                  <div className="absolute inset-0 flex items-center justify-center text-slate-500 text-xs font-mono">
+                    No server selected
+                  </div>
+                );
               }
-              title="Live Preview"
-              style={{
-                position: "absolute",
-                top: 0,
-                bottom: 0,
-                left: "50%",
-                transform: "translateX(-50%)",
-                width:
-                  viewport === "desktop"
-                    ? "100%"
-                    : viewport === "tablet"
-                    ? "768px"
-                    : "375px",
-                height: "100%",
-                border: "none",
-                display: "block",
-              }}
-            />
+
+              return (
+                <iframe
+                  src={src}
+                  title="Live Preview"
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    bottom: 0,
+                    left: "50%",
+                    transform: "translateX(-50%)",
+                    width:
+                      viewport === "desktop"
+                        ? "100%"
+                        : viewport === "tablet"
+                        ? "768px"
+                        : "375px",
+                    height: "100%",
+                    border: "none",
+                    display: "block",
+                  }}
+                />
+              );
+            })()}
           </ErrorBoundaryFrame>
         )}
       </div>

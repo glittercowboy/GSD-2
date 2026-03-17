@@ -19,7 +19,7 @@ export type Viewport = "desktop" | "tablet" | "mobile" | "dual";
 export interface DetectedServer {
   port: number;
   type: "frontend" | "backend" | "unknown";
-  label: string; // e.g., "Vite (:5173)"
+  label?: string; // e.g., "Vite (:5173)"
 }
 
 export interface UsePreviewReturn {
@@ -86,11 +86,13 @@ export async function scanForDevServers(): Promise<DetectedServer[]> {
       }
     })
   );
-  return results
-    .filter(
-      (r): r is PromiseFulfilledResult<DetectedServer> => r.status === "fulfilled"
-    )
-    .map((r) => r.value);
+  const found: DetectedServer[] = [];
+  for (const r of results) {
+    if (r.status === "fulfilled") {
+      found.push(r.value);
+    }
+  }
+  return found;
 }
 
 /**

@@ -9,7 +9,7 @@
  * onClose is required. onViewportChange is lifted to AppShell so viewport
  * changes persist to session file.
  */
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { PreviewPanel } from "./PreviewPanel";
 import { usePreview } from "@/hooks/usePreview";
 import type { Viewport } from "@/hooks/usePreview";
@@ -32,18 +32,32 @@ export function PreviewPanelWithState({
     activeFrontendPort,
     activeBackendPort,
     scanning,
+    browserScreenshot,
     setActiveFrontendPort,
     setActiveBackendPort,
     setViewport,
     triggerScan,
     addManualPort,
+    clearBrowserScreenshot,
   } = usePreview();
 
   const [viewport, setLocalViewport] = useState<Viewport>(initialViewport);
 
+  // Auto-scan on mount so the panel opens with servers populated (Fix 3)
+  useEffect(() => {
+    triggerScan();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Dual-mode independent server selectors
   const [dualLeftPort, setDualLeftPort] = useState<number | null>(activeFrontendPort);
   const [dualRightPort, setDualRightPort] = useState<number | null>(activeFrontendPort);
+
+  // Sync dual ports when activeFrontendPort arrives after async scan (Fix 4)
+  useEffect(() => {
+    if (dualLeftPort === null && activeFrontendPort !== null) setDualLeftPort(activeFrontendPort);
+    if (dualRightPort === null && activeFrontendPort !== null) setDualRightPort(activeFrontendPort);
+  }, [activeFrontendPort]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleViewportChange = (v: Viewport) => {
     setLocalViewport(v);
@@ -69,6 +83,8 @@ export function PreviewPanelWithState({
       dualRightPort={dualRightPort}
       onDualLeftPortChange={setDualLeftPort}
       onDualRightPortChange={setDualRightPort}
+      browserScreenshot={browserScreenshot}
+      onClearBrowserScreenshot={clearBrowserScreenshot}
     />
   );
 }
