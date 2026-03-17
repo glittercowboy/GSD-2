@@ -182,10 +182,10 @@ test("current GSD command family samples dispatch to correct outcomes after S02"
   })
 })
 
-const EXPECTED_GSD_OUTCOMES = new Map<string, "surface" | "prompt" | "local">([
-  // Surface commands (20)
+const EXPECTED_GSD_OUTCOMES = new Map<string, "surface" | "prompt" | "local" | "view-navigate">([
+  // Surface commands (19)
   ["status", "surface"],
-  ["visualize", "surface"],
+  ["visualize", "view-navigate"],
   ["forensics", "surface"],
   ["doctor", "surface"],
   ["skill-health", "surface"],
@@ -222,7 +222,7 @@ test("every registered /gsd subcommand has an explicit browser dispatch outcome"
   assert.equal(
     EXPECTED_GSD_OUTCOMES.size,
     30,
-    "EXPECTED_GSD_OUTCOMES must cover all 30 GSD subcommands (20 surface + 9 passthrough + 1 help)",
+    "EXPECTED_GSD_OUTCOMES must cover all 30 GSD subcommands (19 surface + 1 view-navigate + 9 passthrough + 1 help)",
   )
 
   for (const [subcommand, expectedKind] of EXPECTED_GSD_OUTCOMES) {
@@ -255,6 +255,14 @@ test("every registered /gsd subcommand has an explicit browser dispatch outcome"
           outcome.action,
           "gsd_help",
           `/gsd ${subcommand} should dispatch to gsd_help action`,
+        )
+      }
+
+      if (expectedKind === "view-navigate") {
+        assert.equal(
+          outcome.view,
+          subcommand,
+          `/gsd ${subcommand} should navigate to the ${subcommand} view`,
         )
       }
     })
@@ -317,7 +325,7 @@ test("GSD dispatch edge cases", async (t) => {
 test("every GSD surface dispatches through the contract wiring end-to-end", async (t) => {
   const gsdSurfaces = [...EXPECTED_GSD_OUTCOMES.entries()].filter(([, kind]) => kind === "surface")
 
-  assert.equal(gsdSurfaces.length, 20, "should have exactly 20 GSD surface subcommands")
+  assert.equal(gsdSurfaces.length, 19, "should have exactly 19 GSD surface subcommands")
 
   for (const [subcommand] of gsdSurfaces) {
     await t.test(`/gsd ${subcommand} -> dispatch -> open request -> surface state`, () => {
@@ -335,6 +343,12 @@ test("every GSD surface dispatches through the contract wiring end-to-end", asyn
       assert.equal(state.selectedTarget.subcommand, subcommand, `target subcommand should be "${subcommand}"`)
     })
   }
+})
+
+test("/gsd visualize dispatches as view-navigate to the visualizer view", () => {
+  const outcome = dispatchBrowserSlashCommand("/gsd visualize")
+  assert.equal(outcome.kind, "view-navigate")
+  assert.equal(outcome.view, "visualize")
 })
 
 test("slash /settings and sidebar settings click open the same shared surface contract", () => {

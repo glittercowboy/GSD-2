@@ -35,7 +35,7 @@
   - Verify: `test -f .gsd/milestones/M003/slices/S08/S08-PARITY-AUDIT.md` and document contains matrix for all 30 subcommands
   - Done when: Audit document exists with complete feature matrix, every gap has a disposition, and no TUI feature is unaccounted for
 
-- [ ] **T02: Fix /gsd visualize test assertions and verify full green suite** `est:15m`
+- [x] **T02: Fix /gsd visualize test assertions and verify full green suite** `est:15m`
   - Why: 4 test failures in `web-command-parity-contract.test.ts` because `EXPECTED_GSD_OUTCOMES` maps `visualize → "surface"` but D053 intentionally dispatches it as `"view-navigate"`. The tests need to match the correct dispatch behavior.
   - Files: `src/tests/web-command-parity-contract.test.ts`
   - Do: (1) Change `["visualize", "surface"]` to `["visualize", "view-navigate"]` in `EXPECTED_GSD_OUTCOMES`. (2) Update the surface count assertion from 20 to 19 in the "every GSD surface dispatches through the contract wiring end-to-end" test. (3) Add a separate test block for view-navigate outcomes that verifies `/gsd visualize` dispatches correctly with `kind: "view-navigate"` and `view: "visualize"`. (4) Run builds to confirm no regressions.

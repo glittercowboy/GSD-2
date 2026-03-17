@@ -65,3 +65,9 @@ The `EXPECTED_GSD_OUTCOMES` map type currently only allows `"surface" | "prompt"
 ## Expected Output
 
 - `src/tests/web-command-parity-contract.test.ts` — updated with correct visualize dispatch expectations, passing 0 failures
+
+## Observability Impact
+
+- **Test contract signal**: `web-command-parity-contract.test.ts` now encodes `view-navigate` as a valid dispatch kind for `/gsd visualize`. Future dispatch changes to visualize will fail the dedicated assertion and the exhaustive subcommand iteration.
+- **Inspect this task**: Run `npx tsx --test src/tests/web-command-parity-contract.test.ts` — 118/118 pass means the fix holds. A failure in `/gsd visualize -> view-navigate` means someone changed the dispatch without updating the contract.
+- **Failure state**: If the dispatch type for visualize reverts to `"surface"`, two failures appear: the dedicated view-navigate test and the exhaustive iteration test's `kind` assertion. If a new subcommand is added without updating `EXPECTED_GSD_OUTCOMES`, the size-30 guard assertion fails.
