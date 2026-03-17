@@ -55,9 +55,9 @@ export async function listDirectory(
     return { error: "Invalid path", code: 400 };
   }
 
-  let dirents: Awaited<ReturnType<typeof readdir>>;
+  let dirents: import("node:fs").Dirent<string>[];
   try {
-    dirents = await readdir(resolvedPath, { withFileTypes: true });
+    dirents = await readdir(resolvedPath, { withFileTypes: true, encoding: "utf8" }) as import("node:fs").Dirent<string>[];
   } catch (err: any) {
     if (err.code === "ENOENT") {
       return { error: "Directory not found", code: 404 };
@@ -152,7 +152,8 @@ export async function createDirectory(
  */
 export async function handleFsRequest(
   req: Request,
-  url: URL
+  url: URL,
+  allowedRoot?: string
 ): Promise<Response | null> {
   const { pathname, searchParams } = url;
 
@@ -216,6 +217,57 @@ export async function handleFsRequest(
       return Response.json({ error: result.error }, { status: 500 });
     }
     return Response.json(result);
+  }
+
+  // GET /api/fs/read?path=X — read file content
+  if (pathname === "/api/fs/read" && req.method === "GET") {
+    const filePath = searchParams.get("path");
+    if (!filePath) {
+      return Response.json({ error: "path parameter required" }, { status: 400 });
+    }
+
+    try {
+      validatePath(filePath, allowedRoot);
+    } catch {
+      return Response.json({ error: "Path not allowed" }, { status: 403 });
+    }
+
+    try {
+      const content = await Bun.file(filePath).text();
+      return Response.json({ content, path: filePath });
+    } catch (err: any) {
+      if (err.code === "ENOENT") {
+        return Response.json({ error: "File not found" }, { status: 404 });
+      }
+      return Response.json({ error: err.message }, { status: 500 });
+    }
+  }
+
+  // POST /api/fs/write — write file content
+  if (pathname === "/api/fs/write" && req.method === "POST") {
+    let body: any;
+    try {
+      body = await req.json();
+    } catch {
+      return Response.json({ error: "Invalid JSON body" }, { status: 400 });
+    }
+
+    if (!body.path || typeof body.content !== "string") {
+      return Response.json({ error: "path and content fields required" }, { status: 400 });
+    }
+
+    try {
+      validatePath(body.path, allowedRoot);
+    } catch {
+      return Response.json({ error: "Path not allowed" }, { status: 403 });
+    }
+
+    try {
+      await Bun.write(body.path, body.content);
+      return Response.json({ success: true, path: body.path });
+    } catch (err: any) {
+      return Response.json({ error: err.message }, { status: 500 });
+    }
   }
 
   return null;
