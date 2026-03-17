@@ -108,6 +108,26 @@ import {
   autoWorktreeBranch,
 } from "./auto-worktree.js";
 import { pruneQueueOrder } from "./queue-order.js";
+import {
+  getBudgetAlertLevel,
+  getNewBudgetAlertLevel,
+  getBudgetEnforcementAction,
+  type BudgetAlertLevel,
+} from "./auto/budget.js";
+import {
+  AutoSession,
+  MAX_UNIT_DISPATCHES,
+  STUB_RECOVERY_THRESHOLD,
+  MAX_LIFETIME_DISPATCHES,
+  MAX_CONSECUTIVE_SKIPS,
+  DISPATCH_GAP_TIMEOUT_MS,
+} from "./auto/session.js";
+import {
+  clearUnitTimeout as clearUnitTimeoutFn,
+  clearDispatchGapWatchdog as clearDispatchGapWatchdogFn,
+  startDispatchGapWatchdog as startDispatchGapWatchdogFn,
+} from "./auto/timeouts.js";
+import { state, resetState, stateSnapshot } from "./auto/shared-state.js";
 import { consumeSignal } from "./session-status-io.js";
 import { showNextAction } from "../shared/next-action-ui.js";
 import { debugLog, debugTime, debugCount, debugPeak, enableDebug, isDebugEnabled, writeDebugSummary, getDebugLogPath } from "./debug-logger.js";
@@ -228,6 +248,8 @@ function syncStateToProjectRoot(worktreePath: string, projectRoot: string, miles
 }
 
 // ─── State ────────────────────────────────────────────────────────────────────
+// Canonical state shape is defined in auto/shared-state.ts (resetState,
+// stateSnapshot). Module-level variables below are the active runtime state.
 
 let active = false;
 let paused = false;
@@ -238,33 +260,13 @@ let basePath = "";
 let originalBasePath = "";
 let gitService: GitServiceImpl | null = null;
 
-/** Track total dispatches per unit to detect stuck loops (catches A→B→A→B patterns) */
 const unitDispatchCount = new Map<string, number>();
-const MAX_UNIT_DISPATCHES = 3;
-/** Retry index at which a stub summary placeholder is written when the summary is still absent. */
-const STUB_RECOVERY_THRESHOLD = 2;
-/** Hard cap on total dispatches per unit across ALL reconciliation cycles.
- *  unitDispatchCount can be reset by loop-recovery/self-repair paths, but this
- *  counter is never reset — it catches infinite reconciliation loops where
- *  artifacts exist but deriveState keeps returning the same unit. */
 const unitLifetimeDispatches = new Map<string, number>();
-const MAX_LIFETIME_DISPATCHES = 6;
-
-/** Tracks recovery attempt count per unit for backoff and diagnostics. */
 const unitRecoveryCount = new Map<string, number>();
-
-/** Track consecutive skips per unit — catches infinite skip loops where deriveState
- *  keeps returning the same already-completed unit. Reset on any real dispatch. */
 const unitConsecutiveSkips = new Map<string, number>();
-const MAX_CONSECUTIVE_SKIPS = 3;
-
-/** Persisted completed-unit keys — survives restarts. Loaded from .gsd/completed-units.json. */
 const completedKeySet = new Set<string>();
+const inFlightTools = new Map<string, number>();
 
-/** Resource sync timestamp captured at auto-mode start. If the managed-resources
- *  manifest changes mid-session (e.g. /gsd:update or dev edit + copy-resources),
- *  templates on disk may expect variables the in-memory code doesn't provide.
- *  Detect this and stop gracefully instead of crashing. */
 let resourceSyncedAtOnStart: number | null = null;
 
 function readResourceSyncedAt(): number | null {
@@ -330,92 +332,37 @@ function escapeStaleWorktree(base: string): string {
   return projectRoot;
 }
 
-/** Crash recovery prompt — set by startAuto, consumed by first dispatchNextUnit */
+// ─── State ────────────────────────────────────────────────────────────────────
+// Canonical state definition lives in auto/shared-state.ts with resetState()
+// and stateSnapshot() utilities. The module-level variables below are the
+// active runtime references used by all functions in this file. stopAuto()
+// delegates to resetState() for cleanup. New modules under auto/ should
+// import from shared-state.ts instead of reaching back into this file.
+
 let pendingCrashRecovery: string | null = null;
-
-/** Session file path captured at pause — used to synthesize recovery briefing on resume */
 let pausedSessionFile: string | null = null;
-
-/** Dashboard tracking */
 let autoStartTime: number = 0;
 let completedUnits: { type: string; id: string; startedAt: number; finishedAt: number }[] = [];
 let currentUnit: { type: string; id: string; startedAt: number } | null = null;
-
-/** Track dynamic routing decision for the current unit (for metrics) */
 let currentUnitRouting: { tier: string; modelDowngraded: boolean } | null = null;
-
-/** Queue of quick-task captures awaiting dispatch after triage resolution */
 let pendingQuickTasks: import("./captures.js").CaptureEntry[] = [];
-
-/**
- * Model captured at auto-mode start. Used to prevent model bleed between
- * concurrent GSD instances sharing the same global settings.json (#650).
- * When preferences don't specify a model for a unit type, this ensures
- * the session's original model is re-applied instead of reading from
- * the shared global settings (which another instance may have overwritten).
- */
 let autoModeStartModel: { provider: string; id: string } | null = null;
-
-/** Track current milestone to detect transitions */
 let currentMilestoneId: string | null = null;
 let lastBudgetAlertLevel: BudgetAlertLevel = 0;
-
-/** Model the user had selected before auto-mode started */
 let originalModelId: string | null = null;
 let originalModelProvider: string | null = null;
-
-/** Progress-aware timeout supervision */
 let unitTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
 let wrapupWarningHandle: ReturnType<typeof setTimeout> | null = null;
 let idleWatchdogHandle: ReturnType<typeof setInterval> | null = null;
-
-/** Dispatch gap watchdog — detects when the state machine stalls between units.
- *  After handleAgentEnd completes, if auto-mode is still active but no new unit
- *  has been dispatched (sendMessage not called), this timer fires to force a
- *  re-evaluation. Covers the case where dispatchNextUnit silently fails or
- *  an unhandled error kills the dispatch chain. */
 let dispatchGapHandle: ReturnType<typeof setTimeout> | null = null;
-const DISPATCH_GAP_TIMEOUT_MS = 5_000; // 5 seconds
-
-/** Prompt character measurement for token savings analysis (R051). */
 let lastPromptCharCount: number | undefined;
 let lastBaselineCharCount: number | undefined;
-
-/** SIGTERM handler registered while auto-mode is active — cleared on stop/pause. */
 let _sigtermHandler: (() => void) | null = null;
 
-/**
- * Tool calls currently being executed — prevents false idle detection during long-running tools.
- * Maps toolCallId → start timestamp (ms) so the idle watchdog can detect tools that have been
- * running suspiciously long (e.g., a Bash command hung because `&` kept stdout open).
- */
-const inFlightTools = new Map<string, number>();
-
-type BudgetAlertLevel = 0 | 75 | 80 | 90 | 100;
-
-export function getBudgetAlertLevel(budgetPct: number): BudgetAlertLevel {
-  if (budgetPct >= 1.0) return 100;
-  if (budgetPct >= 0.90) return 90;
-  if (budgetPct >= 0.80) return 80;
-  if (budgetPct >= 0.75) return 75;
-  return 0;
-}
-
-export function getNewBudgetAlertLevel(previousLevel: BudgetAlertLevel, budgetPct: number): BudgetAlertLevel | null {
-  const currentLevel = getBudgetAlertLevel(budgetPct);
-  if (currentLevel === 0 || currentLevel <= previousLevel) return null;
-  return currentLevel;
-}
-
-export function getBudgetEnforcementAction(
-  enforcement: BudgetEnforcementMode,
-  budgetPct: number,
-): "none" | "warn" | "pause" | "halt" {
-  if (budgetPct < 1.0) return "none";
-  if (enforcement === "halt") return "halt";
-  if (enforcement === "pause") return "pause";
-  return "warn";
-}
+// Budget functions are now in auto/budget.ts — re-exported from imports above.
+// The type alias remains for backward compatibility with other files importing from auto.ts.
+export type { BudgetAlertLevel };
+export { getBudgetAlertLevel, getNewBudgetAlertLevel, getBudgetEnforcementAction };
 
 /** Wrapper: register SIGTERM handler and store reference. */
 function registerSigtermHandler(currentBasePath: string): void {
