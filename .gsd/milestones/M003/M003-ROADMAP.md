@@ -73,7 +73,7 @@ This milestone is complete only when all are true:
 - [x] **S06: Extended settings and model management surface** `risk:medium` `depends:[S02]`
   > After this: settings command surface shows dynamic model routing config, provider fallback chain, budget allocation, and all preference fields.
 
-- [ ] **S07: Remaining command surfaces** `risk:medium` `depends:[S02]`
+- [x] **S07: Remaining command surfaces** `risk:medium` `depends:[S02]`
   > After this: `/gsd quick`, `/gsd history`, `/gsd undo`, `/gsd steer`, `/gsd mode`, `/gsd hooks`, `/gsd config`, `/gsd inspect`, `/gsd export`, `/gsd cleanup` each open browser-native surfaces.
 
 - [ ] **S08: TUI-to-web 1:1 parity audit and gap closure** `risk:low` `depends:[S03,S04,S05,S06,S07]`
