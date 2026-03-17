@@ -942,6 +942,11 @@ export async function startAuto(
     ctx.ui.notify(`Debug logging enabled → ${getDebugLogPath()}`, "info");
   }
 
+  // Invalidate all caches before initial state derivation to ensure we read
+  // fresh disk state. Without this, a stale cache from a prior session (e.g.
+  // after a discussion that wrote new artifacts) may cause deriveState to
+  // return pre-planning when the roadmap already exists (#800).
+  invalidateAllCaches();
   let state = await deriveState(base);
 
   // ── Stale worktree state recovery (#654) ─────────────────────────────────
