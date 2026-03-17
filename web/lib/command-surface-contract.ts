@@ -1,6 +1,7 @@
 import type { BrowserSlashCommandDispatchResult, BrowserSlashCommandSurface } from "./browser-slash-command-dispatch"
 import type { DoctorFixResult, DoctorReport, ForensicReport, SkillHealthReport } from "./diagnostics-types"
 import type { KnowledgeData, CapturesData, CaptureResolveResult } from "./knowledge-captures-types"
+import type { SettingsData } from "./settings-types"
 import type { GitSummaryResponse } from "./git-summary-contract"
 import type {
   SessionBrowserNameFilter,
@@ -395,6 +396,14 @@ export function createInitialKnowledgeCapturesState(): CommandSurfaceKnowledgeCa
   }
 }
 
+// ─── Settings panel state ────────────────────────────────────────────────────
+
+export type CommandSurfaceSettingsState = CommandSurfaceDiagnosticsPhaseState<SettingsData>
+
+export function createInitialSettingsState(): CommandSurfaceSettingsState {
+  return createInitialDiagnosticsPhaseState<SettingsData>()
+}
+
 export interface WorkspaceCommandSurfaceState {
   open: boolean
   activeSurface: BrowserSlashCommandSurface | null
@@ -413,6 +422,7 @@ export interface WorkspaceCommandSurfaceState {
   recovery: CommandSurfaceRecoveryState
   diagnostics: CommandSurfaceDiagnosticsState
   knowledgeCaptures: CommandSurfaceKnowledgeCapturesState
+  settingsData: CommandSurfaceSettingsState
   sessionBrowser: CommandSurfaceSessionBrowserState
   resumeRequest: CommandSurfaceSessionMutationState
   renameRequest: CommandSurfaceSessionMutationState
@@ -589,6 +599,7 @@ export function createInitialCommandSurfaceState(): WorkspaceCommandSurfaceState
     recovery: createInitialCommandSurfaceRecoveryState(),
     diagnostics: createInitialDiagnosticsState(),
     knowledgeCaptures: createInitialKnowledgeCapturesState(),
+    settingsData: createInitialSettingsState(),
     sessionBrowser: createInitialCommandSurfaceSessionBrowserState(),
     resumeRequest: createInitialCommandSurfaceSessionMutationState(),
     renameRequest: createInitialCommandSurfaceSessionMutationState(),
@@ -799,6 +810,7 @@ export function openCommandSurfaceState(
     recovery: createInitialCommandSurfaceRecoveryState(),
     diagnostics: createInitialDiagnosticsState(),
     knowledgeCaptures: createInitialKnowledgeCapturesState(),
+    settingsData: createInitialSettingsState(),
     sessionBrowser: buildInitialSessionBrowserState(request),
     resumeRequest: createInitialCommandSurfaceSessionMutationState(),
     renameRequest: createInitialCommandSurfaceSessionMutationState(),

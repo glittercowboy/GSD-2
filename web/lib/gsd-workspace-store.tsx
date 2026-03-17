@@ -44,6 +44,7 @@ import {
 } from "./command-surface-contract"
 import type { DoctorFixResult, DoctorReport, ForensicReport, SkillHealthReport } from "./diagnostics-types"
 import type { KnowledgeData, CapturesData, CaptureResolveRequest, CaptureResolveResult } from "./knowledge-captures-types"
+import type { SettingsData } from "./settings-types"
 import { isGitSummaryResponse, type GitSummaryResponse } from "./git-summary-contract"
 import type {
   SessionBrowserNameFilter,
@@ -2228,6 +2229,15 @@ export class GSDWorkspaceStore {
     })
   }
 
+  private patchSettingsPhaseState(patch: Partial<CommandSurfaceDiagnosticsPhaseState<SettingsData>>): void {
+    this.patchState({
+      commandSurface: {
+        ...this.state.commandSurface,
+        settingsData: { ...this.state.commandSurface.settingsData, ...patch },
+      },
+    })
+  }
+
   loadForensicsDiagnostics = async (): Promise<ForensicReport | null> => {
     this.patchDiagnosticsPhaseState("forensics", { phase: "loading", error: null })
     try {
@@ -2347,6 +2357,25 @@ export class GSDWorkspaceStore {
     } catch (error) {
       const message = normalizeClientError(error)
       this.patchKnowledgeCapturesPhaseState("captures", { phase: "error", error: message })
+      return null
+    }
+  }
+
+  loadSettingsData = async (): Promise<SettingsData | null> => {
+    this.patchSettingsPhaseState({ phase: "loading", error: null })
+    try {
+      const response = await fetch("/api/settings-data", { method: "GET", cache: "no-store", headers: { Accept: "application/json" } })
+      const payload = await response.json().catch(() => null)
+      if (!response.ok || !payload) {
+        const message = payload?.error ?? `Settings request failed with ${response.status}`
+        this.patchSettingsPhaseState({ phase: "error", error: message })
+        return null
+      }
+      this.patchSettingsPhaseState({ phase: "loaded", data: payload as SettingsData, lastLoadedAt: new Date().toISOString() })
+      return payload as SettingsData
+    } catch (error) {
+      const message = normalizeClientError(error)
+      this.patchSettingsPhaseState({ phase: "error", error: message })
       return null
     }
   }
@@ -4761,6 +4790,7 @@ export function useGSDWorkspaceActions(): Pick<
   | "loadSkillHealthDiagnostics"
   | "loadKnowledgeData"
   | "loadCapturesData"
+  | "loadSettingsData"
   | "resolveCaptureAction"
   | "updateSessionBrowserState"
   | "loadSessionBrowser"
@@ -4814,6 +4844,7 @@ export function useGSDWorkspaceActions(): Pick<
     loadSkillHealthDiagnostics: store.loadSkillHealthDiagnostics,
     loadKnowledgeData: store.loadKnowledgeData,
     loadCapturesData: store.loadCapturesData,
+    loadSettingsData: store.loadSettingsData,
     resolveCaptureAction: store.resolveCaptureAction,
     updateSessionBrowserState: store.updateSessionBrowserState,
     loadSessionBrowser: store.loadSessionBrowser,

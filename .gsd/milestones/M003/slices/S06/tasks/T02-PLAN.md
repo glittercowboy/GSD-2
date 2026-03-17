@@ -192,3 +192,10 @@ This follows the exact pattern from S04 (diagnostics panels) and S05 (knowledge/
 - `web/lib/gsd-workspace-store.tsx` — modified with `patchSettingsPhaseState()` and `loadSettingsData()` action
 - `web/components/gsd/settings-panels.tsx` — new file with `PrefsPanel`, `ModelRoutingPanel`, `BudgetPanel` components (~300-400 lines)
 - `web/components/gsd/command-surface.tsx` — modified with import, auto-load cases, and render cases for gsd-prefs/gsd-mode/gsd-config
+
+## Observability Impact
+
+- **`commandSurface.settingsData.phase`** — transitions from `idle` → `loading` → `loaded`/`error` in the workspace store; observable via React DevTools or any component reading `useGSDWorkspaceState().commandSurface.settingsData`
+- **`commandSurface.settingsData.error`** — contains the error string when the settings fetch fails; rendered in-panel as a red error card
+- **Auto-load trigger** — opening `gsd-prefs`, `gsd-mode`, or `gsd-config` sections fires `loadSettingsData()` automatically when `settingsData.phase === "idle"`, observable as a `GET /api/settings-data` network request
+- **Panel loading/error/empty states** — each panel renders distinct UI for loading (spinner), error (red card with message), and empty data (gray placeholder message), making failure states visible in the browser without needing console inspection

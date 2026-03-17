@@ -58,6 +58,7 @@ import {
 } from "@/lib/dev-overrides"
 import { DoctorPanel, ForensicsPanel, SkillHealthPanel } from "./diagnostics-panels"
 import { KnowledgeCapturesPanel } from "./knowledge-captures-panel"
+import { PrefsPanel, ModelRoutingPanel, BudgetPanel } from "./settings-panels"
 import {
   formatCost,
   formatTokens,
@@ -309,6 +310,7 @@ export function CommandSurface() {
     loadSkillHealthDiagnostics,
     loadKnowledgeData,
     loadCapturesData,
+    loadSettingsData,
     updateSessionBrowserState,
     loadSessionBrowser,
     renameSessionFromSurface,
@@ -384,6 +386,7 @@ export function CommandSurface() {
   // Auto-fetch diagnostics panels when their sections open
   const diagnostics = commandSurface.diagnostics
   const knowledgeCaptures = commandSurface.knowledgeCaptures
+  const settingsData = commandSurface.settingsData
   useEffect(() => {
     if (!commandSurface.open) return
     if (commandSurface.section === "gsd-forensics" && diagnostics.forensics.phase === "idle") {
@@ -404,6 +407,13 @@ export function CommandSurface() {
     ) {
       void loadCapturesData()
       void loadKnowledgeData()
+    } else if (
+      (commandSurface.section === "gsd-prefs" ||
+       commandSurface.section === "gsd-mode" ||
+       commandSurface.section === "gsd-config") &&
+      settingsData.phase === "idle"
+    ) {
+      void loadSettingsData()
     }
   }, [
     commandSurface.open,
@@ -413,11 +423,13 @@ export function CommandSurface() {
     diagnostics.skillHealth.phase,
     knowledgeCaptures.knowledge.phase,
     knowledgeCaptures.captures.phase,
+    settingsData.phase,
     loadForensicsDiagnostics,
     loadDoctorDiagnostics,
     loadSkillHealthDiagnostics,
     loadKnowledgeData,
     loadCapturesData,
+    loadSettingsData,
   ])
 
   useEffect(() => {
@@ -1962,6 +1974,15 @@ export function CommandSurface() {
       case "gsd-knowledge": return <KnowledgeCapturesPanel initialTab="knowledge" />
       case "gsd-capture": return <KnowledgeCapturesPanel initialTab="captures" />
       case "gsd-triage": return <KnowledgeCapturesPanel initialTab="captures" />
+      case "gsd-prefs": return (
+        <div className="space-y-6">
+          <PrefsPanel />
+          <ModelRoutingPanel />
+          <BudgetPanel />
+        </div>
+      )
+      case "gsd-mode": return <ModelRoutingPanel />
+      case "gsd-config": return <BudgetPanel />
       default:
         // GSD subcommand surfaces — generic placeholder (S02)
         if (commandSurface.section?.startsWith("gsd-")) {
