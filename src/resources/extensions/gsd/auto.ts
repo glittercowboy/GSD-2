@@ -2055,7 +2055,7 @@ async function dispatchNextUnit(
   // Lightweight check for critical issues that would cause the next unit
   // to fail or corrupt state. Auto-heals what it can, blocks on the rest.
   try {
-    const healthGate = preDispatchHealthGate(basePath);
+    const healthGate = await preDispatchHealthGate(basePath);
     if (healthGate.fixesApplied.length > 0) {
       ctx.ui.notify(`Pre-dispatch: ${healthGate.fixesApplied.join(", ")}`, "info");
     }
