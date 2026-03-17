@@ -438,19 +438,8 @@ test("view components read from real data sources (store or API)", () => {
   }
 });
 
-test("dashboard consumes activeToolExecution and streamingAssistantText from store", () => {
-  const dashboardPath = resolve(import.meta.dirname, "../../web/components/gsd/dashboard.tsx");
-  const source = readFileSync(dashboardPath, "utf-8");
-
-  assert.ok(
-    source.includes("activeToolExecution"),
-    "dashboard.tsx must reference activeToolExecution for live tool execution display",
-  );
-  assert.ok(
-    source.includes("streamingAssistantText"),
-    "dashboard.tsx must reference streamingAssistantText for streaming indicator",
-  );
-});
+// Session card (with activeToolExecution and streamingAssistantText) was removed
+// from the dashboard. Live signals are visible in the terminal/power mode instead.
 
 test("status bar consumes statusTexts from store", () => {
   const statusBarPath = resolve(import.meta.dirname, "../../web/components/gsd/status-bar.tsx");

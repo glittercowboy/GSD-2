@@ -10,9 +10,6 @@ import {
   Circle,
   Play,
   GitBranch,
-  Cpu,
-  Wrench,
-  MessageSquare,
   Loader2,
   Milestone,
 } from "lucide-react"
@@ -30,7 +27,6 @@ import {
   getLiveAutoDashboard,
   getLiveResumableSessions,
   getLiveWorkspaceIndex,
-  getModelLabel,
   type WorkspaceTerminalLine,
   type TerminalLineType,
 } from "@/lib/gsd-workspace-store"
@@ -40,7 +36,6 @@ import { NewMilestoneDialog } from "@/components/gsd/new-milestone-dialog"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   CurrentSliceCardSkeleton,
-  SessionCardSkeleton,
   ActivityCardSkeleton,
 } from "@/components/gsd/loading-skeletons"
 import { ScopeBadge } from "@/components/gsd/scope-badge"
@@ -137,9 +132,6 @@ export function Dashboard({ onSwitchView, onExpandTerminal }: DashboardProps = {
   const freshness = state.live.freshness
   const recoverySummary = state.live.recoverySummary
 
-  const activeToolExecution = state.activeToolExecution
-  const streamingAssistantText = state.streamingAssistantText
-
   const elapsed = auto?.elapsed ?? 0
   const totalCost = auto?.totalCost ?? 0
   const totalTokens = auto?.totalTokens ?? 0
@@ -153,7 +145,6 @@ export function Dashboard({ onSwitchView, onExpandTerminal }: DashboardProps = {
 
   const scopeLabel = getCurrentScopeLabel(workspace)
   const branch = getCurrentBranch(workspace)
-  const model = getModelLabel(bridge)
   const isAutoActive = auto?.active ?? false
   const currentUnitLabel = auto?.currentUnit?.id ?? scopeLabel
   const currentUnitFreshness = freshness.auto.stale ? "stale" : freshness.auto.status
@@ -370,8 +361,8 @@ export function Dashboard({ onSwitchView, onExpandTerminal }: DashboardProps = {
           />
         </div>
 
-        <div className="mt-6 grid items-stretch gap-6 xl:grid-cols-[1fr_300px]">
-          {/* LEFT — Current Slice */}
+        <div className="mt-6">
+          {/* Current Slice */}
           {isConnecting ? (
             <CurrentSliceCardSkeleton />
           ) : (
@@ -457,83 +448,6 @@ export function Dashboard({ onSwitchView, onExpandTerminal }: DashboardProps = {
               </div>
             </div>
           )}
-
-          {/* RIGHT — Session + Recovery stacked */}
-          <div className="flex flex-col gap-6">
-            {isConnecting ? (
-              <SessionCardSkeleton />
-            ) : (
-              <div className="rounded-md border border-border bg-card">
-                {/* Model */}
-                <div className="border-b border-border px-4 py-3">
-                  <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Session</h2>
-                  <div className="mt-1 flex items-center gap-2">
-                    <Cpu className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                    <span className="font-mono text-sm font-medium truncate">{model}</span>
-                    {(activeToolExecution || streamingAssistantText.length > 0) && (
-                      <span className="ml-auto flex shrink-0 items-center gap-1.5">
-                        <span className="h-1.5 w-1.5 rounded-full bg-success animate-pulse" />
-                        <span className="text-xs text-muted-foreground">
-                          {activeToolExecution ? "running" : "streaming"}
-                        </span>
-                      </span>
-                    )}
-                  </div>
-                </div>
-                {/* 4-cell stat grid */}
-                <div className="grid grid-cols-2 gap-px bg-border p-px">
-                  <div className="bg-card px-3 py-2.5">
-                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Cost</p>
-                    <p className="mt-1 text-lg font-bold tabular-nums">{formatCost(totalCost)}</p>
-                  </div>
-                  <div className="bg-card px-3 py-2.5">
-                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Tokens</p>
-                    <p className="mt-1 text-lg font-bold tabular-nums">{formatTokens(totalTokens)}</p>
-                  </div>
-                  <div className="bg-card px-3 py-2.5">
-                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Elapsed</p>
-                    <p className="mt-1 text-lg font-bold tabular-nums">{formatDuration(elapsed)}</p>
-                  </div>
-                  <div className="bg-card px-3 py-2.5">
-                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Auto Mode</p>
-                    <div className="mt-1 flex items-center gap-1.5">
-                      <span className={cn("h-2 w-2 shrink-0 rounded-full", isAutoActive ? "bg-success animate-pulse" : "bg-muted-foreground/40")} />
-                      <p className="text-sm font-semibold">{isAutoActive ? "active" : "off"}</p>
-                    </div>
-                  </div>
-                </div>
-
-
-                {/* Live signals — only shown when active */}
-                {(activeToolExecution || streamingAssistantText.length > 0) && (
-                  <div className="border-t border-border p-3 space-y-1.5">
-                    {activeToolExecution && (
-                      <div
-                        className="flex items-center gap-2.5 rounded border border-border bg-accent px-3 py-2"
-                        data-testid="dashboard-active-tool"
-                      >
-                        <Wrench className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                        <span className="text-xs text-muted-foreground">Tool</span>
-                        <span className="ml-auto font-mono text-xs font-medium">{activeToolExecution.name}</span>
-                      </div>
-                    )}
-                    {streamingAssistantText.length > 0 && (
-                      <div
-                        className="flex items-center gap-2.5 rounded border border-border bg-accent px-3 py-2"
-                        data-testid="dashboard-streaming"
-                      >
-                        <MessageSquare className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                        <span className="text-xs text-muted-foreground">Agent</span>
-                        <span className="ml-auto text-xs font-medium">Streaming…</span>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-
-
-          </div>
         </div>
 
         {isConnecting ? (

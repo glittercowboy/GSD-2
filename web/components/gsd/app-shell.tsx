@@ -361,24 +361,15 @@ function ProjectAwareWorkspace() {
   const activeProjectCwd = useSyncExternalStore(manager.subscribe, manager.getSnapshot, manager.getSnapshot)
   const activeStore = activeProjectCwd ? manager.getActiveStore() : null
 
-  // Warn on tab close and shut down all projects when confirmed
+  // Shut down all projects when the tab actually closes
   useEffect(() => {
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      e.preventDefault()
-      // Modern browsers show a generic message; returnValue triggers the dialog
-      e.returnValue = ""
-    }
-
     const handlePageHide = () => {
-      // Fire-and-forget shutdown when the tab actually closes
       navigator.sendBeacon("/api/shutdown", "")
     }
 
-    window.addEventListener("beforeunload", handleBeforeUnload)
     window.addEventListener("pagehide", handlePageHide)
 
     return () => {
-      window.removeEventListener("beforeunload", handleBeforeUnload)
       window.removeEventListener("pagehide", handlePageHide)
     }
   }, [])
