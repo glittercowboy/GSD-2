@@ -1,7 +1,7 @@
 # GSD State
 
 **Active Milestone:** M003: Upstream Sync and Full Web Feature Parity
-**Active Slice:** S03: Workflow visualizer page
+**Active Slice:** S04: Diagnostics panels — forensics, doctor, skill-health
 **Phase:** executing
 **Requirements Status:** 12 active · 12 validated · 3 deferred · 3 out of scope
 
@@ -12,11 +12,12 @@
 - ⬜ **M004:** M004
 
 ## Recent Decisions
-- D052: Client-side blob downloads for visualizer Export tab
-- D053: "view-navigate" dispatch kind for /gsd visualize navigation
+- D055: Export buildForensicReport from forensics.ts
+- D056: Extract diagnostics panel components to diagnostics-panels.tsx
+- D057: Simplify ForensicReport for browser (flatten metrics/traces to summary counts)
 
 ## Blockers
 - None
 
 ## Next Action
-Execute S03/T01 (Create visualizer API route, service layer, and browser types).
+Execute T01 of S04 (backend services, API routes, and browser-safe types).
