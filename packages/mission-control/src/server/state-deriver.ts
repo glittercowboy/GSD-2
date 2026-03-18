@@ -615,9 +615,13 @@ export async function buildFullState(gsdDir: string): Promise<GSD2State> {
     // milestones/ dir not present — fall back to active milestone only
   }
 
-  // If scan found nothing, use the active roadmap as the single milestone
-  if (allMilestones.length === 0 && roadmap) {
-    allMilestones.push(roadmap);
+  // Always ensure the active roadmap is included (scan only finds milestones/ subdirs)
+  if (roadmap) {
+    const alreadyIncluded = allMilestones.some((m) => m.milestoneId === roadmap.milestoneId);
+    if (!alreadyIncluded) {
+      allMilestones.push(roadmap);
+      allMilestones.sort((a, b) => a.milestoneId.localeCompare(b.milestoneId));
+    }
   }
 
   return {

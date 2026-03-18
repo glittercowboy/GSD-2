@@ -8,7 +8,7 @@
 import { useEffect, useRef, useCallback } from "react";
 import { EditorView, keymap, highlightActiveLine, highlightActiveLineGutter } from "@codemirror/view";
 import { EditorState, Compartment } from "@codemirror/state";
-import { basicSetup } from "@codemirror/basic-setup";
+import { basicSetup } from "codemirror";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { javascript } from "@codemirror/lang-javascript";
 import { css } from "@codemirror/lang-css";

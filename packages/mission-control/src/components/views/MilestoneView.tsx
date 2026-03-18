@@ -7,7 +7,6 @@
  */
 import { useState } from "react";
 import { PanelWrapper } from "@/components/layout/PanelWrapper";
-import { MilestoneHeader } from "@/components/milestone/MilestoneHeader";
 import { MilestoneMetrics } from "@/components/milestone/MilestoneMetrics";
 import { SliceAccordion } from "@/components/milestone/SliceAccordion";
 import { InlineReadPanel } from "@/components/milestone/InlineReadPanel";
@@ -138,22 +137,10 @@ function MilestoneContent({
     });
   }
 
-  function handleStartNext() {
-    const nextPlanned = allMilestones
-      .flatMap((m) => m.slices)
-      .find((s) => s.status === "planned");
-    if (nextPlanned) {
-      handleSliceAction({ type: "start_slice", sliceId: nextPlanned.id });
-    }
-  }
-
   return (
     <div className="flex flex-col">
       {/* Aggregate metric cards */}
       <MilestoneMetrics gsd2State={gsd2State} />
-
-      {/* MilestoneHeader for active milestone */}
-      <MilestoneHeader gsd2State={gsd2State} onStartNext={handleStartNext} />
 
       {/* Stacked milestone sections */}
       {allMilestones.map((milestone) => {

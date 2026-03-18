@@ -10,7 +10,6 @@
     "test:e2e:ui": "npx playwright test --ui"
   },
   "dependencies": {
-    "@codemirror/basic-setup": "^0.20.0",
     "@codemirror/lang-cpp": "^6.0.3",
     "@codemirror/lang-css": "^6.3.1",
     "@codemirror/lang-go": "^6.0.1",
@@ -35,6 +34,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
+    "codemirror": "6",
     "gray-matter": "^4.0.3",
     "lucide-react": "^0.577.0",
     "marked": "^17.0.4",
