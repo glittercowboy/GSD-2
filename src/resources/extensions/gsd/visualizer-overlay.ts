@@ -15,7 +15,7 @@ import {
   type ProgressFilter,
 } from "./visualizer-views.js";
 import { writeExportFile } from "./export.js";
-import { stripAnsi } from "../shared/index.js";
+import { stripAnsi } from "../shared/mod.js";
 
 const TAB_COUNT = 10;
 const TAB_LABELS = [

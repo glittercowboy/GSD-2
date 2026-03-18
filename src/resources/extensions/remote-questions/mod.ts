@@ -13,4 +13,3 @@ export {
 	parseTelegramResponse,
 } from "./format.js";
 export { resolveRemoteConfig, isValidChannelId } from "./config.js";
-export { sanitizeError } from "./manager.js";

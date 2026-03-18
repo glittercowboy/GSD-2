@@ -37,7 +37,7 @@ import {
 } from "./doctor.js";
 import { loadPrompt } from "./prompt-loader.js";
 
-import { handleRemote } from "../remote-questions/index.js";
+import { handleRemote } from "../remote-questions/mod.js";
 import { handleQuick } from "./quick.js";
 import { handleHistory } from "./history.js";
 import { handleUndo } from "./undo.js";

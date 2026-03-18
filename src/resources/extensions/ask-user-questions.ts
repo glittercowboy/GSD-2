@@ -18,7 +18,7 @@ import {
 	type Question,
 	type QuestionOption,
 	type RoundResult,
-} from "./shared/index.js";
+} from "./shared/mod.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
