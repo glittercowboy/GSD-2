@@ -63,6 +63,22 @@ Note: `useEditorFontSize()` is already imported at line 8 and called at line 393
 - S02 established the View/Edit tab architecture, `ReadOnlyContent` helper, and the `CodeEditor` component which already handles light/dark via its own `useTheme()` call.
 - Shiki v4 (`"shiki": "^4.0.2"` in package.json) includes `github-light-default` as a bundled theme — no new dependency needed.
 
+## Observability Impact
+
+**What changes:**
+- Shiki singleton now loads two themes instead of one — increases initial highlight load time marginally but enables correct theme rendering.
+- `MarkdownViewer` `useEffect` gains `shikiTheme` as a dependency — markdown re-renders when the user toggles theme, producing a brief loading state.
+- `CodeViewer` `useEffect` gains `shikiTheme` as a dependency — code re-highlights on theme toggle.
+
+**How to inspect:**
+- DevTools Elements panel: any `.file-viewer-code` container's inline `style` should include `fontSize` matching the user's setting.
+- DevTools Elements panel: shiki-generated `<pre>` elements include inline `style="background-color:..."` — `#0d1117` for dark, `#fff` for light.
+- React DevTools: `ReadOnlyContent` props should show `fontSize` and `shikiTheme` values.
+
+**Failure state visibility:**
+- If the highlighter singleton fails, `highlighterPromise` resets to `null` and the next render retries. Persistent failure degrades to `PlainViewer` (line-numbered plain text).
+- If `resolvedTheme` is undefined (SSR/hydration), defaults to dark theme — worst case is a flash of dark-themed code in light mode, self-correcting after hydration.
+
 ## Expected Output
 
 - `web/components/gsd/file-content-viewer.tsx` — updated with dual shiki theme loading, `useTheme()` integration, font size applied to View tab containers, and reactive theme switching in `MarkdownViewer`

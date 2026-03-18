@@ -35,7 +35,7 @@
 
 ## Tasks
 
-- [ ] **T01: Apply font size to View tab and add dual shiki theme support** `est:25m`
+- [x] **T01: Apply font size to View tab and add dual shiki theme support** `est:25m`
   - Why: Font size from `useEditorFontSize()` only reaches the Edit tab (CodeEditor). The View tab (`ReadOnlyContent`) ignores it. Shiki only loads `github-dark-default` — in light mode, code renders dark-themed against a light background. Both `CodeViewer` and `MarkdownViewer` hardcode the dark theme name.
   - Files: `web/components/gsd/file-content-viewer.tsx`
   - Do: (1) Import `useTheme` from `next-themes`. (2) In `ReadOnlyContent`, accept `fontSize` and `shikiTheme` props, wrap output in a div with `style={{ fontSize }}`. (3) In `getHighlighter()` singleton, load both themes: `["github-dark-default", "github-light-default"]`. (4) In `CodeViewer`, accept `shikiTheme` prop, use it in `codeToHtml()` instead of hardcoded `"github-dark-default"`. (5) In `MarkdownViewer`, accept `shikiTheme` prop, use it in `codeToHtml()`, add `shikiTheme` to the `useEffect` dependency array so code blocks re-highlight on theme change. (6) In `FileContentViewer`, call `useTheme()`, derive `shikiTheme = resolvedTheme === "light" ? "github-light-default" : "github-dark-default"`, pass `fontSize` and `shikiTheme` through `ReadOnlyContent` to child viewers. (7) In the read-only fallback path (no tabs), also wrap in a div with `style={{ fontSize }}`.
@@ -55,6 +55,29 @@
   - Do: (1) Build and start the app: `npm run build:web-host && npm run gsd:web`. (2) Navigate to the file viewer, open a `.ts` file. (3) Verify View tab shows syntax highlighting. (4) Switch to Edit tab, verify CodeMirror loads. (5) Make an edit, verify Save button activates, click Save, switch to View, verify updated content. (6) Open a `.md` file, repeat edit→save→view round-trip. (7) Open settings, change editor font size, verify both View and Edit tabs reflect the change. (8) Toggle light/dark mode, verify shiki View tab switches theme, CodeMirror Edit tab switches theme, all text is readable. (9) Check browser console for errors. **Skill:** `frontend-design` may be useful for visual assessment.
   - Verify: All 8 checks pass in browser. `npm run build:web-host` exits 0 (final confirmation).
   - Done when: Edit→save→view works for code and markdown, font size applies to both tabs, dark/light themes render correctly in both tabs, no console errors
+
+## Observability / Diagnostics
+
+**Runtime signals:**
+- Shiki highlighter initialization failure is caught and resets the singleton (`highlighterPromise = null`) so the next call retries — visible as a missing-highlight fallback to `PlainViewer`.
+- `MarkdownViewer` and `CodeViewer` catch `codeToHtml` errors silently and fall back to plain rendering — a code block rendering as un-highlighted text indicates a theme/language loading failure.
+- `useTheme()` returns `resolvedTheme: undefined` during SSR or before hydration — the derivation defaults to `"github-dark-default"`, so the worst case is dark-theme rendering on first paint with a flash-correct on hydration.
+
+**Inspection surfaces:**
+- Browser DevTools → Elements → inspect any `.file-viewer-code` container → check `style.fontSize` reflects the settings value.
+- Browser DevTools → Elements → inspect shiki output → `<pre>` elements include `style="background-color:..."` — dark theme uses `#0d1117`, light theme uses `#fff`.
+- Browser console: no errors expected. Shiki load failures surface as `console.error` from the catch handler if the promise rejects.
+
+**Failure visibility:**
+- If the shiki singleton fails to load both themes, the `catch` resets `highlighterPromise` and the next render retries. Persistent failure shows as plain-text code without highlighting.
+- If `resolvedTheme` never resolves (broken ThemeProvider), code renders in dark theme permanently — visually obvious in light mode as dark-on-light mismatch.
+
+**Redaction constraints:** None — no secrets or PII involved in this slice.
+
+## Verification (Diagnostic / Failure Path)
+
+- Browser console check: after toggling dark/light mode and viewing a code file, `browser_get_console_logs` should show no JS errors related to shiki, theme, or font-size.
+- Fallback path: if shiki highlighting fails for a language, the `PlainViewer` line-number table should still render — verifiable by checking the View tab still shows content.
 
 ## Files Likely Touched
 

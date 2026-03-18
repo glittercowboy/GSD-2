@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { CodeEditor } from "@/components/gsd/code-editor"
 import { useEditorFontSize } from "@/lib/use-editor-font-size"
+import { useTheme } from "next-themes"
 
 /* ── Language detection ── */
 
@@ -107,7 +108,7 @@ async function getHighlighter(): Promise<ShikiHighlighter> {
   if (!highlighterPromise) {
     highlighterPromise = import("shiki").then((mod) =>
       mod.createHighlighter({
-        themes: ["github-dark-default"],
+        themes: ["github-dark-default", "github-light-default"],
         langs: [
           "typescript", "tsx", "javascript", "jsx",
           "json", "jsonc", "markdown", "mdx",
@@ -130,7 +131,7 @@ async function getHighlighter(): Promise<ShikiHighlighter> {
 
 /* ── Code viewer (syntax highlighted) ── */
 
-function CodeViewer({ content, filepath }: { content: string; filepath: string }) {
+function CodeViewer({ content, filepath, shikiTheme = "github-dark-default" }: { content: string; filepath: string; shikiTheme?: string }) {
   const [html, setHtml] = useState<string | null>(null)
   const [ready, setReady] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -150,7 +151,7 @@ function CodeViewer({ content, filepath }: { content: string; filepath: string }
       try {
         const highlighted = highlighter.codeToHtml(content, {
           lang,
-          theme: "github-dark-default",
+          theme: shikiTheme,
         })
         setHtml(highlighted)
       } catch {
@@ -163,7 +164,7 @@ function CodeViewer({ content, filepath }: { content: string; filepath: string }
     })
 
     return () => { cancelled = true }
-  }, [content, lang])
+  }, [content, lang, shikiTheme])
 
   if (!ready) {
     return (
@@ -217,7 +218,7 @@ function PlainViewer({ content }: { content: string }) {
 
 /* ── Markdown viewer ── */
 
-function MarkdownViewer({ content, filepath }: { content: string; filepath: string }) {
+function MarkdownViewer({ content, filepath, shikiTheme = "github-dark-default" }: { content: string; filepath: string; shikiTheme?: string }) {
   const [rendered, setRendered] = useState<React.ReactNode | null>(null)
   const [ready, setReady] = useState(false)
 
@@ -247,7 +248,7 @@ function MarkdownViewer({ content, filepath }: { content: string; filepath: stri
                 try {
                   const highlighted = highlighter.codeToHtml(codeStr, {
                     lang: match[1],
-                    theme: "github-dark-default",
+                    theme: shikiTheme,
                   })
                   return (
                     <div
@@ -326,7 +327,7 @@ function MarkdownViewer({ content, filepath }: { content: string; filepath: stri
     })
 
     return () => { cancelled = true }
-  }, [content, filepath])
+  }, [content, filepath, shikiTheme])
 
   if (!ready) {
     return (
@@ -346,11 +347,15 @@ function MarkdownViewer({ content, filepath }: { content: string; filepath: stri
 
 /* ── Read-only content renderer (shared between standalone and tab modes) ── */
 
-function ReadOnlyContent({ content, filepath }: { content: string; filepath: string }) {
-  return isMarkdown(filepath) ? (
-    <MarkdownViewer content={content} filepath={filepath} />
-  ) : (
-    <CodeViewer content={content} filepath={filepath} />
+function ReadOnlyContent({ content, filepath, fontSize, shikiTheme }: { content: string; filepath: string; fontSize?: number; shikiTheme?: string }) {
+  return (
+    <div style={fontSize ? { fontSize } : undefined}>
+      {isMarkdown(filepath) ? (
+        <MarkdownViewer content={content} filepath={filepath} shikiTheme={shikiTheme} />
+      ) : (
+        <CodeViewer content={content} filepath={filepath} shikiTheme={shikiTheme} />
+      )}
+    </div>
   )
 }
 
@@ -391,6 +396,8 @@ export function FileContentViewer({
   const isDirty = editContent !== content
 
   const [fontSize] = useEditorFontSize()
+  const { resolvedTheme } = useTheme()
+  const shikiTheme = resolvedTheme === "light" ? "github-light-default" : "github-dark-default"
   const language = detectLanguage(filepath)
 
   const handleSave = useCallback(async () => {
@@ -409,8 +416,8 @@ export function FileContentViewer({
   // ── Read-only mode (backward compatible) ──
   if (!canEdit) {
     return (
-      <div className={cn("flex-1 overflow-y-auto p-4", className)}>
-        <ReadOnlyContent content={content} filepath={filepath} />
+      <div className={cn("flex-1 overflow-y-auto p-4", className)} style={{ fontSize }}>
+        <ReadOnlyContent content={content} filepath={filepath} fontSize={fontSize} shikiTheme={shikiTheme} />
       </div>
     )
   }
@@ -461,8 +468,8 @@ export function FileContentViewer({
         </div>
       </div>
 
-      <TabsContent value="view" className="flex-1 overflow-y-auto p-4 mt-0">
-        <ReadOnlyContent content={content} filepath={filepath} />
+      <TabsContent value="view" className="flex-1 overflow-y-auto p-4 mt-0" style={{ fontSize }}>
+        <ReadOnlyContent content={content} filepath={filepath} fontSize={fontSize} shikiTheme={shikiTheme} />
       </TabsContent>
 
       <TabsContent value="edit" className="flex-1 overflow-hidden mt-0">
