@@ -366,7 +366,10 @@ export function updateProgressWidget(
 
         lines.push("");
 
-        const target = task ? `${task.id}: ${task.title}` : unitId;
+        const isHook = unitType.startsWith("hook/");
+        const target = isHook
+          ? (unitId.split("/").pop() ?? unitId)
+          : (task ? `${task.id}: ${task.title}` : unitId);
         const actionLeft = `${pad}${theme.fg("accent", "▸")} ${theme.fg("accent", verb)}  ${theme.fg("text", target)}`;
         const tierTag = tierBadge ? theme.fg("dim", `[${tierBadge}] `) : "";
         const phaseBadge = `${tierTag}${theme.fg("dim", phaseLabel)}`;
@@ -386,7 +389,10 @@ export function updateProgressWidget(
             let meta = theme.fg("dim", `${done}/${total} slices`);
 
             if (activeSliceTasks && activeSliceTasks.total > 0) {
-              const taskNum = Math.min(activeSliceTasks.done + 1, activeSliceTasks.total);
+              // For hooks, show the trigger task number (done), not the next task (done + 1)
+              const taskNum = isHook
+                ? Math.max(activeSliceTasks.done, 1)
+                : Math.min(activeSliceTasks.done + 1, activeSliceTasks.total);
               meta += theme.fg("dim", `  ·  task ${taskNum}/${activeSliceTasks.total}`);
             }
 
