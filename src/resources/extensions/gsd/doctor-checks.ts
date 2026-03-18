@@ -535,7 +535,7 @@ function buildStateMarkdownForCheck(state: Awaited<ReturnType<typeof deriveState
   lines.push("## Milestone Registry");
 
   for (const entry of state.registry) {
-    const glyph = entry.status === "complete" ? "\u2705" : entry.status === "active" ? "\uD83D\uDD04" : "\u2B1C";
+    const glyph = entry.status === "complete" ? "\u2705" : entry.status === "active" ? "\uD83D\uDD04" : entry.status === "parked" ? "\u23F8\uFE0F" : "\u2B1C";
     lines.push(`- ${glyph} **${entry.id}:** ${entry.title}`);
   }
 

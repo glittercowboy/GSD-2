@@ -134,7 +134,7 @@ export function renderProgressView(
     }
 
     // Milestone header line
-    const msStatus = ms.status === "complete" ? "done" : ms.status === "active" ? "active" : "pending";
+    const msStatus = ms.status === "complete" ? "done" : ms.status === "active" ? "active" : ms.status === "parked" ? "paused" : "pending";
     const statusGlyph = th.fg(STATUS_COLOR[msStatus], STATUS_GLYPH[msStatus]);
     const statusLabel = th.fg(STATUS_COLOR[msStatus], ms.status);
 

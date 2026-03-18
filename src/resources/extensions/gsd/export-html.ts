@@ -320,7 +320,7 @@ function buildProgressSection(data: VisualizerData): string {
       : '<p class="empty indent">No slices in roadmap yet.</p>';
 
     return `
-      <details class="ms-block" ${ms.status !== 'pending' ? 'open' : ''}>
+      <details class="ms-block" ${ms.status !== 'pending' && ms.status !== 'parked' ? 'open' : ''}>
         <summary class="ms-summary ms-${ms.status}">
           <span class="dot dot-${ms.status}"></span>
           <span class="mono ms-id">${esc(ms.id)}</span>
@@ -494,6 +494,7 @@ function buildMilestoneDepSVG(ms: VisualizerMilestone, data: VisualizerData): st
     <span><span class="dot dot-complete dot-sm"></span> done</span>
     <span><span class="dot dot-active dot-sm"></span> active</span>
     <span><span class="dot dot-pending dot-sm"></span> pending</span>
+    <span><span class="dot dot-parked dot-sm"></span> parked</span>
   </div>`;
 
   return `
@@ -1037,6 +1038,7 @@ code{font-family:var(--mono);font-size:12px;background:var(--bg-3);padding:1px 5
 .dot-complete{background:var(--ok);opacity:.6}
 .dot-active{background:var(--accent)}
 .dot-pending{background:transparent;border:1.5px solid var(--border-2)}
+.dot-parked{background:var(--warn);opacity:.5}
 
 /* Header */
 header{background:var(--bg-1);border-bottom:1px solid var(--border-1);padding:12px 32px;position:sticky;top:0;z-index:200}

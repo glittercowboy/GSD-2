@@ -127,7 +127,7 @@ export async function handleQueueReorder(
     .map(m => ({ id: m.id, title: m.title, dependsOn: m.dependsOn }));
 
   const pending = state.registry
-    .filter(m => m.status !== "complete")
+    .filter(m => m.status !== "complete" && m.status !== "parked")
     .map(m => ({ id: m.id, title: m.title, dependsOn: m.dependsOn }));
 
   const result = await showReorderUI(ctx, completed, pending);
