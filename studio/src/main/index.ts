@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, nativeImage } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
@@ -18,6 +18,7 @@ function createWindow(): BrowserWindow {
     backgroundColor: '#0a0a0a',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     trafficLightPosition: process.platform === 'darwin' ? { x: 16, y: 16 } : undefined,
+    icon: nativeImage.createEmpty(),
     webPreferences: {
       preload,
       contextIsolation: true,
@@ -33,8 +34,10 @@ function createWindow(): BrowserWindow {
     void window.loadFile(join(__dirname, '../renderer/index.html'))
   }
 
-  console.log('[studio] window created')
-  console.log('GSD Studio ready')
+  window.webContents.once('did-finish-load', () => {
+    console.log('[studio] window created')
+    console.log('GSD Studio ready')
+  })
 
   return window
 }

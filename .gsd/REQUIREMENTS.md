@@ -6,13 +6,13 @@ This file is the explicit capability and coverage contract for the project.
 
 ### R001 — Desktop app shell with native window management
 - Class: core-capability
-- Status: active
+- Status: validated
 - Description: Electron desktop app launches with native window, title bar, and proper macOS integration
 - Why it matters: Foundation for everything else — no shell, no app
 - Source: user
 - Primary owning slice: M001-1ya5a3/S01
 - Supporting slices: none
-- Validation: unmapped
+- Validation: `npm run dev -w studio` reaches renderer URL plus `[studio] preload loaded`, `[studio] window created`, and `GSD Studio ready`; Electron window loads the custom title bar shell in browser verification.
 - Notes: Electron + Vite + React. Must support HMR in dev.
 
 ### R002 — gsd-2 RPC connection with full event streaming
@@ -83,13 +83,13 @@ This file is the explicit capability and coverage contract for the project.
 
 ### R008 — Dark monochrome + warm amber design system
 - Class: quality-attribute
-- Status: active
+- Status: validated
 - Description: Comprehensive design system — dark backgrounds, light text, monochrome grays, warm amber/gold as the single accent color. Inter for UI text, JetBrains Mono for code. Phosphor Icons. Radix primitives + Tailwind for styling. No Lucide icons, no purple, no shadcn recognizable aesthetic. Custom component library that feels like Linear or Vercel.
 - Why it matters: The "no AI slop" requirement. Every pixel must feel intentional, premium, and hand-crafted.
 - Source: user
 - Primary owning slice: M001-1ya5a3/S01
 - Supporting slices: all slices
-- Validation: unmapped
+- Validation: `npm run test -w studio` proves token/font contract; browser verification confirms Inter + JetBrains Mono, amber accents, and Phosphor-backed shell primitives render in the live app.
 - Notes: Design system is established in S01 and consumed by every subsequent slice. Tailwind config defines the full color palette, typography scale, and spacing system.
 
 ### R009 — Beautiful interactive prompt UI — wizard-style extension UI
@@ -105,24 +105,24 @@ This file is the explicit capability and coverage contract for the project.
 
 ### R010 — Three-column resizable layout
 - Class: core-capability
-- Status: active
+- Status: validated
 - Description: Three resizable columns — file tree (left), conversation stream (center), editor+preview (right). Draggable dividers. Center column is the primary focus. Panels can be collapsed.
 - Why it matters: The spatial layout is the cockpit — seeing everything at once is the whole point
 - Source: user
 - Primary owning slice: M001-1ya5a3/S01
 - Supporting slices: none
-- Validation: unmapped
+- Validation: Browser verification confirms the three-column shell; localStorage key `react-resizable-panels:gsd-studio-layout:files:conversation:editor` mutates after separator interaction, proving persisted resizable layout wiring.
 - Notes: Use a panel library like react-resizable-panels or custom dividers. Remember panel sizes across sessions via localStorage.
 
 ### R011 — No AI slop aesthetic
 - Class: constraint
-- Status: active
+- Status: validated
 - Description: No Lucide icons, no purple accent, no generic component-kit look, no recognizable shadcn aesthetic, no default Monaco themes. Every visual element must feel intentionally designed, not assembled from a kit.
 - Why it matters: This is a negative constraint that's sharper than any positive specification — it defines the taste bar
 - Source: user
 - Primary owning slice: M001-1ya5a3/S01
 - Supporting slices: all slices
-- Validation: unmapped
+- Validation: Live shell review confirms Phosphor icons, restrained amber-only accents, flattened panel/card radii, and custom desktop chrome rather than stock component-kit styling.
 - Notes: Enforce during every slice. UAT should include visual review.
 
 ### R012 — Streaming performance — smooth high-frequency delta rendering

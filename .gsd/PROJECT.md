@@ -15,7 +15,7 @@ Tool cards that are art — beautiful, informative, syntax-highlighted cards for
 
 ## Current State
 
-Greenfield project. No code exists yet. gsd-2 has a mature JSON-RPC protocol (`@gsd/pi-coding-agent` package) with TypeScript SDK, event streaming, and extension UI request/response handling.
+M001 is in progress. S01 is complete: the `studio/` Electron workspace now boots a real desktop shell with the dark amber design system, shared UI primitives, a typed preload bridge stub, and a persisted three-column layout populated with placeholder file/conversation/editor surfaces. The next slice is wiring gsd-2 RPC and event streaming into the center rail.
 
 ## Architecture / Key Patterns
 
