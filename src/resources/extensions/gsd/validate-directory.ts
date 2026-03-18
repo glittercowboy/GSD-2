@@ -82,8 +82,14 @@ export function validateDirectory(dirPath: string): DirectoryValidationResult {
     resolved = resolve(dirPath);
   }
 
-  // Normalize trailing slashes for consistent comparison
-  const normalized = resolved.replace(/[/\\]+$/, "") || "/";
+  // Normalize trailing slashes for consistent comparison.
+  // Special cases: "/" → "/" (not ""), "C:\" → "C:\" (not "C:")
+  let normalized = resolved.replace(/[/\\]+$/, "");
+  if (normalized === "") {
+    normalized = "/";
+  } else if (/^[A-Za-z]:$/.test(normalized)) {
+    normalized = normalized + "\\";
+  }
 
   // ── Check 1: Blocked system paths ──────────────────────────────────────
   const blockedPaths = platform() === "win32" ? WINDOWS_BLOCKED_PATHS : UNIX_BLOCKED_PATHS;

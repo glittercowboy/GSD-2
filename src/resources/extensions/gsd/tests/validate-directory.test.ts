@@ -2,7 +2,7 @@
  * Unit tests for GSD Directory Validation — safeguards against dangerous directories.
  *
  * Exercises validateDirectory() and assertSafeDirectory() with:
- * - Blocked system paths (/, /usr, /etc, $HOME)
+ * - Blocked system paths (/, /usr, /etc, $HOME, C:\Windows)
  * - Temp directory root
  * - Normal project directories (should pass)
  * - Directories with many entries (warning heuristic)
@@ -12,8 +12,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir, homedir } from "node:os";
+import { tmpdir, homedir, platform } from "node:os";
 import { validateDirectory, assertSafeDirectory } from "../validate-directory.ts";
+
+const isWindows = platform() === "win32";
 
 function makeTempDir(prefix: string): string {
   const dir = join(
@@ -24,40 +26,55 @@ function makeTempDir(prefix: string): string {
   return dir;
 }
 
-// ─── Blocked system paths ────────────────────────────────────────────────────────
+// ─── Blocked system paths (Unix) ─────────────────────────────────────────────────
 
-test("validateDirectory: root filesystem is blocked", () => {
+test("validateDirectory: root filesystem is blocked", { skip: isWindows ? "Unix-only test" : undefined }, () => {
   const result = validateDirectory("/");
   assert.equal(result.safe, false);
   assert.equal(result.severity, "blocked");
   assert.ok(result.reason?.includes("system directory"));
 });
 
-test("validateDirectory: /usr is blocked", () => {
+test("validateDirectory: /usr is blocked", { skip: isWindows ? "Unix-only test" : undefined }, () => {
   const result = validateDirectory("/usr");
   assert.equal(result.safe, false);
   assert.equal(result.severity, "blocked");
 });
 
-test("validateDirectory: /etc is blocked", () => {
+test("validateDirectory: /etc is blocked", { skip: isWindows ? "Unix-only test" : undefined }, () => {
   const result = validateDirectory("/etc");
   assert.equal(result.safe, false);
   assert.equal(result.severity, "blocked");
 });
 
-test("validateDirectory: /var is blocked", () => {
+test("validateDirectory: /var is blocked", { skip: isWindows ? "Unix-only test" : undefined }, () => {
   const result = validateDirectory("/var");
   assert.equal(result.safe, false);
   assert.equal(result.severity, "blocked");
 });
 
-test("validateDirectory: /usr/local/bin is blocked", () => {
+test("validateDirectory: /usr/local/bin is blocked", { skip: isWindows ? "Unix-only test" : undefined }, () => {
   const result = validateDirectory("/usr/local/bin");
   assert.equal(result.safe, false);
   assert.equal(result.severity, "blocked");
 });
 
-// ─── Home directory ──────────────────────────────────────────────────────────────
+// ─── Blocked system paths (Windows) ──────────────────────────────────────────────
+
+test("validateDirectory: C:\\ is blocked", { skip: !isWindows ? "Windows-only test" : undefined }, () => {
+  const result = validateDirectory("C:\\");
+  assert.equal(result.safe, false);
+  assert.equal(result.severity, "blocked");
+  assert.ok(result.reason?.includes("system directory"));
+});
+
+test("validateDirectory: C:\\Windows is blocked", { skip: !isWindows ? "Windows-only test" : undefined }, () => {
+  const result = validateDirectory("C:\\Windows");
+  assert.equal(result.safe, false);
+  assert.equal(result.severity, "blocked");
+});
+
+// ─── Home directory (cross-platform) ─────────────────────────────────────────────
 
 test("validateDirectory: home directory itself is blocked", () => {
   const result = validateDirectory(homedir());
@@ -67,7 +84,8 @@ test("validateDirectory: home directory itself is blocked", () => {
 });
 
 test("validateDirectory: home directory with trailing slash is blocked", () => {
-  const result = validateDirectory(homedir() + "/");
+  const sep = isWindows ? "\\" : "/";
+  const result = validateDirectory(homedir() + sep);
   assert.equal(result.safe, false);
   assert.equal(result.severity, "blocked");
 });
@@ -75,9 +93,7 @@ test("validateDirectory: home directory with trailing slash is blocked", () => {
 test("validateDirectory: subdirectory of home is NOT blocked", () => {
   const dir = makeTempDir("home-subdir");
   try {
-    // Simulate a subdirectory of home (use temp dir which IS a subdir)
     const result = validateDirectory(dir);
-    // Should be ok (not blocked, and too few entries for warning)
     assert.equal(result.severity, "ok");
     assert.equal(result.safe, true);
   } finally {
@@ -153,7 +169,7 @@ test("validateDirectory: directory with exactly 200 entries is safe", () => {
 
 // ─── assertSafeDirectory ─────────────────────────────────────────────────────────
 
-test("assertSafeDirectory: throws for blocked directories", () => {
+test("assertSafeDirectory: throws for blocked directories", { skip: isWindows ? "Unix-only test" : undefined }, () => {
   assert.throws(
     () => assertSafeDirectory("/"),
     (err: Error) => err.message.includes("system directory"),
@@ -193,13 +209,13 @@ test("assertSafeDirectory: returns ok for safe directories", () => {
 
 // ─── Trailing slash normalization ────────────────────────────────────────────────
 
-test("validateDirectory: handles paths with trailing slashes", () => {
+test("validateDirectory: handles paths with trailing slashes", { skip: isWindows ? "Unix-only test" : undefined }, () => {
   const result = validateDirectory("/usr/");
   assert.equal(result.safe, false);
   assert.equal(result.severity, "blocked");
 });
 
-test("validateDirectory: handles paths with multiple trailing slashes", () => {
+test("validateDirectory: handles paths with multiple trailing slashes", { skip: isWindows ? "Unix-only test" : undefined }, () => {
   const result = validateDirectory("/etc///");
   assert.equal(result.safe, false);
   assert.equal(result.severity, "blocked");
