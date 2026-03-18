@@ -123,3 +123,27 @@ Doctor rebuilds `STATE.md` from plan and roadmap files on disk and fixes detecte
 - **Dashboard:** `Ctrl+Alt+G` or `/gsd status` for real-time diagnostics
 - **Forensics:** `/gsd forensics` for structured post-mortem analysis of auto-mode failures
 - **Session logs:** `.gsd/activity/` contains JSONL session dumps for crash forensics
+
+## LSP (Language Server Protocol)
+
+### "LSP isn't available in this workspace"
+
+GSD auto-detects language servers based on project files (e.g. `package.json` → TypeScript, `Cargo.toml` → Rust, `go.mod` → Go). If no servers are detected, the agent skips LSP features.
+
+**Check status:**
+```
+lsp status
+```
+
+This shows which servers are active and, if none are found, diagnoses why — including which project markers were detected but which server commands are missing.
+
+**Common fixes:**
+
+| Project type | Install command |
+|-------------|-----------------|
+| TypeScript/JavaScript | `npm install -g typescript-language-server typescript` |
+| Python | `pip install pyright` or `pip install python-lsp-server` |
+| Rust | `rustup component add rust-analyzer` |
+| Go | `go install golang.org/x/tools/gopls@latest` |
+
+After installing, run `lsp reload` to restart detection without restarting GSD.
