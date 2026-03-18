@@ -248,8 +248,8 @@ async function main(): Promise<void> {
 
   assertEq(
     RUNTIME_EXCLUSION_PATHS.length,
-    9,
-    "exactly 9 runtime exclusion paths"
+    11,
+    "exactly 11 runtime exclusion paths"
   );
 
   const expectedPaths = [
@@ -261,6 +261,8 @@ async function main(): Promise<void> {
     ".gsd/completed-units.json",
     ".gsd/STATE.md",
     ".gsd/gsd.db",
+    ".gsd/gsd.db-wal",
+    ".gsd/gsd.db-shm",
     ".gsd/DISCUSSION-MANIFEST.json",
   ];
 
@@ -1051,6 +1053,8 @@ async function main(): Promise<void> {
     writeFileSync(join(repo, ".gsd", "completed-units.json"), '["u1"]');
     writeFileSync(join(repo, ".gsd", "metrics.json"), '{}');
     writeFileSync(join(repo, ".gsd", "STATE.md"), "# State");
+    writeFileSync(join(repo, ".gsd", "gsd.db-wal"), "wal");
+    writeFileSync(join(repo, ".gsd", "gsd.db-shm"), "shm");
     writeFileSync(join(repo, ".gsd", "activity", "log.jsonl"), "{}");
     writeFileSync(join(repo, ".gsd", "runtime", "data.json"), "{}");
     writeFileSync(join(repo, "src.ts"), "code");
@@ -1061,6 +1065,8 @@ async function main(): Promise<void> {
     const trackedBefore = run("git ls-files .gsd/", repo);
     assertTrue(trackedBefore.includes("completed-units.json"), "untrack: precondition — completed-units tracked");
     assertTrue(trackedBefore.includes("metrics.json"), "untrack: precondition — metrics tracked");
+    assertTrue(trackedBefore.includes("gsd.db-wal"), "untrack: precondition — gsd.db-wal tracked");
+    assertTrue(trackedBefore.includes("gsd.db-shm"), "untrack: precondition — gsd.db-shm tracked");
 
     // Run untrackRuntimeFiles
     untrackRuntimeFiles(repo);

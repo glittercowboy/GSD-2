@@ -27,6 +27,8 @@ const GSD_RUNTIME_PATTERNS = [
   ".gsd/completed-units.json",
   ".gsd/STATE.md",
   ".gsd/gsd.db",
+  ".gsd/gsd.db-wal",
+  ".gsd/gsd.db-shm",
   ".gsd/DISCUSSION-MANIFEST.json",
   ".gsd/milestones/**/*-CONTINUE.md",
   ".gsd/milestones/**/continue.md",

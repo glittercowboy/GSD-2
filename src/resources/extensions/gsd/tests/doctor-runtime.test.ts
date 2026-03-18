@@ -238,7 +238,10 @@ None
 
       // Verify .gsd entry was added (external state symlink)
       const content = readFileSync(join(dir, ".gitignore"), "utf-8");
-      assertTrue(content.includes(".gsd"), "gitignore now has .gsd entry");
+      assertTrue(content.includes(".gsd/activity/"), "gitignore now has activity pattern");
+      assertTrue(content.includes(".gsd/auto.lock"), "gitignore now has auto.lock pattern");
+      assertTrue(content.includes(".gsd/gsd.db-wal"), "gitignore now has gsd.db-wal pattern");
+      assertTrue(content.includes(".gsd/gsd.db-shm"), "gitignore now has gsd.db-shm pattern");
     }
     } else {
       console.log("\n=== gitignore_missing_patterns (skipped on Windows) ===");
