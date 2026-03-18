@@ -57,7 +57,7 @@
   "plugins": {
     "deep-link": {
       "desktop": [
-        { "scheme": "gsd", "host": "oauth" }
+        { "schemes": ["gsd"] }
       ]
     },
     "protocol": {
