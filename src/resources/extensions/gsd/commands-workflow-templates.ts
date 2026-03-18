@@ -22,6 +22,7 @@ import { loadPrompt } from "./prompt-loader.js";
 import { gsdRoot } from "./paths.js";
 import { GitServiceImpl, runGit } from "./git-service.js";
 import { loadEffectiveGSDPreferences } from "./preferences.js";
+import { isAutoActive, isAutoPaused } from "./auto.js";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -113,6 +114,26 @@ export async function handleStart(
   if (trimmed === "--list" || trimmed === "list") {
     ctx.ui.notify(listTemplates(), "info");
     return;
+  }
+
+  // ─── Auto-mode conflict guard ──────────────────────────────────────────
+  // Workflow templates dispatch their own messages and switch git branches,
+  // which would conflict with an active auto-mode dispatch loop.
+  if (isAutoActive()) {
+    ctx.ui.notify(
+      "Cannot start a workflow template while auto-mode is running.\n" +
+      "Run /gsd pause first, then /gsd start.",
+      "warning",
+    );
+    return;
+  }
+
+  if (isAutoPaused()) {
+    ctx.ui.notify(
+      "Auto-mode is paused. Starting a workflow template will run independently.\n" +
+      "The paused auto-mode session can be resumed later with /gsd auto.",
+      "info",
+    );
   }
 
   // /gsd start --dry-run <template> → preview without executing
