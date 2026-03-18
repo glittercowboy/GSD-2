@@ -479,6 +479,11 @@ export default function (pi: ExtensionAPI) {
   // The LLM cannot generate random suffixes for unique_milestone_ids on its
   // own. This tool calls back into the TS code that owns ID generation,
   // ensuring the preference is always respected and IDs are always valid.
+  //
+  // Reservation set: tracks IDs returned by this tool but not yet persisted
+  // to disk, preventing duplicate M001 when called multiple times (#961).
+  const reservedMilestoneIds = new Set<string>();
+
   pi.registerTool({
     name: "gsd_generate_milestone_id",
     label: "Generate Milestone ID",
@@ -499,10 +504,13 @@ export default function (pi: ExtensionAPI) {
         const basePath = process.cwd();
         const existingIds = findMilestoneIds(basePath);
         const uniqueEnabled = !!loadEffectiveGSDPreferences()?.preferences?.unique_milestone_ids;
-        const newId = nextMilestoneId(existingIds, uniqueEnabled);
+        // Combine on-disk IDs with previously reserved (but not yet persisted) IDs
+        const allIds = [...new Set([...existingIds, ...reservedMilestoneIds])];
+        const newId = nextMilestoneId(allIds, uniqueEnabled);
+        reservedMilestoneIds.add(newId);
         return {
           content: [{ type: "text" as const, text: newId }],
-          details: { operation: "generate_milestone_id", id: newId, existingCount: existingIds.length, uniqueEnabled },
+          details: { operation: "generate_milestone_id", id: newId, existingCount: existingIds.length, reservedCount: reservedMilestoneIds.size, uniqueEnabled },
         };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
