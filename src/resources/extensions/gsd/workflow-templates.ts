@@ -1,6 +1,5 @@
 /**
  * GSD Workflow Templates — Registry & Resolution
- * Copyright (c) 2026 Jeremy McSpadden <jeremy@fluxlabs.net>
  *
  * Loads the workflow template registry and resolves templates by name,
  * alias, or trigger-keyword matching against user input.

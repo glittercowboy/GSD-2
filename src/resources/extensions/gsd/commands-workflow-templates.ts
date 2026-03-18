@@ -1,6 +1,5 @@
 /**
  * GSD Workflow Template Commands — /gsd start, /gsd templates
- * Copyright (c) 2026 Jeremy McSpadden <jeremy@fluxlabs.net>
  *
  * Handles the `/gsd start [template] [description]` and `/gsd templates` commands.
  * Resolves templates by name or auto-detection, then dispatches the workflow prompt.

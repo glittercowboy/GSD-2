@@ -1,5 +1,4 @@
 // GSD Workflow Templates — Unit Tests
-// Copyright (c) 2026 Jeremy McSpadden <jeremy@fluxlabs.net>
 //
 // Tests registry loading, template resolution, auto-detection, and listing.
 
