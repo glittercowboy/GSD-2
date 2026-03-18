@@ -38,11 +38,15 @@ function getManagedResourceManifestPath(agentDir: string): string {
 }
 
 function getBundledGsdVersion(): string {
+  // Prefer GSD_VERSION env var (set once by loader.ts) to avoid re-reading package.json
+  if (process.env.GSD_VERSION && process.env.GSD_VERSION !== '0.0.0') {
+    return process.env.GSD_VERSION
+  }
   try {
     const pkg = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf-8'))
     return typeof pkg?.version === 'string' ? pkg.version : '0.0.0'
   } catch {
-    return process.env.GSD_VERSION || '0.0.0'
+    return '0.0.0'
   }
 }
 
@@ -123,6 +127,14 @@ function makeTreeWritable(dirPath: string): void {
 export function initResources(agentDir: string): void {
   mkdirSync(agentDir, { recursive: true })
 
+  // Skip the full copy when the synced version already matches the running version.
+  // This avoids ~800ms of synchronous rmSync + cpSync on every startup.
+  const currentVersion = getBundledGsdVersion()
+  const managedVersion = readManagedResourceVersion(agentDir)
+  if (managedVersion && managedVersion === currentVersion) {
+    return
+  }
+
   // Unlock all existing destination files in a single recursive walk so that
   // rmSync and cpSync can overwrite read-only copies from the Nix store.
   makeTreeWritable(agentDir)
@@ -177,12 +189,22 @@ export function initResources(agentDir: string): void {
  * ~/.gsd/agent/extensions/ (GSD's default) and ~/.pi/agent/extensions/ (pi's default).
  * This allows users to use extensions from either location.
  */
+// Cache bundled extension keys at module load — avoids re-scanning the extensions
+// directory in buildResourceLoader() (already scanned by loader.ts for env var).
+let _bundledExtensionKeys: Set<string> | null = null
+function getBundledExtensionKeys(): Set<string> {
+  if (!_bundledExtensionKeys) {
+    _bundledExtensionKeys = new Set(
+      discoverExtensionEntryPaths(bundledExtensionsDir).map((entryPath) => getExtensionKey(entryPath, bundledExtensionsDir)),
+    )
+  }
+  return _bundledExtensionKeys
+}
+
 export function buildResourceLoader(agentDir: string): DefaultResourceLoader {
   const piAgentDir = join(homedir(), '.pi', 'agent')
   const piExtensionsDir = join(piAgentDir, 'extensions')
-  const bundledKeys = new Set(
-    discoverExtensionEntryPaths(bundledExtensionsDir).map((entryPath) => getExtensionKey(entryPath, bundledExtensionsDir)),
-  )
+  const bundledKeys = getBundledExtensionKeys()
   const piExtensionPaths = discoverExtensionEntryPaths(piExtensionsDir).filter(
     (entryPath) => !bundledKeys.has(getExtensionKey(entryPath, piExtensionsDir)),
   )

@@ -18,7 +18,7 @@ import { loadStoredEnvKeys } from './wizard.js'
 import { getPiDefaultModelAndProvider, migratePiCredentials } from './pi-migration.js'
 import { shouldRunOnboarding, runOnboarding } from './onboarding.js'
 import chalk from 'chalk'
-import { checkForUpdates, checkAndPromptForUpdates } from './update-check.js'
+import { checkForUpdates } from './update-check.js'
 import { printHelp, printSubcommandHelp } from './help-text.js'
 
 // ---------------------------------------------------------------------------
@@ -211,17 +211,11 @@ if (!isPrintMode && shouldRunOnboarding(authStorage, settingsManager.getDefaultP
   process.stdin.pause()
 }
 
-// Update check — interactive prompt when stdin is a TTY, passive banner otherwise
+// Update check — non-blocking banner check; interactive prompt deferred to avoid
+// blocking startup. The passive checkForUpdates() prints a banner if an update is
+// available (using cached data or a background fetch) without blocking the TUI.
 if (!isPrintMode) {
-  if (process.stdin.isTTY) {
-    const updated = await checkAndPromptForUpdates().catch(() => false)
-    if (updated) {
-      // User chose to update — exit so they relaunch with the new version
-      process.exit(0)
-    }
-  } else {
-    checkForUpdates().catch(() => {})
-  }
+  checkForUpdates().catch(() => {})
 }
 
 // Warn if terminal is too narrow for readable output
