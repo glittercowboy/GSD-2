@@ -1,13 +1,14 @@
 "use client"
 
-import { useEffect, useRef, useCallback, useState, useMemo, KeyboardEvent } from "react"
-import { MessagesSquare, SendHorizonal, Check, Eye, EyeOff, Play, Loader2, Milestone, X, MessageCircle, FileEdit, FilePlus, Terminal, ChevronDown, ChevronRight, MoreHorizontal, Zap, Square, Pause, BarChart3, LayoutGrid, ListOrdered, History, Compass, PenLine, Inbox, SkipForward, Undo2, BookOpen, Settings, SlidersHorizontal, Stethoscope, FileOutput, Trash2, Globe, type LucideIcon } from "lucide-react"
+import { useEffect, useRef, useCallback, useState, useMemo, KeyboardEvent, DragEvent, ClipboardEvent } from "react"
+import { MessagesSquare, SendHorizonal, Check, Eye, EyeOff, Play, Loader2, Milestone, X, MessageCircle, FileEdit, FilePlus, Terminal, ChevronDown, ChevronRight, MoreHorizontal, Zap, Square, Pause, BarChart3, LayoutGrid, ListOrdered, History, Compass, PenLine, Inbox, SkipForward, Undo2, BookOpen, Settings, SlidersHorizontal, Stethoscope, FileOutput, Trash2, Globe, ImagePlus, type LucideIcon } from "lucide-react"
 import { AnimatePresence, motion } from "motion/react"
 import { cn } from "@/lib/utils"
 import { Input } from "@/components/ui/input"
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip"
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover"
 import { ChatMessage, TuiPrompt } from "@/lib/pty-chat-parser"
+import { PendingImage, processImageFile, validateImageFile, generateImageId, MAX_PENDING_IMAGES } from "@/lib/image-utils"
 import {
   useGSDWorkspaceState,
   useGSDWorkspaceActions,
@@ -1343,6 +1344,18 @@ function ChatBubble({
     return (
       <div className="flex justify-end">
         <div className="max-w-[72%] rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-sm text-primary-foreground shadow-sm">
+          {message.images && message.images.length > 0 && (
+            <div className="flex gap-1.5 mb-2 flex-wrap">
+              {message.images.map((img, idx) => (
+                <img
+                  key={idx}
+                  src={`data:${img.mimeType};base64,${img.data}`}
+                  alt={`Attached image ${idx + 1}`}
+                  className="h-8 w-8 rounded object-cover border border-primary-foreground/20"
+                />
+              ))}
+            </div>
+          )}
           <span className="whitespace-pre-wrap leading-relaxed">{message.content}</span>
           {!message.complete && <StreamingCursor />}
         </div>
@@ -1478,23 +1491,145 @@ function ChatInputBar({
   connected,
   onOpenAction,
 }: {
-  onSendInput: (data: string) => void
+  onSendInput: (data: string, images?: PendingImage[]) => void
   connected: boolean
   onOpenAction?: (action: GSDActionDef) => void
 }) {
   const [value, setValue] = useState("")
   const [overflowOpen, setOverflowOpen] = useState(false)
+  const [pendingImages, setPendingImages] = useState<PendingImage[]>([])
+  const [isDragging, setIsDragging] = useState(false)
+  const [imageNotice, setImageNotice] = useState<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const dragCounterRef = useRef(0)
+
+  // Cleanup blob URLs on unmount
+  useEffect(() => {
+    return () => {
+      pendingImages.forEach((img) => URL.revokeObjectURL(img.previewUrl))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const addImages = useCallback(async (files: File[]) => {
+    setImageNotice(null)
+
+    const imageFiles = files.filter((f) => f.type.startsWith("image/"))
+    if (imageFiles.length === 0) return
+
+    setPendingImages((prev) => {
+      const remaining = MAX_PENDING_IMAGES - prev.length
+      if (remaining <= 0) {
+        setImageNotice(`Maximum ${MAX_PENDING_IMAGES} images per message`)
+        return prev
+      }
+      return prev // return current, processing happens below
+    })
+
+    // Process files outside setState to handle async
+    const currentCount = pendingImages.length
+    const toProcess = imageFiles.slice(0, MAX_PENDING_IMAGES - currentCount)
+
+    if (toProcess.length < imageFiles.length) {
+      setImageNotice(`Maximum ${MAX_PENDING_IMAGES} images per message`)
+    }
+
+    const newImages: PendingImage[] = []
+    for (const file of toProcess) {
+      try {
+        const result = await processImageFile(file)
+        const previewUrl = URL.createObjectURL(file)
+        newImages.push({
+          id: generateImageId(),
+          data: result.data,
+          mimeType: result.mimeType,
+          previewUrl,
+        })
+      } catch (err) {
+        console.warn("[chat-input] image processing failed:", err instanceof Error ? err.message : err)
+        setImageNotice(err instanceof Error ? err.message : "Failed to process image")
+      }
+    }
+
+    if (newImages.length > 0) {
+      setPendingImages((prev) => {
+        const combined = [...prev, ...newImages]
+        if (combined.length > MAX_PENDING_IMAGES) {
+          // Revoke excess
+          combined.slice(MAX_PENDING_IMAGES).forEach((img) => URL.revokeObjectURL(img.previewUrl))
+          setImageNotice(`Maximum ${MAX_PENDING_IMAGES} images per message`)
+          return combined.slice(0, MAX_PENDING_IMAGES)
+        }
+        return combined
+      })
+    }
+  }, [pendingImages.length])
+
+  const removeImage = useCallback((id: string) => {
+    setPendingImages((prev) => {
+      const removed = prev.find((img) => img.id === id)
+      if (removed) URL.revokeObjectURL(removed.previewUrl)
+      return prev.filter((img) => img.id !== id)
+    })
+    setImageNotice(null)
+  }, [])
+
+  const handleDrop = useCallback((e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragging(false)
+    dragCounterRef.current = 0
+    const files = Array.from(e.dataTransfer.files)
+    void addImages(files)
+  }, [addImages])
+
+  const handleDragOver = useCallback((e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    e.stopPropagation()
+  }, [])
+
+  const handleDragEnter = useCallback((e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    e.stopPropagation()
+    dragCounterRef.current += 1
+    setIsDragging(true)
+  }, [])
+
+  const handleDragLeave = useCallback((e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    e.stopPropagation()
+    dragCounterRef.current -= 1
+    if (dragCounterRef.current <= 0) {
+      dragCounterRef.current = 0
+      setIsDragging(false)
+    }
+  }, [])
+
+  const handlePaste = useCallback((e: ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.files
+    if (items && items.length > 0) {
+      const imageFiles = Array.from(items).filter((f) => f.type.startsWith("image/"))
+      if (imageFiles.length > 0) {
+        e.preventDefault()
+        void addImages(imageFiles)
+      }
+      // If no image files in clipboard, let normal text paste proceed (no-regression)
+    }
+  }, [addImages])
 
   const handleSend = useCallback(() => {
     const trimmed = value.trim()
-    if (!trimmed || !connected) return
-    onSendInput(value + "\r")
+    if (!trimmed && pendingImages.length === 0) return
+    if (!connected) return
+    onSendInput(value + "\r", pendingImages.length > 0 ? pendingImages : undefined)
     setValue("")
+    // Don't revoke URLs here — they'll be used in the chat bubble for the sent message
+    setPendingImages([])
+    setImageNotice(null)
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto"
     }
-  }, [value, connected, onSendInput])
+  }, [value, connected, onSendInput, pendingImages])
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -1513,26 +1648,59 @@ function ChatInputBar({
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`
   }, [])
 
-  const hasContent = value.trim().length > 0
+  const hasContent = value.trim().length > 0 || pendingImages.length > 0
   const overflowGroups = useMemo(() => groupByCategory(OVERFLOW_ACTIONS), [])
 
   return (
     <div className="flex-shrink-0 border-t border-border bg-card/80 px-4 py-3 backdrop-blur-sm">
-      <div className="flex items-end gap-2">
+      <div
+        className="flex items-end gap-2"
+        onDrop={handleDrop}
+        onDragOver={handleDragOver}
+        onDragEnter={handleDragEnter}
+        onDragLeave={handleDragLeave}
+      >
         {/* Input + send button */}
         <div
           className={cn(
-            "flex flex-1 items-end gap-2 rounded-xl border bg-background transition-colors",
+            "flex flex-1 flex-col rounded-xl border bg-background transition-colors",
             connected
               ? "border-border focus-within:border-border/80 focus-within:ring-1 focus-within:ring-border/30"
               : "border-border/40 opacity-60",
+            isDragging && connected && "border-primary/60 ring-2 ring-primary/20 bg-primary/5",
           )}
         >
+          {/* Thumbnail preview row */}
+          {pendingImages.length > 0 && (
+            <div className="flex items-center gap-2 px-3 pt-2.5 pb-1 flex-wrap">
+              {pendingImages.map((img) => (
+                <div key={img.id} className="relative group flex-shrink-0">
+                  <img
+                    src={img.previewUrl}
+                    alt="Pending image"
+                    className="h-12 w-12 rounded-lg object-cover border border-border/50"
+                  />
+                  <button
+                    onClick={() => removeImage(img.id)}
+                    aria-label="Remove image"
+                    className="absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-destructive-foreground text-[10px] opacity-0 group-hover:opacity-100 transition-opacity shadow-sm"
+                  >
+                    <X className="h-2.5 w-2.5" />
+                  </button>
+                </div>
+              ))}
+              {imageNotice && (
+                <span className="text-[10px] text-muted-foreground/70 italic">{imageNotice}</span>
+              )}
+            </div>
+          )}
+          <div className="flex items-end gap-2">
           <textarea
             ref={textareaRef}
             value={value}
             onChange={handleInput}
             onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
             disabled={!connected}
             rows={1}
             aria-label="Send message"
@@ -1564,6 +1732,7 @@ function ChatInputBar({
               <SendHorizonal className="h-3.5 w-3.5" />
             </button>
           </div>
+        </div>
         </div>
 
         {/* ── Top 3 action buttons with tooltips ── */}
@@ -2239,9 +2408,9 @@ export function ChatPane({ className, onOpenAction }: ChatPaneProps) {
   }, [workflowAction, sendCommand, bridge])
 
   /** Send user text — adds a user bubble and dispatches via the store */
-  const handleUserInput = useCallback((data: string) => {
+  const handleUserInput = useCallback((data: string, images?: PendingImage[]) => {
     const text = data.replace(/\r$/, "").trim()
-    if (!text) return
+    if (!text && (!images || images.length === 0)) return
 
     const userMsg: ChatMessage = {
       id: createLocalMessageId(),
@@ -2249,9 +2418,10 @@ export function ChatPane({ className, onOpenAction }: ChatPaneProps) {
       content: text,
       complete: true,
       timestamp: Date.now(),
+      images: images?.map((i) => ({ data: i.data, mimeType: i.mimeType })),
     }
     setUserMessages((prev) => [...prev, userMsg])
-    void submitInput(text)
+    void submitInput(text, images)
   }, [submitInput])
 
   // Build message list from store state

@@ -55,6 +55,8 @@ export interface ChatMessage {
   prompt?: TuiPrompt
   /** Unix timestamp (ms) of first content */
   timestamp: number
+  /** Optional images attached by the user (chat mode only — PTY parser never sets this) */
+  images?: { data: string; mimeType: string }[]
 }
 
 // ─── Subscriber Types ─────────────────────────────────────────────────────────

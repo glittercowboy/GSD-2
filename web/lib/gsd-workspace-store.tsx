@@ -57,6 +57,7 @@ import type {
   SteerData,
 } from "./remaining-command-types"
 import { isGitSummaryResponse, type GitSummaryResponse } from "./git-summary-contract"
+import type { PendingImage } from "./image-utils"
 import type {
   SessionBrowserNameFilter,
   SessionBrowserResponse,
@@ -3980,7 +3981,7 @@ export class GSDWorkspaceStore {
     await this.sendCommand({ type: "abort" })
   }
 
-  submitInput = async (input: string): Promise<BrowserSlashCommandDispatchResult | null> => {
+  submitInput = async (input: string, images?: PendingImage[]): Promise<BrowserSlashCommandDispatchResult | null> => {
     const trimmed = input.trim()
     if (!trimmed) return null
 
@@ -3995,7 +3996,11 @@ export class GSDWorkspaceStore {
     switch (outcome.kind) {
       case "prompt":
       case "rpc": {
-        await this.sendCommand(outcome.command, { displayInput: trimmed })
+        const imagePayload = images?.map((i) => ({ type: "image" as const, data: i.data, mimeType: i.mimeType }))
+        const command = imagePayload && imagePayload.length > 0
+          ? { ...outcome.command, images: imagePayload }
+          : outcome.command
+        await this.sendCommand(command, { displayInput: trimmed })
         return outcome
       }
       case "local":
