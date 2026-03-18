@@ -115,3 +115,11 @@ The existing design system from S01 (Button, Text, Icon components, amber accent
 - `studio/src/renderer/src/stores/session-store.ts` — Zustand store for connection state, events, and session metadata
 - `studio/src/renderer/src/lib/rpc/use-gsd.ts` — React hook bridging IPC events to the Zustand store with command API
 - `studio/src/renderer/src/components/layout/CenterPanel.tsx` — replaced with live event stream, connection status, and working composer
+
+## Observability Impact
+
+- **Zustand store** is the primary inspection surface: `useSessionStore.getState()` in React DevTools shows `connectionStatus`, full `events[]` array (capped at 500), `isStreaming`, `lastError`, and `sessionState`. This is the single source of truth for all renderer-side connection and event data.
+- **Connection status badge** in the CenterPanel header provides instant visual feedback on the main→renderer pipeline health. Status transitions (disconnected → connecting → connected) are driven by `gsd:connection-change` IPC events from GsdService.
+- **Raw event log** renders every event flowing through the RPC pipe, including stderr forwarded as `{ type: 'stderr', message }` entries. This gives full visibility into what the agent subprocess is producing before S03 adds structured rendering.
+- **Failure visibility**: `lastError` surfaces in the connection badge when status is 'error'. Auto-spawn failures on mount are caught and routed to `setError`. Disconnection events from crash/kill propagate through `onConnectionChange` to the badge.
+- **No new logging**: All console logging remains in the main process (`[gsd-service]` prefix). The renderer is intentionally log-free — state is observable through the Zustand store and the rendered UI.
