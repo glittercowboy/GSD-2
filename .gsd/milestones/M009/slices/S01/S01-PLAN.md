@@ -49,7 +49,7 @@
   - Verify: `npm run build:web-host` exits 0. Start server, curl valid write → 200, curl traversal → 400, curl missing parent → 404, curl oversized body → 413.
   - Done when: POST /api/files correctly writes valid files and rejects all traversal/invalid paths with appropriate status codes.
 
-- [ ] **T02: Add useEditorFontSize hook, EditorSizePanel, and wire into settings** `est:30m`
+- [x] **T02: Add useEditorFontSize hook, EditorSizePanel, and wire into settings** `est:30m`
   - Why: R121 requires a configurable font size for the file viewer/editor. This follows the exact pattern already proven by `useTerminalFontSize` + `TerminalSizePanel`.
   - Files: `web/lib/use-editor-font-size.ts`, `web/components/gsd/settings-panels.tsx`, `web/components/gsd/command-surface.tsx`
   - Do: (1) Create `web/lib/use-editor-font-size.ts` cloning `use-terminal-font-size.ts` with: storage key `gsd-editor-font-size`, default 14, event name `editor-font-size-changed`, same 8–24 range. (2) In `settings-panels.tsx`: add `EDITOR_SIZE_PRESETS = [11, 12, 13, 14, 15, 16]` constant, add `EditorSizePanel` component after `TerminalSizePanel` using same structure — `SettingsHeader` with `Type` icon, subtitle "Applies to file viewer & editor", preset buttons with 14 as default marker, live preview div with `font-mono`. Export the component. (3) In `command-surface.tsx`: add `EditorSizePanel` to the import from `./settings-panels`, add `<EditorSizePanel />` after `<TerminalSizePanel />` in the `gsd-prefs` case.

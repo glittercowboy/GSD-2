@@ -73,3 +73,10 @@ Add an editor font size preference that persists in localStorage, following the 
 - `web/lib/use-editor-font-size.ts` — new file exporting `useEditorFontSize()` hook
 - `web/components/gsd/settings-panels.tsx` — new `EditorSizePanel` component exported
 - `web/components/gsd/command-surface.tsx` — `EditorSizePanel` imported and rendered in settings
+
+## Observability Impact
+
+- **New localStorage key:** `gsd-editor-font-size` — inspectable via `localStorage.getItem('gsd-editor-font-size')` in browser devtools. Returns the numeric font size (e.g. `"14"`) or `null` if never set.
+- **New CustomEvent:** `editor-font-size-changed` — fires on `window` when the font size changes within the same tab. `event.detail` contains the numeric value.
+- **New test ID:** `data-testid="settings-editor-size"` — scopes the EditorSizePanel for targeted UI testing and accessibility inspection.
+- **Failure visibility:** If the hook fails to read/write localStorage (e.g. storage quota, private browsing), it silently falls back to the default (14px). No error surfaces — this matches the terminal font size pattern.
