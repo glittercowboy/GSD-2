@@ -607,6 +607,12 @@ export default function (pi: ExtensionAPI) {
     // Load tool API keys from auth.json into environment
     loadToolApiKeys();
 
+    // Always-on health widget — ambient system health signal below the editor
+    try {
+      const { initHealthWidget } = await import("./health-widget.js");
+      initHealthWidget(ctx);
+    } catch { /* non-fatal — widget is best-effort */ }
+
     // Notify remote questions status if configured
     try {
       const [{ getRemoteConfigStatus }, { getLatestPromptSummary }] = await Promise.all([
