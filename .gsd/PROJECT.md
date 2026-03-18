@@ -15,7 +15,7 @@ Tool cards that are art — beautiful, informative, syntax-highlighted cards for
 
 ## Current State
 
-M001 is in progress. S01 is complete: the `studio/` Electron workspace now boots a real desktop shell with the dark amber design system, shared UI primitives, a typed preload bridge stub, and a persisted three-column layout populated with placeholder file/conversation/editor surfaces. The next slice is wiring gsd-2 RPC and event streaming into the center rail.
+M001 is in progress. S01 and S02 are complete. The `studio/` Electron workspace boots a real desktop shell with the dark amber design system and a full bidirectional RPC pipe to gsd-2. GsdService spawns the agent as a subprocess, communicates over JSONL stdin/stdout with LF-only framing, handles crash recovery with exponential backoff, and auto-responds to interactive extension UI requests. The preload bridge routes events through six IPC channels to a Zustand session store, and the CenterPanel renders a live connection badge, scrollable raw event stream, and working composer. The next slice (S03) replaces raw JSON with structured markdown rendering.
 
 ## Architecture / Key Patterns
 
