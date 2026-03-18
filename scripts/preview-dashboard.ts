@@ -104,14 +104,13 @@ function render(width: number): string[] {
   const contextLine = contextParts.join(theme.fg("dim", " · "));
   lines.push(rightAlign(`${pad}${contextLine}`, phaseBadge, width));
 
-  // Column sizing: both fixed, adjacent. Empty space on the right.
-  const minTwoColWidth = 80;
-  const leftColFixed = 44;
+  // Column sizing: left flexes, right fixed. Task list sits center-right.
+  const minTwoColWidth = 100;
   const rightColFixed = 44;
-  const colGap = 3;
+  const colGap = 5;
   const useTwoCol = width >= minTwoColWidth;
-  const leftColWidth = useTwoCol ? leftColFixed : width;
   const rightColWidth = useTwoCol ? rightColFixed : 0;
+  const leftColWidth = useTwoCol ? width - rightColWidth - colGap : width;
 
   // Left column: progress, ETA, next, stats
   const leftLines: string[] = [];
@@ -179,8 +178,9 @@ function render(width: number): string[] {
     lines.push("");
     for (let i = 0; i < maxRows; i++) {
       const left = padToWidth(leftLines[i] ?? "", leftColWidth);
+      const gap = " ".repeat(colGap - 2);
       const right = rightLines[i] ?? "";
-      lines.push(truncateToWidth(`${left} ${divider} ${right}`, width));
+      lines.push(truncateToWidth(`${left}${gap}${divider} ${right}`, width));
     }
   } else {
     lines.push("");

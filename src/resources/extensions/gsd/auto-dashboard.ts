@@ -400,13 +400,13 @@ export function updateProgressWidget(
         // Left: progress, ETA, next, stats (fixed)  |  Right: task checklist (fixed, adjacent)
         // Both columns sit left-to-center; empty space is on the right.
         const divider = theme.fg("dim", "│");
-        const minTwoColWidth = 80;
-        const leftColFixed = 44;
+        const minTwoColWidth = 100;
         const rightColFixed = 44;
-        const colGap = 3; // space + │ + space
+        const colGap = 5; // breathing room between columns
+        // Left column takes remaining space — no truncation on wide terminals
         const useTwoCol = width >= minTwoColWidth;
-        const leftColWidth = useTwoCol ? leftColFixed : width;
         const rightColWidth = useTwoCol ? rightColFixed : 0;
+        const leftColWidth = useTwoCol ? width - rightColWidth - colGap : width;
 
         const roadmapSlices = mid ? getRoadmapSlicesSync() : null;
 
@@ -603,8 +603,9 @@ export function updateProgressWidget(
             lines.push(""); // spacer before columns
             for (let i = 0; i < maxRows; i++) {
               const left = padToWidth(leftLines[i] ?? "", leftColWidth);
+              const gap = " ".repeat(colGap - 2); // colGap minus divider and its trailing space
               const right = rightLines[i] ?? "";
-              lines.push(truncateToWidth(`${left} ${divider} ${right}`, width));
+              lines.push(truncateToWidth(`${left}${gap}${divider} ${right}`, width));
             }
           }
         } else {
