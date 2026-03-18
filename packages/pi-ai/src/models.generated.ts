@@ -13459,7 +13459,7 @@ export const MODELS = {
 			api: "anthropic-messages",
 			provider: "alibaba-coding-plan",
 			baseUrl: "https://coding-intl.dashscope.aliyuncs.com/apps/anthropic",
-			reasoning: true,
+			reasoning: false,
 			input: ["text"],
 			cost: {
 				input: 0,
