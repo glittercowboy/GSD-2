@@ -12,7 +12,7 @@
 import type { GSDState } from "./types.js";
 import type { GSDPreferences } from "./preferences.js";
 import type { UatType } from "./files.js";
-import { loadFile, extractUatType, loadActiveOverrides } from "./files.js";
+import { loadFile, extractUatType, loadActiveOverrides, parseRoadmap } from "./files.js";
 import {
   resolveMilestoneFile, resolveMilestonePath, resolveSliceFile, resolveTaskFile,
   relSliceFile, buildMilestoneFileName,
@@ -121,6 +121,35 @@ const DISPATCH_RULES: DispatchRule[] = [
         ),
         pauseAfterDispatch: uatType !== "artifact-driven",
       };
+    },
+  },
+  {
+    name: "uat-verdict-gate (non-PASS blocks progression)",
+    match: async ({ mid, basePath, prefs }) => {
+      // Only applies when UAT dispatch is enabled
+      if (!prefs?.uat_dispatch) return null;
+
+      const roadmapFile = resolveMilestoneFile(basePath, mid, "ROADMAP");
+      const roadmapContent = roadmapFile ? await loadFile(roadmapFile) : null;
+      if (!roadmapContent) return null;
+
+      const roadmap = parseRoadmap(roadmapContent);
+      for (const slice of roadmap.slices.filter(s => s.done)) {
+        const resultFile = resolveSliceFile(basePath, mid, slice.id, "UAT-RESULT");
+        if (!resultFile) continue;
+        const content = await loadFile(resultFile);
+        if (!content) continue;
+        const verdictMatch = content.match(/verdict:\s*([\w-]+)/i);
+        const verdict = verdictMatch?.[1]?.toLowerCase();
+        if (verdict && verdict !== "pass" && verdict !== "passed") {
+          return {
+            action: "stop" as const,
+            reason: `UAT verdict for ${slice.id} is "${verdict}" — blocking progression until resolved.\nReview the UAT result and update the verdict to PASS, or re-run /gsd auto after fixing.`,
+            level: "warning" as const,
+          };
+        }
+      }
+      return null;
     },
   },
   {

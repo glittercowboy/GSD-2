@@ -530,11 +530,21 @@ export async function checkNeedsRunUat(
   const uatContent = await loadFile(uatFile);
   if (!uatContent) return null;
 
-  // If UAT result already exists, skip (idempotent)
+  // If UAT result already exists with a PASS verdict, skip (idempotent).
+  // Non-PASS verdicts (FAIL, surfaced-for-human-review) should block slice
+  // progression — return the slice for re-evaluation (#1231).
   const uatResultFile = resolveSliceFile(base, mid, sid, "UAT-RESULT");
   if (uatResultFile) {
-    const hasResult = !!(await loadFile(uatResultFile));
-    if (hasResult) return null;
+    const resultContent = await loadFile(uatResultFile);
+    if (resultContent) {
+      const verdictMatch = resultContent.match(/verdict:\s*([\w-]+)/i);
+      const verdict = verdictMatch?.[1]?.toLowerCase();
+      if (verdict === "pass" || verdict === "passed") return null; // PASS — skip
+      // Non-PASS verdict exists — don't re-run UAT, but don't advance either.
+      // Return null here since the UAT already ran; the dispatch table's
+      // complete-slice rule should check the verdict before advancing.
+      // For now, returning the slice signals it still needs attention.
+    }
   }
 
   // Classify UAT type; unknown type → treat as human-experience (human review)
