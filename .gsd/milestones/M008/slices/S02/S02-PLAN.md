@@ -41,7 +41,7 @@
 
 ## Tasks
 
-- [ ] **T01: Build update service and API route** `est:45m`
+- [x] **T01: Build update service and API route** `est:45m`
   - Why: Creates the server-side infrastructure — version check against npm registry, async update trigger via child process, and the GET/POST API endpoints. This is the foundation that the UI component will consume.
   - Files: `src/web/update-service.ts`, `web/app/api/update/route.ts`
   - Do: Create `update-service.ts` with `checkForUpdate()` (fetch npm registry, compare with `compareSemver`), `triggerUpdate()` (spawn child process, track in module-level singleton), `getUpdateStatus()`. Create route with GET (version check + status) and POST (trigger update, 202/409). Import `compareSemver` from `../update-check.ts` (safe — pure function). Use `process.env.GSD_VERSION` for current version. Follow `web/app/api/doctor/route.ts` pattern.
