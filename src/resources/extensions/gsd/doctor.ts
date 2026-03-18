@@ -308,7 +308,13 @@ async function markTaskDoneInPlan(basePath: string, milestoneId: string, sliceId
   if (!planPath) return;
   const content = await loadFile(planPath);
   if (!content) return;
-  const updated = content.replace(new RegExp(`^-\\s+\\[ \\]\\s+\\*\\*${taskId}:`, "m"), `- [x] **${taskId}:`);
+  // Allow optional leading whitespace to match the same patterns the plan parser
+  // accepts. Capture the leading whitespace + "- " so the replacement preserves
+  // indentation instead of collapsing it (#1063).
+  const updated = content.replace(
+    new RegExp(`^(\\s*-\\s+)\\[ \\]\\s+\\*\\*${taskId}:`, "m"),
+    `$1[x] **${taskId}:`,
+  );
   if (updated !== content) {
     await saveFile(planPath, updated);
     fixesApplied.push(`marked ${taskId} done in ${planPath}`);
@@ -320,7 +326,13 @@ async function markSliceDoneInRoadmap(basePath: string, milestoneId: string, sli
   if (!roadmapPath) return;
   const content = await loadFile(roadmapPath);
   if (!content) return;
-  const updated = content.replace(new RegExp(`^-\\s+\\[ \\]\\s+\\*\\*${sliceId}:`, "m"), `- [x] **${sliceId}:`);
+  // Allow optional leading whitespace to match the same patterns the roadmap
+  // parser accepts (^\s*-\s+ in roadmap-slices.ts). Capture the prefix so the
+  // replacement preserves original indentation (#1063).
+  const updated = content.replace(
+    new RegExp(`^(\\s*-\\s+)\\[ \\]\\s+\\*\\*${sliceId}:`, "m"),
+    `$1[x] **${sliceId}:`,
+  );
   if (updated !== content) {
     await saveFile(roadmapPath, updated);
     fixesApplied.push(`marked ${sliceId} done in ${roadmapPath}`);
