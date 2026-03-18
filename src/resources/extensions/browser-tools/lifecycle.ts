@@ -103,10 +103,10 @@ export function attachPageListeners(p: Page, pageId: number): void {
 				try {
 					const body = await response.text();
 					entry.responseBody = body.slice(0, 2000);
-				} catch {}
+				} catch { /* non-fatal — response body may be unavailable or already consumed */ }
 			}
 			logPusher(networkLogs, entry);
-		} catch {}
+		} catch { /* non-fatal — request may have been aborted or page closed */ }
 	});
 
 	p.on("requestfailed", (request) => {

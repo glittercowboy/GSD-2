@@ -60,7 +60,7 @@ export function registerNavigationTools(pi: ExtensionAPI, deps: ToolDeps): void 
 						let buf = await p.screenshot({ type: "jpeg", quality: 80, scale: "css" });
 						buf = await deps.constrainScreenshot(p, buf, "image/jpeg", 80);
 						screenshotContent = [{ type: "image", data: buf.toString("base64"), mimeType: "image/jpeg" }];
-					} catch {}
+					} catch { /* non-fatal — screenshot is optional, navigation result is still valid */ }
 				}
 
 				return {
@@ -207,7 +207,7 @@ export function registerNavigationTools(pi: ExtensionAPI, deps: ToolDeps): void 
 						data: buf.toString("base64"),
 						mimeType: "image/jpeg",
 					}];
-				} catch {}
+				} catch { /* non-fatal — screenshot is optional, reload result is still valid */ }
 
 				return {
 					content: [
