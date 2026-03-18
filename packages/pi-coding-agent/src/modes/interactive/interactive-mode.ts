@@ -319,6 +319,23 @@ export class InteractiveMode {
 			};
 		}
 
+		// Add argument completions for /thinking
+		const thinkingCommand = slashCommands.find((command) => command.name === "thinking");
+		if (thinkingCommand) {
+			thinkingCommand.getArgumentCompletions = (prefix: string): AutocompleteItem[] | null => {
+				const levels = [
+					{ value: "off", label: "off", description: "Disable extended thinking" },
+					{ value: "minimal", label: "minimal", description: "Minimal thinking budget" },
+					{ value: "low", label: "low", description: "Low thinking budget" },
+					{ value: "medium", label: "medium", description: "Medium thinking budget" },
+					{ value: "high", label: "high", description: "High thinking budget" },
+					{ value: "xhigh", label: "xhigh", description: "Maximum thinking budget" },
+				];
+				const filtered = levels.filter((l) => l.value.startsWith(prefix.trim().toLowerCase()));
+				return filtered.length > 0 ? filtered : null;
+			};
+		}
+
 		// Convert prompt templates to SlashCommand format for autocomplete
 		const templateCommands: SlashCommand[] = this.session.promptTemplates.map((cmd) => ({
 			name: cmd.name,

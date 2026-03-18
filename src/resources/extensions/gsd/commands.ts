@@ -131,93 +131,161 @@ export function registerGSDCommand(pi: ExtensionAPI): void {
 
       if (parts[0] === "auto" && parts.length <= 2) {
         const flagPrefix = parts[1] ?? "";
-        return ["--verbose", "--debug"]
-          .filter((f) => f.startsWith(flagPrefix))
-          .map((f) => ({ value: `auto ${f}`, label: f }));
+        const flags = [
+          { flag: "--verbose", desc: "Show detailed execution output" },
+          { flag: "--debug", desc: "Enable debug logging" },
+        ];
+        return flags
+          .filter((f) => f.flag.startsWith(flagPrefix))
+          .map((f) => ({ value: `auto ${f.flag}`, label: f.flag, description: f.desc }));
       }
 
       if (parts[0] === "mode" && parts.length <= 2) {
         const subPrefix = parts[1] ?? "";
-        return ["global", "project"]
-          .filter((cmd) => cmd.startsWith(subPrefix))
-          .map((cmd) => ({ value: `mode ${cmd}`, label: cmd }));
+        const modes = [
+          { cmd: "global", desc: "Edit global workflow mode" },
+          { cmd: "project", desc: "Edit project-specific workflow mode" },
+        ];
+        return modes
+          .filter((m) => m.cmd.startsWith(subPrefix))
+          .map((m) => ({ value: `mode ${m.cmd}`, label: m.cmd, description: m.desc }));
       }
 
       if (parts[0] === "parallel" && parts.length <= 2) {
         const subPrefix = parts[1] ?? "";
-        return ["start", "status", "stop", "pause", "resume", "merge"]
-          .filter((cmd) => cmd.startsWith(subPrefix))
-          .map((cmd) => ({ value: `parallel ${cmd}`, label: cmd }));
+        const subs = [
+          { cmd: "start", desc: "Start parallel milestone orchestration" },
+          { cmd: "status", desc: "Show parallel worker statuses" },
+          { cmd: "stop", desc: "Stop all parallel workers" },
+          { cmd: "pause", desc: "Pause a specific worker" },
+          { cmd: "resume", desc: "Resume a paused worker" },
+          { cmd: "merge", desc: "Merge completed milestone branches" },
+        ];
+        return subs
+          .filter((s) => s.cmd.startsWith(subPrefix))
+          .map((s) => ({ value: `parallel ${s.cmd}`, label: s.cmd, description: s.desc }));
       }
 
       if (parts[0] === "setup" && parts.length <= 2) {
         const subPrefix = parts[1] ?? "";
-        return ["llm", "search", "remote", "keys", "prefs"]
-          .filter((cmd) => cmd.startsWith(subPrefix))
-          .map((cmd) => ({ value: `setup ${cmd}`, label: cmd }));
+        const subs = [
+          { cmd: "llm", desc: "Configure LLM provider settings" },
+          { cmd: "search", desc: "Configure web search provider" },
+          { cmd: "remote", desc: "Configure remote integrations" },
+          { cmd: "keys", desc: "Manage API keys" },
+          { cmd: "prefs", desc: "Configure global preferences" },
+        ];
+        return subs
+          .filter((s) => s.cmd.startsWith(subPrefix))
+          .map((s) => ({ value: `setup ${s.cmd}`, label: s.cmd, description: s.desc }));
       }
 
       if (parts[0] === "prefs" && parts.length <= 2) {
         const subPrefix = parts[1] ?? "";
-        return ["global", "project", "status", "wizard", "setup", "import-claude"]
-          .filter((cmd) => cmd.startsWith(subPrefix))
-          .map((cmd) => ({ value: `prefs ${cmd}`, label: cmd }));
+        const subs = [
+          { cmd: "global", desc: "Edit global preferences file" },
+          { cmd: "project", desc: "Edit project preferences file" },
+          { cmd: "status", desc: "Show effective preferences" },
+          { cmd: "wizard", desc: "Interactive preferences wizard" },
+          { cmd: "setup", desc: "First-time preferences setup" },
+          { cmd: "import-claude", desc: "Import settings from Claude Code" },
+        ];
+        return subs
+          .filter((s) => s.cmd.startsWith(subPrefix))
+          .map((s) => ({ value: `prefs ${s.cmd}`, label: s.cmd, description: s.desc }));
       }
 
       if (parts[0] === "remote" && parts.length <= 2) {
         const subPrefix = parts[1] ?? "";
-        return ["slack", "discord", "status", "disconnect"]
-          .filter((cmd) => cmd.startsWith(subPrefix))
-          .map((cmd) => ({ value: `remote ${cmd}`, label: cmd }));
+        const subs = [
+          { cmd: "slack", desc: "Configure Slack integration" },
+          { cmd: "discord", desc: "Configure Discord integration" },
+          { cmd: "status", desc: "Show remote connection status" },
+          { cmd: "disconnect", desc: "Disconnect remote integrations" },
+        ];
+        return subs
+          .filter((s) => s.cmd.startsWith(subPrefix))
+          .map((s) => ({ value: `remote ${s.cmd}`, label: s.cmd, description: s.desc }));
       }
 
       if (parts[0] === "next" && parts.length <= 2) {
         const flagPrefix = parts[1] ?? "";
-        return ["--verbose", "--dry-run"]
-          .filter((f) => f.startsWith(flagPrefix))
-          .map((f) => ({ value: `next ${f}`, label: f }));
+        const flags = [
+          { flag: "--verbose", desc: "Show detailed step output" },
+          { flag: "--dry-run", desc: "Preview next step without executing" },
+        ];
+        return flags
+          .filter((f) => f.flag.startsWith(flagPrefix))
+          .map((f) => ({ value: `next ${f.flag}`, label: f.flag, description: f.desc }));
       }
 
       if (parts[0] === "history" && parts.length <= 2) {
         const flagPrefix = parts[1] ?? "";
-        return ["--cost", "--phase", "--model", "10", "20", "50"]
-          .filter((f) => f.startsWith(flagPrefix))
-          .map((f) => ({ value: `history ${f}`, label: f }));
+        const flags = [
+          { flag: "--cost", desc: "Show cost breakdown per entry" },
+          { flag: "--phase", desc: "Filter by phase type" },
+          { flag: "--model", desc: "Filter by model used" },
+          { flag: "10", desc: "Show last 10 entries" },
+          { flag: "20", desc: "Show last 20 entries" },
+          { flag: "50", desc: "Show last 50 entries" },
+        ];
+        return flags
+          .filter((f) => f.flag.startsWith(flagPrefix))
+          .map((f) => ({ value: `history ${f.flag}`, label: f.flag, description: f.desc }));
       }
 
       if (parts[0] === "undo" && parts.length <= 2) {
-        return [{ value: "undo --force", label: "--force" }];
+        return [{ value: "undo --force", label: "--force", description: "Skip confirmation prompt" }];
       }
 
       if (parts[0] === "export" && parts.length <= 2) {
         const flagPrefix = parts[1] ?? "";
-        return ["--json", "--markdown", "--html", "--html --all"]
-          .filter((f) => f.startsWith(flagPrefix))
-          .map((f) => ({ value: `export ${f}`, label: f }));
+        const flags = [
+          { flag: "--json", desc: "Export as JSON" },
+          { flag: "--markdown", desc: "Export as Markdown" },
+          { flag: "--html", desc: "Export as HTML" },
+          { flag: "--html --all", desc: "Export all milestones as HTML" },
+        ];
+        return flags
+          .filter((f) => f.flag.startsWith(flagPrefix))
+          .map((f) => ({ value: `export ${f.flag}`, label: f.flag, description: f.desc }));
       }
 
       if (parts[0] === "cleanup" && parts.length <= 2) {
         const subPrefix = parts[1] ?? "";
-        return ["branches", "snapshots"]
-          .filter((cmd) => cmd.startsWith(subPrefix))
-          .map((cmd) => ({ value: `cleanup ${cmd}`, label: cmd }));
+        const subs = [
+          { cmd: "branches", desc: "Remove merged milestone branches" },
+          { cmd: "snapshots", desc: "Remove old execution snapshots" },
+        ];
+        return subs
+          .filter((s) => s.cmd.startsWith(subPrefix))
+          .map((s) => ({ value: `cleanup ${s.cmd}`, label: s.cmd, description: s.desc }));
       }
 
       if (parts[0] === "knowledge" && parts.length <= 2) {
         const subPrefix = parts[1] ?? "";
-        return ["rule", "pattern", "lesson"]
-          .filter((cmd) => cmd.startsWith(subPrefix))
-          .map((cmd) => ({ value: `knowledge ${cmd}`, label: cmd }));
+        const subs = [
+          { cmd: "rule", desc: "Add a project rule (always/never do X)" },
+          { cmd: "pattern", desc: "Add a code pattern to follow" },
+          { cmd: "lesson", desc: "Record a lesson learned" },
+        ];
+        return subs
+          .filter((s) => s.cmd.startsWith(subPrefix))
+          .map((s) => ({ value: `knowledge ${s.cmd}`, label: s.cmd, description: s.desc }));
       }
 
       if (parts[0] === "doctor") {
         const modePrefix = parts[1] ?? "";
-        const modes = ["fix", "heal", "audit"];
+        const modes = [
+          { cmd: "fix", desc: "Auto-fix detected issues" },
+          { cmd: "heal", desc: "AI-driven deep healing" },
+          { cmd: "audit", desc: "Run health audit without fixing" },
+        ];
 
         if (parts.length <= 2) {
           return modes
-            .filter((cmd) => cmd.startsWith(modePrefix))
-            .map((cmd) => ({ value: `doctor ${cmd}`, label: cmd }));
+            .filter((m) => m.cmd.startsWith(modePrefix))
+            .map((m) => ({ value: `doctor ${m.cmd}`, label: m.cmd, description: m.desc }));
         }
 
         return [];
@@ -225,9 +293,18 @@ export function registerGSDCommand(pi: ExtensionAPI): void {
 
       if (parts[0] === "dispatch" && parts.length <= 2) {
         const phasePrefix = parts[1] ?? "";
-        return ["research", "plan", "execute", "complete", "reassess", "uat", "replan"]
-          .filter((cmd) => cmd.startsWith(phasePrefix))
-          .map((cmd) => ({ value: `dispatch ${cmd}`, label: cmd }));
+        const phases = [
+          { cmd: "research", desc: "Run research phase" },
+          { cmd: "plan", desc: "Run planning phase" },
+          { cmd: "execute", desc: "Run execution phase" },
+          { cmd: "complete", desc: "Run completion phase" },
+          { cmd: "reassess", desc: "Reassess current progress" },
+          { cmd: "uat", desc: "Run user acceptance testing" },
+          { cmd: "replan", desc: "Replan the current slice" },
+        ];
+        return phases
+          .filter((p) => p.cmd.startsWith(phasePrefix))
+          .map((p) => ({ value: `dispatch ${p.cmd}`, label: p.cmd, description: p.desc }));
       }
 
       return [];
