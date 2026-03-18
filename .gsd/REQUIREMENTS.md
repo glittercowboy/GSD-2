@@ -294,58 +294,58 @@ This file is the explicit capability and coverage contract for the project.
 
 ### R114 — Dark mode is the default theme when no user preference is stored.
 - Class: quality-attribute
-- Status: active
+- Status: validated
 - Description: Opening the GSD web workspace with no stored theme preference defaults to dark mode instead of system preference.
 - Why it matters: Dark mode is the primary development environment; system preference detection often picks light mode on macOS, which is not the intended default experience.
 - Source: user
 - Primary owning slice: M008/S03
 - Supporting slices: none
-- Validation: unmapped
+- Validation: `defaultTheme="dark"` in layout.tsx (grep confirms 1 match), `enableSystem` removed (grep confirms 0 matches). `npm run build:web-host` exits 0. Verified 2026-03-18.
 - Notes: One-line change in ThemeProvider defaultTheme prop plus layout.tsx.
 
 ### R115 — Light mode non-monochrome colors are consistent via design tokens.
 - Class: quality-attribute
-- Status: active
+- Status: validated
 - Description: Every non-monochrome color in light mode (success, warning, error, info states) uses the semantic CSS custom property tokens (`--success`, `--warning`, `--destructive`, `--info`) instead of raw Tailwind color classes. The same green, amber, red, and blue are used everywhere for the same semantic meaning.
 - Why it matters: Post-M005 development (M006, M007) introduced raw Tailwind accent colors (`emerald-400`, `amber-400`, `red-400`, `sky-400`) in ~15+ components, creating visual inconsistency in light mode.
 - Source: user
 - Primary owning slice: M008/S03
 - Supporting slices: none
-- Validation: unmapped
+- Validation: `rg "emerald-|amber-|red-[0-9]|sky-|orange-|green-[0-9]|blue-[0-9]" web/components/` returns 0 hits. ~235 instances migrated across 24 files. `npm run build:web-host` exits 0. Verified 2026-03-18.
 - Notes: Verified by `rg "emerald-|amber-|red-[0-9]|sky-|orange-|green-|blue-" web/components/` returning zero hits for semantic state colors.
 
 ### R116 — Dashboard progress bar dynamically colors red→green by completion percentage.
 - Class: quality-attribute
-- Status: active
+- Status: validated
 - Description: The current slice progress bar on the main dashboard transitions from red (0%) through yellow (50%) to green (100%) based on task completion percentage, instead of using a static monochrome color.
 - Why it matters: Visual progress feedback through color is more intuitive than percentage text alone.
 - Source: user
 - Primary owning slice: M008/S05
 - Supporting slices: none
-- Validation: unmapped
-- Notes: Currently uses `bg-foreground` (monochrome). Needs oklch color interpolation.
+- Validation: `getProgressColor()` implements oklch hue interpolation 25→85→145. Inline `backgroundColor` replaces static `bg-foreground` on progress bar div. `npm run build:web-host` exits 0. Verified 2026-03-18.
+- Notes: Uses oklch(0.65 0.16 H) with L/C values tuned for visibility in both light and dark themes.
 
 ### R117 — Browser update banner with in-app update trigger.
 - Class: core-capability
-- Status: active
+- Status: validated
 - Description: When a newer GSD version is available on npm, a banner appears in the browser workspace. The user can trigger the update from the browser, which runs npm install asynchronously with progress feedback.
 - Why it matters: Users running `gsd --web` have no visibility into available updates and must fall back to the CLI to update.
 - Source: user
 - Primary owning slice: M008/S02
 - Supporting slices: none
-- Validation: unmapped
-- Notes: Reuses existing `src/update-check.ts` infrastructure for version detection. Needs new async API route for the update trigger.
+- Validation: GET/POST `/api/update` route compiled in build. `UpdateBanner` imported and rendered in app-shell.tsx. Async `npm install -g` via spawn with 202/409 semantics. Polling progress with status feedback. `npm run build:web-host` exits 0. Verified 2026-03-18.
+- Notes: Uses inline npm registry fetch (avoids Turbopack import issues with checkForUpdates). Module-level singleton for cross-request state.
 
 ### R118 — Slack/Discord/Telegram remote question config in web settings.
 - Class: core-capability
-- Status: active
+- Status: validated
 - Description: The web settings panel exposes configuration for Slack, Discord, and Telegram remote question channels — channel type, channel ID, timeout, and poll interval — reading and writing the same `remote_questions` preferences.md format the TUI uses.
 - Why it matters: Remote question configuration exists in the TUI preferences system but has no web settings surface, so browser-only users cannot configure it.
 - Source: user
 - Primary owning slice: M008/S04
 - Supporting slices: none
-- Validation: unmapped
-- Notes: `RemoteQuestionsConfig` type already exists in `src/resources/extensions/gsd/preferences.ts`.
+- Validation: GET/POST/DELETE `/api/remote-questions` route compiled in build. `RemoteQuestionsPanel` rendered in gsd-prefs command surface. Channel type validation, channel ID regex per channel, timeout/poll clamping. Full CRUD round-trip verified. `npm run build:web-host` exits 0. Verified 2026-03-18.
+- Notes: `RemoteQuestionsConfig` type already exists in `src/resources/extensions/gsd/preferences.ts`. Channel ID patterns replicated in API route due to Turbopack constraint.
 
 ### R119 — Projects view is a styled list with expandable progress details.
 - Class: quality-attribute
@@ -355,8 +355,8 @@ This file is the explicit capability and coverage contract for the project.
 - Source: user
 - Primary owning slice: M008/S01
 - Supporting slices: none
-- Validation: unmapped
-- Notes: Progress detail for non-active projects may use lightweight filesystem reads (STATE.md) rather than requiring a running bridge.
+- Validation: `flex flex-col gap-2` layout replaces grid. `expandedProject` state with single-click expand / double-click navigate. ActiveProjectDetail and InactiveProjectDetail components. Zero `grid grid-cols` matches. `npm run build:web-host` exits 0. Verified 2026-03-18.
+- Notes: Non-active project progress uses synchronous `readFileSync` of STATE.md via `?detail=true` API param.
 
 ### R120 — Terminal text size adjustable in settings (chat + expert split, not footer).
 - Class: quality-attribute
@@ -463,18 +463,17 @@ This file is the explicit capability and coverage contract for the project.
 | R111 | quality-attribute | active | M004/S01 | M004/S02 | unmapped |
 | R112 | quality-attribute | active | M004/S03 | none | unmapped |
 | R113 | primary-user-loop | validated | M007/S02 | M007/S01, M007/S03, M007/S04 | All four M007 slices delivered their components: S01 (PtyChatParser + CompletionSignal), S02 (Chat Mode view, ChatPane, ChatBubble, sidebar nav), S03 (TUI prompt intercept UI — select/text/password), S04 (ChatModeHeader toolbar, ActionPanel with animated lifecycle, session DELETE cleanup). npm run build:web-host exits 0. Browser end-to-end verified: panel slides in with accent color, secondary PTY session established, X close fires DELETE, main session unaffected. Completion auto-close (1500ms after CompletionSignal) wired; live runtime UAT required to fully exercise. |
-| R114 | quality-attribute | active | M008/S03 | none | unmapped |
-| R115 | quality-attribute | active | M008/S03 | none | unmapped |
-| R116 | quality-attribute | validated | M008/S05 | none | oklch interpolation, build passes, visual test |
-| R117 | core-capability | active | M008/S02 | none | unmapped |
-| R118 | core-capability | active | M008/S04 | none | unmapped |
-| R119 | quality-attribute | validated | M008/S01 | none | npm run build:web-host exits 0. rg "grid grid-cols" returns empty. Visual: list layout, expand/collapse, progress detail. API: /api/projects?detail=true returns progress. Verified 2026-03-18. |
-| R120 | quality-attribute | validated | M008/S05 | none | hook + settings panel, build passes |
+| R114 | quality-attribute | validated | M008/S03 | none | `defaultTheme="dark"` in layout.tsx, `enableSystem` removed. Verified 2026-03-18. |
+| R115 | quality-attribute | validated | M008/S03 | none | `rg` scan returns 0 hits for raw accent colors. ~235 instances migrated across 24 files. Build passes. Verified 2026-03-18. |
+| R116 | quality-attribute | validated | M008/S05 | none | `getProgressColor()` oklch hue interpolation 25→85→145. Build passes. Verified 2026-03-18. |
+| R117 | core-capability | validated | M008/S02 | none | GET/POST `/api/update` route, `UpdateBanner` in app-shell, async spawn, polling. Build passes. Verified 2026-03-18. |
+| R118 | core-capability | validated | M008/S04 | none | GET/POST/DELETE `/api/remote-questions`, `RemoteQuestionsPanel` in gsd-prefs. Full CRUD round-trip. Build passes. Verified 2026-03-18. |
+| R119 | quality-attribute | validated | M008/S01 | none | Vertical list layout, expandable detail, progress info. Zero `grid grid-cols` matches. Build passes. Verified 2026-03-18. |
+| R120 | quality-attribute | validated | M008/S05 | none | `useTerminalFontSize()` hook, `TerminalSizePanel` presets, fontSize prop on ShellTerminal/DualTerminal, footer excluded. Build passes. Verified 2026-03-18. |
 
 ## Coverage Summary
 
-- Active requirements: 10
-- Mapped to slices: 10
-- Validated: 23 (R001, R002, R003, R004, R005, R006, R007, R008, R009, R010, R011, R100, R101, R102, R103, R104, R105, R106, R107, R108, R109, R110, R113)
+- Active requirements: 5
+- Mapped to slices: 5
+- Validated: 28 (R001, R002, R003, R004, R005, R006, R007, R008, R009, R010, R011, R100, R101, R102, R103, R104, R105, R106, R107, R108, R109, R110, R113, R114, R115, R116, R117, R118)
 - Unmapped active requirements: 0
-rements: 0
