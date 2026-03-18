@@ -7,7 +7,7 @@
  */
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@gsd/pi-coding-agent";
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   resolveByName,
@@ -71,9 +71,29 @@ function datePrefix(): string {
   return `${yy}${mm}${dd}`;
 }
 
+// ─── State Types ─────────────────────────────────────────────────────────────
+
+interface WorkflowPhaseState {
+  name: string;
+  index: number;
+  status: "pending" | "active" | "completed";
+}
+
+interface WorkflowState {
+  template: string;
+  templateName: string;
+  description: string;
+  branch: string;
+  phases: WorkflowPhaseState[];
+  currentPhase: number;
+  startedAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  artifactDir: string;
+}
+
 /**
  * Write a STATE.json file to track workflow execution state.
- * Enables resume across sessions.
  */
 function writeWorkflowState(
   artifactDir: string,
@@ -84,7 +104,7 @@ function writeWorkflowState(
   branch: string,
 ): void {
   const statePath = join(artifactDir, "STATE.json");
-  const state = {
+  const state: WorkflowState = {
     template: templateId,
     templateName,
     description,
@@ -92,13 +112,50 @@ function writeWorkflowState(
     phases: phases.map((p, i) => ({
       name: p,
       index: i,
-      status: i === 0 ? "active" : "pending",
+      status: i === 0 ? "active" as const : "pending" as const,
     })),
     currentPhase: 0,
     startedAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
+    artifactDir,
   };
   writeFileSync(statePath, JSON.stringify(state, null, 2) + "\n");
+}
+
+/**
+ * Scan all workflow artifact directories for in-progress STATE.json files.
+ * Returns workflows that were started but not completed.
+ */
+function findInProgressWorkflows(basePath: string): WorkflowState[] {
+  const workflowsRoot = join(gsdRoot(basePath), "workflows");
+  if (!existsSync(workflowsRoot)) return [];
+
+  const results: WorkflowState[] = [];
+  try {
+    // Scan each category dir (bugfixes/, features/, spikes/, etc.)
+    for (const category of readdirSync(workflowsRoot, { withFileTypes: true })) {
+      if (!category.isDirectory()) continue;
+      const categoryDir = join(workflowsRoot, category.name);
+
+      for (const workflow of readdirSync(categoryDir, { withFileTypes: true })) {
+        if (!workflow.isDirectory()) continue;
+        const statePath = join(categoryDir, workflow.name, "STATE.json");
+        if (!existsSync(statePath)) continue;
+
+        try {
+          const raw = readFileSync(statePath, "utf-8");
+          const state = JSON.parse(raw) as WorkflowState;
+          if (!state.completedAt) {
+            results.push(state);
+          }
+        } catch { /* corrupted state file — skip */ }
+      }
+    }
+  } catch { /* workflows dir unreadable — skip */ }
+
+  // Sort by most recently updated
+  results.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return results;
 }
 
 // ─── /gsd start ──────────────────────────────────────────────────────────────
@@ -134,6 +191,76 @@ export async function handleStart(
       "The paused auto-mode session can be resumed later with /gsd auto.",
       "info",
     );
+  }
+
+  // ─── Resume detection ───────────────────────────────────────────────────
+  // /gsd start --resume or /gsd start resume → resume in-progress workflow
+  if (trimmed === "--resume" || trimmed === "resume") {
+    const basePath = process.cwd();
+    const inProgress = findInProgressWorkflows(basePath);
+    if (inProgress.length === 0) {
+      ctx.ui.notify("No in-progress workflows found.", "info");
+      return;
+    }
+
+    // Resume the most recent one
+    const wf = inProgress[0];
+    const activePhase = wf.phases.find(p => p.status === "active");
+    const completedCount = wf.phases.filter(p => p.status === "completed").length;
+
+    ctx.ui.notify(
+      `Resuming: ${wf.templateName}\n` +
+      `Description: ${wf.description}\n` +
+      `Progress: ${completedCount}/${wf.phases.length} phases completed\n` +
+      `Current phase: ${activePhase?.name ?? "unknown"}\n` +
+      `Branch: ${wf.branch}\n` +
+      `Artifacts: ${wf.artifactDir}`,
+      "info",
+    );
+
+    const workflowContent = loadWorkflowTemplate(wf.template);
+    if (!workflowContent) {
+      ctx.ui.notify(`Template "${wf.template}" workflow file not found.`, "warning");
+      return;
+    }
+
+    const prompt = loadPrompt("workflow-start", {
+      templateId: wf.template,
+      templateName: wf.templateName,
+      templateDescription: `RESUMING — pick up from phase "${activePhase?.name ?? "unknown"}" (${completedCount}/${wf.phases.length} phases done)`,
+      phases: wf.phases.map(p => `${p.name}${p.status === "completed" ? " ✓" : p.status === "active" ? " ←" : ""}`).join(" → "),
+      complexity: "resume",
+      artifactDir: wf.artifactDir,
+      branch: wf.branch,
+      description: wf.description,
+      issueRef: "(none)",
+      date: new Date().toISOString().split("T")[0],
+      workflowContent,
+    });
+
+    pi.sendMessage(
+      { customType: "gsd-workflow-template", content: prompt, display: false },
+      { triggerTurn: true },
+    );
+    return;
+  }
+
+  // Show in-progress workflows when /gsd start is called with no args
+  if (!trimmed) {
+    const basePath = process.cwd();
+    const inProgress = findInProgressWorkflows(basePath);
+    if (inProgress.length > 0) {
+      const wf = inProgress[0];
+      const activePhase = wf.phases.find(p => p.status === "active");
+      const completedCount = wf.phases.filter(p => p.status === "completed").length;
+      ctx.ui.notify(
+        `In-progress workflow found:\n` +
+        `  ${wf.templateName}: "${wf.description}"\n` +
+        `  Phase ${completedCount + 1}/${wf.phases.length}: ${activePhase?.name ?? "unknown"}\n\n` +
+        `Run /gsd start resume to continue it.\n`,
+        "info",
+      );
+    }
   }
 
   // /gsd start --dry-run <template> → preview without executing

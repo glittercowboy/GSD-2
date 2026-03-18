@@ -321,6 +321,7 @@ export function registerGSDCommand(pi: ExtensionAPI): void {
           { cmd: "security-audit", desc: "Scan, triage, remediate, re-scan" },
           { cmd: "dep-upgrade", desc: "Assess, upgrade, fix breaks, verify" },
           { cmd: "full-project", desc: "Complete GSD workflow with full ceremony" },
+          { cmd: "resume", desc: "Resume an in-progress workflow" },
           { cmd: "--list", desc: "List all available templates" },
           { cmd: "--dry-run", desc: "Preview workflow without executing" },
         ];
