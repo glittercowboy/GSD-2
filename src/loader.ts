@@ -12,27 +12,21 @@ const gsdRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const args = process.argv.slice(2)
 const firstArg = args[0]
 
-let _cachedVersion: string | undefined
-function getVersion(): string {
-  if (_cachedVersion === undefined) {
-    try {
-      const pkg = JSON.parse(readFileSync(join(gsdRoot, 'package.json'), 'utf-8'))
-      _cachedVersion = pkg.version || '0.0.0'
-    } catch {
-      _cachedVersion = '0.0.0'
-    }
-  }
-  return _cachedVersion as string
-}
+// Read package.json once — reused for version, banner, and GSD_VERSION below
+let gsdVersion = '0.0.0'
+try {
+  const pkg = JSON.parse(readFileSync(join(gsdRoot, 'package.json'), 'utf-8'))
+  gsdVersion = pkg.version || '0.0.0'
+} catch { /* ignore */ }
 
 if (firstArg === '--version' || firstArg === '-v') {
-  process.stdout.write(getVersion() + '\n')
+  process.stdout.write(gsdVersion + '\n')
   process.exit(0)
 }
 
 if (firstArg === '--help' || firstArg === '-h') {
   const { printHelp } = await import('./help-text.js')
-  printHelp(getVersion())
+  printHelp(gsdVersion)
   process.exit(0)
 }
 
@@ -64,7 +58,7 @@ if (!existsSync(appRoot)) {
   process.stderr.write(
     renderLogo(colorCyan) +
     '\n' +
-    `  Get Shit Done ${dim}v${getVersion()}${reset}\n` +
+    `  Get Shit Done ${dim}v${gsdVersion}${reset}\n` +
     `  ${green}Welcome.${reset} Setting up your environment...\n\n`
   )
 }
@@ -87,7 +81,7 @@ const { Module } = await import('module');
 (Module as any)._initPaths?.()
 
 // GSD_VERSION — expose package version so extensions can display it
-process.env.GSD_VERSION = getVersion()
+process.env.GSD_VERSION = gsdVersion
 
 // GSD_BIN_PATH — absolute path to this loader (dist/loader.js), used by patched subagent
 // to spawn gsd instead of pi when dispatching workflow tasks

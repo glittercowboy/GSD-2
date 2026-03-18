@@ -157,6 +157,41 @@ test("initResources syncs extensions, agents, and skills to target dir", async (
   }
 });
 
+test("initResources skips copy when managed version matches current version", async () => {
+  const { initResources, readManagedResourceVersion } = await import("../resource-loader.ts");
+  const tmp = mkdtempSync(join(tmpdir(), "gsd-resources-skip-"));
+  const fakeAgentDir = join(tmp, "agent");
+
+  try {
+    // First run: full sync (no manifest yet)
+    initResources(fakeAgentDir);
+    const version = readManagedResourceVersion(fakeAgentDir);
+    assert.ok(version, "manifest written after first sync");
+
+    // Add a marker file to detect whether sync runs again
+    const markerPath = join(fakeAgentDir, "extensions", "gsd", "_marker.txt");
+    writeFileSync(markerPath, "test-marker");
+
+    // Second run: version matches — should skip, marker survives
+    initResources(fakeAgentDir);
+    assert.ok(existsSync(markerPath), "marker file survives when version matches (sync skipped)");
+
+    // Simulate version mismatch by writing older version to manifest
+    const manifestPath = join(fakeAgentDir, "managed-resources.json");
+    writeFileSync(manifestPath, JSON.stringify({ gsdVersion: "0.0.1", syncedAt: Date.now() }));
+
+    // Third run: version mismatch — full sync, marker removed
+    initResources(fakeAgentDir);
+    assert.ok(!existsSync(markerPath), "marker file removed after version-mismatch sync");
+
+    // Manifest updated to current version
+    const updatedVersion = readManagedResourceVersion(fakeAgentDir);
+    assert.strictEqual(updatedVersion, version, "manifest updated to current version after sync");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 // ═══════════════════════════════════════════════════════════════════════════
 // 4. wizard loadStoredEnvKeys hydration
 // ═══════════════════════════════════════════════════════════════════════════
