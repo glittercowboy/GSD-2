@@ -15,7 +15,7 @@ Tool cards that are art — beautiful, informative, syntax-highlighted cards for
 
 ## Current State
 
-M001 is in progress. S01 is complete: the `studio/` Electron workspace now boots a real desktop shell with the dark amber design system, shared UI primitives, a typed preload bridge stub, and a persisted three-column layout populated with placeholder file/conversation/editor surfaces. The next slice is wiring gsd-2 RPC and event streaming into the center rail.
+M001 is in progress. S01, S02, and S03 are complete. The `studio/` Electron workspace boots a real desktop shell with the dark amber design system, a full bidirectional RPC pipe to gsd-2, and a structured message stream with premium markdown rendering. The center panel renders three block types: assistant text (via Streamdown with Shiki syntax highlighting, 20+ custom component overrides, and streaming block caret), user prompts (styled with amber accent border), and tool stubs (minimal placeholders with animated status icons). The message model is a pure `buildMessageBlocks()` function tested with 12 unit cases. Auto-scroll follows streaming content and respects manual scroll-up. The next slice (S04) replaces tool stubs with bespoke collapsed/expandable tool cards.
 
 ## Architecture / Key Patterns
 
