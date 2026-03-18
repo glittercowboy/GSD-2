@@ -25,15 +25,15 @@
  *   Esc          exit confirmation
  */
 
-import type { ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
-import { type Theme } from "@mariozechner/pi-coding-agent";
+import type { ExtensionCommandContext } from "@gsd/pi-coding-agent";
+import { type Theme } from "@gsd/pi-coding-agent";
 import {
 	Editor,
 	Key,
 	matchesKey,
 	truncateToWidth,
 	type TUI,
-} from "@mariozechner/pi-tui";
+} from "@gsd/pi-tui";
 import { makeUI, INDENT } from "./ui.js";
 
 // ─── Exported types ───────────────────────────────────────────────────────────
@@ -105,7 +105,7 @@ export interface WrapUpOptions {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const OTHER_OPTION_LABEL = "None of the above";
-const OTHER_OPTION_DESCRIPTION = "Optionally, add details in notes below.";
+const OTHER_OPTION_DESCRIPTION = "Press TAB to add optional notes.";
 
 // ─── Wrap-up screen ───────────────────────────────────────────────────────────
 
@@ -235,7 +235,7 @@ export async function showInterviewRound(
 		}
 
 		function saveEditorToState() {
-			states[currentIdx].notes = getEditor().getText().trim();
+			states[currentIdx].notes = getEditor().getExpandedText().trim();
 		}
 
 		function loadStateToEditor() {
@@ -593,7 +593,7 @@ export async function showInterviewRound(
 				hints.push("tab to add notes");
 				hints.push(isLast && allAnswered() ? "enter to review" : "enter to next");
 			} else {
-				if (st.committedIndex !== null || !isMultiQuestion) hints.push("tab to add notes");
+				hints.push("tab to add notes");
 				if (isMultiQuestion) hints.push("←/→ navigate");
 				hints.push(isLast && allAnswered() ? "enter to review" : "enter to next");
 			}

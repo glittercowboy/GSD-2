@@ -1,5 +1,5 @@
 /**
- * Web Search Extension v3
+ * Web Search Extension v4
  *
  * Provides three tools for grounding the agent in real-world web content:
  *
@@ -14,6 +14,15 @@
  *   search_and_read  — Single-call search + content extraction via Brave LLM Context API.
  *                      Returns pre-extracted, relevance-scored page content.
  *                      Best when you need content, not just links.
+ *
+ * v4: Native Anthropic web search
+ * - When using an Anthropic provider, injects the native `web_search_20250305`
+ *   server-side tool via `before_provider_request`. This eliminates the need for
+ *   a BRAVE_API_KEY when using Anthropic models — search is billed through the
+ *   existing Anthropic API key ($0.01/search).
+ * - Custom Brave-based tools (search-the-web, search_and_read) are disabled when
+ *   Anthropic + no BRAVE_API_KEY to avoid confusing the LLM with broken tools.
+ * - fetch_page (Jina) remains available — it works without a key at lower rate limits.
  *
  * v3 improvements over v2:
  * - search_and_read: New tool — Brave LLM Context API (search + read in one call)
@@ -30,45 +39,27 @@
  * - Cache timer cleanup: purge timers use unref() to not block process exit
  *
  * Environment variables:
- *   BRAVE_API_KEY  — Required for search. Get one at brave.com/search/api
+ *   BRAVE_API_KEY  — Optional with Anthropic models (built-in search available).
+ *                    Required for non-Anthropic providers. Get one at brave.com/search/api
  *   JINA_API_KEY   — Optional. Higher rate limits for page extraction.
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { registerSearchTool } from "./tool-search";
-import { registerFetchPageTool } from "./tool-fetch-page";
-import { registerLLMContextTool } from "./tool-llm-context";
-import { registerSearchProviderCommand } from "./command-search-provider.ts";
+import type { ExtensionAPI } from "@gsd/pi-coding-agent";
+import { registerSearchTool } from "./tool-search.js";
+import { registerFetchPageTool } from "./tool-fetch-page.js";
+import { registerLLMContextTool } from "./tool-llm-context.js";
+import { registerSearchProviderCommand } from "./command-search-provider.js";
+import { registerNativeSearchHooks } from "./native-search.js";
 
 export default function (pi: ExtensionAPI) {
-  // Register all tools
   registerSearchTool(pi);
   registerFetchPageTool(pi);
   registerLLMContextTool(pi);
 
+
   // Register slash commands
   registerSearchProviderCommand(pi);
 
-  // Startup diagnostics
-  pi.on("session_start", async (_event, ctx) => {
-    const hasBrave = !!process.env.BRAVE_API_KEY;
-    const hasTavily = !!process.env.TAVILY_API_KEY;
-    const hasJina = !!process.env.JINA_API_KEY;
-    const hasAnswers = !!process.env.BRAVE_ANSWERS_KEY;
-
-    if (!hasBrave && !hasTavily) {
-      ctx.ui.notify(
-        "Web search: Set BRAVE_API_KEY or TAVILY_API_KEY for web search capability",
-        "warning"
-      );
-    }
-
-    const parts: string[] = ["Web search v3"];
-    if (hasTavily) parts.push("Tavily ✓");
-    if (hasBrave) parts.push("Search ✓");
-    if (hasAnswers) parts.push("Answers ✓");
-    if (hasJina) parts.push("Jina ✓");
-
-    ctx.ui.notify(parts.join(" · "), "info");
-  });
+  // Register native Anthropic web search hooks
+  registerNativeSearchHooks(pi);
 }

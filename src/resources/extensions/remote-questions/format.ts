@@ -18,7 +18,8 @@ export interface DiscordEmbed {
   footer?: { text: string };
 }
 
-const NUMBER_EMOJIS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"];
+export const DISCORD_NUMBER_EMOJIS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"];
+export const SLACK_NUMBER_REACTION_NAMES = ["one", "two", "three", "four", "five"];
 const MAX_USER_NOTE_LENGTH = 500;
 
 export function formatForSlack(prompt: RemotePrompt): SlackBlock[] {
@@ -29,7 +30,18 @@ export function formatForSlack(prompt: RemotePrompt): SlackBlock[] {
     },
   ];
 
+  if (prompt.questions.length > 1) {
+    blocks.push({
+      type: "context",
+      elements: [{
+        type: "mrkdwn",
+        text: "Reply once in thread using one line per question or semicolons (`1; 2; custom note`).",
+      }],
+    });
+  }
+
   for (const q of prompt.questions) {
+    const supportsReactions = prompt.questions.length === 1;
     blocks.push({
       type: "section",
       text: { type: "mrkdwn", text: `*${q.header}*\n${q.question}` },
@@ -47,13 +59,31 @@ export function formatForSlack(prompt: RemotePrompt): SlackBlock[] {
       type: "context",
       elements: [{
         type: "mrkdwn",
-        text: q.allowMultiple
-          ? "Reply in thread with comma-separated numbers (`1,3`) or free text."
-          : "Reply in thread with a number (`1`) or free text.",
+        text: prompt.questions.length > 1
+          ? (q.allowMultiple
+              ? "For this question, use comma-separated numbers (`1,3`) or free text."
+              : "For this question, use one number (`1`) or free text.")
+          : (q.allowMultiple
+              ? (supportsReactions
+                  ? "Reply in thread with comma-separated numbers (`1,3`) or react with matching number emoji."
+                  : "Reply in thread with comma-separated numbers (`1,3`) or free text.")
+              : (supportsReactions
+                  ? "Reply in thread with a number (`1`) or react with the matching number emoji."
+                  : "Reply in thread with a number (`1`) or free text.")),
       }],
     });
 
     blocks.push({ type: "divider" });
+  }
+
+  if (prompt.context?.source) {
+    blocks.push({
+      type: "context",
+      elements: [{
+        type: "mrkdwn",
+        text: `Source: \`${prompt.context.source}\``,
+      }],
+    });
   }
 
   return blocks;
@@ -64,23 +94,29 @@ export function formatForDiscord(prompt: RemotePrompt): { embeds: DiscordEmbed[]
   const embeds: DiscordEmbed[] = prompt.questions.map((q, questionIndex) => {
     const supportsReactions = prompt.questions.length === 1;
     const optionLines = q.options.map((opt, i) => {
-      const emoji = NUMBER_EMOJIS[i] ?? `${i + 1}.`;
-      if (supportsReactions && NUMBER_EMOJIS[i]) reactionEmojis.push(NUMBER_EMOJIS[i]);
+      const emoji = DISCORD_NUMBER_EMOJIS[i] ?? `${i + 1}.`;
+      if (supportsReactions && DISCORD_NUMBER_EMOJIS[i]) reactionEmojis.push(DISCORD_NUMBER_EMOJIS[i]);
       return `${emoji} **${opt.label}** — ${opt.description}`;
     });
 
-    const footerText = supportsReactions
-      ? (q.allowMultiple
-          ? "Reply with comma-separated choices (`1,3`) or react with matching numbers"
-          : "Reply with a number or react with the matching number")
-      : `Question ${questionIndex + 1}/${prompt.questions.length} — reply with one line per question or use semicolons`;
+    const footerParts: string[] = [];
+    if (supportsReactions) {
+      footerParts.push(q.allowMultiple
+        ? "Reply with comma-separated choices (`1,3`) or react with matching numbers"
+        : "Reply with a number or react with the matching number");
+    } else {
+      footerParts.push(`Question ${questionIndex + 1}/${prompt.questions.length} — reply with one line per question or use semicolons`);
+    }
+    if (prompt.context?.source) {
+      footerParts.push(`Source: ${prompt.context.source}`);
+    }
 
     return {
       title: q.header,
       description: q.question,
       color: 0x7c3aed,
       fields: [{ name: "Options", value: optionLines.join("\n") }],
-      footer: { text: footerText },
+      footer: { text: footerParts.join(" · ") },
     };
   });
 
@@ -124,14 +160,130 @@ export function parseDiscordResponse(
 
   const q = questions[0];
   const picked = reactions
-    .filter((r) => NUMBER_EMOJIS.includes(r.emoji) && r.count > 0)
-    .map((r) => q.options[NUMBER_EMOJIS.indexOf(r.emoji)]?.label)
+    .filter((r) => DISCORD_NUMBER_EMOJIS.includes(r.emoji) && r.count > 0)
+    .map((r) => q.options[DISCORD_NUMBER_EMOJIS.indexOf(r.emoji)]?.label)
     .filter(Boolean) as string[];
 
   answers[q.id] = picked.length > 0
     ? { answers: q.allowMultiple ? picked : [picked[0]] }
     : { answers: [], user_note: "No clear response via reactions" };
 
+  return { answers };
+}
+
+export function parseSlackReactionResponse(
+  reactionNames: string[],
+  questions: RemoteQuestion[],
+): RemoteAnswer {
+  const answers: RemoteAnswer["answers"] = {};
+  if (questions.length !== 1) {
+    for (const q of questions) {
+      answers[q.id] = { answers: [], user_note: "Slack reactions are only supported for single-question prompts" };
+    }
+    return { answers };
+  }
+
+  const q = questions[0];
+  const picked = reactionNames
+    .filter((name) => SLACK_NUMBER_REACTION_NAMES.includes(name))
+    .map((name) => q.options[SLACK_NUMBER_REACTION_NAMES.indexOf(name)]?.label)
+    .filter(Boolean) as string[];
+
+  answers[q.id] = picked.length > 0
+    ? { answers: q.allowMultiple ? picked : [picked[0]] }
+    : { answers: [], user_note: "No clear response via reactions" };
+
+  return { answers };
+}
+
+export interface TelegramInlineButton {
+  text: string;
+  callback_data: string;
+}
+
+export interface TelegramInlineKeyboardMarkup {
+  inline_keyboard: TelegramInlineButton[][];
+}
+
+export interface TelegramMessage {
+  text: string;
+  parse_mode: "HTML";
+  reply_markup?: TelegramInlineKeyboardMarkup;
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+export function formatForTelegram(prompt: RemotePrompt): TelegramMessage {
+  const lines: string[] = ["<b>GSD needs your input</b>", ""];
+
+  for (let qi = 0; qi < prompt.questions.length; qi++) {
+    const q = prompt.questions[qi];
+    lines.push(`<b>${escapeHtml(q.header)}</b>`);
+    lines.push(escapeHtml(q.question));
+    lines.push("");
+
+    for (let i = 0; i < q.options.length; i++) {
+      lines.push(`${i + 1}. <b>${escapeHtml(q.options[i].label)}</b> — ${escapeHtml(q.options[i].description)}`);
+    }
+
+    lines.push("");
+    if (prompt.questions.length === 1) {
+      lines.push(q.allowMultiple
+        ? "Reply with comma-separated numbers (1,3) or free text."
+        : "Reply with a number or tap a button below.");
+    } else {
+      lines.push(`Question ${qi + 1}/${prompt.questions.length} — reply with one line per question or use semicolons.`);
+    }
+
+    if (qi < prompt.questions.length - 1) lines.push("");
+  }
+
+  const result: TelegramMessage = {
+    text: lines.join("\n"),
+    parse_mode: "HTML",
+  };
+
+  // Inline keyboard for single-question with <=5 options
+  const isSingle = prompt.questions.length === 1;
+  if (isSingle && prompt.questions[0].options.length <= 5) {
+    result.reply_markup = {
+      inline_keyboard: prompt.questions[0].options.map((opt, i) => [{
+        text: `${i + 1}. ${opt.label}`,
+        callback_data: `${prompt.id}:${i}`,
+      }]),
+    };
+  }
+
+  return result;
+}
+
+export function parseTelegramResponse(
+  callbackData: string | null,
+  replyText: string | null,
+  questions: RemoteQuestion[],
+  promptId: string,
+): RemoteAnswer {
+  // Handle callback_data from inline keyboard button press
+  if (callbackData) {
+    const match = callbackData.match(new RegExp(`^${promptId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:(\\d+)$`));
+    if (match && questions.length === 1) {
+      const idx = parseInt(match[1], 10);
+      const q = questions[0];
+      if (idx >= 0 && idx < q.options.length) {
+        return { answers: { [q.id]: { answers: [q.options[idx].label] } } };
+      }
+    }
+  }
+
+  // Handle text reply — delegate to parseSlackReply (text parsing is format-agnostic)
+  if (replyText) return parseSlackReply(replyText, questions);
+
+  const answers: RemoteAnswer["answers"] = {};
+  for (const q of questions) {
+    answers[q.id] = { answers: [], user_note: "No response provided" };
+  }
   return { answers };
 }
 

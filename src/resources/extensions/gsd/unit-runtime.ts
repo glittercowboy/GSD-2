@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import {
   gsdRoot,
@@ -6,8 +6,9 @@ import {
   relTaskFile,
   resolveSliceFile,
   resolveTaskFile,
-} from "./paths.ts";
-import { loadFile, parseTaskPlanMustHaves, countMustHavesMentionedInSummary } from "./files.ts";
+} from "./paths.js";
+import { loadFile, parseTaskPlanMustHaves, countMustHavesMentionedInSummary } from "./files.js";
+import { loadJsonFileOrNull, saveJsonFile } from "./json-persistence.js";
 
 export type UnitRuntimePhase =
   | "dispatched"
@@ -36,6 +37,7 @@ export interface AutoUnitRuntimeRecord {
   updatedAt: number;
   phase: UnitRuntimePhase;
   wrapupWarningSent: boolean;
+  continueHereFired: boolean;
   timeoutAt: number | null;
   lastProgressAt: number;
   progressCount: number;
@@ -45,12 +47,24 @@ export interface AutoUnitRuntimeRecord {
   lastRecoveryReason?: "idle" | "hard";
 }
 
+function isAutoUnitRuntimeRecord(data: unknown): data is AutoUnitRuntimeRecord {
+  return (
+    typeof data === "object" &&
+    data !== null &&
+    (data as AutoUnitRuntimeRecord).version === 1 &&
+    typeof (data as AutoUnitRuntimeRecord).unitType === "string" &&
+    typeof (data as AutoUnitRuntimeRecord).unitId === "string"
+  );
+}
+
 function runtimeDir(basePath: string): string {
   return join(gsdRoot(basePath), "runtime", "units");
 }
 
 function runtimePath(basePath: string, unitType: string, unitId: string): string {
-  return join(runtimeDir(basePath), `${unitType}-${unitId.replace(/[\/]/g, "-")}.json`);
+  const sanitizedUnitType = unitType.replace(/[^a-zA-Z0-9._-]+/g, "-");
+  const sanitizedUnitId = unitId.replace(/[^a-zA-Z0-9._-]+/g, "-");
+  return join(runtimeDir(basePath), `${sanitizedUnitType}-${sanitizedUnitId}.json`);
 }
 
 export function writeUnitRuntimeRecord(
@@ -60,8 +74,6 @@ export function writeUnitRuntimeRecord(
   startedAt: number,
   updates: Partial<AutoUnitRuntimeRecord> = {},
 ): AutoUnitRuntimeRecord {
-  const dir = runtimeDir(basePath);
-  mkdirSync(dir, { recursive: true });
   const path = runtimePath(basePath, unitType, unitId);
   const prev = readUnitRuntimeRecord(basePath, unitType, unitId);
   const next: AutoUnitRuntimeRecord = {
@@ -72,6 +84,7 @@ export function writeUnitRuntimeRecord(
     updatedAt: Date.now(),
     phase: updates.phase ?? prev?.phase ?? "dispatched",
     wrapupWarningSent: updates.wrapupWarningSent ?? prev?.wrapupWarningSent ?? false,
+    continueHereFired: updates.continueHereFired ?? prev?.continueHereFired ?? false,
     timeoutAt: updates.timeoutAt ?? prev?.timeoutAt ?? null,
     lastProgressAt: updates.lastProgressAt ?? prev?.lastProgressAt ?? Date.now(),
     progressCount: updates.progressCount ?? prev?.progressCount ?? 0,
@@ -80,18 +93,12 @@ export function writeUnitRuntimeRecord(
     recoveryAttempts: updates.recoveryAttempts ?? prev?.recoveryAttempts ?? 0,
     lastRecoveryReason: updates.lastRecoveryReason ?? prev?.lastRecoveryReason,
   };
-  writeFileSync(path, JSON.stringify(next, null, 2) + "\n", "utf-8");
+  saveJsonFile(path, next);
   return next;
 }
 
 export function readUnitRuntimeRecord(basePath: string, unitType: string, unitId: string): AutoUnitRuntimeRecord | null {
-  const path = runtimePath(basePath, unitType, unitId);
-  if (!existsSync(path)) return null;
-  try {
-    return JSON.parse(readFileSync(path, "utf-8")) as AutoUnitRuntimeRecord;
-  } catch {
-    return null;
-  }
+  return loadJsonFileOrNull(runtimePath(basePath, unitType, unitId), isAutoUnitRuntimeRecord);
 }
 
 export function clearUnitRuntimeRecord(basePath: string, unitType: string, unitId: string): void {

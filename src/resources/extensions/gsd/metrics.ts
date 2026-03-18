@@ -13,10 +13,14 @@
  *   4. On crash recovery or fresh start, the ledger is loaded from disk
  */
 
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionContext } from "@gsd/pi-coding-agent";
 import { gsdRoot } from "./paths.js";
+import { getAndClearSkills } from "./skill-telemetry.js";
+import { loadJsonFile, loadJsonFileOrNull, saveJsonFile } from "./json-persistence.js";
+
+// Re-export from shared — canonical implementation lives in format-utils.
+export { formatTokenCount } from "../shared/mod.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -39,6 +43,25 @@ export interface UnitMetrics {
   toolCalls: number;
   assistantMessages: number;
   userMessages: number;
+  apiRequests?: number;    // total API requests made (useful for copilot users where cost is always 0)
+  // Budget fields (optional — absent in pre-M009 metrics data)
+  contextWindowTokens?: number;
+  truncationSections?: number;
+  continueHereFired?: boolean;
+  promptCharCount?: number;
+  baselineCharCount?: number;
+  tier?: string;           // complexity tier (light/standard/heavy) if dynamic routing active
+  modelDowngraded?: boolean; // true if dynamic routing used a cheaper model
+  skills?: string[];       // skill names available/loaded during this unit (#599)
+  cacheHitRate?: number;       // percentage 0-100, computed from cacheRead/(cacheRead+input)
+  compressionSavings?: number; // percentage 0-100, char savings from prompt compression
+}
+
+/** Budget state passed to snapshotUnitMetrics for persistence in the metrics ledger. */
+export interface BudgetInfo {
+  contextWindowTokens?: number;
+  truncationSections?: number;
+  continueHereFired?: boolean;
 }
 
 export interface MetricsLedger {
@@ -104,6 +127,7 @@ export function snapshotUnitMetrics(
   unitId: string,
   startedAt: number,
   model: string,
+  opts?: { tier?: string; modelDowngraded?: boolean; contextWindowTokens?: number; truncationSections?: number; continueHereFired?: boolean; promptCharCount?: number; baselineCharCount?: number },
 ): UnitMetrics | null {
   if (!ledger) return null;
 
@@ -156,7 +180,27 @@ export function snapshotUnitMetrics(
     toolCalls,
     assistantMessages,
     userMessages,
+    apiRequests: assistantMessages, // each assistant message = one API request
+    ...(opts?.tier ? { tier: opts.tier } : {}),
+    ...(opts?.modelDowngraded !== undefined ? { modelDowngraded: opts.modelDowngraded } : {}),
+    ...(opts?.contextWindowTokens !== undefined ? { contextWindowTokens: opts.contextWindowTokens } : {}),
+    ...(opts?.truncationSections !== undefined ? { truncationSections: opts.truncationSections } : {}),
+    ...(opts?.continueHereFired !== undefined ? { continueHereFired: opts.continueHereFired } : {}),
+    ...(opts?.promptCharCount != null ? { promptCharCount: opts.promptCharCount } : {}),
+    ...(opts?.baselineCharCount != null ? { baselineCharCount: opts.baselineCharCount } : {}),
   };
+
+  // Auto-capture skill telemetry (#599)
+  const skills = getAndClearSkills();
+  if (skills.length > 0) {
+    unit.skills = skills;
+  }
+
+  // Compute cache hit rate
+  if (tokens.cacheRead > 0 || tokens.input > 0) {
+    const totalInput = tokens.cacheRead + tokens.input;
+    unit.cacheHitRate = totalInput > 0 ? Math.round((tokens.cacheRead / totalInput) * 100) : 0;
+  }
 
   ledger.units.push(unit);
   saveLedger(basePath, ledger);
@@ -194,6 +238,7 @@ export interface ModelAggregate {
   units: number;
   tokens: TokenCounts;
   cost: number;
+  contextWindowTokens?: number;
 }
 
 export interface ProjectTotals {
@@ -204,6 +249,9 @@ export interface ProjectTotals {
   toolCalls: number;
   assistantMessages: number;
   userMessages: number;
+  apiRequests: number;
+  totalTruncationSections: number;
+  continueHereFiredCount: number;
 }
 
 function emptyTokens(): TokenCounts {
@@ -269,6 +317,9 @@ export function aggregateByModel(units: UnitMetrics[]): ModelAggregate[] {
     agg.units++;
     agg.tokens = addTokens(agg.tokens, u.tokens);
     agg.cost += u.cost;
+    if (u.contextWindowTokens !== undefined && agg.contextWindowTokens === undefined) {
+      agg.contextWindowTokens = u.contextWindowTokens;
+    }
   }
   return Array.from(map.values()).sort((a, b) => b.cost - a.cost);
 }
@@ -282,6 +333,9 @@ export function getProjectTotals(units: UnitMetrics[]): ProjectTotals {
     toolCalls: 0,
     assistantMessages: 0,
     userMessages: 0,
+    apiRequests: 0,
+    totalTruncationSections: 0,
+    continueHereFiredCount: 0,
   };
   for (const u of units) {
     totals.tokens = addTokens(totals.tokens, u.tokens);
@@ -290,8 +344,70 @@ export function getProjectTotals(units: UnitMetrics[]): ProjectTotals {
     totals.toolCalls += u.toolCalls;
     totals.assistantMessages += u.assistantMessages;
     totals.userMessages += u.userMessages;
+    totals.apiRequests += u.apiRequests ?? u.assistantMessages; // fallback for pre-existing data
+    totals.totalTruncationSections += u.truncationSections ?? 0;
+    if (u.continueHereFired) totals.continueHereFiredCount++;
   }
   return totals;
+}
+
+// ─── Tier Aggregation ────────────────────────────────────────────────────────
+
+export interface TierAggregate {
+  tier: string;
+  units: number;
+  tokens: TokenCounts;
+  cost: number;
+  downgraded: number;   // units that were downgraded by dynamic routing
+}
+
+export function aggregateByTier(units: UnitMetrics[]): TierAggregate[] {
+  const map = new Map<string, TierAggregate>();
+  for (const u of units) {
+    const tier = u.tier ?? "unknown";
+    let agg = map.get(tier);
+    if (!agg) {
+      agg = { tier, units: 0, tokens: emptyTokens(), cost: 0, downgraded: 0 };
+      map.set(tier, agg);
+    }
+    agg.units++;
+    agg.tokens = addTokens(agg.tokens, u.tokens);
+    agg.cost += u.cost;
+    if (u.modelDowngraded) agg.downgraded++;
+  }
+  const order = ["light", "standard", "heavy", "unknown"];
+  return order.map(t => map.get(t)).filter((a): a is TierAggregate => !!a);
+}
+
+/**
+ * Format a summary of savings from dynamic routing.
+ * Returns empty string if no units were downgraded.
+ */
+export function formatTierSavings(units: UnitMetrics[]): string {
+  const downgraded = units.filter(u => u.modelDowngraded);
+  if (downgraded.length === 0) return "";
+
+  const downgradedCost = downgraded.reduce((sum, u) => sum + u.cost, 0);
+  const totalUnits = units.filter(u => u.tier).length;
+  const pct = totalUnits > 0 ? Math.round((downgraded.length / totalUnits) * 100) : 0;
+
+  return `Dynamic routing: ${downgraded.length}/${totalUnits} units downgraded (${pct}%), cost: ${formatCost(downgradedCost)}`;
+}
+
+/**
+ * Compute aggregate cache hit rate across all units.
+ * Returns percentage 0-100.
+ */
+export function aggregateCacheHitRate(): number {
+  if (!ledger || ledger.units.length === 0) return 0;
+  let totalInput = 0;
+  let totalCacheRead = 0;
+  for (const unit of ledger.units) {
+    totalInput += unit.tokens.input;
+    totalCacheRead += unit.tokens.cacheRead;
+  }
+  const total = totalInput + totalCacheRead;
+  return total > 0 ? Math.round((totalCacheRead / total) * 100) : 0;
 }
 
 // ─── Formatting helpers ───────────────────────────────────────────────────────
@@ -301,6 +417,50 @@ export function formatCost(cost: number): string {
   if (n < 0.01) return `$${n.toFixed(4)}`;
   if (n < 1) return `$${n.toFixed(3)}`;
   return `$${n.toFixed(2)}`;
+}
+
+// ─── Budget Prediction ────────────────────────────────────────────────────────
+
+/**
+ * Calculate average cost per unit type from completed units.
+ * Returns a Map from unit type to average cost in USD.
+ */
+export function getAverageCostPerUnitType(units: UnitMetrics[]): Map<string, number> {
+  const sums = new Map<string, { total: number; count: number }>();
+  for (const u of units) {
+    const entry = sums.get(u.type) ?? { total: 0, count: 0 };
+    entry.total += u.cost;
+    entry.count += 1;
+    sums.set(u.type, entry);
+  }
+  const avgs = new Map<string, number>();
+  for (const [type, { total, count }] of sums) {
+    avgs.set(type, total / count);
+  }
+  return avgs;
+}
+
+/**
+ * Estimate remaining cost given average costs and remaining unit counts.
+ * @param avgCosts - Average cost per unit type
+ * @param remainingUnits - Array of unit types still to dispatch
+ * @param fallbackAvg - Fallback average if unit type not seen before
+ * @returns Estimated remaining cost in USD
+ */
+export function predictRemainingCost(
+  avgCosts: Map<string, number>,
+  remainingUnits: string[],
+  fallbackAvg?: number,
+): number {
+  // If no averages available, use overall average as fallback
+  const allAvgs = [...avgCosts.values()];
+  const overallAvg = fallbackAvg ?? (allAvgs.length > 0 ? allAvgs.reduce((a, b) => a + b, 0) / allAvgs.length : 0);
+
+  let total = 0;
+  for (const unitType of remainingUnits) {
+    total += avgCosts.get(unitType) ?? overallAvg;
+  }
+  return total;
 }
 
 /**
@@ -335,11 +495,6 @@ export function formatCostProjection(
   return result;
 }
 
-export function formatTokenCount(count: number): string {
-  if (count < 1000) return `${count}`;
-  if (count < 1_000_000) return `${(count / 1000).toFixed(1)}k`;
-  return `${(count / 1_000_000).toFixed(2)}M`;
-}
 
 // ─── Disk I/O ─────────────────────────────────────────────────────────────────
 
@@ -347,28 +502,31 @@ function metricsPath(base: string): string {
   return join(gsdRoot(base), "metrics.json");
 }
 
+function isMetricsLedger(data: unknown): data is MetricsLedger {
+  return (
+    typeof data === "object" &&
+    data !== null &&
+    (data as MetricsLedger).version === 1 &&
+    Array.isArray((data as MetricsLedger).units)
+  );
+}
+
+function defaultLedger(): MetricsLedger {
+  return { version: 1, projectStartedAt: Date.now(), units: [] };
+}
+
+/**
+ * Load ledger from disk without initializing in-memory state.
+ * Used by history/export commands outside of auto-mode.
+ */
+export function loadLedgerFromDisk(base: string): MetricsLedger | null {
+  return loadJsonFileOrNull(metricsPath(base), isMetricsLedger);
+}
+
 function loadLedger(base: string): MetricsLedger {
-  try {
-    const raw = readFileSync(metricsPath(base), "utf-8");
-    const parsed = JSON.parse(raw);
-    if (parsed.version === 1 && Array.isArray(parsed.units)) {
-      return parsed as MetricsLedger;
-    }
-  } catch {
-    // File doesn't exist or is corrupt — start fresh
-  }
-  return {
-    version: 1,
-    projectStartedAt: Date.now(),
-    units: [],
-  };
+  return loadJsonFile(metricsPath(base), isMetricsLedger, defaultLedger);
 }
 
 function saveLedger(base: string, data: MetricsLedger): void {
-  try {
-    mkdirSync(gsdRoot(base), { recursive: true });
-    writeFileSync(metricsPath(base), JSON.stringify(data, null, 2) + "\n", "utf-8");
-  } catch {
-    // Don't let metrics failures break auto-mode
-  }
+  saveJsonFile(metricsPath(base), data);
 }

@@ -1,51 +1,143 @@
 /**
- * GSD Slice Branch Management
+ * GSD Worktree Utilities
  *
- * Simple branch-per-slice workflow. No worktrees, no registry.
- * Runtime state (metrics, activity, lock, STATE.md) is gitignored
- * so branch switches are clean.
+ * Pure utility functions for worktree name detection, legacy branch name
+ * parsing, and integration branch capture.
  *
- * Flow:
- *   1. ensureSliceBranch() — create + checkout slice branch
- *   2. agent does work, commits
- *   3. mergeSliceToMain() — checkout main, squash-merge, delete branch
+ * Pure utility functions (detectWorktreeName, getSliceBranchName, parseSliceBranch,
+ * SLICE_BRANCH_RE) remain standalone for backwards compatibility.
+ *
+ * Branchless architecture: all work commits sequentially on the milestone branch.
+ * Pure utility functions (detectWorktreeName, getSliceBranchName, parseSliceBranch,
+ * SLICE_BRANCH_RE) remain for backwards compatibility with legacy branches.
  */
 
-import { existsSync } from "node:fs";
-import { execSync } from "node:child_process";
-import { sep } from "node:path";
+import { existsSync, lstatSync, readFileSync, utimesSync } from "node:fs";
+import { join, resolve, sep } from "node:path";
 
-export interface MergeSliceResult {
-  branch: string;
-  mergedCommitMessage: string;
-  deletedBranch: boolean;
-}
+import { GitServiceImpl, writeIntegrationBranch, type TaskCommitContext } from "./git-service.js";
+import { loadEffectiveGSDPreferences } from "./preferences.js";
 
-function runGit(basePath: string, args: string[], options: { allowFailure?: boolean } = {}): string {
-  try {
-    return execSync(`git ${args.join(" ")}`, {
-      cwd: basePath,
-      stdio: ["ignore", "pipe", "pipe"],
-      encoding: "utf-8",
-    }).trim();
-  } catch (error) {
-    if (options.allowFailure) return "";
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`git ${args.join(" ")} failed in ${basePath}: ${message}`);
+export { MergeConflictError } from "./git-service.js";
+export type { TaskCommitContext } from "./git-service.js";
+
+// ─── Lazy GitServiceImpl Cache ─────────────────────────────────────────────
+
+let cachedService: GitServiceImpl | null = null;
+let cachedBasePath: string | null = null;
+
+/**
+ * Get or create a GitServiceImpl for the given basePath.
+ * Resets the cache if basePath changes between calls.
+ * Lazy construction: only instantiated at call-time, never at module-evaluation.
+ */
+function getService(basePath: string): GitServiceImpl {
+  if (cachedService === null || cachedBasePath !== basePath) {
+    const loaded = loadEffectiveGSDPreferences();
+    const gitPrefs = loaded?.preferences?.git ?? {};
+    cachedService = new GitServiceImpl(basePath, gitPrefs);
+    cachedBasePath = basePath;
   }
+  return cachedService;
 }
+
+/**
+ * Set the active milestone ID on the cached GitServiceImpl.
+ * This enables integration branch resolution in getMainBranch().
+ */
+export function setActiveMilestoneId(basePath: string, milestoneId: string | null): void {
+  getService(basePath).setMilestoneId(milestoneId);
+}
+
+/**
+ * Record the current branch as the integration branch for a milestone.
+ * Called once when auto-mode starts — captures where slice branches should
+ * merge back to. No-op if the same branch is already recorded. Updates the
+ * record when the user starts from a different branch (#300). Always a no-op
+ * if on a GSD slice branch.
+ */
+export function captureIntegrationBranch(basePath: string, milestoneId: string, options?: { commitDocs?: boolean }): void {
+  // In a worktree, the base branch is implicit (worktree/<name>).
+  // Writing it to META.json would leave stale metadata after merge back to main.
+  if (detectWorktreeName(basePath)) return;
+  const svc = getService(basePath);
+  const current = svc.getCurrentBranch();
+  writeIntegrationBranch(basePath, milestoneId, current, options);
+}
+
+// ─── Pure Utility Functions (unchanged) ────────────────────────────────────
 
 /**
  * Detect the active worktree name from the current working directory.
  * Returns null if not inside a GSD worktree (.gsd/worktrees/<name>/).
  */
 export function detectWorktreeName(basePath: string): string | null {
-  const marker = `${sep}.gsd${sep}worktrees${sep}`;
-  const idx = basePath.indexOf(marker);
+  // Primary: use git metadata — .git file with gitdir: pointer
+  const gitPath = join(basePath, ".git");
+  try {
+    const stat = lstatSync(gitPath);
+    if (stat.isFile()) {
+      const content = readFileSync(gitPath, "utf-8").trim();
+      if (content.startsWith("gitdir:")) {
+        const gitdir = content.slice(7).trim();
+        // Git worktree gitdir format: <repo>/.git/worktrees/<name>
+        const parts = gitdir.replace(/\\/g, "/").split("/");
+        const wtIdx = parts.lastIndexOf("worktrees");
+        if (wtIdx !== -1 && wtIdx < parts.length - 1) {
+          return parts[wtIdx + 1] || null;
+        }
+      }
+    }
+  } catch { /* fall through */ }
+
+  // Fallback: path-based detection for legacy setups
+  const normalizedPath = basePath.replaceAll("\\", "/");
+  const marker = "/.gsd/worktrees/";
+  const idx = normalizedPath.indexOf(marker);
   if (idx === -1) return null;
-  const afterMarker = basePath.slice(idx + marker.length);
-  const name = afterMarker.split(sep)[0] ?? afterMarker.split("/")[0];
+  const afterMarker = normalizedPath.slice(idx + marker.length);
+  const name = afterMarker.split("/")[0];
   return name || null;
+}
+
+/**
+ * Resolve the project root from a path that may be inside a worktree.
+ * If the path contains `/.gsd/worktrees/<name>/`, returns the portion
+ * before `/.gsd/`. Otherwise returns the input unchanged.
+ *
+ * Use this in commands that call `process.cwd()` to ensure they always
+ * operate against the real project root, not a worktree subdirectory.
+ */
+export function resolveProjectRoot(basePath: string): string {
+  // Primary: use git metadata to resolve the main worktree root
+  const gitPath = join(basePath, ".git");
+  try {
+    const stat = lstatSync(gitPath);
+    if (stat.isFile()) {
+      const content = readFileSync(gitPath, "utf-8").trim();
+      if (content.startsWith("gitdir:")) {
+        const gitdir = resolve(basePath, content.slice(7).trim());
+        // Git worktree gitdir: <repo>/.git/worktrees/<name>
+        // Walk up to <repo>
+        const parts = gitdir.replace(/\\/g, "/").split("/");
+        const wtIdx = parts.lastIndexOf("worktrees");
+        if (wtIdx >= 2 && parts[wtIdx - 1] === ".git") {
+          return parts.slice(0, wtIdx - 1).join("/");
+        }
+      }
+    }
+  } catch { /* fall through */ }
+
+  // Fallback: legacy path-based detection
+  const normalizedPath = basePath.replaceAll("\\", "/");
+  const marker = "/.gsd/worktrees/";
+  const idx = normalizedPath.indexOf(marker);
+  if (idx === -1) return basePath;
+  const osSep = basePath.includes("\\") ? "\\" : "/";
+  const markerOs = `${osSep}.gsd${osSep}worktrees${osSep}`;
+  const idxOs = basePath.indexOf(markerOs);
+  if (idxOs !== -1) return basePath.slice(0, idxOs);
+  return basePath.slice(0, idx);
 }
 
 /**
@@ -66,7 +158,7 @@ export function getSliceBranchName(milestoneId: string, sliceId: string, worktre
 }
 
 /** Regex that matches both plain and worktree-namespaced slice branches. */
-export const SLICE_BRANCH_RE = /^gsd\/(?:([a-zA-Z0-9_-]+)\/)?(M\d+)\/(S\d+)$/;
+export const SLICE_BRANCH_RE = /^gsd\/(?:([a-zA-Z0-9_-]+)\/)?(M\d+(?:-[a-z0-9]{6})?)\/(S\d+)$/;
 
 /**
  * Parse a slice branch name into its components.
@@ -86,6 +178,8 @@ export function parseSliceBranch(branchName: string): {
   };
 }
 
+// ─── Git-Mutation Functions (delegate to GitServiceImpl) ───────────────────
+
 /**
  * Get the "main" branch for GSD slice operations.
  *
@@ -98,193 +192,66 @@ export function parseSliceBranch(branchName: string): {
  * /worktree merge.
  */
 export function getMainBranch(basePath: string): string {
-  // When inside a worktree, slice branches should merge into the worktree's
-  // own branch (worktree/<name>), not main — main is checked out by the
-  // parent working tree and git would refuse the checkout.
-  const wtName = detectWorktreeName(basePath);
-  if (wtName) {
-    const wtBranch = `worktree/${wtName}`;
-    // Verify the branch exists (it should — createWorktree made it)
-    const exists = runGit(basePath, ["show-ref", "--verify", `refs/heads/${wtBranch}`], { allowFailure: true });
-    if (exists) return wtBranch;
-    // Worktree branch is gone — return current branch rather than falling
-    // through to main/master which would cause a checkout conflict
-    return runGit(basePath, ["branch", "--show-current"]);
-  }
-
-  const symbolic = runGit(basePath, ["symbolic-ref", "refs/remotes/origin/HEAD"], { allowFailure: true });
-  if (symbolic) {
-    const match = symbolic.match(/refs\/remotes\/origin\/(.+)$/);
-    if (match) return match[1]!;
-  }
-
-  const mainExists = runGit(basePath, ["show-ref", "--verify", "refs/heads/main"], { allowFailure: true });
-  if (mainExists) return "main";
-
-  const masterExists = runGit(basePath, ["show-ref", "--verify", "refs/heads/master"], { allowFailure: true });
-  if (masterExists) return "master";
-
-  return runGit(basePath, ["branch", "--show-current"]);
+  return getService(basePath).getMainBranch();
 }
 
 export function getCurrentBranch(basePath: string): string {
-  return runGit(basePath, ["branch", "--show-current"]);
-}
-
-function branchExists(basePath: string, branch: string): boolean {
-  try {
-    runGit(basePath, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Ensure the slice branch exists and is checked out.
- * Creates the branch from the current branch if it's not a slice branch,
- * otherwise from main. This preserves planning artifacts (CONTEXT, ROADMAP,
- * etc.) that were committed on the working branch — which may differ from
- * the repo's default branch (e.g. `developer` vs `main`).
- * When inside a worktree, the branch is namespaced to avoid conflicts.
- * Returns true if the branch was newly created.
- */
-export function ensureSliceBranch(basePath: string, milestoneId: string, sliceId: string): boolean {
-  const wtName = detectWorktreeName(basePath);
-  const branch = getSliceBranchName(milestoneId, sliceId, wtName);
-  const current = getCurrentBranch(basePath);
-
-  if (current === branch) return false;
-
-  let created = false;
-
-  if (!branchExists(basePath, branch)) {
-    // Branch from the current branch when it's a normal working branch
-    // (not itself a slice branch). This ensures the new slice branch
-    // inherits planning artifacts that may only exist on the working
-    // branch and haven't been merged to main yet.
-    // If we're already on a slice branch (e.g. creating S02 while S01
-    // wasn't merged yet), fall back to main to avoid chaining slice branches.
-    const mainBranch = getMainBranch(basePath);
-    const base = SLICE_BRANCH_RE.test(current) ? mainBranch : current;
-    runGit(basePath, ["branch", branch, base]);
-    created = true;
-  } else {
-    // Check if the branch is already checked out in another worktree
-    const worktreeList = runGit(basePath, ["worktree", "list", "--porcelain"]);
-    if (worktreeList.includes(`branch refs/heads/${branch}`)) {
-      throw new Error(
-        `Branch "${branch}" is already in use by another worktree. ` +
-        `Remove that worktree first, or switch it to a different branch.`,
-      );
-    }
-  }
-
-  // Auto-commit dirty files before checkout to prevent "would be overwritten" errors.
-  // This handles cases where doctor, STATE.md rebuild, or agent work left uncommitted changes.
-  const status = runGit(basePath, ["status", "--short"]);
-  if (status.trim()) {
-    runGit(basePath, ["add", "-A"]);
-    const staged = runGit(basePath, ["diff", "--cached", "--stat"]);
-    if (staged.trim()) {
-      runGit(basePath, ["commit", "-m", `"chore: auto-commit before switching to ${branch}"`]);
-    }
-  }
-
-  runGit(basePath, ["checkout", branch]);
-  return created;
+  return getService(basePath).getCurrentBranch();
 }
 
 /**
  * Auto-commit any dirty files in the current working tree.
+ *
+ * When `taskContext` is provided, generates a meaningful conventional commit
+ * message from the task summary (one-liner, inferred type, key files).
+ * Falls back to a generic `chore()` message for non-task commits.
+ *
  * Returns the commit message used, or null if already clean.
  */
 export function autoCommitCurrentBranch(
   basePath: string, unitType: string, unitId: string,
+  taskContext?: TaskCommitContext,
 ): string | null {
-  const status = runGit(basePath, ["status", "--short"]);
-  if (!status.trim()) return null;
-
-  runGit(basePath, ["add", "-A"]);
-
-  const staged = runGit(basePath, ["diff", "--cached", "--stat"]);
-  if (!staged.trim()) return null;
-
-  const message = `chore(${unitId}): auto-commit after ${unitType}`;
-  runGit(basePath, ["commit", "-m", JSON.stringify(message)]);
-  return message;
+  return getService(basePath).autoCommit(unitType, unitId, [], taskContext);
 }
 
-/**
- * Switch to main, auto-committing any dirty files on the current branch first.
- */
-export function switchToMain(basePath: string): void {
-  const mainBranch = getMainBranch(basePath);
-  const current = getCurrentBranch(basePath);
-  if (current === mainBranch) return;
-
-  // Auto-commit if dirty
-  autoCommitCurrentBranch(basePath, "pre-switch", current);
-
-  runGit(basePath, ["checkout", mainBranch]);
-}
+// ─── Git HEAD Resolution ────────────────────────────────────────────────────
 
 /**
- * Squash-merge a completed slice branch to main.
- * Expects to already be on main (call switchToMain first).
- * Deletes the branch after merge.
+ * Resolve the git HEAD file path for a given directory.
+ * Handles both normal repos (.git is a directory) and worktrees (.git is a file
+ * containing a `gitdir:` pointer to the real gitdir).
  */
-export function mergeSliceToMain(
-  basePath: string, milestoneId: string, sliceId: string, sliceTitle: string,
-): MergeSliceResult {
-  const wtName = detectWorktreeName(basePath);
-  const branch = getSliceBranchName(milestoneId, sliceId, wtName);
-  const mainBranch = getMainBranch(basePath);
+export function resolveGitHeadPath(dir: string): string | null {
+  const gitPath = join(dir, ".git");
+  if (!existsSync(gitPath)) return null;
 
-  const current = getCurrentBranch(basePath);
-  if (current !== mainBranch) {
-    throw new Error(`Expected to be on ${mainBranch}, found ${current}`);
-  }
-
-  if (!branchExists(basePath, branch)) {
-    throw new Error(`Slice branch ${branch} does not exist`);
-  }
-
-  const ahead = runGit(basePath, ["rev-list", "--count", `${mainBranch}..${branch}`]);
-  if (Number(ahead) <= 0) {
-    throw new Error(`Slice branch ${branch} has no commits ahead of ${mainBranch}`);
-  }
-
-  runGit(basePath, ["merge", "--squash", branch]);
-  const mergedCommitMessage = `feat(${milestoneId}/${sliceId}): ${sliceTitle}`;
-  runGit(basePath, ["commit", "-m", JSON.stringify(mergedCommitMessage)]);
-  runGit(basePath, ["branch", "-D", branch]);
-
-  return {
-    branch,
-    mergedCommitMessage,
-    deletedBranch: true,
-  };
-}
-
-/**
- * Check if we're currently on a slice branch (not main).
- * Handles both plain (gsd/M001/S01) and worktree-namespaced (gsd/wt/M001/S01) branches.
- */
-export function isOnSliceBranch(basePath: string): boolean {
-  const current = getCurrentBranch(basePath);
-  return SLICE_BRANCH_RE.test(current);
-}
-
-/**
- * Get the active slice branch name, or null if on main.
- * Handles both plain and worktree-namespaced branch patterns.
- */
-export function getActiveSliceBranch(basePath: string): string | null {
   try {
-    const current = getCurrentBranch(basePath);
-    return SLICE_BRANCH_RE.test(current) ? current : null;
+    const content = readFileSync(gitPath, "utf8").trim();
+    if (content.startsWith("gitdir: ")) {
+      const gitDir = resolve(dir, content.slice(8));
+      const headPath = join(gitDir, "HEAD");
+      return existsSync(headPath) ? headPath : null;
+    }
+    const headPath = join(dir, ".git", "HEAD");
+    return existsSync(headPath) ? headPath : null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Nudge pi's FooterDataProvider to re-read the git branch after chdir.
+ * Touches HEAD in both old and new cwd to fire the fs watcher.
+ */
+export function nudgeGitBranchCache(previousCwd: string): void {
+  const now = new Date();
+  for (const dir of [previousCwd, process.cwd()]) {
+    try {
+      const headPath = resolveGitHeadPath(dir);
+      if (headPath) utimesSync(headPath, now, now);
+    } catch {
+      // Best-effort
+    }
   }
 }

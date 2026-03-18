@@ -20,34 +20,185 @@
 
 import type {
   ExtensionAPI,
+  ExtensionCommandContext,
   ExtensionContext,
-} from "@mariozechner/pi-coding-agent";
-import { createBashTool, createWriteTool, createReadTool, createEditTool } from "@mariozechner/pi-coding-agent";
+} from "@gsd/pi-coding-agent";
+import { createBashTool, createWriteTool, createReadTool, createEditTool, isToolCallEventType } from "@gsd/pi-coding-agent";
+import { Type } from "@sinclair/typebox";
 
+import { debugLog, debugTime } from "./debug-logger.js";
 import { registerGSDCommand } from "./commands.js";
+import { loadToolApiKeys } from "./commands-config.js";
+import { registerExitCommand } from "./exit-command.js";
 import { registerWorktreeCommand, getWorktreeOriginalCwd, getActiveWorktreeName } from "./worktree-command.js";
-import { saveFile, formatContinue, loadFile, parseContinue, parseSummary } from "./files.js";
+import { getActiveAutoWorktreeContext } from "./auto-worktree.js";
+import { saveFile, formatContinue, loadFile, parseContinue, parseSummary, loadActiveOverrides, formatOverridesSection } from "./files.js";
 import { loadPrompt } from "./prompt-loader.js";
 import { deriveState } from "./state.js";
-import { isAutoActive, isAutoPaused, handleAgentEnd, pauseAuto, getAutoDashboardData } from "./auto.js";
+import { isAutoActive, isAutoPaused, handleAgentEnd, pauseAuto, getAutoDashboardData, getAutoModeStartModel, markToolStart, markToolEnd } from "./auto.js";
 import { saveActivityLog } from "./activity-log.js";
-import { checkAutoStartAfterDiscuss } from "./guided-flow.js";
+import { checkAutoStartAfterDiscuss, getDiscussionMilestoneId, findMilestoneIds, nextMilestoneId } from "./guided-flow.js";
 import { GSDDashboardOverlay } from "./dashboard-overlay.js";
 import {
   loadEffectiveGSDPreferences,
   renderPreferencesForSystemPrompt,
   resolveAllSkillReferences,
+  resolveModelWithFallbacksForUnit,
+  getNextFallbackModel,
+  isTransientNetworkError,
 } from "./preferences.js";
 import { hasSkillSnapshot, detectNewSkills, formatSkillsXml } from "./skill-discovery.js";
 import {
   resolveSlicePath, resolveSliceFile, resolveTaskFile, resolveTaskFiles, resolveTasksDir,
   relSliceFile, relSlicePath, relTaskFile,
-  buildSliceFileName, gsdRoot,
+  buildSliceFileName, buildMilestoneFileName, gsdRoot, resolveMilestonePath,
+  resolveGsdRootFile,
 } from "./paths.js";
-import { Key } from "@mariozechner/pi-tui";
+import { Key } from "@gsd/pi-tui";
 import { join } from "node:path";
-import { existsSync } from "node:fs";
-import { Text } from "@mariozechner/pi-tui";
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { shortcutDesc } from "../shared/mod.js";
+import { Text } from "@gsd/pi-tui";
+import { pauseAutoForProviderError, classifyProviderError } from "./provider-error-pause.js";
+import { toPosixPath } from "../shared/mod.js";
+import { isParallelActive, shutdownParallel } from "./parallel-orchestrator.js";
+import { DEFAULT_BASH_TIMEOUT_SECS } from "./constants.js";
+
+/**
+ * Ensure the GSD database is available, auto-initializing if needed.
+ * Returns true if the DB is ready, false if initialization failed.
+ */
+async function ensureDbAvailable(): Promise<boolean> {
+  try {
+    const db = await import("./gsd-db.js");
+    if (db.isDbAvailable()) return true;
+
+    // Auto-initialize: open (and create if needed) the DB at the standard path
+    const gsdDir = gsdRoot(process.cwd());
+    if (!existsSync(gsdDir)) return false; // No GSD project — can't create DB
+    const dbPath = join(gsdDir, "gsd.db");
+    return db.openDatabase(dbPath);
+  } catch {
+    return false;
+  }
+}
+
+// ── Agent Instructions ────────────────────────────────────────────────────
+// Lightweight "always follow" files injected into every GSD agent session.
+// Global: ~/.gsd/agent-instructions.md   Project: .gsd/agent-instructions.md
+// Both are loaded and concatenated (global first, project appends).
+
+function loadAgentInstructions(): string | null {
+  const parts: string[] = [];
+
+  const globalPath = join(homedir(), ".gsd", "agent-instructions.md");
+  if (existsSync(globalPath)) {
+    try {
+      const content = readFileSync(globalPath, "utf-8").trim();
+      if (content) parts.push(content);
+    } catch { /* non-fatal — skip unreadable file */ }
+  }
+
+  const projectPath = join(process.cwd(), ".gsd", "agent-instructions.md");
+  if (existsSync(projectPath)) {
+    try {
+      const content = readFileSync(projectPath, "utf-8").trim();
+      if (content) parts.push(content);
+    } catch { /* non-fatal — skip unreadable file */ }
+  }
+
+  if (parts.length === 0) return null;
+  return parts.join("\n\n");
+}
+
+// ── Depth verification state ──────────────────────────────────────────────
+// Tracks which milestones have passed depth verification.
+// Single-milestone flows set '*' (wildcard). Multi-milestone flows set per-ID.
+const depthVerifiedMilestones = new Set<string>();
+
+// ── Queue phase tracking ──────────────────────────────────────────────────
+// When true, the LLM is in a queue flow writing CONTEXT.md files.
+// The write-gate applies during queue flows just like discussion flows.
+let activeQueuePhase = false;
+
+// ── Network error retry counters ──────────────────────────────────────────
+// Tracks per-model retry attempts for transient network errors.
+// Cleared when a model switch occurs or retries are exhausted.
+const networkRetryCounters = new Map<string, number>();
+
+// ── Transient error escalation ───────────────────────────────────────────
+// Tracks consecutive transient auto-resume attempts. Each attempt doubles
+// the delay. After MAX_TRANSIENT_AUTO_RESUMES consecutive failures, auto-mode
+// pauses indefinitely to avoid infinite rapid-fire retries (#1166).
+const MAX_TRANSIENT_AUTO_RESUMES = 5;
+let consecutiveTransientErrors = 0;
+
+export function isDepthVerified(): boolean {
+  return depthVerifiedMilestones.has("*") || depthVerifiedMilestones.size > 0;
+}
+
+/** Check whether a specific milestone has passed depth verification. */
+export function isDepthVerifiedFor(milestoneId: string): boolean {
+  // Wildcard means "all milestones verified" (single-milestone flow)
+  if (depthVerifiedMilestones.has("*")) return true;
+  return depthVerifiedMilestones.has(milestoneId);
+}
+
+/** Mark a specific milestone as depth-verified. */
+export function markDepthVerified(milestoneId: string): void {
+  depthVerifiedMilestones.add(milestoneId);
+}
+
+/** Check whether a queue phase is active. */
+export function isQueuePhaseActive(): boolean {
+  return activeQueuePhase;
+}
+
+/** Set the queue phase state — called from guided-flow-queue.ts on dispatch. */
+export function setQueuePhaseActive(active: boolean): void {
+  activeQueuePhase = active;
+}
+
+// ── Write-gate: block CONTEXT.md writes during discussion without depth verification ──
+const MILESTONE_CONTEXT_RE = /M\d+(?:-[a-z0-9]{6})?-CONTEXT\.md$/;
+
+export function shouldBlockContextWrite(
+  toolName: string,
+  inputPath: string,
+  milestoneId: string | null,
+  depthVerified: boolean,
+  queuePhaseActive?: boolean,
+): { block: boolean; reason?: string } {
+  if (toolName !== "write") return { block: false };
+
+  // Gate applies during both discussion (milestoneId set) and queue (queuePhaseActive) flows
+  const inDiscussion = milestoneId !== null;
+  const inQueue = queuePhaseActive ?? false;
+  if (!inDiscussion && !inQueue) return { block: false };
+
+  if (!MILESTONE_CONTEXT_RE.test(inputPath)) return { block: false };
+
+  // For discussion flows: check global depth verification (backward compat)
+  if (inDiscussion && depthVerified) return { block: false };
+
+  // For queue flows: extract milestone ID from the path and check per-milestone verification
+  if (inQueue) {
+    const pathMatch = inputPath.match(/\/(M\d+(?:-[a-z0-9]{6})?)-CONTEXT\.md$/);
+    const targetMid = pathMatch?.[1];
+    if (targetMid && depthVerifiedMilestones.has(targetMid)) return { block: false };
+    // Wildcard passes all
+    if (depthVerifiedMilestones.has("*")) return { block: false };
+  }
+
+  return {
+    block: true,
+    reason: `Blocked: Cannot write milestone CONTEXT.md without depth verification. ` +
+      `Use ask_user_questions with a question id containing "depth_verification" first. ` +
+      `For multi-milestone flows, include the milestone ID in the question id (e.g., "depth_verification_M001"). ` +
+      `This ensures each milestone's context has been critically examined before being written.`,
+  };
+}
 
 // ── ASCII logo ────────────────────────────────────────────────────────────
 const GSD_LOGO_LINES = [
@@ -62,11 +213,29 @@ const GSD_LOGO_LINES = [
 export default function (pi: ExtensionAPI) {
   registerGSDCommand(pi);
   registerWorktreeCommand(pi);
+  registerExitCommand(pi);
 
-  // ── /exit — kill the process immediately ──────────────────────────────
-  pi.registerCommand("exit", {
-    description: "Exit GSD immediately",
-    handler: async (_ctx) => {
+  // ── EPIPE guard — prevent crash when stdout/stderr pipe closes unexpectedly ──
+  // Node.js throws a fatal `Error: write EPIPE` when the parent process closes
+  // its end of the stdio pipe (e.g. during shell/IPC teardown) while auto-mode
+  // is still writing diagnostics. Catching this here gives auto-mode a clean
+  // chance to persist state and pause instead of crashing (see issue #739).
+  if (!process.listeners("uncaughtException").some(l => l.name === "_gsdEpipeGuard")) {
+    const _gsdEpipeGuard = (err: Error): void => {
+      if ((err as NodeJS.ErrnoException).code === "EPIPE") {
+        // Pipe closed — nothing we can write; just exit cleanly
+        process.exit(0);
+      }
+      // Re-throw anything that isn't EPIPE so real crashes still surface
+      throw err;
+    };
+    process.on("uncaughtException", _gsdEpipeGuard);
+  }
+
+  // ── /kill — immediate exit (bypass cleanup) ─────────────────────────────
+  pi.registerCommand("kill", {
+    description: "Exit GSD immediately (no cleanup)",
+    handler: async (_args: string, _ctx: ExtensionCommandContext) => {
       process.exit(0);
     },
   });
@@ -80,7 +249,6 @@ export default function (pi: ExtensionAPI) {
   // the timeout parameter, commands run indefinitely, causing hangs on
   // Windows where process killing is unreliable (see #40). We wrap execute
   // to inject a 120-second default when no timeout is provided.
-  const DEFAULT_BASH_TIMEOUT_SECS = 120;
   const baseBash = createBashTool(process.cwd(), {
     spawnHook: (ctx) => ({ ...ctx, cwd: process.cwd() }),
   });
@@ -97,7 +265,7 @@ export default function (pi: ExtensionAPI) {
         ...params,
         timeout: params.timeout ?? DEFAULT_BASH_TIMEOUT_SECS,
       };
-      return baseBash.execute(toolCallId, paramsWithTimeout, signal, onUpdate, ctx);
+      return (baseBash as any).execute(toolCallId, paramsWithTimeout, signal, onUpdate, ctx);
     },
   };
   pi.registerTool(dynamicBash as any);
@@ -118,7 +286,7 @@ export default function (pi: ExtensionAPI) {
       ctx?: any,
     ) => {
       const fresh = createWriteTool(process.cwd());
-      return fresh.execute(toolCallId, params, signal, onUpdate, ctx);
+      return (fresh as any).execute(toolCallId, params, signal, onUpdate, ctx);
     },
   };
   pi.registerTool(dynamicWrite as any);
@@ -134,7 +302,7 @@ export default function (pi: ExtensionAPI) {
       ctx?: any,
     ) => {
       const fresh = createReadTool(process.cwd());
-      return fresh.execute(toolCallId, params, signal, onUpdate, ctx);
+      return (fresh as any).execute(toolCallId, params, signal, onUpdate, ctx);
     },
   };
   pi.registerTool(dynamicRead as any);
@@ -150,21 +318,294 @@ export default function (pi: ExtensionAPI) {
       ctx?: any,
     ) => {
       const fresh = createEditTool(process.cwd());
-      return fresh.execute(toolCallId, params, signal, onUpdate, ctx);
+      return (fresh as any).execute(toolCallId, params, signal, onUpdate, ctx);
     },
   };
   pi.registerTool(dynamicEdit as any);
 
-  // ── session_start: render branded GSD header + remote channel status ──
+  // ── Structured LLM tools — DB-first write path (R014) ──────────────────
+
+  pi.registerTool({
+    name: "gsd_save_decision",
+    label: "Save Decision",
+    description:
+      "Record a project decision to the GSD database and regenerate DECISIONS.md. " +
+      "Decision IDs are auto-assigned — never provide an ID manually.",
+    promptSnippet: "Record a project decision to the GSD database (auto-assigns ID, regenerates DECISIONS.md)",
+    promptGuidelines: [
+      "Use gsd_save_decision when recording an architectural, pattern, library, or observability decision.",
+      "Decision IDs are auto-assigned (D001, D002, ...) — never guess or provide an ID.",
+      "All fields except revisable and when_context are required.",
+      "The tool writes to the DB and regenerates .gsd/DECISIONS.md automatically.",
+    ],
+    parameters: Type.Object({
+      scope: Type.String({ description: "Scope of the decision (e.g. 'architecture', 'library', 'observability')" }),
+      decision: Type.String({ description: "What is being decided" }),
+      choice: Type.String({ description: "The choice made" }),
+      rationale: Type.String({ description: "Why this choice was made" }),
+      revisable: Type.Optional(Type.String({ description: "Whether this can be revisited (default: 'Yes')" })),
+      when_context: Type.Optional(Type.String({ description: "When/context for the decision (e.g. milestone ID)" })),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+      // Ensure DB is available (auto-initialize if needed)
+      if (!await ensureDbAvailable()) {
+        return {
+          content: [{ type: "text" as const, text: "Error: GSD database is not available. Cannot save decision." }],
+          isError: true,
+          details: { operation: "save_decision", error: "db_unavailable" },
+        };
+      }
+
+      try {
+        const { saveDecisionToDb } = await import("./db-writer.js");
+        const { id } = await saveDecisionToDb(
+          {
+            scope: params.scope,
+            decision: params.decision,
+            choice: params.choice,
+            rationale: params.rationale,
+            revisable: params.revisable,
+            when_context: params.when_context,
+          },
+          process.cwd(),
+        );
+        return {
+          content: [{ type: "text" as const, text: `Saved decision ${id}` }],
+          details: { operation: "save_decision", id },
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        process.stderr.write(`gsd-db: gsd_save_decision tool failed: ${msg}\n`);
+        return {
+          content: [{ type: "text" as const, text: `Error saving decision: ${msg}` }],
+          isError: true,
+          details: { operation: "save_decision", error: msg },
+        };
+      }
+    },
+  });
+
+  pi.registerTool({
+    name: "gsd_update_requirement",
+    label: "Update Requirement",
+    description:
+      "Update an existing requirement in the GSD database and regenerate REQUIREMENTS.md. " +
+      "Provide the requirement ID (e.g. R001) and any fields to update.",
+    promptSnippet: "Update an existing GSD requirement by ID (regenerates REQUIREMENTS.md)",
+    promptGuidelines: [
+      "Use gsd_update_requirement to change status, validation, notes, or other fields on an existing requirement.",
+      "The id parameter is required — it must be an existing RXXX identifier.",
+      "All other fields are optional — only provided fields are updated.",
+      "The tool verifies the requirement exists before updating.",
+    ],
+    parameters: Type.Object({
+      id: Type.String({ description: "The requirement ID (e.g. R001, R014)" }),
+      status: Type.Optional(Type.String({ description: "New status (e.g. 'active', 'validated', 'deferred')" })),
+      validation: Type.Optional(Type.String({ description: "Validation criteria or proof" })),
+      notes: Type.Optional(Type.String({ description: "Additional notes" })),
+      description: Type.Optional(Type.String({ description: "Updated description" })),
+      primary_owner: Type.Optional(Type.String({ description: "Primary owning slice" })),
+      supporting_slices: Type.Optional(Type.String({ description: "Supporting slices" })),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+      // Ensure DB is available (auto-initialize if needed)
+      if (!await ensureDbAvailable()) {
+        return {
+          content: [{ type: "text" as const, text: "Error: GSD database is not available. Cannot update requirement." }],
+          isError: true,
+          details: { operation: "update_requirement", id: params.id, error: "db_unavailable" },
+        };
+      }
+
+      try {
+        // Verify requirement exists
+        const db = await import("./gsd-db.js");
+        const existing = db.getRequirementById(params.id);
+        if (!existing) {
+          return {
+            content: [{ type: "text" as const, text: `Error: Requirement ${params.id} not found.` }],
+            isError: true,
+            details: { operation: "update_requirement", id: params.id, error: "not_found" },
+          };
+        }
+
+        const { updateRequirementInDb } = await import("./db-writer.js");
+        const updates: Record<string, string | undefined> = {};
+        if (params.status !== undefined) updates.status = params.status;
+        if (params.validation !== undefined) updates.validation = params.validation;
+        if (params.notes !== undefined) updates.notes = params.notes;
+        if (params.description !== undefined) updates.description = params.description;
+        if (params.primary_owner !== undefined) updates.primary_owner = params.primary_owner;
+        if (params.supporting_slices !== undefined) updates.supporting_slices = params.supporting_slices;
+
+        await updateRequirementInDb(params.id, updates, process.cwd());
+
+        return {
+          content: [{ type: "text" as const, text: `Updated requirement ${params.id}` }],
+          details: { operation: "update_requirement", id: params.id },
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        process.stderr.write(`gsd-db: gsd_update_requirement tool failed: ${msg}\n`);
+        return {
+          content: [{ type: "text" as const, text: `Error updating requirement: ${msg}` }],
+          isError: true,
+          details: { operation: "update_requirement", id: params.id, error: msg },
+        };
+      }
+    },
+  });
+
+  pi.registerTool({
+    name: "gsd_save_summary",
+    label: "Save Summary",
+    description:
+      "Save a summary, research, context, or assessment artifact to the GSD database and write it to disk. " +
+      "Computes the file path from milestone/slice/task IDs automatically.",
+    promptSnippet: "Save a GSD artifact (summary/research/context/assessment) to DB and disk",
+    promptGuidelines: [
+      "Use gsd_save_summary to persist structured artifacts (SUMMARY, RESEARCH, CONTEXT, ASSESSMENT).",
+      "milestone_id is required. slice_id and task_id are optional — they determine the file path.",
+      "The tool computes the relative path automatically: milestones/M001/M001-SUMMARY.md, milestones/M001/slices/S01/S01-SUMMARY.md, etc.",
+      "artifact_type must be one of: SUMMARY, RESEARCH, CONTEXT, ASSESSMENT.",
+    ],
+    parameters: Type.Object({
+      milestone_id: Type.String({ description: "Milestone ID (e.g. M001)" }),
+      slice_id: Type.Optional(Type.String({ description: "Slice ID (e.g. S01)" })),
+      task_id: Type.Optional(Type.String({ description: "Task ID (e.g. T01)" })),
+      artifact_type: Type.String({ description: "One of: SUMMARY, RESEARCH, CONTEXT, ASSESSMENT" }),
+      content: Type.String({ description: "The full markdown content of the artifact" }),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+      // Ensure DB is available (auto-initialize if needed)
+      if (!await ensureDbAvailable()) {
+        return {
+          content: [{ type: "text" as const, text: "Error: GSD database is not available. Cannot save artifact." }],
+          isError: true,
+          details: { operation: "save_summary", error: "db_unavailable" },
+        };
+      }
+
+      // Validate artifact_type
+      const validTypes = ["SUMMARY", "RESEARCH", "CONTEXT", "ASSESSMENT"];
+      if (!validTypes.includes(params.artifact_type)) {
+        return {
+          content: [{ type: "text" as const, text: `Error: Invalid artifact_type "${params.artifact_type}". Must be one of: ${validTypes.join(", ")}` }],
+          isError: true,
+          details: { operation: "save_summary", error: "invalid_artifact_type" },
+        };
+      }
+
+      try {
+        // Compute relative path from IDs
+        let relativePath: string;
+        if (params.task_id && params.slice_id) {
+          relativePath = `milestones/${params.milestone_id}/slices/${params.slice_id}/tasks/${params.task_id}-${params.artifact_type}.md`;
+        } else if (params.slice_id) {
+          relativePath = `milestones/${params.milestone_id}/slices/${params.slice_id}/${params.slice_id}-${params.artifact_type}.md`;
+        } else {
+          relativePath = `milestones/${params.milestone_id}/${params.milestone_id}-${params.artifact_type}.md`;
+        }
+
+        const { saveArtifactToDb } = await import("./db-writer.js");
+        await saveArtifactToDb(
+          {
+            path: relativePath,
+            artifact_type: params.artifact_type,
+            content: params.content,
+            milestone_id: params.milestone_id,
+            slice_id: params.slice_id,
+            task_id: params.task_id,
+          },
+          process.cwd(),
+        );
+
+        return {
+          content: [{ type: "text" as const, text: `Saved ${params.artifact_type} artifact to ${relativePath}` }],
+          details: { operation: "save_summary", path: relativePath, artifact_type: params.artifact_type },
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        process.stderr.write(`gsd-db: gsd_save_summary tool failed: ${msg}\n`);
+        return {
+          content: [{ type: "text" as const, text: `Error saving artifact: ${msg}` }],
+          isError: true,
+          details: { operation: "save_summary", error: msg },
+        };
+      }
+    },
+  });
+
+  // ── gsd_generate_milestone_id — canonical milestone ID generation ──────
+  // The LLM cannot generate random suffixes for unique_milestone_ids on its
+  // own. This tool calls back into the TS code that owns ID generation,
+  // ensuring the preference is always respected and IDs are always valid.
+  //
+  // Reservation set: tracks IDs returned by this tool but not yet persisted
+  // to disk, preventing duplicate M001 when called multiple times (#961).
+  const reservedMilestoneIds = new Set<string>();
+
+  pi.registerTool({
+    name: "gsd_generate_milestone_id",
+    label: "Generate Milestone ID",
+    description:
+      "Generate the next milestone ID for a new GSD milestone. " +
+      "Scans existing milestones on disk and respects the unique_milestone_ids preference. " +
+      "Always use this tool when creating a new milestone — never invent milestone IDs manually.",
+    promptSnippet: "Generate a valid milestone ID (respects unique_milestone_ids preference)",
+    promptGuidelines: [
+      "ALWAYS call gsd_generate_milestone_id before creating a new milestone directory or writing milestone files.",
+      "Never invent or hardcode milestone IDs like M001, M002 — always use this tool.",
+      "Call it once per milestone you need to create. For multi-milestone projects, call it once for each milestone in sequence.",
+      "The tool returns the correct format based on project preferences (e.g. M001 or M001-r5jzab).",
+    ],
+    parameters: Type.Object({}),
+    async execute(_toolCallId, _params, _signal, _onUpdate, _ctx) {
+      try {
+        const basePath = process.cwd();
+        const existingIds = findMilestoneIds(basePath);
+        const uniqueEnabled = !!loadEffectiveGSDPreferences()?.preferences?.unique_milestone_ids;
+        // Combine on-disk IDs with previously reserved (but not yet persisted) IDs
+        const allIds = [...new Set([...existingIds, ...reservedMilestoneIds])];
+        const newId = nextMilestoneId(allIds, uniqueEnabled);
+        reservedMilestoneIds.add(newId);
+        return {
+          content: [{ type: "text" as const, text: newId }],
+          details: { operation: "generate_milestone_id", id: newId, existingCount: existingIds.length, reservedCount: reservedMilestoneIds.size, uniqueEnabled },
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: "text" as const, text: `Error generating milestone ID: ${msg}` }],
+          isError: true,
+          details: { operation: "generate_milestone_id", error: msg },
+        };
+      }
+    },
+  });
+
+  // ── session_start: render branded GSD header + load tool keys + remote status ──
   pi.on("session_start", async (_event, ctx) => {
-    const theme = ctx.ui.theme;
-    const version = process.env.GSD_VERSION || "0.0.0";
+    // Clear depth verification and queue phase state from any prior session
+    depthVerifiedMilestones.clear();
+    activeQueuePhase = false;
 
-    const logoText = GSD_LOGO_LINES.map((line) => theme.fg("accent", line)).join("\n");
-    const titleLine = `  ${theme.bold("Get Shit Done")} ${theme.fg("dim", `v${version}`)}`;
+    // Theme access throws in RPC mode (no TUI) — header is decorative, skip it
+    try {
+      const theme = ctx.ui.theme;
+      const version = process.env.GSD_VERSION || "0.0.0";
 
-    const headerContent = `${logoText}\n${titleLine}`;
-    ctx.ui.setHeader((_ui, _theme) => new Text(headerContent, 1, 0));
+      const logoText = GSD_LOGO_LINES.map((line) => theme.fg("accent", line)).join("\n");
+      const titleLine = `  ${theme.bold("Get Shit Done")} ${theme.fg("dim", `v${version}`)}`;
+
+      const headerContent = `${logoText}\n${titleLine}`;
+      ctx.ui.setHeader((_ui, _theme) => new Text(headerContent, 1, 0));
+    } catch {
+      // RPC mode — no TUI, skip header rendering
+    }
+
+    // Load tool API keys from auth.json into environment
+    loadToolApiKeys();
 
     // Notify remote questions status if configured
     try {
@@ -184,18 +625,16 @@ export default function (pi: ExtensionAPI) {
   });
 
   // ── Ctrl+Alt+G shortcut — GSD dashboard overlay ────────────────────────
-  // Requires Kitty keyboard protocol or modifyOtherKeys support.
-  // Terminals without support (macOS Terminal.app, JetBrains): use /gsd status instead.
   pi.registerShortcut(Key.ctrlAlt("g"), {
-    description: "Open GSD dashboard (or use /gsd status)",
+    description: shortcutDesc("Open GSD dashboard", "/gsd status"),
     handler: async (ctx) => {
       // Only show if .gsd/ exists
-      if (!existsSync(join(process.cwd(), ".gsd"))) {
+      if (!existsSync(gsdRoot(process.cwd()))) {
         ctx.ui.notify("No .gsd/ directory found. Run /gsd to start.", "info");
         return;
       }
 
-      await ctx.ui.custom<void>(
+      const result = await ctx.ui.custom<void>(
         (tui, theme, _kb, done) => {
           return new GSDDashboardOverlay(tui, theme, () => done());
         },
@@ -209,13 +648,20 @@ export default function (pi: ExtensionAPI) {
           },
         },
       );
+
+      // Fallback for RPC mode where ctx.ui.custom() returns undefined.
+      if (result === undefined) {
+        const { fireStatusViaCommand } = await import("./commands.js");
+        await fireStatusViaCommand(ctx);
+      }
     },
   });
 
   // ── before_agent_start: inject GSD contract into true system prompt ─────
   pi.on("before_agent_start", async (event, ctx: ExtensionContext) => {
-    if (!existsSync(join(process.cwd(), ".gsd"))) return;
+    if (!existsSync(gsdRoot(process.cwd()))) return;
 
+    const stopContextTimer = debugTime("context-inject");
     const systemContent = loadPrompt("system");
     const loadedPreferences = loadEffectiveGSDPreferences();
     let preferenceBlock = "";
@@ -233,6 +679,33 @@ export default function (pi: ExtensionAPI) {
       }
     }
 
+    // Load project knowledge if available
+    let knowledgeBlock = "";
+    const knowledgePath = resolveGsdRootFile(process.cwd(), "KNOWLEDGE");
+    if (existsSync(knowledgePath)) {
+      try {
+        const content = readFileSync(knowledgePath, "utf-8").trim();
+        if (content) {
+          knowledgeBlock = `\n\n[PROJECT KNOWLEDGE — Rules, patterns, and lessons learned]\n\n${content}`;
+        }
+      } catch {
+        // File read error — skip knowledge injection
+      }
+    }
+
+    // Inject auto-learned project memories
+    let memoryBlock = "";
+    try {
+      const { getActiveMemoriesRanked, formatMemoriesForPrompt } = await import("./memory-store.js");
+      const memories = getActiveMemoriesRanked(30);
+      if (memories.length > 0) {
+        const formatted = formatMemoriesForPrompt(memories, 2000);
+        if (formatted) {
+          memoryBlock = `\n\n${formatted}`;
+        }
+      }
+    } catch { /* non-fatal */ }
+
     // Detect skills installed during this auto-mode session
     let newSkillsBlock = "";
     if (hasSkillSnapshot()) {
@@ -242,33 +715,66 @@ export default function (pi: ExtensionAPI) {
       }
     }
 
+    // Load agent instructions (global + project)
+    let agentInstructionsBlock = "";
+    const agentInstructions = loadAgentInstructions();
+    if (agentInstructions) {
+      agentInstructionsBlock = `\n\n## Agent Instructions\n\nThe following instructions were provided by the user and must be followed in every session:\n\n${agentInstructions}`;
+    }
+
     const injection = await buildGuidedExecuteContextInjection(event.prompt, process.cwd());
 
     // Worktree context — override the static CWD in the system prompt
     let worktreeBlock = "";
     const worktreeName = getActiveWorktreeName();
     const worktreeMainCwd = getWorktreeOriginalCwd();
+    const autoWorktree = getActiveAutoWorktreeContext();
     if (worktreeName && worktreeMainCwd) {
       worktreeBlock = [
         "",
         "",
         "[WORKTREE CONTEXT — OVERRIDES CURRENT WORKING DIRECTORY ABOVE]",
         `IMPORTANT: Ignore the "Current working directory" shown earlier in this prompt.`,
-        `The actual current working directory is: ${process.cwd()}`,
+        `The actual current working directory is: ${toPosixPath(process.cwd())}`,
         "",
         `You are working inside a GSD worktree.`,
         `- Worktree name: ${worktreeName}`,
-        `- Worktree path (this is the real cwd): ${process.cwd()}`,
-        `- Main project: ${worktreeMainCwd}`,
+        `- Worktree path (this is the real cwd): ${toPosixPath(process.cwd())}`,
+        `- Main project: ${toPosixPath(worktreeMainCwd)}`,
         `- Branch: worktree/${worktreeName}`,
         "",
         "All file operations, bash commands, and GSD state resolve against the worktree path above.",
         "Use /worktree merge to merge changes back. Use /worktree return to switch back to the main tree.",
       ].join("\n");
+    } else if (autoWorktree) {
+      worktreeBlock = [
+        "",
+        "",
+        "[WORKTREE CONTEXT — OVERRIDES CURRENT WORKING DIRECTORY ABOVE]",
+        `IMPORTANT: Ignore the "Current working directory" shown earlier in this prompt.`,
+        `The actual current working directory is: ${toPosixPath(process.cwd())}`,
+        "",
+        "You are working inside a GSD auto-worktree.",
+        `- Milestone worktree: ${autoWorktree.worktreeName}`,
+        `- Worktree path (this is the real cwd): ${toPosixPath(process.cwd())}`,
+        `- Main project: ${toPosixPath(autoWorktree.originalBase)}`,
+        `- Branch: ${autoWorktree.branch}`,
+        "",
+        "All file operations, bash commands, and GSD state resolve against the worktree path above.",
+        "Write every .gsd artifact in the worktree path above, never in the main project tree.",
+      ].join("\n");
     }
 
+    const fullSystem = `${event.systemPrompt}\n\n[SYSTEM CONTEXT — GSD]\n\n${systemContent}${preferenceBlock}${agentInstructionsBlock}${knowledgeBlock}${memoryBlock}${newSkillsBlock}${worktreeBlock}`;
+    stopContextTimer({
+      systemPromptSize: fullSystem.length,
+      injectionSize: injection?.length ?? 0,
+      hasPreferences: preferenceBlock.length > 0,
+      hasNewSkills: newSkillsBlock.length > 0,
+    });
+
     return {
-      systemPrompt: `${event.systemPrompt}\n\n[SYSTEM CONTEXT — GSD]\n\n${systemContent}${preferenceBlock}${newSkillsBlock}${worktreeBlock}`,
+      systemPrompt: fullSystem,
       ...(injection
         ? {
           message: {
@@ -284,21 +790,208 @@ export default function (pi: ExtensionAPI) {
   // ── agent_end: auto-mode advancement or auto-start after discuss ───────────
   pi.on("agent_end", async (event, ctx: ExtensionContext) => {
     // If discuss phase just finished, start auto-mode
-    if (checkAutoStartAfterDiscuss()) return;
+    if (checkAutoStartAfterDiscuss()) {
+      depthVerifiedMilestones.clear();
+      activeQueuePhase = false;
+      return;
+    }
 
     // If auto-mode is already running, advance to next unit
     if (!isAutoActive()) return;
 
-    // If the agent was aborted (user pressed Escape), pause auto-mode
-    // instead of advancing. This preserves the conversation so the user
-    // can inspect what happened, interact with the agent, or resume.
+    // If the agent was aborted (user pressed Escape) or hit a provider
+    // error (fetch failure, rate limit, etc.), pause auto-mode instead of
+    // advancing. This preserves the conversation so the user can inspect
+    // what happened, interact with the agent, or resume.
     const lastMsg = event.messages[event.messages.length - 1];
     if (lastMsg && "stopReason" in lastMsg && lastMsg.stopReason === "aborted") {
       await pauseAuto(ctx, pi);
       return;
     }
+    if (lastMsg && "stopReason" in lastMsg && lastMsg.stopReason === "error") {
+      const errorDetail =
+        "errorMessage" in lastMsg && lastMsg.errorMessage
+          ? `: ${lastMsg.errorMessage}`
+          : "";
 
-    await handleAgentEnd(ctx, pi);
+      const errorMsg = ("errorMessage" in lastMsg && lastMsg.errorMessage) ? String(lastMsg.errorMessage) : "";
+
+      // ── Transient network error retry ──────────────────────────────────
+      // Before falling back to a different model, retry the current model
+      // for transient network errors (connection reset, timeout, DNS, etc.).
+      // This prevents providers with occasional network flakiness from being
+      // immediately abandoned in favor of fallback models (#941).
+      if (isTransientNetworkError(errorMsg)) {
+        const currentModelId = ctx.model?.id ?? "unknown";
+        const retryKey = `network-retry:${currentModelId}`;
+        const maxRetries = 2;
+        const currentRetries = networkRetryCounters.get(retryKey) ?? 0;
+
+        if (currentRetries < maxRetries) {
+          networkRetryCounters.set(retryKey, currentRetries + 1);
+          const attempt = currentRetries + 1;
+          const delayMs = attempt * 3000; // 3s, 6s backoff
+          ctx.ui.notify(
+            `Network error on ${currentModelId}${errorDetail}. Retry ${attempt}/${maxRetries} in ${delayMs / 1000}s...`,
+            "warning",
+          );
+          setTimeout(() => {
+            pi.sendMessage(
+              { customType: "gsd-auto-timeout-recovery", content: "Continue execution — retrying after transient network error.", display: false },
+              { triggerTurn: true },
+            );
+          }, delayMs);
+          return;
+        }
+        // Retries exhausted — clear counter and fall through to fallback logic
+        networkRetryCounters.delete(retryKey);
+        ctx.ui.notify(
+          `Network retries exhausted for ${currentModelId}. Attempting model fallback.`,
+          "warning",
+        );
+      }
+
+      const dash = getAutoDashboardData();
+      if (dash.currentUnit) {
+        const modelConfig = resolveModelWithFallbacksForUnit(dash.currentUnit.type);
+        if (modelConfig && modelConfig.fallbacks.length > 0) {
+          const availableModels = ctx.modelRegistry.getAvailable();
+          const currentModelId = ctx.model?.id;
+
+          const nextModelId = getNextFallbackModel(currentModelId, modelConfig);
+
+          if (nextModelId) {
+            // Clear any network retry counters when switching models
+            networkRetryCounters.clear();
+
+            let modelToSet;
+            const slashIdx = nextModelId.indexOf("/");
+            if (slashIdx !== -1) {
+              const provider = nextModelId.substring(0, slashIdx);
+              const id = nextModelId.substring(slashIdx + 1);
+              modelToSet = availableModels.find(
+                m => m.provider.toLowerCase() === provider.toLowerCase()
+                  && m.id.toLowerCase() === id.toLowerCase()
+              );
+            } else {
+              const currentProvider = ctx.model?.provider;
+              const exactProviderMatch = availableModels.find(
+                m => m.id === nextModelId && m.provider === currentProvider
+              );
+              modelToSet = exactProviderMatch ?? availableModels.find(m => m.id === nextModelId);
+            }
+
+            if (modelToSet) {
+              const ok = await pi.setModel(modelToSet, { persist: false });
+              if (ok) {
+                ctx.ui.notify(`Model error${errorDetail}. Switched to fallback: ${nextModelId} and resuming.`, "warning");
+                // Trigger a generic "Continue execution" to resume the task since the previous attempt failed
+                pi.sendMessage(
+                  { customType: "gsd-auto-timeout-recovery", content: "Continue execution.", display: false },
+                  { triggerTurn: true }
+                );
+                return;
+              }
+            }
+          }
+        }
+      }
+
+      // ── Session model recovery (#1065) ──────────────────────────────────
+      // Before pausing, attempt to restore the model captured at auto-mode
+      // start. This prevents cross-session model leakage: when fallback
+      // chains are exhausted (or absent), the session retries with the model
+      // the user originally chose instead of reading (possibly stale) global
+      // preferences that another concurrent session may have modified.
+      const sessionModel = getAutoModeStartModel();
+      if (sessionModel) {
+        const currentModelId = ctx.model?.id;
+        const currentProvider = ctx.model?.provider;
+        // Only attempt recovery if the current model diverged from the session model
+        if (currentModelId !== sessionModel.id || currentProvider !== sessionModel.provider) {
+          const availableModels = ctx.modelRegistry.getAvailable();
+          const startModel = availableModels.find(
+            m => m.provider === sessionModel.provider && m.id === sessionModel.id,
+          );
+          if (startModel) {
+            const ok = await pi.setModel(startModel, { persist: false });
+            if (ok) {
+              networkRetryCounters.clear();
+              ctx.ui.notify(
+                `Model error${errorDetail}. Restored session model: ${sessionModel.provider}/${sessionModel.id} and resuming.`,
+                "warning",
+              );
+              pi.sendMessage(
+                { customType: "gsd-auto-timeout-recovery", content: "Continue execution.", display: false },
+                { triggerTurn: true },
+              );
+              return;
+            }
+          }
+        }
+      }
+
+      // Classify the error: transient (auto-resume) vs permanent (manual resume)
+      const classification = classifyProviderError(errorMsg);
+
+      // Extract explicit retry-after from the message or response metadata
+      const explicitRetryAfterMs = ("retryAfterMs" in lastMsg && typeof lastMsg.retryAfterMs === "number")
+        ? lastMsg.retryAfterMs
+        : undefined;
+      let retryAfterMs = explicitRetryAfterMs ?? classification.suggestedDelayMs;
+
+      // ── Escalating backoff for repeated transient errors ──────────────
+      // Each consecutive transient auto-resume doubles the delay. After
+      // MAX_TRANSIENT_AUTO_RESUMES consecutive failures, treat as permanent
+      // to avoid infinite rapid-fire retries (#1166).
+      let effectiveTransient = classification.isTransient;
+      if (classification.isTransient) {
+        consecutiveTransientErrors++;
+        if (consecutiveTransientErrors > MAX_TRANSIENT_AUTO_RESUMES) {
+          effectiveTransient = false;
+          ctx.ui.notify(
+            `${consecutiveTransientErrors} consecutive transient errors. Pausing indefinitely — resume manually with /gsd auto.`,
+            "error",
+          );
+          consecutiveTransientErrors = 0;
+        } else {
+          // Escalate: base delay × 2^(consecutive-1) → 30s, 60s, 120s, 240s, 480s
+          retryAfterMs = retryAfterMs * 2 ** (consecutiveTransientErrors - 1);
+        }
+      }
+
+      await pauseAutoForProviderError(ctx.ui, errorDetail, () => pauseAuto(ctx, pi), {
+        isRateLimit: classification.isRateLimit,
+        isTransient: effectiveTransient,
+        retryAfterMs,
+        resume: () => {
+          pi.sendMessage(
+            { customType: "gsd-auto-timeout-recovery", content: "Continue execution \u2014 provider error recovery delay elapsed.", display: false },
+            { triggerTurn: true },
+          );
+        },
+      });
+      return;
+    }
+
+    try {
+      networkRetryCounters.clear(); // Clear network retry state on successful unit completion
+      consecutiveTransientErrors = 0; // Reset escalating backoff on success
+      await handleAgentEnd(ctx, pi);
+    } catch (err) {
+      // Safety net: if handleAgentEnd throws despite its internal try-catch,
+      // ensure auto-mode stops gracefully instead of silently stalling (#381).
+      const message = err instanceof Error ? err.message : String(err);
+      ctx.ui.notify(
+        `Auto-mode error in agent_end handler: ${message}. Stopping auto-mode.`,
+        "error",
+      );
+      try {
+        await pauseAuto(ctx, pi);
+      } catch {
+        // Last resort — at least log
+      }
+    }
   });
 
   // ── session_before_compact ────────────────────────────────────────────────
@@ -349,6 +1042,12 @@ export default function (pi: ExtensionAPI) {
 
   // ── session_shutdown: save activity log on Ctrl+C / SIGTERM ─────────────
   pi.on("session_shutdown", async (_event, ctx: ExtensionContext) => {
+    if (isParallelActive()) {
+      try {
+        await shutdownParallel(process.cwd());
+      } catch { /* best-effort */ }
+    }
+
     if (!isAutoActive() && !isAutoPaused()) return;
 
     // Save the current session — the lock file stays on disk
@@ -358,16 +1057,123 @@ export default function (pi: ExtensionAPI) {
       saveActivityLog(ctx, dash.basePath, dash.currentUnit.type, dash.currentUnit.id);
     }
   });
+
+  // ── tool_call: block CONTEXT.md writes without depth verification ──
+  // Active during both discussion flows (pendingAutoStart set) and
+  // queue flows (activeQueuePhase set). For multi-milestone queue flows,
+  // each milestone must pass its own depth verification before its
+  // CONTEXT.md can be written.
+  pi.on("tool_call", async (event) => {
+    if (!isToolCallEventType("write", event)) return;
+    const result = shouldBlockContextWrite(
+      event.toolName,
+      event.input.path,
+      getDiscussionMilestoneId(),
+      isDepthVerified(),
+      activeQueuePhase,
+    );
+    if (result.block) return result;
+  });
+
+  // ── tool_result: persist discussion exchanges & detect depth gate ──────
+  // Handles both discussion flows and queue flows. For queue flows,
+  // depth verification question IDs may include milestone IDs
+  // (e.g., "depth_verification_M001") for per-milestone gating.
+  pi.on("tool_result", async (event) => {
+    if (event.toolName !== "ask_user_questions") return;
+
+    const milestoneId = getDiscussionMilestoneId();
+    // Queue flows don't set pendingAutoStart, so milestoneId may be null.
+    // Depth gate detection still applies — it sets per-milestone flags.
+    const inQueue = activeQueuePhase;
+
+    const details = event.details as any;
+    if (details?.cancelled || !details?.response) return;
+
+    // ── Depth gate detection ──────────────────────────────────────────
+    // Supports two patterns:
+    //   1. "depth_verification" — wildcard, marks all milestones verified
+    //   2. "depth_verification_M001" — per-milestone verification
+    const questions: any[] = (event.input as any)?.questions ?? [];
+    for (const q of questions) {
+      if (typeof q.id === "string" && q.id.includes("depth_verification")) {
+        // Extract milestone ID from question ID if present
+        const midMatch = q.id.match(/depth_verification[_-](M\d+(?:-[a-z0-9]{6})?)/i);
+        if (midMatch) {
+          depthVerifiedMilestones.add(midMatch[1]);
+        } else {
+          // Wildcard — all milestones verified (backward compat for single-milestone)
+          depthVerifiedMilestones.add("*");
+        }
+        break;
+      }
+    }
+
+    // Discussion persistence only applies when in a discussion flow with a known milestone
+    if (!milestoneId) return;
+
+    // ── Persist exchange to DISCUSSION.md ──────────────────────────────
+    const basePath = process.cwd();
+    const milestoneDir = resolveMilestonePath(basePath, milestoneId);
+    if (!milestoneDir) return;
+
+    const fileName = buildMilestoneFileName(milestoneId, "DISCUSSION");
+    const discussionPath = join(milestoneDir, fileName);
+    const timestamp = new Date().toISOString();
+
+    // Format exchange as markdown
+    const lines: string[] = [`## Exchange — ${timestamp}`, ""];
+
+    for (const q of questions) {
+      lines.push(`### ${q.header ?? "Question"}`);
+      lines.push("");
+      lines.push(q.question ?? "");
+      if (Array.isArray(q.options)) {
+        lines.push("");
+        for (const opt of q.options) {
+          lines.push(`- **${opt.label}** — ${opt.description ?? ""}`);
+        }
+      }
+
+      // Append user response for this question
+      const answer = details.response?.answers?.[q.id];
+      if (answer) {
+        lines.push("");
+        const selected = Array.isArray(answer.selected) ? answer.selected.join(", ") : answer.selected;
+        lines.push(`**Selected:** ${selected}`);
+        if (answer.notes) {
+          lines.push(`**Notes:** ${answer.notes}`);
+        }
+      }
+      lines.push("");
+    }
+
+    lines.push("---", "");
+
+    const newBlock = lines.join("\n");
+    const existing = await loadFile(discussionPath) ?? `# ${milestoneId} Discussion Log\n\n`;
+    await saveFile(discussionPath, existing + newBlock);
+  });
+
+  // ── tool_execution_start/end: track in-flight tools for idle detection ──
+  pi.on("tool_execution_start", async (event) => {
+    if (!isAutoActive()) return;
+    markToolStart(event.toolCallId);
+  });
+
+  pi.on("tool_execution_end", async (event) => {
+    markToolEnd(event.toolCallId);
+  });
 }
 
 async function buildGuidedExecuteContextInjection(prompt: string, basePath: string): Promise<string | null> {
-  const executeMatch = prompt.match(/Execute the next task:\s+(T\d+)\s+\("([^"]+)"\)\s+in slice\s+(S\d+)\s+of milestone\s+(M\d+)/i);
+  const executeMatch = prompt.match(/Execute the next task:\s+(T\d+)\s+\("([^"]+)"\)\s+in slice\s+(S\d+)\s+of milestone\s+(M\d+(?:-[a-z0-9]{6})?)/i);
   if (executeMatch) {
     const [, taskId, taskTitle, sliceId, milestoneId] = executeMatch;
     return buildTaskExecutionContextInjection(basePath, milestoneId, sliceId, taskId, taskTitle);
   }
 
-  const resumeMatch = prompt.match(/Resume interrupted work\.[\s\S]*?slice\s+(S\d+)\s+of milestone\s+(M\d+)/i);
+  const resumeMatch = prompt.match(/Resume interrupted work\.[\s\S]*?slice\s+(S\d+)\s+of milestone\s+(M\d+(?:-[a-z0-9]{6})?)/i);
   if (resumeMatch) {
     const [, sliceId, milestoneId] = resumeMatch;
     const state = await deriveState(basePath);
@@ -419,9 +1225,13 @@ async function buildTaskExecutionContextInjection(
   const priorTaskLines = await buildCarryForwardLines(basePath, milestoneId, sliceId, taskId);
   const resumeSection = await buildResumeSection(basePath, milestoneId, sliceId);
 
+  const activeOverrides = await loadActiveOverrides(basePath);
+  const overridesSection = formatOverridesSection(activeOverrides);
+
   return [
     "[GSD Guided Execute Context]",
     "Use this injected context as startup context for guided task execution. Treat the inlined task plan as the authoritative local execution contract. Use source artifacts to verify details and run checks.",
+    overridesSection, "",
     "",
     resumeSection,
     "",

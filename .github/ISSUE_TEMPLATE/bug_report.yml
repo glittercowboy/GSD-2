@@ -1,0 +1,148 @@
+name: Bug Report
+description: Report a bug in GSD
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug! Please fill out the sections below so we can reproduce and fix it.
+
+  - type: input
+    id: version
+    attributes:
+      label: GSD version
+      description: Run `gsd --version` or check `package.json`
+      placeholder: "e.g., 2.25.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Auto-mode / dispatch loop
+        - TUI / terminal display
+        - Planning / roadmap
+        - Phase execution
+        - Git / worktree isolation
+        - Hook orchestration
+        - State management
+        - AI provider integration
+        - CLI / commands
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: A clear description of the bug.
+      placeholder: "When I run X, Y happens instead of Z."
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should have happened instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps to trigger the bug.
+      placeholder: |
+        1. Run `gsd ...`
+        2. Select option ...
+        3. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error output / logs
+      description: Paste any error messages or relevant log output.
+      render: shell
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Linux
+        - Windows
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: node-version
+    attributes:
+      label: Node.js version
+      description: Run `node --version`
+      placeholder: "e.g., v22.4.0"
+
+  - type: dropdown
+    id: model-type
+    attributes:
+      label: Model type
+      description: Is the model a cloud-hosted provider or a locally-running model?
+      options:
+        - Cloud model
+        - Local model (Ollama, llama.cpp, LM Studio, etc.)
+        - N/A
+    validations:
+      required: true
+
+  - type: dropdown
+    id: ai-provider
+    attributes:
+      label: AI provider
+      description: Which provider are you using? Select "Other" for providers not listed here.
+      options:
+        - Anthropic (Claude)
+        - OpenAI
+        - GitHub Copilot
+        - Google (Gemini)
+        - Google Vertex AI
+        - Google Gemini CLI
+        - Antigravity (Gemini 3, Claude, GPT-OSS)
+        - Amazon Bedrock
+        - Azure OpenAI
+        - OpenRouter
+        - Groq
+        - xAI (Grok)
+        - Mistral
+        - Ollama Cloud
+        - Vercel AI Gateway
+        - Other (provide details below)
+        - N/A
+    validations:
+      required: true
+
+  - type: input
+    id: model-id
+    attributes:
+      label: Model ID
+      description: The specific model used. Run `/model` in GSD or check settings.
+      placeholder: "e.g., claude-sonnet-4-6, gpt-4o, gemini-2.5-pro"
+
+  - type: input
+    id: custom-provider-docs
+    attributes:
+      label: API documentation link
+      description: Required if you selected "Other" provider above. Link to the API docs for the provider/model you're using so we can verify compatibility.
+      placeholder: "e.g., https://docs.example.com/api"
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Anything else — screenshots, config snippets, related issues.

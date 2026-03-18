@@ -2,6 +2,10 @@ You are executing GSD auto-mode.
 
 ## UNIT: Run UAT — {{milestoneId}}/{{sliceId}}
 
+## Working Directory
+
+Your working directory is `{{workingDirectory}}`. All file reads, writes, and shell commands MUST operate relative to this directory. Do NOT `cd` to any other directory.
+
 All relevant context has been preloaded below. Start working immediately without re-reading these files.
 
 {{inlinedContext}}
@@ -14,7 +18,7 @@ If a `GSD Skill Preferences` block is present in system context, use it to decid
 
 **UAT file:** `{{uatPath}}`
 **UAT type:** `{{uatType}}`
-**Result file to write:** `{{uatResultAbsPath}}` (relative: `{{uatResultPath}}`)
+**Result file to write:** `{{uatResultPath}}`
 
 ### If UAT type is `artifact-driven`
 
@@ -37,7 +41,7 @@ After running all checks, compute the **overall verdict**:
 - `FAIL` — one or more checks failed
 - `PARTIAL` — some checks passed, some failed or were skipped
 
-Write `{{uatResultAbsPath}}` with:
+Write `{{uatResultPath}}` with:
 
 ```markdown
 ---
@@ -68,7 +72,7 @@ date: <ISO 8601 timestamp>
 
 This UAT type requires human execution or live-runtime observation that you cannot perform mechanically. Your role is to surface it clearly for review.
 
-Write `{{uatResultAbsPath}}` with:
+Write `{{uatResultPath}}` with:
 
 ```markdown
 ---
@@ -104,6 +108,6 @@ Once updated, run `/gsd auto` to resume auto-mode.
 
 ---
 
-**You MUST write `{{uatResultAbsPath}}` before finishing.**
+**You MUST write `{{uatResultPath}}` before finishing.**
 
 When done, say: "UAT {{sliceId}} complete."

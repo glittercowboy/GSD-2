@@ -5,9 +5,11 @@
 import { randomUUID } from "node:crypto";
 import type { ChannelAdapter, RemotePrompt, RemoteQuestion, RemoteAnswer } from "./types.js";
 import { resolveRemoteConfig, type ResolvedConfig } from "./config.js";
-import { SlackAdapter } from "./slack-adapter.js";
 import { DiscordAdapter } from "./discord-adapter.js";
+import { SlackAdapter } from "./slack-adapter.js";
+import { TelegramAdapter } from "./telegram-adapter.js";
 import { createPromptRecord, writePromptRecord, markPromptAnswered, markPromptDispatched, markPromptStatus, updatePromptRecord } from "./store.js";
+import { sanitizeError } from "../shared/sanitize.js";
 
 interface ToolResult {
   content: Array<{ type: "text"; text: string }>;
@@ -69,13 +71,19 @@ export async function tryRemoteQuestions(
         channel: config.channel,
         timed_out: true,
         promptId: prompt.id,
-        threadUrl: dispatch.ref.threadUrl,
+        threadUrl: dispatch.ref.threadUrl ?? null,
         status: signal?.aborted ? "cancelled" : "timed_out",
       },
     };
   }
 
   markPromptAnswered(prompt.id, answer);
+
+  // Best-effort acknowledgement gives remote users a visible receipt signal.
+  try {
+    await adapter.acknowledgeAnswer?.(dispatch.ref);
+  } catch { /* best-effort */ }
+
   return {
     content: [{ type: "text", text: JSON.stringify({ answers: formatForTool(answer) }) }],
     details: {
@@ -83,7 +91,7 @@ export async function tryRemoteQuestions(
       channel: config.channel,
       timed_out: false,
       promptId: prompt.id,
-      threadUrl: dispatch.ref.threadUrl,
+      threadUrl: dispatch.ref.threadUrl ?? null,
       questions,
       response: answer,
       status: "answered",
@@ -111,9 +119,9 @@ function createPrompt(questions: QuestionInput[], config: ResolvedConfig): Remot
 }
 
 function createAdapter(config: ResolvedConfig): ChannelAdapter {
-  return config.channel === "slack"
-    ? new SlackAdapter(config.token, config.channelId)
-    : new DiscordAdapter(config.token, config.channelId);
+  if (config.channel === "slack") return new SlackAdapter(config.token, config.channelId);
+  if (config.channel === "telegram") return new TelegramAdapter(config.token, config.channelId);
+  return new DiscordAdapter(config.token, config.channelId);
 }
 
 async function pollUntilDone(
@@ -166,22 +174,6 @@ function formatForTool(answer: RemoteAnswer): Record<string, { answers: string[]
     out[id] = { answers: list };
   }
   return out;
-}
-
-// Strip token-like strings from error messages before surfacing
-const TOKEN_PATTERNS = [
-  /xoxb-[A-Za-z0-9\-]+/g,    // Slack bot tokens
-  /xoxp-[A-Za-z0-9\-]+/g,    // Slack user tokens
-  /xoxa-[A-Za-z0-9\-]+/g,    // Slack app tokens
-  /[A-Za-z0-9_\-.]{20,}/g,   // Long opaque secrets (Discord tokens, etc.)
-];
-
-export function sanitizeError(msg: string): string {
-  let sanitized = msg;
-  for (const pattern of TOKEN_PATTERNS) {
-    sanitized = sanitized.replace(pattern, "[REDACTED]");
-  }
-  return sanitized;
 }
 
 function errorResult(message: string, channel: string): ToolResult {

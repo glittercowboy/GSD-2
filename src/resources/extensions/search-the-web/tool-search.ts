@@ -10,18 +10,18 @@
  * - Rate limit info in details
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { truncateHead, formatSize, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "@mariozechner/pi-coding-agent";
-import { Text } from "@mariozechner/pi-tui";
+import type { ExtensionAPI } from "@gsd/pi-coding-agent";
+import { truncateHead, formatSize, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "@gsd/pi-coding-agent";
+import { Text } from "@gsd/pi-tui";
 import { Type } from "@sinclair/typebox";
-import { StringEnum } from "@mariozechner/pi-ai";
+import { StringEnum } from "@gsd/pi-ai";
 
-import { LRUTTLCache } from "./cache";
-import { fetchWithRetryTimed, fetchWithRetry, classifyError, type RateLimitInfo } from "./http";
-import { normalizeQuery, toDedupeKey, detectFreshness } from "./url-utils";
-import { formatSearchResults, type SearchResultFormatted, type FormatSearchOptions } from "./format";
-import { getTavilyApiKey, resolveSearchProvider } from "./provider";
-import { normalizeTavilyResult, mapFreshnessToTavily, type TavilySearchResponse } from "./tavily";
+import { LRUTTLCache } from "./cache.js";
+import { fetchWithRetryTimed, fetchWithRetry, classifyError, type RateLimitInfo } from "./http.js";
+import { normalizeQuery, toDedupeKey, detectFreshness } from "./url-utils.js";
+import { formatSearchResults, type SearchResultFormatted, type FormatSearchOptions } from "./format.js";
+import { getTavilyApiKey, getOllamaApiKey, getBraveApiKey, braveHeaders, resolveSearchProvider } from "./provider.js";
+import { normalizeTavilyResult, mapFreshnessToTavily, type TavilySearchResponse } from "./tavily.js";
 
 // =============================================================================
 // Types
@@ -93,7 +93,7 @@ interface SearchDetails {
   errorKind?: string;
   error?: string;
   retryAfterMs?: number;
-  provider?: 'tavily' | 'brave';
+  provider?: 'tavily' | 'brave' | 'ollama';
 }
 
 // =============================================================================
@@ -104,24 +104,18 @@ interface SearchDetails {
 const searchCache = new LRUTTLCache<CachedSearchResult>({ max: 100, ttlMs: 600_000 });
 searchCache.startPurgeInterval(60_000);
 
+// Consecutive duplicate search guard (#949)
+// Tracks recent query keys to detect and break search loops.
+const MAX_CONSECUTIVE_DUPES = 3;
+let lastSearchKey = "";
+let consecutiveDupeCount = 0;
+
 // Summarizer responses: max 50 entries, 15-minute TTL
 const summarizerCache = new LRUTTLCache<string>({ max: 50, ttlMs: 900_000 });
 
 // =============================================================================
 // Brave API helpers
 // =============================================================================
-
-function getBraveApiKey(): string {
-  return process.env.BRAVE_API_KEY || "";
-}
-
-function braveHeaders(): Record<string, string> {
-  return {
-    "Accept": "application/json",
-    "Accept-Encoding": "gzip",
-    "X-Subscription-Token": getBraveApiKey(),
-  };
-}
 
 /**
  * Normalize a Brave result into our formatted result type.
@@ -246,6 +240,57 @@ async function executeTavilySearch(
 }
 
 // =============================================================================
+// Ollama API execution
+// =============================================================================
+
+interface OllamaWebSearchResult {
+  title: string;
+  url: string;
+  content: string;
+}
+
+interface OllamaWebSearchResponse {
+  results: OllamaWebSearchResult[];
+}
+
+/**
+ * Execute a search against the Ollama web_search API.
+ * Returns a CachedSearchResult with normalized, deduplicated results.
+ */
+async function executeOllamaSearch(
+  params: { query: string; count: number },
+  signal?: AbortSignal
+): Promise<{ results: CachedSearchResult; latencyMs: number; rateLimit?: RateLimitInfo }> {
+  const timed = await fetchWithRetryTimed("https://ollama.com/api/web_search", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${getOllamaApiKey()}`,
+    },
+    body: JSON.stringify({ query: params.query, max_results: params.count }),
+    signal,
+  }, 2);
+
+  const data: OllamaWebSearchResponse = await timed.response.json();
+  const normalized: SearchResultFormatted[] = (data.results || []).map(r => ({
+    title: r.title || "(untitled)",
+    url: r.url,
+    description: r.content || "",
+  }));
+  const deduplicated = deduplicateResults(normalized);
+
+  return {
+    results: {
+      results: deduplicated,
+      queryCorrected: false,
+      moreResultsAvailable: false,
+    },
+    latencyMs: timed.latencyMs,
+    rateLimit: timed.rateLimit,
+  };
+}
+
+// =============================================================================
 // Tool Registration
 // =============================================================================
 
@@ -291,7 +336,7 @@ export function registerSearchTool(pi: ExtensionAPI) {
 
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       if (signal?.aborted) {
-        return { content: [{ type: "text", text: "Search cancelled." }] };
+        return { content: [{ type: "text", text: "Search cancelled." }], details: undefined as unknown };
       }
 
       // ------------------------------------------------------------------
@@ -300,7 +345,7 @@ export function registerSearchTool(pi: ExtensionAPI) {
       const provider = resolveSearchProvider();
       if (!provider) {
         return {
-          content: [{ type: "text", text: "Web search unavailable: No search API key is set. Use secure_env_collect to set TAVILY_API_KEY or BRAVE_API_KEY." }],
+          content: [{ type: "text", text: "Web search unavailable: No search API key is set. Use secure_env_collect to set TAVILY_API_KEY, BRAVE_API_KEY, or OLLAMA_API_KEY." }],
           isError: true,
           details: { errorKind: "auth_error", error: "No search API key set" } satisfies Partial<SearchDetails>,
         };
@@ -337,6 +382,26 @@ export function registerSearchTool(pi: ExtensionAPI) {
       // Cache lookup (provider-prefixed key)
       // ------------------------------------------------------------------
       const cacheKey = normalizeQuery(effectiveQuery) + `|f:${freshness || ""}|s:${wantSummary}|p:${provider}`;
+
+      // ── Consecutive duplicate search guard (#949) ──────────────────────
+      // If the LLM keeps calling the same search query, break the loop
+      // with an explicit warning instead of returning the same results.
+      if (cacheKey === lastSearchKey) {
+        consecutiveDupeCount++;
+        if (consecutiveDupeCount >= MAX_CONSECUTIVE_DUPES) {
+          consecutiveDupeCount = 0;
+          lastSearchKey = "";
+          return {
+            content: [{ type: "text" as const, text: `⚠️ Search loop detected: the query "${params.query}" has been searched ${MAX_CONSECUTIVE_DUPES + 1} times consecutively with identical results. The information you need is already in the previous search results above. Stop searching and use those results to proceed with your task.` }],
+            isError: true,
+            details: { errorKind: "search_loop", error: "Consecutive duplicate search detected" } satisfies Partial<SearchDetails>,
+          };
+        }
+      } else {
+        lastSearchKey = cacheKey;
+        consecutiveDupeCount = 0;
+      }
+
       const cached = searchCache.get(cacheKey);
 
       if (cached) {
@@ -365,7 +430,7 @@ export function registerSearchTool(pi: ExtensionAPI) {
         const truncation = truncateHead(output, { maxLines: DEFAULT_MAX_LINES, maxBytes: DEFAULT_MAX_BYTES });
         let content = truncation.content;
         if (truncation.truncated) {
-          const tempFile = await pi.writeTempFile(output, { prefix: "web-search-" });
+          const tempFile = await (pi as any).writeTempFile(output, { prefix: "web-search-" });
           content += `\n\n[Truncated: ${truncation.outputLines}/${truncation.totalLines} lines (${formatSize(truncation.outputBytes)}/${formatSize(truncation.totalBytes)}). Full results: ${tempFile}]`;
         }
 
@@ -387,7 +452,7 @@ export function registerSearchTool(pi: ExtensionAPI) {
         return { content: [{ type: "text", text: content }], details };
       }
 
-      onUpdate?.({ content: [{ type: "text", text: `Searching for "${params.query}"...` }] });
+      onUpdate?.({ content: [{ type: "text", text: `Searching for "${params.query}"...` }], details: undefined as unknown });
 
       try {
         // ------------------------------------------------------------------
@@ -405,6 +470,14 @@ export function registerSearchTool(pi: ExtensionAPI) {
           searchResult = tavilyResult.results;
           latencyMs = tavilyResult.latencyMs;
           rateLimit = tavilyResult.rateLimit;
+        } else if (provider === "ollama") {
+          const ollamaResult = await executeOllamaSearch(
+            { query: params.query, count: 10 },
+            signal
+          );
+          searchResult = ollamaResult.results;
+          latencyMs = ollamaResult.latencyMs;
+          rateLimit = ollamaResult.rateLimit;
         } else {
           // ================================================================
           // BRAVE PATH (unchanged API logic)
@@ -484,7 +557,7 @@ export function registerSearchTool(pi: ExtensionAPI) {
         let content = truncation.content;
 
         if (truncation.truncated) {
-          const tempFile = await pi.writeTempFile(output, { prefix: "web-search-" });
+          const tempFile = await (pi as any).writeTempFile(output, { prefix: "web-search-" });
           content += `\n\n[Truncated: ${truncation.outputLines}/${truncation.totalLines} lines (${formatSize(truncation.outputBytes)}/${formatSize(truncation.totalBytes)}). Full results: ${tempFile}]`;
         }
 

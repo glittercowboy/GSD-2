@@ -15,28 +15,9 @@ import {
   parseOldState,
   parseOldConfig,
 } from '../migrate/parsers.ts';
+import { createTestContext } from './test-helpers.ts';
 
-let passed = 0;
-let failed = 0;
-
-function assert(condition: boolean, message: string): void {
-  if (condition) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message}`);
-  }
-}
-
-function assertEq<T>(actual: T, expected: T, message: string): void {
-  if (JSON.stringify(actual) === JSON.stringify(expected)) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message} — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-  }
-}
-
+const { assertEq, assertTrue, report } = createTestContext();
 function createFixtureBase(): string {
   return mkdtempSync(join(tmpdir(), 'gsd-migrate-t02-'));
 }
@@ -204,8 +185,8 @@ async function main(): Promise<void> {
     try {
       const result = await validatePlanningDirectory(join(base, 'nonexistent'));
       assertEq(result.valid, false, 'missing dir: validation fails');
-      assert(result.issues.length > 0, 'missing dir: has issues');
-      assert(result.issues.some(i => i.severity === 'fatal'), 'missing dir: has fatal issue');
+      assertTrue(result.issues.length > 0, 'missing dir: has issues');
+      assertTrue(result.issues.some(i => i.severity === 'fatal'), 'missing dir: has fatal issue');
     } finally {
       cleanup(base);
     }
@@ -219,7 +200,7 @@ async function main(): Promise<void> {
       writeFileSync(join(planning, 'PROJECT.md'), SAMPLE_PROJECT);
       const result = await validatePlanningDirectory(planning);
       assertEq(result.valid, true, 'no roadmap: validation still passes');
-      assert(result.issues.some(i => i.severity === 'warning' && i.file.includes('ROADMAP')), 'no roadmap: warning issue mentions ROADMAP');
+      assertTrue(result.issues.some(i => i.severity === 'warning' && i.file.includes('ROADMAP')), 'no roadmap: warning issue mentions ROADMAP');
     } finally {
       cleanup(base);
     }
@@ -233,7 +214,7 @@ async function main(): Promise<void> {
       writeFileSync(join(planning, 'ROADMAP.md'), SAMPLE_ROADMAP);
       const result = await validatePlanningDirectory(planning);
       assertEq(result.valid, true, 'no project: validation passes (warning only)');
-      assert(result.issues.some(i => i.severity === 'warning' && i.file.includes('PROJECT')), 'no project: warning issue mentions PROJECT');
+      assertTrue(result.issues.some(i => i.severity === 'warning' && i.file.includes('PROJECT')), 'no project: warning issue mentions PROJECT');
     } finally {
       cleanup(base);
     }
@@ -275,18 +256,18 @@ async function main(): Promise<void> {
   console.log('\n=== parseOldRoadmap: milestone-sectioned with <details> ===');
   {
     const roadmap = parseOldRoadmap(SAMPLE_MILESTONE_SECTIONED_ROADMAP);
-    assert(roadmap.milestones.length >= 2, 'ms roadmap: has milestone sections');
+    assertTrue(roadmap.milestones.length >= 2, 'ms roadmap: has milestone sections');
 
     const v20 = roadmap.milestones.find(m => m.id.includes('2.0'));
-    assert(v20 !== undefined, 'ms roadmap: v2.0 found');
+    assertTrue(v20 !== undefined, 'ms roadmap: v2.0 found');
     assertEq(v20?.collapsed, true, 'ms roadmap: v2.0 collapsed');
-    assert((v20?.phases.length ?? 0) >= 2, 'ms roadmap: v2.0 has phases');
-    assert(v20?.phases.every(p => p.done) ?? false, 'ms roadmap: v2.0 all done');
+    assertTrue((v20?.phases.length ?? 0) >= 2, 'ms roadmap: v2.0 has phases');
+    assertTrue(v20?.phases.every(p => p.done) ?? false, 'ms roadmap: v2.0 all done');
 
     const v25 = roadmap.milestones.find(m => m.id.includes('2.5'));
-    assert(v25 !== undefined, 'ms roadmap: v2.5 found');
+    assertTrue(v25 !== undefined, 'ms roadmap: v2.5 found');
     assertEq(v25?.collapsed, false, 'ms roadmap: v2.5 not collapsed');
-    assert((v25?.phases.length ?? 0) >= 3, 'ms roadmap: v2.5 has 3 phases');
+    assertTrue((v25?.phases.length ?? 0) >= 3, 'ms roadmap: v2.5 has 3 phases');
 
     const p29 = v25?.phases.find(p => p.number === 29);
     assertEq(p29?.done, true, 'ms roadmap: phase 29 done');
@@ -301,12 +282,12 @@ async function main(): Promise<void> {
   console.log('\n=== parseOldPlan: XML-in-markdown ===');
   {
     const plan = parseOldPlan(SAMPLE_PLAN_XML, '29-01-PLAN.md', '01');
-    assert(plan.objective.includes('authentication'), 'plan: objective extracted');
+    assertTrue(plan.objective.includes('authentication'), 'plan: objective extracted');
     assertEq(plan.tasks.length, 3, 'plan: 3 tasks');
-    assert(plan.tasks[0].includes('auth middleware'), 'plan: first task content');
-    assert(plan.context.includes('JWT'), 'plan: context extracted');
-    assert(plan.verification.includes('Login returns'), 'plan: verification extracted');
-    assert(plan.successCriteria.includes('endpoints respond'), 'plan: success criteria extracted');
+    assertTrue(plan.tasks[0].includes('auth middleware'), 'plan: first task content');
+    assertTrue(plan.context.includes('JWT'), 'plan: context extracted');
+    assertTrue(plan.verification.includes('Login returns'), 'plan: verification extracted');
+    assertTrue(plan.successCriteria.includes('endpoints respond'), 'plan: success criteria extracted');
 
     // Frontmatter
     assertEq(plan.frontmatter.phase, '29-auth-system', 'plan fm: phase');
@@ -314,10 +295,10 @@ async function main(): Promise<void> {
     assertEq(plan.frontmatter.type, 'implementation', 'plan fm: type');
     assertEq(plan.frontmatter.wave, 1, 'plan fm: wave');
     assertEq(plan.frontmatter.autonomous, true, 'plan fm: autonomous');
-    assert(plan.frontmatter.files_modified.length >= 2, 'plan fm: files_modified');
-    assert(plan.frontmatter.must_haves !== null, 'plan fm: must_haves parsed');
-    assert((plan.frontmatter.must_haves?.truths.length ?? 0) >= 1, 'plan fm: must_haves truths');
-    assert((plan.frontmatter.must_haves?.artifacts.length ?? 0) >= 1, 'plan fm: must_haves artifacts');
+    assertTrue(plan.frontmatter.files_modified.length >= 2, 'plan fm: files_modified');
+    assertTrue(plan.frontmatter.must_haves !== null, 'plan fm: must_haves parsed');
+    assertTrue((plan.frontmatter.must_haves?.truths.length ?? 0) >= 1, 'plan fm: must_haves truths');
+    assertTrue((plan.frontmatter.must_haves?.artifacts.length ?? 0) >= 1, 'plan fm: must_haves artifacts');
   }
 
   console.log('\n=== parseOldPlan: plain markdown (no XML tags) ===');
@@ -358,7 +339,7 @@ Fix the login button not responding on mobile.
     assertEq(summary.frontmatter['patterns-established'], ['Middleware-based auth'], 'summary fm: patterns-established');
     assertEq(summary.frontmatter.duration, '2h', 'summary fm: duration');
     assertEq(summary.frontmatter.completed, '2026-01-15', 'summary fm: completed');
-    assert(summary.body.includes('Auth Implementation Summary'), 'summary: body content present');
+    assertTrue(summary.body.includes('Auth Implementation Summary'), 'summary: body content present');
   }
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -372,7 +353,7 @@ Fix the login button not responding on mobile.
     assertEq(reqs[0].id, 'R001', 'req 0: id');
     assertEq(reqs[0].title, 'User Authentication', 'req 0: title');
     assertEq(reqs[0].status, 'active', 'req 0: status');
-    assert(reqs[0].description.includes('log in'), 'req 0: description');
+    assertTrue(reqs[0].description.includes('log in'), 'req 0: description');
     assertEq(reqs[2].id, 'R003', 'req 2: id');
     assertEq(reqs[2].status, 'validated', 'req 2: status');
     assertEq(reqs[3].id, 'R004', 'req 3: id');
@@ -386,9 +367,9 @@ Fix the login button not responding on mobile.
   console.log('\n=== parseOldState ===');
   {
     const state = parseOldState(SAMPLE_STATE);
-    assert(state.currentPhase?.includes('30') ?? false, 'state: current phase includes 30');
+    assertTrue(state.currentPhase?.includes('30') ?? false, 'state: current phase includes 30');
     assertEq(state.status, 'in-progress', 'state: status');
-    assert(state.raw === SAMPLE_STATE, 'state: raw preserved');
+    assertTrue(state.raw === SAMPLE_STATE, 'state: raw preserved');
   }
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -398,7 +379,7 @@ Fix the login button not responding on mobile.
   console.log('\n=== parseOldConfig: valid JSON ===');
   {
     const config = parseOldConfig('{"projectName":"test","version":"1.0"}');
-    assert(config !== null, 'config: parsed');
+    assertTrue(config !== null, 'config: parsed');
     assertEq(config?.projectName, 'test', 'config: projectName');
   }
 
@@ -424,17 +405,7 @@ Fix the login button not responding on mobile.
     assertEq(project, SAMPLE_PROJECT, 'project: returns raw content');
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // Results
-  // ═══════════════════════════════════════════════════════════════════════
-
-  console.log(`\n${'='.repeat(40)}`);
-  console.log(`Results: ${passed} passed, ${failed} failed`);
-  if (failed > 0) {
-    process.exit(1);
-  } else {
-    console.log('All tests passed ✓');
-  }
+  report();
 }
 
 main().catch((error) => {

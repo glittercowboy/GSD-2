@@ -1,20 +1,20 @@
 /**
- * App-level smoke tests for the gsd CLI package.
+ * Unit tests for the gsd CLI package.
  *
  * Tests the glue code that IS the product:
  * - app-paths resolve to ~/.gsd/
  * - loader sets all required env vars
  * - resource-loader syncs bundled resources
  * - wizard loadStoredEnvKeys hydrates env
- * - npm pack produces a valid tarball
- * - tarball installs and the `gsd` binary resolves
+ *
+ * Integration tests (npm pack, install, launch) are in ./integration/pack-install.test.ts
  */
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { execSync, spawn } from "node:child_process";
+import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
@@ -42,7 +42,7 @@ test("loader sets all 4 GSD_ env vars and PI_PACKAGE_DIR", async () => {
   // Run loader in a subprocess that prints env vars and exits before TUI starts
   const script = `
     import { fileURLToPath } from 'url';
-    import { dirname, resolve, join } from 'path';
+    import { dirname, resolve, join, delimiter } from 'path';
     import { agentDir } from './app-paths.js';
 
     const pkgDir = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'pkg');
@@ -52,7 +52,7 @@ test("loader sets all 4 GSD_ env vars and PI_PACKAGE_DIR", async () => {
     const resourcesDir = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'resources');
     process.env.GSD_WORKFLOW_PATH = join(resourcesDir, 'GSD-WORKFLOW.md');
     const exts = ['extensions/gsd/index.ts'].map(r => join(resourcesDir, r));
-    process.env.GSD_BUNDLED_EXTENSION_PATHS = exts.join(':');
+    process.env.GSD_BUNDLED_EXTENSION_PATHS = exts.join(delimiter);
 
     // Print for verification
     console.log('PI_PACKAGE_DIR=' + process.env.PI_PACKAGE_DIR);
@@ -82,7 +82,7 @@ test("loader sets all 4 GSD_ env vars and PI_PACKAGE_DIR", async () => {
 
   // Direct logic verification (no subprocess needed)
   const { agentDir: ad } = await import("../app-paths.ts");
-  assert.ok(ad.endsWith(".gsd/agent"), "agentDir ends with .gsd/agent");
+  assert.ok(ad.endsWith(join(".gsd", "agent")), "agentDir ends with .gsd/agent");
 
   // Verify the env var names are in loader.ts source
   const loaderSrc = readFileSync(join(projectRoot, "src", "loader.ts"), "utf-8");
@@ -91,23 +91,30 @@ test("loader sets all 4 GSD_ env vars and PI_PACKAGE_DIR", async () => {
   assert.ok(loaderSrc.includes("GSD_BIN_PATH"), "loader sets GSD_BIN_PATH");
   assert.ok(loaderSrc.includes("GSD_WORKFLOW_PATH"), "loader sets GSD_WORKFLOW_PATH");
   assert.ok(loaderSrc.includes("GSD_BUNDLED_EXTENSION_PATHS"), "loader sets GSD_BUNDLED_EXTENSION_PATHS");
+  assert.ok(loaderSrc.includes("serializeBundledExtensionPaths"), "loader uses shared bundled path serializer");
+  assert.ok(loaderSrc.includes("join(delimiter)"), "loader uses platform delimiter for NODE_PATH");
 
-  // Verify all 11 extension entry points are referenced in loader
-  // Loader uses join() calls like join(agentDir, 'extensions', 'gsd', 'index.ts')
-  // so we check for the distinguishing directory name of each extension
-  const extNames = [
-    "'gsd'",
-    "'bg-shell'",
-    "'browser-tools'",
-    "'context7'",
-    "'search-the-web'",
-    "'slash-commands'",
-    "'subagent'",
-    "'ask-user-questions.ts'",
-    "'get-secrets-from-user.ts'",
-  ];
-  for (const name of extNames) {
-    assert.ok(loaderSrc.includes(name), `loader references extension ${name}`);
+  // Verify extension discovery mechanism is in place
+  // loader.ts uses shared discoverExtensionEntryPaths() from extension-discovery.ts
+  assert.ok(loaderSrc.includes("discoverExtensionEntryPaths"), "loader uses discoverExtensionEntryPaths for extension discovery");
+  assert.ok(loaderSrc.includes("bundledExtDir"), "loader defines bundledExtDir for scanning");
+  assert.ok(loaderSrc.includes("discoveredExtensionPaths"), "loader collects discovered paths");
+
+  // Verify that the env var is populated at runtime by checking the actual
+  // extensions directory has discoverable entry points
+  const { discoverExtensionEntryPaths } = await import("../extension-discovery.ts");
+  const bundledExtensionsDir = join(projectRoot, existsSync(join(projectRoot, "dist", "resources"))
+    ? "dist" : "src", "resources", "extensions");
+  const discovered = discoverExtensionEntryPaths(bundledExtensionsDir);
+  assert.ok(discovered.length >= 10, `expected >=10 extensions, found ${discovered.length}`);
+
+  // Spot-check that core extensions are discoverable
+  const discoveredNames = discovered.map(p => {
+    const rel = p.slice(bundledExtensionsDir.length + 1);
+    return rel.split(/[\\/]/)[0].replace(/\.ts$/, "");
+  });
+  for (const core of ["gsd", "bg-shell", "browser-tools", "subagent", "search-the-web"]) {
+    assert.ok(discoveredNames.includes(core), `core extension '${core}' is discoverable`);
   }
 
   rmSync(tmp, { recursive: true, force: true });
@@ -117,8 +124,8 @@ test("loader sets all 4 GSD_ env vars and PI_PACKAGE_DIR", async () => {
 // 3. resource-loader syncs bundled resources
 // ═══════════════════════════════════════════════════════════════════════════
 
-test("initResources syncs extensions, agents, and AGENTS.md to target dir", async () => {
-  const { initResources } = await import("../resource-loader.ts");
+test("initResources syncs extensions, agents, and skills to target dir", async () => {
+  const { initResources, readManagedResourceVersion } = await import("../resource-loader.ts");
   const tmp = mkdtempSync(join(tmpdir(), "gsd-resources-test-"));
   const fakeAgentDir = join(tmp, "agent");
 
@@ -135,14 +142,51 @@ test("initResources syncs extensions, agents, and AGENTS.md to target dir", asyn
     // Agents synced
     assert.ok(existsSync(join(fakeAgentDir, "agents", "scout.md")), "scout agent synced");
 
-    // AGENTS.md synced
-    assert.ok(existsSync(join(fakeAgentDir, "AGENTS.md")), "AGENTS.md synced");
-    const agentsMd = readFileSync(join(fakeAgentDir, "AGENTS.md"), "utf-8");
-    assert.ok(agentsMd.length > 1000, "AGENTS.md has substantial content");
+    // Skills synced
+    assert.ok(existsSync(join(fakeAgentDir, "skills")), "skills directory synced");
+
+    // Version manifest synced
+    const managedVersion = readManagedResourceVersion(fakeAgentDir);
+    assert.ok(managedVersion, "managed resource version written");
 
     // Idempotent: run again, no crash
     initResources(fakeAgentDir);
     assert.ok(existsSync(join(fakeAgentDir, "extensions", "gsd", "index.ts")), "idempotent re-sync works");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("initResources skips copy when managed version matches current version", async () => {
+  const { initResources, readManagedResourceVersion } = await import("../resource-loader.ts");
+  const tmp = mkdtempSync(join(tmpdir(), "gsd-resources-skip-"));
+  const fakeAgentDir = join(tmp, "agent");
+
+  try {
+    // First run: full sync (no manifest yet)
+    initResources(fakeAgentDir);
+    const version = readManagedResourceVersion(fakeAgentDir);
+    assert.ok(version, "manifest written after first sync");
+
+    // Add a marker file to detect whether sync runs again
+    const markerPath = join(fakeAgentDir, "extensions", "gsd", "_marker.txt");
+    writeFileSync(markerPath, "test-marker");
+
+    // Second run: version matches — should skip, marker survives
+    initResources(fakeAgentDir);
+    assert.ok(existsSync(markerPath), "marker file survives when version matches (sync skipped)");
+
+    // Simulate version mismatch by writing older version to manifest
+    const manifestPath = join(fakeAgentDir, "managed-resources.json");
+    writeFileSync(manifestPath, JSON.stringify({ gsdVersion: "0.0.1", syncedAt: Date.now() }));
+
+    // Third run: version mismatch — full sync, marker removed
+    initResources(fakeAgentDir);
+    assert.ok(!existsSync(markerPath), "marker file removed after version-mismatch sync");
+
+    // Manifest updated to current version
+    const updatedVersion = readManagedResourceVersion(fakeAgentDir);
+    assert.strictEqual(updatedVersion, version, "manifest updated to current version after sync");
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -154,7 +198,7 @@ test("initResources syncs extensions, agents, and AGENTS.md to target dir", asyn
 
 test("loadStoredEnvKeys hydrates process.env from auth.json", async () => {
   const { loadStoredEnvKeys } = await import("../wizard.ts");
-  const { AuthStorage } = await import("@mariozechner/pi-coding-agent");
+  const { AuthStorage } = await import("@gsd/pi-coding-agent");
 
   const tmp = mkdtempSync(join(tmpdir(), "gsd-wizard-test-"));
   const authPath = join(tmp, "auth.json");
@@ -163,19 +207,21 @@ test("loadStoredEnvKeys hydrates process.env from auth.json", async () => {
     brave_answers: { type: "api_key", key: "test-answers-key" },
     context7: { type: "api_key", key: "test-ctx7-key" },
     tavily: { type: "api_key", key: "test-tavily-key" },
+    telegram_bot: { type: "api_key", key: "test-telegram-key" },
+    "custom-openai": { type: "api_key", key: "test-custom-openai-key" },
   }));
 
   // Clear any existing env vars
-  const origBrave = process.env.BRAVE_API_KEY;
-  const origBraveAnswers = process.env.BRAVE_ANSWERS_KEY;
-  const origCtx7 = process.env.CONTEXT7_API_KEY;
-  const origJina = process.env.JINA_API_KEY;
-  const origTavily = process.env.TAVILY_API_KEY;
-  delete process.env.BRAVE_API_KEY;
-  delete process.env.BRAVE_ANSWERS_KEY;
-  delete process.env.CONTEXT7_API_KEY;
-  delete process.env.JINA_API_KEY;
-  delete process.env.TAVILY_API_KEY;
+  const envVarsToRestore = [
+    "BRAVE_API_KEY", "BRAVE_ANSWERS_KEY", "CONTEXT7_API_KEY",
+    "JINA_API_KEY", "TAVILY_API_KEY", "TELEGRAM_BOT_TOKEN",
+    "CUSTOM_OPENAI_API_KEY",
+  ];
+  const origValues: Record<string, string | undefined> = {};
+  for (const v of envVarsToRestore) {
+    origValues[v] = process.env[v];
+    delete process.env[v];
+  }
 
   try {
     const auth = AuthStorage.create(authPath);
@@ -186,13 +232,12 @@ test("loadStoredEnvKeys hydrates process.env from auth.json", async () => {
     assert.equal(process.env.CONTEXT7_API_KEY, "test-ctx7-key", "CONTEXT7_API_KEY hydrated");
     assert.equal(process.env.JINA_API_KEY, undefined, "JINA_API_KEY not set (not in auth)");
     assert.equal(process.env.TAVILY_API_KEY, "test-tavily-key", "TAVILY_API_KEY hydrated");
+    assert.equal(process.env.TELEGRAM_BOT_TOKEN, "test-telegram-key", "TELEGRAM_BOT_TOKEN hydrated");
+    assert.equal(process.env.CUSTOM_OPENAI_API_KEY, "test-custom-openai-key", "CUSTOM_OPENAI_API_KEY hydrated");
   } finally {
-    // Restore original env
-    if (origBrave) process.env.BRAVE_API_KEY = origBrave; else delete process.env.BRAVE_API_KEY;
-    if (origBraveAnswers) process.env.BRAVE_ANSWERS_KEY = origBraveAnswers; else delete process.env.BRAVE_ANSWERS_KEY;
-    if (origCtx7) process.env.CONTEXT7_API_KEY = origCtx7; else delete process.env.CONTEXT7_API_KEY;
-    if (origJina) process.env.JINA_API_KEY = origJina; else delete process.env.JINA_API_KEY;
-    if (origTavily) process.env.TAVILY_API_KEY = origTavily; else delete process.env.TAVILY_API_KEY;
+    for (const v of envVarsToRestore) {
+      if (origValues[v]) process.env[v] = origValues[v]; else delete process.env[v];
+    }
     rmSync(tmp, { recursive: true, force: true });
   }
 });
@@ -203,7 +248,7 @@ test("loadStoredEnvKeys hydrates process.env from auth.json", async () => {
 
 test("loadStoredEnvKeys does not overwrite existing env vars", async () => {
   const { loadStoredEnvKeys } = await import("../wizard.ts");
-  const { AuthStorage } = await import("@mariozechner/pi-coding-agent");
+  const { AuthStorage } = await import("@gsd/pi-coding-agent");
 
   const tmp = mkdtempSync(join(tmpdir(), "gsd-wizard-nooverwrite-"));
   const authPath = join(tmp, "auth.json");
@@ -226,149 +271,157 @@ test("loadStoredEnvKeys does not overwrite existing env vars", async () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 6. npm pack produces valid tarball with correct file layout
+// 6. State derivation — Gap 2
 // ═══════════════════════════════════════════════════════════════════════════
 
-test("npm pack produces tarball with required files", async () => {
-  // Build first
-  execSync("npm run build", { cwd: projectRoot, stdio: "pipe" });
+test("deriveState returns pre-planning phase for empty .gsd/ directory", async () => {
+  const { deriveState } = await import("../resources/extensions/gsd/state.ts");
+  const tmp = mkdtempSync(join(tmpdir(), "gsd-state-smoke-"));
 
-  // Pack
-  const packOutput = execSync("npm pack --json 2>/dev/null", {
-    cwd: projectRoot,
-    encoding: "utf-8",
-  });
-  const packInfo = JSON.parse(packOutput);
-  const tarball = packInfo[0].filename;
-  const tarballPath = join(projectRoot, tarball);
-
-  assert.ok(existsSync(tarballPath), `tarball ${tarball} created`);
+  // Create minimal .gsd/ structure with no milestones
+  mkdirSync(join(tmp, ".gsd"), { recursive: true });
 
   try {
-    // List tarball contents
-    const contents = execSync(`tar tzf ${tarballPath}`, { encoding: "utf-8" });
-    const files = contents.split("\n").filter(Boolean);
+    const state = await deriveState(tmp);
 
-    // Critical files must be present
-    assert.ok(files.some(f => f.includes("dist/loader.js")), "tarball contains dist/loader.js");
-    assert.ok(files.some(f => f.includes("dist/cli.js")), "tarball contains dist/cli.js");
-    assert.ok(files.some(f => f.includes("dist/app-paths.js")), "tarball contains dist/app-paths.js");
-    assert.ok(files.some(f => f.includes("dist/wizard.js")), "tarball contains dist/wizard.js");
-    assert.ok(files.some(f => f.includes("dist/resource-loader.js")), "tarball contains dist/resource-loader.js");
-    assert.ok(files.some(f => f.includes("pkg/package.json")), "tarball contains pkg/package.json");
-    assert.ok(files.some(f => f.includes("src/resources/extensions/gsd/index.ts")), "tarball contains bundled gsd extension");
-    assert.ok(files.some(f => f.includes("src/resources/AGENTS.md")), "tarball contains AGENTS.md");
-    assert.ok(files.some(f => f.includes("scripts/postinstall.js")), "tarball contains postinstall script");
-
-    // pkg/package.json must have piConfig
-    const pkgJson = readFileSync(join(projectRoot, "pkg", "package.json"), "utf-8");
-    const pkg = JSON.parse(pkgJson);
-    assert.equal(pkg.piConfig?.name, "gsd", "pkg/package.json piConfig.name is gsd");
-    assert.equal(pkg.piConfig?.configDir, ".gsd", "pkg/package.json piConfig.configDir is .gsd");
+    assert.equal(state.phase, "pre-planning",
+      `expected pre-planning phase for empty .gsd/, got: ${state.phase}`);
+    assert.equal(state.activeMilestone, null, "no active milestone");
+    assert.equal(state.activeSlice, null, "no active slice");
+    assert.equal(state.activeTask, null, "no active task");
+    assert.ok(Array.isArray(state.blockers), "blockers is an array");
+    assert.ok(Array.isArray(state.registry), "registry is an array");
+    assert.equal(state.registry.length, 0, "empty registry");
+    assert.ok(typeof state.nextAction === "string", "nextAction is a string");
+    assert.ok(state.nextAction.length > 0, "nextAction is non-empty");
   } finally {
-    // Clean up tarball
-    rmSync(tarballPath, { force: true });
+    rmSync(tmp, { recursive: true, force: true });
   }
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 7. npm pack → install → gsd binary resolves
-// ═══════════════════════════════════════════════════════════════════════════
-
-test("tarball installs and gsd binary resolves", async () => {
-  // Build and pack
-  execSync("npm run build", { cwd: projectRoot, stdio: "pipe" });
-  const packOutput = execSync("npm pack --json 2>/dev/null", {
-    cwd: projectRoot,
-    encoding: "utf-8",
-  });
-  const packInfo = JSON.parse(packOutput);
-  const tarball = packInfo[0].filename;
-  const tarballPath = join(projectRoot, tarball);
-
-  const tmp = mkdtempSync(join(tmpdir(), "gsd-install-test-"));
+test("deriveState returns pre-planning phase when no .gsd/ directory exists", async () => {
+  const { deriveState } = await import("../resources/extensions/gsd/state.ts");
+  // Use a temp dir with no .gsd/ subdirectory at all
+  const tmp = mkdtempSync(join(tmpdir(), "gsd-state-nogsd-"));
 
   try {
-    // Install from tarball into a temp prefix
-    execSync(`npm install --prefix ${tmp} ${tarballPath} --no-save 2>&1`, {
-      encoding: "utf-8",
-      env: { ...process.env, PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1" },
-    });
+    // Should not throw — missing .gsd/ is a valid "no project" state
+    const state = await deriveState(tmp);
 
-    // Verify the gsd bin exists in the installed package
-    const installedBin = join(tmp, "node_modules", ".bin", "gsd");
-    assert.ok(existsSync(installedBin), "gsd binary exists in node_modules/.bin/");
-
-    // Verify loader.js is executable (has shebang)
-    const installedLoader = join(tmp, "node_modules", "gsd-pi", "dist", "loader.js");
-    const loaderContent = readFileSync(installedLoader, "utf-8");
-    assert.ok(loaderContent.startsWith("#!/usr/bin/env node"), "loader.js has node shebang");
-
-    // Verify bundled resources are present
-    const installedGsdExt = join(tmp, "node_modules", "gsd-pi", "src", "resources", "extensions", "gsd", "index.ts");
-    assert.ok(existsSync(installedGsdExt), "bundled gsd extension present in installed package");
+    assert.equal(state.phase, "pre-planning",
+      `expected pre-planning phase when .gsd/ absent, got: ${state.phase}`);
+    assert.equal(state.activeMilestone, null, "no active milestone");
   } finally {
-    rmSync(tarballPath, { force: true });
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("deriveState shape is structurally complete", async () => {
+  const { deriveState } = await import("../resources/extensions/gsd/state.ts");
+  const tmp = mkdtempSync(join(tmpdir(), "gsd-state-shape-"));
+  mkdirSync(join(tmp, ".gsd"), { recursive: true });
+
+  try {
+    const state = await deriveState(tmp);
+
+    // All required fields present
+    const requiredFields = [
+      "phase", "activeMilestone", "activeSlice", "activeTask",
+      "recentDecisions", "blockers", "nextAction", "registry",
+    ] as const;
+    for (const field of requiredFields) {
+      assert.ok(field in state, `state.${field} should be present`);
+    }
+
+    // phase is a known string value
+    const validPhases = [
+      "pre-planning", "needs-discussion", "researching", "planning",
+      "executing", "summarizing", "replanning-slice", "validating-milestone",
+      "completing-milestone", "complete", "blocked",
+    ];
+    assert.ok(validPhases.includes(state.phase),
+      `state.phase '${state.phase}' should be a known phase`);
+  } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 8. Launch → extensions load → no errors on stderr
+// 7. Doctor health checks — Gap 3
 // ═══════════════════════════════════════════════════════════════════════════
 
-test("gsd launches and loads extensions without errors", async () => {
-  // Build first
-  execSync("npm run build", { cwd: projectRoot, stdio: "pipe" });
+test("runGSDDoctor completes without throwing on empty .gsd/ directory", async () => {
+  const { runGSDDoctor } = await import("../resources/extensions/gsd/doctor.ts");
+  const tmp = mkdtempSync(join(tmpdir(), "gsd-doctor-smoke-"));
+  mkdirSync(join(tmp, ".gsd"), { recursive: true });
 
-  // Launch gsd with all optional keys set (skip wizard) and capture stderr.
-  // Kill after 5 seconds — we just need to see if extensions load.
-  const output = await new Promise<string>((resolve) => {
-    let stderr = "";
-    const child = spawn("node", ["dist/loader.js"], {
-      cwd: projectRoot,
-      env: {
-        ...process.env,
-        BRAVE_API_KEY: "test",
-        BRAVE_ANSWERS_KEY: "test",
-        CONTEXT7_API_KEY: "test",
-        JINA_API_KEY: "test",
-        TAVILY_API_KEY: "test",
-      },
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+  try {
+    // audit-only mode (fix: false) — should never throw
+    const report = await runGSDDoctor(tmp, { fix: false });
 
-    child.stderr.on("data", (data: Buffer) => {
-      stderr += data.toString();
-    });
+    // Structural assertions on the DoctorReport
+    assert.ok(typeof report === "object" && report !== null, "report is an object");
+    assert.ok("ok" in report, "report has ok field");
+    assert.ok("issues" in report, "report has issues field");
+    assert.ok("fixesApplied" in report, "report has fixesApplied field");
+    assert.ok("basePath" in report, "report has basePath field");
+    assert.ok(Array.isArray(report.issues), "report.issues is an array");
+    assert.ok(Array.isArray(report.fixesApplied), "report.fixesApplied is an array");
+    assert.equal(typeof report.ok, "boolean", "report.ok is a boolean");
+    assert.equal(report.fixesApplied.length, 0, "no fixes applied in audit mode");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
 
-    // Close stdin immediately so it's non-TTY
-    child.stdin.end();
+test("runGSDDoctor issue objects have required fields", async () => {
+  const { runGSDDoctor } = await import("../resources/extensions/gsd/doctor.ts");
+  const tmp = mkdtempSync(join(tmpdir(), "gsd-doctor-fields-"));
+  mkdirSync(join(tmp, ".gsd"), { recursive: true });
 
-    // Give it 5s to start up
-    const timer = setTimeout(() => {
-      child.kill("SIGTERM");
-    }, 5000);
+  // Create a milestone dir with no ROADMAP.md to force a missing_roadmap issue
+  const mDir = join(tmp, ".gsd", "milestones", "M001");
+  mkdirSync(mDir, { recursive: true });
+  writeFileSync(join(mDir, "M001-CONTEXT.md"), "# Context\n");
 
-    child.on("close", () => {
-      clearTimeout(timer);
-      resolve(stderr);
-    });
-  });
+  try {
+    const report = await runGSDDoctor(tmp, { fix: false });
 
-  // No extension load errors
-  assert.ok(
-    !output.includes("[gsd] Extension load error"),
-    `no extension load errors on stderr (got: ${output.slice(0, 500)})`,
-  );
+    // Should find at least one issue (missing roadmap for M001)
+    assert.ok(report.issues.length > 0, "expected at least one issue for milestone missing ROADMAP.md");
 
-  // No crash / unhandled errors
-  assert.ok(
-    !output.includes("Error: Cannot find module"),
-    "no missing module errors",
-  );
-  assert.ok(
-    !output.includes("ERR_MODULE_NOT_FOUND"),
-    "no ERR_MODULE_NOT_FOUND",
-  );
+    // Verify structure of each issue
+    for (const issue of report.issues) {
+      assert.ok(typeof issue.severity === "string", "issue.severity is a string");
+      assert.ok(["info", "warning", "error"].includes(issue.severity),
+        `issue.severity '${issue.severity}' should be info|warning|error`);
+      assert.ok(typeof issue.code === "string", "issue.code is a string");
+      assert.ok(typeof issue.message === "string", "issue.message is a string");
+      assert.ok(issue.message.length > 0, "issue.message is non-empty");
+      assert.ok(typeof issue.fixable === "boolean", "issue.fixable is a boolean");
+    }
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("runGSDDoctor with fix:false never modifies the filesystem", async () => {
+  const { runGSDDoctor } = await import("../resources/extensions/gsd/doctor.ts");
+  const tmp = mkdtempSync(join(tmpdir(), "gsd-doctor-readonly-"));
+  const gsdDir = join(tmp, ".gsd");
+  mkdirSync(gsdDir, { recursive: true });
+
+  // Write a sentinel file — doctor must not delete or modify it
+  const sentinelPath = join(gsdDir, "SENTINEL.md");
+  writeFileSync(sentinelPath, "# sentinel\n");
+
+  try {
+    await runGSDDoctor(tmp, { fix: false });
+
+    assert.ok(existsSync(sentinelPath), "sentinel file still exists after audit-only run");
+    const content = readFileSync(sentinelPath, "utf-8");
+    assert.equal(content, "# sentinel\n", "sentinel file content unchanged");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });

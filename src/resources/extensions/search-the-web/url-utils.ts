@@ -1,6 +1,40 @@
 /**
- * URL normalization and query utilities.
+ * URL normalization, query utilities, and SSRF protection.
  */
+
+const BLOCKED_HOSTNAMES = new Set([
+  "localhost",
+  "metadata.google.internal",
+  "instance-data",
+]);
+
+const PRIVATE_IP_PATTERNS = [
+  /^127\./,
+  /^10\./,
+  /^172\.(1[6-9]|2\d|3[01])\./,
+  /^192\.168\./,
+  /^169\.254\./,
+  /^0\./,
+  /^::1$/,
+  /^fc00:/i,
+  /^fd/i,
+  /^fe80:/i,
+];
+
+export function isBlockedUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return true;
+    const hostname = parsed.hostname.toLowerCase();
+    if (BLOCKED_HOSTNAMES.has(hostname)) return true;
+    for (const pattern of PRIVATE_IP_PATTERNS) {
+      if (pattern.test(hostname)) return true;
+    }
+    return false;
+  } catch {
+    return true;
+  }
+}
 
 /** Normalize a search query into a stable cache key. */
 export function normalizeQuery(query: string): string {

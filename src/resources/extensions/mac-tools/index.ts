@@ -12,8 +12,8 @@
  *  - All Swift debug output goes to stderr; only JSON on stdout
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { StringEnum } from "@mariozechner/pi-ai";
+import type { ExtensionAPI } from "@gsd/pi-coding-agent";
+import { StringEnum } from "@gsd/pi-ai";
 import { Type } from "@sinclair/typebox";
 import { execFileSync } from "node:child_process";
 import { statSync, readdirSync } from "node:fs";
@@ -123,7 +123,7 @@ function execMacAgent(command: string, params?: Record<string, any>): MacAgentRe
 			stdio: ["pipe", "pipe", "pipe"],
 			maxBuffer: 5 * 1024 * 1024, // 5MB — needed for retina screenshot base64 payloads
 		});
-		stdout = typeof result === "string" ? result : result.toString();
+		stdout = typeof result === "string" ? result : String(result);
 	} catch (err: any) {
 		stderr = err.stderr?.toString() || "";
 		const isTimeout = err.killed || err.signal === "SIGTERM";

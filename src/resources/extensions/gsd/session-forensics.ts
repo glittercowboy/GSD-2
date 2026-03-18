@@ -18,9 +18,14 @@
  * - Tool results: { role: "toolResult", toolCallId: "toolu_...", toolName: "bash", isError: bool, content: ... }
  */
 
-import { readFileSync, readdirSync, existsSync } from "node:fs";
-import { execSync } from "node:child_process";
+import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
+import { gsdRoot } from "./paths.js";
+import { truncateWithEllipsis } from "../shared/format-utils.js";
+import { nativeParseJsonlTail } from "./native-parser-bridge.js";
+import { MAX_JSONL_BYTES, parseJSONL } from "./jsonl-utils.js";
+import { nativeWorkingTreeStatus, nativeDiffStat } from "./native-git-bridge.js";
+import { getAutoWorktreePath } from "./auto-worktree.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -61,13 +66,7 @@ export interface RecoveryBriefing {
 }
 
 // ─── JSONL Parsing ────────────────────────────────────────────────────────────
-
-function parseJSONL(raw: string): unknown[] {
-  return raw.trim().split("\n").map(line => {
-    try { return JSON.parse(line); }
-    catch { return null; }
-  }).filter(Boolean) as unknown[];
-}
+// MAX_JSONL_BYTES and parseJSONL are imported from ./jsonl-utils.js
 
 /**
  * Find the entries belonging to the last session in a JSONL file.
@@ -202,11 +201,11 @@ export function extractTrace(entries: unknown[]): ExecutionTrace {
 
 function getGitChanges(basePath: string): string | null {
   try {
-    const status = execSync("git status --porcelain", { cwd: basePath, stdio: "pipe" }).toString().trim();
+    const status = nativeWorkingTreeStatus(basePath);
     if (!status) return null;
 
-    const diffStat = execSync("git diff --stat HEAD 2>/dev/null || true", { cwd: basePath, stdio: "pipe" }).toString().trim();
-    const stagedStat = execSync("git diff --stat --cached HEAD 2>/dev/null || true", { cwd: basePath, stdio: "pipe" }).toString().trim();
+    const diffStat = nativeDiffStat(basePath, "HEAD", "WORKDIR").summary;
+    const stagedStat = nativeDiffStat(basePath, "HEAD", "INDEX").summary;
 
     const parts: string[] = [];
     if (status) parts.push(`Status:\n${status}`);
@@ -239,10 +238,22 @@ export function synthesizeCrashRecovery(
 
     // Primary source: surviving pi session file
     if (sessionFile && existsSync(sessionFile)) {
-      const raw = readFileSync(sessionFile, "utf-8");
-      const allEntries = parseJSONL(raw);
-      const sessionEntries = extractLastSession(allEntries);
-      trace = extractTrace(sessionEntries);
+      // Try native JSONL parser first (handles arbitrary file sizes with constant memory)
+      const nativeResult = nativeParseJsonlTail(sessionFile, MAX_JSONL_BYTES);
+      if (nativeResult) {
+        const sessionEntries = extractLastSession(nativeResult.entries);
+        trace = extractTrace(sessionEntries);
+      } else {
+        const stat = statSync(sessionFile, { throwIfNoEntry: false });
+        const fileSize = stat?.size ?? 0;
+        // Skip files that would blow up memory; fall back to activity log
+        if (fileSize <= MAX_JSONL_BYTES * 2) {
+          const raw = readFileSync(sessionFile, "utf-8");
+          const allEntries = parseJSONL(raw);
+          const sessionEntries = extractLastSession(allEntries);
+          trace = extractTrace(sessionEntries);
+        }
+      }
     }
 
     // Fallback: last GSD activity log
@@ -275,10 +286,43 @@ export function synthesizeCrashRecovery(
  * Replaces the old shallow getLastActivityDiagnostic().
  */
 export function getDeepDiagnostic(basePath: string): string | null {
-  const activityDir = join(basePath, ".gsd", "activity");
-  const trace = readLastActivityLog(activityDir);
+  // Try worktree activity logs first if an auto-worktree is active
+  let trace: ExecutionTrace | null = null;
+  try {
+    const mid = readActiveMilestoneId(basePath);
+    if (mid) {
+      const wtPath = getAutoWorktreePath(basePath, mid);
+      if (wtPath) {
+        const wtActivityDir = join(gsdRoot(wtPath), "activity");
+        trace = readLastActivityLog(wtActivityDir);
+      }
+    }
+  } catch { /* non-fatal — fall through to root */ }
+
+  // Fall back to root activity logs
+  if (!trace || trace.toolCallCount === 0) {
+    const activityDir = join(gsdRoot(basePath), "activity");
+    trace = readLastActivityLog(activityDir);
+  }
+
   if (!trace || trace.toolCallCount === 0) return null;
   return formatTraceSummary(trace);
+}
+
+/**
+ * Read the active milestone ID directly from STATE.md without async deriveState().
+ * Looks for `**Active Milestone:** M001` pattern.
+ */
+function readActiveMilestoneId(basePath: string): string | null {
+  try {
+    const statePath = join(gsdRoot(basePath), "STATE.md");
+    if (!existsSync(statePath)) return null;
+    const content = readFileSync(statePath, "utf-8");
+    const match = /\*\*Active Milestone:\*\*\s*(\S+)/i.exec(content);
+    return match?.[1] ?? null;
+  } catch {
+    return null;
+  }
 }
 
 // ─── Formatting ───────────────────────────────────────────────────────────────
@@ -292,10 +336,10 @@ function formatRecoveryPrompt(
   const sections: string[] = [];
 
   sections.push(
-    "## Crash Recovery Briefing",
+    "## Recovery Briefing",
     "",
-    `You are resuming \`${unitType}\` for \`${unitId}\` after a crash.`,
-    `The previous session completed **${trace.toolCallCount} tool calls** before dying.`,
+    `You are resuming \`${unitType}\` for \`${unitId}\` after an interruption.`,
+    `The previous session completed **${trace.toolCallCount} tool calls** before stopping.`,
     "Use this briefing to pick up exactly where it left off. Do NOT redo completed work.",
   );
 
@@ -324,15 +368,15 @@ function formatRecoveryPrompt(
     sections.push("", "### Commands Already Run");
     for (const c of significantCommands.slice(-10)) {
       const status = c.failed ? " ❌" : " ✓";
-      sections.push(`- \`${truncate(c.command, 120)}\`${status}`);
+      sections.push(`- \`${truncateWithEllipsis(c.command, 121)}\`${status}`);
     }
   }
 
   // Errors
   if (trace.errors.length > 0) {
     sections.push(
-      "", "### Errors Before Crash",
-      ...trace.errors.slice(-3).map(e => `- ${truncate(e, 200)}`),
+      "", "### Errors Before Interruption",
+      ...trace.errors.slice(-3).map(e => `- ${truncateWithEllipsis(e, 201)}`),
     );
   }
 
@@ -347,7 +391,7 @@ function formatRecoveryPrompt(
   // Last reasoning
   if (trace.lastReasoning) {
     sections.push(
-      "", "### Last Agent Reasoning Before Crash",
+      "", "### Last Agent Reasoning Before Interruption",
       `> ${trace.lastReasoning.replace(/\n/g, "\n> ")}`,
     );
   }
@@ -398,7 +442,7 @@ function compressToolCallTrace(calls: ToolCall[]): string {
     if (call.name === "write" || call.name === "edit") {
       lines.push(`${num}. ${call.name} \`${call.input.path || "?"}\`${err}`);
     } else if (call.name === "bash" || call.name === "bg_shell") {
-      const cmd = truncate(String(call.input.command || ""), 80);
+      const cmd = truncateWithEllipsis(String(call.input.command || ""), 81);
       lines.push(`${num}. ${call.name}: \`${cmd}\`${err}`);
     } else {
       lines.push(`${num}. ${call.name}${err}`);
@@ -417,7 +461,7 @@ function formatTraceSummary(trace: ExecutionTrace): string {
     parts.push(`Files written: ${trace.filesWritten.map(f => `\`${f}\``).join(", ")}`);
   }
   if (trace.commandsRun.length > 0) {
-    const cmds = trace.commandsRun.slice(-5).map(c => `\`${truncate(c.command, 80)}\`${c.failed ? " ❌" : ""}`);
+    const cmds = trace.commandsRun.slice(-5).map(c => `\`${truncateWithEllipsis(c.command, 81)}\`${c.failed ? " ❌" : ""}`);
     parts.push(`Commands run: ${cmds.join(", ")}`);
   }
   if (trace.errors.length > 0) {
@@ -439,7 +483,16 @@ function readLastActivityLog(activityDir?: string): ExecutionTrace | null {
     if (files.length === 0) return null;
 
     const lastFile = files[files.length - 1]!;
-    const raw = readFileSync(join(activityDir, lastFile), "utf-8");
+    const filePath = join(activityDir, lastFile);
+
+    // Try native JSONL parser first
+    const nativeResult = nativeParseJsonlTail(filePath, MAX_JSONL_BYTES);
+    if (nativeResult) {
+      return extractTrace(nativeResult.entries);
+    }
+
+    // Fall back to JS parsing
+    const raw = readFileSync(filePath, "utf-8");
     return extractTrace(parseJSONL(raw));
   } catch {
     return null;
@@ -466,7 +519,7 @@ function redactInput(name: string, input: Record<string, unknown>): Record<strin
   const safe: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(input)) {
     if (key === "content" || key === "oldText" || key === "newText") {
-      safe[key] = typeof value === "string" ? truncate(value, 100) : "[redacted]";
+      safe[key] = typeof value === "string" ? truncateWithEllipsis(value, 101) : "[redacted]";
     } else {
       safe[key] = value;
     }
@@ -482,6 +535,3 @@ function findLast<T>(arr: T[], predicate: (item: T) => boolean): T | undefined {
   return undefined;
 }
 
-function truncate(s: string, max: number): string {
-  return s.length > max ? s.slice(0, max) + "…" : s;
-}

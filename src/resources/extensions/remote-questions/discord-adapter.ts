@@ -2,16 +2,16 @@
  * Remote Questions — Discord adapter
  */
 
-import type { ChannelAdapter, RemotePrompt, RemoteDispatchResult, RemoteAnswer, RemotePromptRef } from "./types.js";
-import { formatForDiscord, parseDiscordResponse } from "./format.js";
+import { type ChannelAdapter, type RemotePrompt, type RemoteDispatchResult, type RemoteAnswer, type RemotePromptRef } from "./types.js";
+import { formatForDiscord, parseDiscordResponse, DISCORD_NUMBER_EMOJIS } from "./format.js";
+import { apiRequest } from "./http-client.js";
 
 const DISCORD_API = "https://discord.com/api/v10";
-const PER_REQUEST_TIMEOUT_MS = 15_000;
-const NUMBER_EMOJIS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"];
 
 export class DiscordAdapter implements ChannelAdapter {
   readonly name = "discord" as const;
   private botUserId: string | null = null;
+  private guildId: string | null = null;
   private readonly token: string;
   private readonly channelId: string;
 
@@ -24,6 +24,17 @@ export class DiscordAdapter implements ChannelAdapter {
     const res = await this.discordApi("GET", "/users/@me");
     if (!res.id) throw new Error("Discord auth failed: invalid token");
     this.botUserId = String(res.id);
+
+    // Resolve guild ID for message URL generation.
+    // The channel belongs to a guild — fetch channel info to discover it.
+    try {
+      const channelInfo = await this.discordApi("GET", `/channels/${this.channelId}`);
+      if (channelInfo.guild_id) {
+        this.guildId = String(channelInfo.guild_id);
+      }
+    } catch {
+      // Non-fatal — message URLs will be omitted if guild ID can't be resolved
+    }
   }
 
   async sendPrompt(prompt: RemotePrompt): Promise<RemoteDispatchResult> {
@@ -46,12 +57,18 @@ export class DiscordAdapter implements ChannelAdapter {
       }
     }
 
+    // Build message URL if guild ID is available
+    const messageUrl = this.guildId
+      ? `https://discord.com/channels/${this.guildId}/${this.channelId}/${messageId}`
+      : undefined;
+
     return {
       ref: {
         id: prompt.id,
         channel: "discord",
         messageId,
         channelId: this.channelId,
+        threadUrl: messageUrl,
       },
     };
   }
@@ -67,9 +84,24 @@ export class DiscordAdapter implements ChannelAdapter {
     return this.checkReplies(prompt, ref);
   }
 
+  /**
+   * Acknowledge that an answer was received by adding a ✅ reaction to the
+   * original prompt message. Best-effort — failures are silently ignored.
+   */
+  async acknowledgeAnswer(ref: RemotePromptRef): Promise<void> {
+    try {
+      await this.discordApi(
+        "PUT",
+        `/channels/${ref.channelId}/messages/${ref.messageId}/reactions/${encodeURIComponent("✅")}/@me`,
+      );
+    } catch {
+      // Best-effort — don't let acknowledgement failures affect the flow
+    }
+  }
+
   private async checkReactions(prompt: RemotePrompt, ref: RemotePromptRef): Promise<RemoteAnswer | null> {
     const reactions: Array<{ emoji: string; count: number }> = [];
-    for (const emoji of NUMBER_EMOJIS) {
+    for (const emoji of DISCORD_NUMBER_EMOJIS) {
       try {
         const users = await this.discordApi("GET", `/channels/${ref.channelId}/messages/${ref.messageId}/reactions/${encodeURIComponent(emoji)}`);
         if (Array.isArray(users)) {
@@ -106,23 +138,11 @@ export class DiscordAdapter implements ChannelAdapter {
     return parseDiscordResponse([], String(replies[0].content), prompt.questions);
   }
 
-  private async discordApi(method: string, path: string, body?: unknown): Promise<any> {
-    const headers: Record<string, string> = { Authorization: `Bot ${this.token}` };
-    const init: RequestInit = { method, headers };
-    if (body) {
-      headers["Content-Type"] = "application/json";
-      init.body = JSON.stringify(body);
-    }
-
-    init.signal = AbortSignal.timeout(PER_REQUEST_TIMEOUT_MS);
-    const response = await fetch(`${DISCORD_API}${path}`, init);
-    if (response.status === 204) return {};
-    if (!response.ok) {
-      const text = await response.text().catch(() => "");
-      // Limit error body length to avoid leaking verbose Discord error responses
-      const safeText = text.length > 200 ? text.slice(0, 200) + "…" : text;
-      throw new Error(`Discord API HTTP ${response.status}: ${safeText}`);
-    }
-    return response.json();
+  private async discordApi(method: "GET" | "POST" | "PUT" | "DELETE", path: string, body?: unknown): Promise<any> {
+    return apiRequest(`${DISCORD_API}${path}`, method, body, {
+      authScheme: "Bot",
+      authToken: this.token,
+      errorLabel: "Discord API",
+    });
   }
 }

@@ -9,18 +9,133 @@
  * via prefix matching, so existing projects work without migration.
  */
 
-import { readdirSync, existsSync } from "node:fs";
+import { readdirSync, existsSync, realpathSync, Dirent } from "node:fs";
 import { join } from "node:path";
+import { nativeScanGsdTree, type GsdTreeEntry } from "./native-parser-bridge.js";
+import { DIR_CACHE_MAX } from "./constants.js";
 
-// ─── Name Builders ─────────────────────────────────────────────────────────
+// ─── Directory Listing Cache ──────────────────────────────────────────────────
+
+const dirEntryCache = new Map<string, Dirent[]>();
+const dirListCache = new Map<string, string[]>();
+
+// ─── Native Tree Cache ────────────────────────────────────────────────────────
+// When the native module is available, scan the entire .gsd/ tree in one call
+// and serve directory listings from memory instead of individual readdirSync calls.
+
+let nativeTreeCache: Map<string, GsdTreeEntry[]> | null = null;
+let nativeTreeBase: string | null = null;
+
+function getNativeTree(gsdDir: string): Map<string, GsdTreeEntry[]> | null {
+  if (nativeTreeCache && nativeTreeBase === gsdDir) return nativeTreeCache;
+
+  const entries = nativeScanGsdTree(gsdDir);
+  if (!entries) return null;
+
+  // Build a map of parent directory -> entries
+  const tree = new Map<string, GsdTreeEntry[]>();
+  for (const entry of entries) {
+    const parts = entry.path.split('/');
+    const parentPath = parts.slice(0, -1).join('/');
+    const parentKey = parentPath || '.';
+    if (!tree.has(parentKey)) tree.set(parentKey, []);
+    tree.get(parentKey)!.push(entry);
+  }
+
+  nativeTreeCache = tree;
+  nativeTreeBase = gsdDir;
+  return tree;
+}
 
 /**
- * Build a directory name from an ID.
- * ("M001") → "M001"
+ * Convert a native tree lookup into a relative key for the tree map.
+ * Returns the relative path from the gsdDir, or null if the path isn't under gsdDir.
  */
-export function buildDirName(id: string): string {
-  return id;
+function nativeTreeKey(dirPath: string, gsdDir: string): string | null {
+  if (!dirPath.startsWith(gsdDir)) return null;
+  const rel = dirPath.slice(gsdDir.length).replace(/^\//, '');
+  return rel || '.';
 }
+
+function cachedReaddirWithTypes(dirPath: string): Dirent[] {
+  const cached = dirEntryCache.get(dirPath);
+  if (cached) return cached;
+
+  // Try native tree cache for paths under .gsd/
+  if (nativeTreeBase) {
+    const key = nativeTreeKey(dirPath, nativeTreeBase);
+    if (key && nativeTreeCache) {
+      const treeEntries = nativeTreeCache.get(key);
+      if (treeEntries) {
+        // Synthesize Dirent-like objects from native tree entries
+        const dirents = treeEntries.map(e => {
+          const d = Object.create(Dirent.prototype) as Dirent;
+          Object.assign(d, {
+            name: e.name,
+            parentPath: dirPath,
+            path: dirPath,
+          });
+          // Override the type check methods
+          const isDir = e.isDir;
+          d.isDirectory = () => isDir;
+          d.isFile = () => !isDir;
+          d.isSymbolicLink = () => false;
+          d.isBlockDevice = () => false;
+          d.isCharacterDevice = () => false;
+          d.isFIFO = () => false;
+          d.isSocket = () => false;
+          return d;
+        });
+        if (dirEntryCache.size >= DIR_CACHE_MAX) dirEntryCache.clear();
+        dirEntryCache.set(dirPath, dirents);
+        return dirents;
+      }
+    }
+  }
+
+  const entries = readdirSync(dirPath, { withFileTypes: true });
+  if (dirEntryCache.size >= DIR_CACHE_MAX) dirEntryCache.clear();
+  dirEntryCache.set(dirPath, entries);
+  return entries;
+}
+
+function cachedReaddir(dirPath: string): string[] {
+  const cached = dirListCache.get(dirPath);
+  if (cached) return cached;
+
+  // Try native tree cache for paths under .gsd/
+  if (nativeTreeBase) {
+    const key = nativeTreeKey(dirPath, nativeTreeBase);
+    if (key && nativeTreeCache) {
+      const treeEntries = nativeTreeCache.get(key);
+      if (treeEntries) {
+        const names = treeEntries.map(e => e.name);
+        if (dirListCache.size >= DIR_CACHE_MAX) dirListCache.clear();
+        dirListCache.set(dirPath, names);
+        return names;
+      }
+    }
+  }
+
+  const entries = readdirSync(dirPath);
+  if (dirListCache.size >= DIR_CACHE_MAX) dirListCache.clear();
+  dirListCache.set(dirPath, entries);
+  return entries;
+}
+
+/**
+ * Clear the directory listing cache.
+ * Call after milestone transitions, file creation in planning directories,
+ * or at the start/end of a dispatch cycle.
+ */
+export function clearPathCache(): void {
+  dirEntryCache.clear();
+  dirListCache.clear();
+  nativeTreeCache = null;
+  nativeTreeBase = null;
+}
+
+// ─── Name Builders ─────────────────────────────────────────────────────────
 
 /**
  * Build a milestone-level file name.
@@ -58,7 +173,7 @@ export function buildTaskFileName(taskId: string, suffix: string): string {
 export function resolveDir(parentDir: string, idPrefix: string): string | null {
   if (!existsSync(parentDir)) return null;
   try {
-    const entries = readdirSync(parentDir, { withFileTypes: true });
+    const entries = cachedReaddirWithTypes(parentDir);
     // Exact match first (current convention: bare ID)
     const exact = entries.find(e => e.isDirectory() && e.name === idPrefix);
     if (exact) return exact.name;
@@ -83,7 +198,7 @@ export function resolveFile(dir: string, idPrefix: string, suffix: string): stri
   if (!existsSync(dir)) return null;
   const target = `${idPrefix}-${suffix}.md`.toUpperCase();
   try {
-    const entries = readdirSync(dir);
+    const entries = cachedReaddir(dir);
     // Direct match: ID-SUFFIX.md
     const direct = entries.find(e => e.toUpperCase() === target);
     if (direct) return direct;
@@ -113,7 +228,24 @@ export function resolveTaskFiles(tasksDir: string, suffix: string): string[] {
     const currentPattern = new RegExp(`^T\\d+-${suffix}\\.md$`, "i");
     // Legacy convention: T01-INSTALL-PACKAGES-PLAN.md
     const legacyPattern = new RegExp(`^T\\d+-.*-${suffix}\\.md$`, "i");
-    return readdirSync(tasksDir)
+    return cachedReaddir(tasksDir)
+      .filter(f => currentPattern.test(f) || legacyPattern.test(f))
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Find all task JSON files matching a pattern in a tasks directory.
+ * Returns sorted file names matching T##-SUFFIX.json or legacy T##-*-SUFFIX.json
+ */
+export function resolveTaskJsonFiles(tasksDir: string, suffix: string): string[] {
+  if (!existsSync(tasksDir)) return [];
+  try {
+    const currentPattern = new RegExp(`^T\\d+-${suffix}\\.json$`, "i");
+    const legacyPattern = new RegExp(`^T\\d+-.*-${suffix}\\.json$`, "i");
+    return cachedReaddir(tasksDir)
       .filter(f => currentPattern.test(f) || legacyPattern.test(f))
       .sort();
   } catch {
@@ -129,6 +261,8 @@ export const GSD_ROOT_FILES = {
   QUEUE: "QUEUE.md",
   STATE: "STATE.md",
   REQUIREMENTS: "REQUIREMENTS.md",
+  OVERRIDES: "OVERRIDES.md",
+  KNOWLEDGE: "KNOWLEDGE.md",
 } as const;
 
 export type GSDRootFileKey = keyof typeof GSD_ROOT_FILES;
@@ -139,10 +273,17 @@ const LEGACY_GSD_ROOT_FILES: Record<GSDRootFileKey, string> = {
   QUEUE: "queue.md",
   STATE: "state.md",
   REQUIREMENTS: "requirements.md",
+  OVERRIDES: "overrides.md",
+  KNOWLEDGE: "knowledge.md",
 };
 
 export function gsdRoot(basePath: string): string {
-  return join(basePath, ".gsd");
+  const local = join(basePath, ".gsd");
+  try {
+    const resolved = realpathSync(local);
+    if (resolved !== local) return resolved; // symlink resolved
+  } catch { /* doesn't exist yet — fall through */ }
+  return local; // backwards compat: unmigrated projects
 }
 
 export function milestonesDir(basePath: string): string {

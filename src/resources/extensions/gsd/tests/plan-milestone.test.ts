@@ -12,33 +12,13 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 import { inlinePriorMilestoneSummary } from '../files.ts';
+import { createTestContext } from './test-helpers.ts';
 
 // ─── Worktree-aware prompt loader ──────────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// ─── Assertion helpers ─────────────────────────────────────────────────────
 
-let passed = 0;
-let failed = 0;
-
-function assert(condition: boolean, message: string): void {
-  if (condition) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message}`);
-  }
-}
-
-function assertEq<T>(actual: T, expected: T, message: string): void {
-  if (JSON.stringify(actual) === JSON.stringify(expected)) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message} — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-  }
-}
-
+const { assertEq, assertTrue, report } = createTestContext();
 // ─── Fixture helpers ───────────────────────────────────────────────────────
 
 function createFixtureBase(): string {
@@ -78,12 +58,12 @@ async function main(): Promise<void> {
 
       const result = await inlinePriorMilestoneSummary('M002', base);
 
-      assert(result !== null, '(A) result is not null when prior milestone has SUMMARY');
-      assert(
+      assertTrue(result !== null, '(A) result is not null when prior milestone has SUMMARY');
+      assertTrue(
         typeof result === 'string' && result.includes('Prior Milestone Summary'),
         '(A) result contains "Prior Milestone Summary" label',
       );
-      assert(
+      assertTrue(
         typeof result === 'string' && result.includes('Key decisions: used TypeScript throughout.'),
         '(A) result contains the summary file content',
       );
@@ -144,17 +124,7 @@ async function main(): Promise<void> {
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // Results
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  console.log(`\n${'='.repeat(40)}`);
-  console.log(`Results: ${passed} passed, ${failed} failed`);
-  if (failed > 0) {
-    process.exit(1);
-  } else {
-    console.log('All tests passed ✓');
-  }
+  report();
 }
 
 main().catch((error) => {

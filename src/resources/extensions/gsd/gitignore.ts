@@ -1,26 +1,40 @@
 /**
- * GSD bootstrappers for .gitignore and PREFERENCES.md
+ * GSD bootstrappers for .gitignore and preferences.md
  *
  * Ensures baseline .gitignore exists with universally-correct patterns.
- * Creates an empty PREFERENCES.md template if it doesn't exist.
+ * Creates an empty preferences.md template if it doesn't exist.
  * Both idempotent — non-destructive if already present.
  */
 
 import { join } from "node:path";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { nativeRmCached } from "./native-git-bridge.js";
+import { gsdRoot } from "./paths.js";
 
 /**
- * Patterns that are always correct regardless of project type.
- * No one ever wants these tracked.
+ * GSD runtime patterns for git index cleanup.
+ * With external state (symlink), these are a no-op in most cases,
+ * but retained for backwards compatibility during migration.
  */
-const BASELINE_PATTERNS = [
-  // ── GSD runtime (not source artifacts) ──
+const GSD_RUNTIME_PATTERNS = [
   ".gsd/activity/",
+  ".gsd/forensics/",
   ".gsd/runtime/",
   ".gsd/worktrees/",
+  ".gsd/parallel/",
   ".gsd/auto.lock",
   ".gsd/metrics.json",
+  ".gsd/completed-units.json",
   ".gsd/STATE.md",
+  ".gsd/gsd.db",
+  ".gsd/DISCUSSION-MANIFEST.json",
+  ".gsd/milestones/**/*-CONTINUE.md",
+  ".gsd/milestones/**/continue.md",
+] as const;
+
+const BASELINE_PATTERNS = [
+  // ── GSD state directory (symlink to external storage) ──
+  ".gsd",
 
   // ── OS junk ──
   ".DS_Store",
@@ -68,8 +82,15 @@ const BASELINE_PATTERNS = [
  * Ensure basePath/.gitignore contains all baseline patterns.
  * Creates the file if missing; appends only missing lines if it exists.
  * Returns true if the file was created or modified, false if already complete.
+ *
+ * When `commitDocs` is false, the entire `.gsd/` directory is added to
+ * .gitignore instead of individual runtime patterns, keeping all GSD
+ * artifacts local-only.
  */
-export function ensureGitignore(basePath: string): boolean {
+export function ensureGitignore(basePath: string, options?: { commitDocs?: boolean; manageGitignore?: boolean }): boolean {
+  // If manage_gitignore is explicitly false, do not touch .gitignore at all
+  if (options?.manageGitignore === false) return false;
+
   const gitignorePath = join(basePath, ".gitignore");
 
   let existing = "";
@@ -106,14 +127,40 @@ export function ensureGitignore(basePath: string): boolean {
 }
 
 /**
- * Ensure basePath/.gsd/PREFERENCES.md exists as an empty template.
+ * Remove BASELINE_PATTERNS runtime paths from the git index if they are
+ * currently tracked. This fixes repos that started tracking these files
+ * before the .gitignore rule was added — git continues tracking files
+ * already in the index even after .gitignore is updated.
+ *
+ * Only removes from the index (`--cached`), never from disk. Idempotent.
+ */
+export function untrackRuntimeFiles(basePath: string): void {
+  const runtimePaths = GSD_RUNTIME_PATTERNS;
+
+  for (const pattern of runtimePaths) {
+    // Use -r for directory patterns (trailing slash), strip the slash for the command
+    const target = pattern.endsWith("/") ? pattern.slice(0, -1) : pattern;
+    try {
+      nativeRmCached(basePath, [target]);
+    } catch {
+      // File not tracked or doesn't exist — expected, ignore
+    }
+  }
+}
+
+/**
+ * Ensure basePath/.gsd/preferences.md exists as an empty template.
  * Creates the file with frontmatter only if it doesn't exist.
  * Returns true if created, false if already exists.
+ *
+ * Checks both lowercase (canonical) and uppercase (legacy) to avoid
+ * creating a duplicate when an uppercase file already exists.
  */
 export function ensurePreferences(basePath: string): boolean {
-  const preferencesPath = join(basePath, ".gsd", "PREFERENCES.md");
+  const preferencesPath = join(gsdRoot(basePath), "preferences.md");
+  const legacyPath = join(gsdRoot(basePath), "PREFERENCES.md");
 
-  if (existsSync(preferencesPath)) {
+  if (existsSync(preferencesPath) || existsSync(legacyPath)) {
     return false;
   }
 
@@ -145,6 +192,7 @@ See \`~/.gsd/agent/extensions/gsd/docs/preferences-reference.md\` for full field
 - \`models\`: Model preferences for specific task types
 - \`skill_discovery\`: Automatic skill detection preferences
 - \`auto_supervisor\`: Supervision and gating rules for autonomous modes
+- \`git\`: Git preferences — \`main_branch\` (default branch name for new repos, e.g., "main", "master", "trunk"), \`auto_push\`, \`snapshots\`, \`commit_docs\` (set to \`false\` to keep .gsd/ local-only), etc.
 
 ## Examples
 
@@ -164,4 +212,5 @@ custom_instructions:
   writeFileSync(preferencesPath, template, "utf-8");
   return true;
 }
+
 

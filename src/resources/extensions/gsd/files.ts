@@ -1,130 +1,72 @@
-// GSD Extension — File Parsing and I/O
+// GSD Extension - File Parsing and I/O
 // Parsers for roadmap, plan, summary, and continue files.
 // Used by state derivation and the status widget.
-// Pure functions, zero Pi dependencies — uses only Node built-ins.
+// Pure functions, zero Pi dependencies - uses only Node built-ins.
 
-import { promises as fs, readdirSync } from 'node:fs';
-import { dirname } from 'node:path';
-import { milestonesDir, resolveMilestoneFile, relMilestoneFile } from './paths.js';
+import { promises as fs } from 'node:fs';
+import { resolve } from 'node:path';
+import { atomicWriteAsync } from './atomic-write.js';
+import { resolveMilestoneFile, relMilestoneFile, resolveGsdRootFile } from './paths.js';
+import { milestoneIdSort, findMilestoneIds } from './guided-flow.js';
 
 import type {
-  Roadmap, RoadmapSliceEntry, BoundaryMapEntry, RiskLevel,
+  Roadmap, BoundaryMapEntry,
   SlicePlan, TaskPlanEntry,
   Summary, SummaryFrontmatter, SummaryRequires, FileModified,
   Continue, ContinueFrontmatter, ContinueStatus,
   RequirementCounts,
-} from './types.ts';
+  SecretsManifest, SecretsManifestEntry, SecretsManifestEntryStatus,
+  ManifestStatus,
+} from './types.js';
 
-// ─── Helpers ───────────────────────────────────────────────────────────────
+import { checkExistingEnvKeys } from '../get-secrets-from-user.js';
+import { parseRoadmapSlices } from './roadmap-slices.js';
+import { nativeParseRoadmap, nativeExtractSection, nativeParsePlanFile, nativeParseSummaryFile, NATIVE_UNAVAILABLE } from './native-parser-bridge.js';
+import { debugTime, debugCount } from './debug-logger.js';
+import { CACHE_MAX } from './constants.js';
+import { splitFrontmatter, parseFrontmatterMap } from '../shared/frontmatter.js';
 
-/**
- * Split markdown content into frontmatter (YAML-like) and body.
- * Returns [frontmatterLines, body] where frontmatterLines is null if no frontmatter.
- */
-export function splitFrontmatter(content: string): [string[] | null, string] {
-  const trimmed = content.trimStart();
-  if (!trimmed.startsWith('---')) return [null, content];
+// Re-export for downstream consumers
+export { splitFrontmatter, parseFrontmatterMap };
 
-  const afterFirst = trimmed.indexOf('\n');
-  if (afterFirst === -1) return [null, content];
+// ─── Parse Cache ──────────────────────────────────────────────────────────
 
-  const rest = trimmed.slice(afterFirst + 1);
-  const endIdx = rest.indexOf('\n---');
-  if (endIdx === -1) return [null, content];
-
-  const fmLines = rest.slice(0, endIdx).split('\n');
-  const body = rest.slice(endIdx + 4).replace(/^\n+/, '');
-  return [fmLines, body];
+/** Fast composite key: length + first/mid/last 100 chars. The middle sample
+ *  prevents collisions when only a few characters change in the interior of
+ *  a file (e.g., a checkbox [ ] → [x] that doesn't alter length or endpoints). */
+function cacheKey(content: string): string {
+  const len = content.length;
+  const head = content.slice(0, 100);
+  const midStart = Math.max(0, Math.floor(len / 2) - 50);
+  const mid = len > 200 ? content.slice(midStart, midStart + 100) : '';
+  const tail = len > 100 ? content.slice(-100) : '';
+  return `${len}:${head}:${mid}:${tail}`;
 }
 
-/**
- * Parse YAML-like frontmatter lines into a flat key-value map.
- * Handles simple scalars and arrays (lines starting with "  - ").
- * Handles nested objects like requires (lines with "    key: value").
- */
-export function parseFrontmatterMap(lines: string[]): Record<string, unknown> {
-  const result: Record<string, unknown> = {};
-  let currentKey: string | null = null;
-  let currentArray: unknown[] | null = null;
-  let currentObj: Record<string, string> | null = null;
+const _parseCache = new Map<string, unknown>();
 
-  for (const line of lines) {
-    // Nested object property (4-space indent with key: value)
-    const nestedMatch = line.match(/^    (\w[\w_]*)\s*:\s*(.*)$/);
-    if (nestedMatch && currentArray && currentObj) {
-      currentObj[nestedMatch[1]] = nestedMatch[2].trim();
-      continue;
-    }
-
-    // Array item (2-space indent)
-    const arrayMatch = line.match(/^  - (.*)$/);
-    if (arrayMatch && currentKey) {
-      // If there's a pending nested object, push it
-      if (currentObj && Object.keys(currentObj).length > 0) {
-        currentArray!.push(currentObj);
-      }
-      currentObj = null;
-
-      const val = arrayMatch[1].trim();
-      if (!currentArray) currentArray = [];
-
-      // Check if this array item starts a nested object (e.g. "- slice: S00")
-      const nestedStart = val.match(/^(\w[\w_]*)\s*:\s*(.*)$/);
-      if (nestedStart) {
-        currentObj = { [nestedStart[1]]: nestedStart[2].trim() };
-      } else {
-        currentArray.push(val);
-      }
-      continue;
-    }
-
-    // Flush previous key
-    if (currentKey) {
-      if (currentObj && Object.keys(currentObj).length > 0 && currentArray) {
-        currentArray.push(currentObj);
-        currentObj = null;
-      }
-      if (currentArray) {
-        result[currentKey] = currentArray;
-      }
-      currentArray = null;
-    }
-
-    // Top-level key: value
-    const kvMatch = line.match(/^(\w[\w_]*)\s*:\s*(.*)$/);
-    if (kvMatch) {
-      currentKey = kvMatch[1];
-      const val = kvMatch[2].trim();
-
-      if (val === '' || val === '[]') {
-        currentArray = [];
-      } else if (val.startsWith('[') && val.endsWith(']')) {
-        const inner = val.slice(1, -1).trim();
-        result[currentKey] = inner ? inner.split(',').map(s => s.trim()) : [];
-        currentKey = null;
-      } else {
-        result[currentKey] = val;
-        currentKey = null;
-      }
-    }
-  }
-
-  // Flush final key
-  if (currentKey) {
-    if (currentObj && Object.keys(currentObj).length > 0 && currentArray) {
-      currentArray.push(currentObj);
-      currentObj = null;
-    }
-    if (currentArray) {
-      result[currentKey] = currentArray;
-    }
-  }
-
+function cachedParse<T>(content: string, tag: string, parseFn: (c: string) => T): T {
+  const key = tag + '|' + cacheKey(content);
+  if (_parseCache.has(key)) return _parseCache.get(key) as T;
+  if (_parseCache.size >= CACHE_MAX) _parseCache.clear();
+  const result = parseFn(content);
+  _parseCache.set(key, result);
   return result;
 }
 
+/** Clear the module-scoped parse cache. Call when files change on disk. */
+export function clearParseCache(): void {
+  _parseCache.clear();
+}
+
+// ─── Helpers ───────────────────────────────────────────────────────────────
+
 /** Extract the text after a heading at a given level, up to the next heading of same or higher level. */
 export function extractSection(body: string, heading: string, level: number = 2): string | null {
+  // Try native parser first for better performance on large files
+  const nativeResult = nativeExtractSection(body, heading, level);
+  if (nativeResult !== NATIVE_UNAVAILABLE) return nativeResult as string | null;
+
   const prefix = '#'.repeat(level) + ' ';
   const regex = new RegExp(`^${prefix}${escapeRegex(heading)}\\s*$`, 'm');
   const match = regex.exec(body);
@@ -177,6 +119,19 @@ export function extractBoldField(text: string, key: string): string | null {
 // ─── Roadmap Parser ────────────────────────────────────────────────────────
 
 export function parseRoadmap(content: string): Roadmap {
+  return cachedParse(content, 'roadmap', _parseRoadmapImpl);
+}
+
+function _parseRoadmapImpl(content: string): Roadmap {
+  const stopTimer = debugTime("parse-roadmap");
+  // Try native parser first for better performance
+  const nativeResult = nativeParseRoadmap(content);
+  if (nativeResult) {
+    stopTimer({ native: true, slices: nativeResult.slices.length, boundaryEntries: nativeResult.boundaryMap.length });
+    debugCount("parseRoadmapCalls");
+    return nativeResult;
+  }
+
   const lines = content.split('\n');
 
   const h1 = lines.find(l => l.startsWith('# '));
@@ -196,39 +151,7 @@ export function parseRoadmap(content: string): Roadmap {
   const successCriteria = scSection ? parseBullets(scSection) : [];
 
   // Slices
-  const slicesSection = extractSection(content, 'Slices');
-  const slices: RoadmapSliceEntry[] = [];
-
-  if (slicesSection) {
-    const checkboxItems = slicesSection.split('\n');
-    let currentSlice: RoadmapSliceEntry | null = null;
-
-    for (const line of checkboxItems) {
-      const cbMatch = line.match(/^-\s+\[([ xX])\]\s+\*\*(\w+):\s+(.+?)\*\*\s*(.*)/);
-      if (cbMatch) {
-        if (currentSlice) slices.push(currentSlice);
-
-        const done = cbMatch[1].toLowerCase() === 'x';
-        const id = cbMatch[2];
-        const sliceTitle = cbMatch[3];
-        const rest = cbMatch[4];
-
-        const riskMatch = rest.match(/`risk:(\w+)`/);
-        const risk = (riskMatch ? riskMatch[1] : 'low') as RiskLevel;
-
-        const depsMatch = rest.match(/`depends:\[([^\]]*)\]`/);
-        const depends = depsMatch && depsMatch[1].trim()
-          ? depsMatch[1].split(',').map(s => s.trim())
-          : [];
-
-        currentSlice = { id, title: sliceTitle, risk, depends, done, demo: '' };
-      } else if (currentSlice && line.trim().startsWith('>')) {
-        const demoText = line.trim().replace(/^>\s*/, '').replace(/^After this:\s*/i, '');
-        currentSlice.demo = demoText;
-      }
-    }
-    if (currentSlice) slices.push(currentSlice);
-  }
+  const slices = parseRoadmapSlices(content);
 
   // Boundary map
   const boundaryMap: BoundaryMapEntry[] = [];
@@ -246,26 +169,142 @@ export function parseRoadmap(content: string): Roadmap {
       let produces = '';
       let consumes = '';
 
-      const prodMatch = sectionContent.match(/^Produces:\s*\n([\s\S]*?)(?=^Consumes|$)/m);
-      if (prodMatch) produces = prodMatch[1].trim();
+      // Use indexOf-based parsing instead of [\s\S]*? regex to avoid
+      // catastrophic backtracking on content with code fences (#468).
+      const prodIdx = sectionContent.search(/^Produces:\s*$/m);
+      if (prodIdx !== -1) {
+        const afterProd = sectionContent.indexOf('\n', prodIdx);
+        if (afterProd !== -1) {
+          const consIdx = sectionContent.search(/^Consumes/m);
+          const endIdx = consIdx !== -1 && consIdx > afterProd ? consIdx : sectionContent.length;
+          produces = sectionContent.slice(afterProd + 1, endIdx).trim();
+        }
+      }
 
-      const consMatch = sectionContent.match(/^Consumes[^:]*:\s*\n?([\s\S]*?)$/m);
-      if (consMatch) consumes = consMatch[1].trim();
+      const consLineMatch = sectionContent.match(/^Consumes[^:]*:\s*(.+)$/m);
+      if (consLineMatch) {
+        consumes = consLineMatch[1].trim();
+      }
       if (!consumes) {
-        const singleCons = sectionContent.match(/^Consumes[^:]*:\s*(.+)$/m);
-        if (singleCons) consumes = singleCons[1].trim();
+        const consIdx = sectionContent.search(/^Consumes[^:]*:\s*$/m);
+        if (consIdx !== -1) {
+          const afterCons = sectionContent.indexOf('\n', consIdx);
+          if (afterCons !== -1) {
+            consumes = sectionContent.slice(afterCons + 1).trim();
+          }
+        }
       }
 
       boundaryMap.push({ fromSlice, toSlice, produces, consumes });
     }
   }
 
-  return { title, vision, successCriteria, slices, boundaryMap };
+  const result = { title, vision, successCriteria, slices, boundaryMap };
+  stopTimer({ native: false, slices: slices.length, boundaryEntries: boundaryMap.length });
+  debugCount("parseRoadmapCalls");
+  return result;
+}
+
+// ─── Secrets Manifest Parser ───────────────────────────────────────────────
+
+const VALID_STATUSES = new Set<SecretsManifestEntryStatus>(['pending', 'collected', 'skipped']);
+
+export function parseSecretsManifest(content: string): SecretsManifest {
+  const milestone = extractBoldField(content, 'Milestone') || '';
+  const generatedAt = extractBoldField(content, 'Generated') || '';
+
+  const h3Sections = extractAllSections(content, 3);
+  const entries: SecretsManifestEntry[] = [];
+
+  for (const [heading, sectionContent] of h3Sections) {
+    const key = heading.trim();
+    if (!key) continue;
+
+    const service = extractBoldField(sectionContent, 'Service') || '';
+    const dashboardUrl = extractBoldField(sectionContent, 'Dashboard') || '';
+    const formatHint = extractBoldField(sectionContent, 'Format hint') || '';
+    const rawStatus = (extractBoldField(sectionContent, 'Status') || 'pending').toLowerCase().trim() as SecretsManifestEntryStatus;
+    const status: SecretsManifestEntryStatus = VALID_STATUSES.has(rawStatus) ? rawStatus : 'pending';
+    const destination = extractBoldField(sectionContent, 'Destination') || 'dotenv';
+
+    // Extract numbered guidance list (lines matching "1. ...", "2. ...", etc.)
+    const guidance: string[] = [];
+    for (const line of sectionContent.split('\n')) {
+      const numMatch = line.match(/^\s*\d+\.\s+(.+)/);
+      if (numMatch) {
+        guidance.push(numMatch[1].trim());
+      }
+    }
+
+    entries.push({ key, service, dashboardUrl, guidance, formatHint, status, destination });
+  }
+
+  return { milestone, generatedAt, entries };
+}
+
+// ─── Secrets Manifest Formatter ───────────────────────────────────────────
+
+export function formatSecretsManifest(manifest: SecretsManifest): string {
+  const lines: string[] = [];
+
+  lines.push('# Secrets Manifest');
+  lines.push('');
+  lines.push(`**Milestone:** ${manifest.milestone}`);
+  lines.push(`**Generated:** ${manifest.generatedAt}`);
+
+  for (const entry of manifest.entries) {
+    lines.push('');
+    lines.push(`### ${entry.key}`);
+    lines.push('');
+    lines.push(`**Service:** ${entry.service}`);
+    if (entry.dashboardUrl) {
+      lines.push(`**Dashboard:** ${entry.dashboardUrl}`);
+    }
+    if (entry.formatHint) {
+      lines.push(`**Format hint:** ${entry.formatHint}`);
+    }
+    lines.push(`**Status:** ${entry.status}`);
+    lines.push(`**Destination:** ${entry.destination}`);
+    lines.push('');
+    for (let i = 0; i < entry.guidance.length; i++) {
+      lines.push(`${i + 1}. ${entry.guidance[i]}`);
+    }
+  }
+
+  return lines.join('\n') + '\n';
 }
 
 // ─── Slice Plan Parser ─────────────────────────────────────────────────────
 
 export function parsePlan(content: string): SlicePlan {
+  return cachedParse(content, 'plan', _parsePlanImpl);
+}
+
+function _parsePlanImpl(content: string): SlicePlan {
+  const stopTimer = debugTime("parse-plan");
+  // Try native parser first for better performance
+  const nativeResult = nativeParsePlanFile(content);
+  if (nativeResult) {
+    stopTimer({ native: true });
+    return {
+      id: nativeResult.id,
+      title: nativeResult.title,
+      goal: nativeResult.goal,
+      demo: nativeResult.demo,
+      mustHaves: nativeResult.mustHaves,
+      tasks: nativeResult.tasks.map(t => ({
+        id: t.id,
+        title: t.title,
+        description: t.description,
+        done: t.done,
+        estimate: t.estimate,
+        ...(t.files.length > 0 ? { files: t.files } : {}),
+        ...(t.verify ? { verify: t.verify } : {}),
+      })),
+      filesLikelyTouched: nativeResult.filesLikelyTouched,
+    };
+  }
+
   const lines = content.split('\n');
 
   const h1 = lines.find(l => l.startsWith('# '));
@@ -295,7 +334,7 @@ export function parsePlan(content: string): SlicePlan {
     let currentTask: TaskPlanEntry | null = null;
 
     for (const line of taskLines) {
-      const cbMatch = line.match(/^-\s+\[([ xX])\]\s+\*\*(\w+):\s+(.+?)\*\*\s*(.*)/);
+      const cbMatch = line.match(/^-\s+\[([ xX])\]\s+\*\*([\w.]+):\s+(.+?)\*\*\s*(.*)/);
       if (cbMatch) {
         if (currentTask) tasks.push(currentTask);
 
@@ -338,12 +377,49 @@ export function parsePlan(content: string): SlicePlan {
   const filesSection = extractSection(content, 'Files Likely Touched');
   const filesLikelyTouched = filesSection ? parseBullets(filesSection) : [];
 
-  return { id, title, goal, demo, mustHaves, tasks, filesLikelyTouched };
+  const result = { id, title, goal, demo, mustHaves, tasks, filesLikelyTouched };
+  stopTimer({ tasks: tasks.length });
+  debugCount("parsePlanCalls");
+  return result;
 }
 
 // ─── Summary Parser ────────────────────────────────────────────────────────
 
 export function parseSummary(content: string): Summary {
+  return cachedParse(content, 'summary', _parseSummaryImpl);
+}
+
+function _parseSummaryImpl(content: string): Summary {
+  // Try native parser first for better performance
+  const nativeResult = nativeParseSummaryFile(content);
+  if (nativeResult) {
+    const nfm = nativeResult.frontmatter;
+    return {
+      frontmatter: {
+        id: nfm.id,
+        parent: nfm.parent,
+        milestone: nfm.milestone,
+        provides: nfm.provides,
+        requires: nfm.requires,
+        affects: nfm.affects,
+        key_files: nfm.keyFiles,
+        key_decisions: nfm.keyDecisions,
+        patterns_established: nfm.patternsEstablished,
+        drill_down_paths: nfm.drillDownPaths,
+        observability_surfaces: nfm.observabilitySurfaces,
+        duration: nfm.duration,
+        verification_result: nfm.verificationResult,
+        completed_at: nfm.completedAt,
+        blocker_discovered: nfm.blockerDiscovered,
+      },
+      title: nativeResult.title,
+      oneLiner: nativeResult.oneLiner,
+      whatHappened: nativeResult.whatHappened,
+      deviations: nativeResult.deviations,
+      filesModified: nativeResult.filesModified,
+    };
+  }
+
   const [fmLines, body] = splitFrontmatter(content);
 
   const fm = fmLines ? parseFrontmatterMap(fmLines) : {};
@@ -408,6 +484,10 @@ export function parseSummary(content: string): Summary {
 // ─── Continue Parser ───────────────────────────────────────────────────────
 
 export function parseContinue(content: string): Continue {
+  return cachedParse(content, 'continue', _parseContinueImpl);
+}
+
+function _parseContinueImpl(content: string): Continue {
   const [fmLines, body] = splitFrontmatter(content);
 
   const fm = fmLines ? parseFrontmatterMap(fmLines) : {};
@@ -520,12 +600,7 @@ export async function loadFile(path: string): Promise<string | null> {
  * Creates parent directories if needed.
  */
 export async function saveFile(path: string, content: string): Promise<void> {
-  const dir = dirname(path);
-  await fs.mkdir(dir, { recursive: true });
-
-  const tmpPath = path + '.tmp';
-  await fs.writeFile(tmpPath, content, 'utf-8');
-  await fs.rename(tmpPath, path);
+  await atomicWriteAsync(path, content);
 }
 
 export function parseRequirementCounts(content: string | null): RequirementCounts {
@@ -584,7 +659,7 @@ export function parseTaskPlanMustHaves(content: string): Array<{ text: string; c
         checked: cbMatch[1].toLowerCase() === 'x',
       };
     }
-    // No checkbox — treat as unchecked with full line as text
+    // No checkbox - treat as unchecked with full line as text
     return { text: line.trim(), checked: false };
   });
 }
@@ -659,7 +734,7 @@ export type UatType = 'artifact-driven' | 'live-runtime' | 'human-experience' | 
 /**
  * Extract the UAT type from a UAT file's raw content.
  *
- * UAT files have no YAML frontmatter — pass raw file content directly.
+ * UAT files have no YAML frontmatter - pass raw file content directly.
  * Classification is leading-keyword-only: e.g. `mixed (artifact-driven + live-runtime)` → `'mixed'`.
  *
  * Returns `undefined` when:
@@ -697,30 +772,18 @@ export function parseContextDependsOn(content: string | null): string[] {
   const fm = parseFrontmatterMap(fmLines);
   const raw = fm['depends_on'];
   if (!Array.isArray(raw) || raw.length === 0) return [];
-  return (raw as string[]).map(s => String(s).toUpperCase().trim()).filter(Boolean);
+  return (raw as string[]).map(s => String(s).trim()).filter(Boolean);
 }
 
 /**
  * Inline the prior milestone's SUMMARY.md as context for the current milestone's planning prompt.
  * Returns null when: (1) `mid` is the first milestone, (2) prior milestone has no SUMMARY file.
  *
- * Scans the milestones directory using the same readdirSync + sort + M\d+ match pattern
- * as findMilestoneIds in state.ts.
+ * Uses the shared findMilestoneIds to scan the milestones directory.
  */
 export async function inlinePriorMilestoneSummary(mid: string, base: string): Promise<string | null> {
-  const dir = milestonesDir(base);
-  let sorted: string[];
-  try {
-    sorted = readdirSync(dir, { withFileTypes: true })
-      .filter(d => d.isDirectory())
-      .map(d => {
-        const match = d.name.match(/^(M\d+)/);
-        return match ? match[1] : d.name;
-      })
-      .sort();
-  } catch {
-    return null;
-  }
+  const sorted = findMilestoneIds(base);
+  if (sorted.length === 0) return null;
   const idx = sorted.indexOf(mid);
   if (idx <= 0) return null;
   const prevMid = sorted[idx - 1];
@@ -729,4 +792,267 @@ export async function inlinePriorMilestoneSummary(mid: string, base: string): Pr
   const content = absPath ? await loadFile(absPath) : null;
   if (!content) return null;
   return `### Prior Milestone Summary\nSource: \`${relPath}\`\n\n${content.trim()}`;
+}
+
+// ─── Manifest Status ──────────────────────────────────────────────────────
+
+/**
+ * Read a secrets manifest from disk and cross-reference each entry's status
+ * with the current environment (.env + process.env).
+ *
+ * Returns `null` when no manifest file exists (path resolution failure or
+ * file not on disk) - callers can distinguish "no manifest" from "empty manifest".
+ */
+export async function getManifestStatus(
+  base: string, milestoneId: string,
+): Promise<ManifestStatus | null> {
+  const resolvedPath = resolveMilestoneFile(base, milestoneId, 'SECRETS');
+  if (!resolvedPath) return null;
+
+  const content = await loadFile(resolvedPath);
+  if (!content) return null;
+
+  const manifest = parseSecretsManifest(content);
+  const keys = manifest.entries.map(e => e.key);
+  const existingKeys = await checkExistingEnvKeys(keys, resolve(base, '.env'));
+  const existingSet = new Set(existingKeys);
+
+  const result: ManifestStatus = {
+    pending: [],
+    collected: [],
+    skipped: [],
+    existing: [],
+  };
+
+  for (const entry of manifest.entries) {
+    if (existingSet.has(entry.key)) {
+      result.existing.push(entry.key);
+    } else {
+      result[entry.status].push(entry.key);
+    }
+  }
+
+  return result;
+}
+
+// ─── Overrides ──────────────────────────────────────────────────────────────
+
+export interface Override {
+  timestamp: string;
+  change: string;
+  scope: "active" | "resolved";
+  appliedAt: string;
+}
+
+export async function appendOverride(basePath: string, change: string, appliedAt: string): Promise<void> {
+  const overridesPath = resolveGsdRootFile(basePath, "OVERRIDES");
+  const timestamp = new Date().toISOString();
+  const entry = [
+    `## Override: ${timestamp}`,
+    "",
+    `**Change:** ${change}`,
+    `**Scope:** active`,
+    `**Applied-at:** ${appliedAt}`,
+    "",
+    "---",
+    "",
+  ].join("\n");
+
+  const existing = await loadFile(overridesPath);
+  if (existing) {
+    await saveFile(overridesPath, existing.trimEnd() + "\n\n" + entry);
+  } else {
+    const header = [
+      "# GSD Overrides",
+      "",
+      "User-issued overrides that supersede plan document content.",
+      "",
+      "---",
+      "",
+    ].join("\n");
+    await saveFile(overridesPath, header + entry);
+  }
+}
+
+export async function appendKnowledge(
+  basePath: string,
+  type: "rule" | "pattern" | "lesson",
+  entry: string,
+  scope: string,
+): Promise<void> {
+  const knowledgePath = resolveGsdRootFile(basePath, "KNOWLEDGE");
+  const existing = await loadFile(knowledgePath);
+
+  if (existing) {
+    // Find the next ID for this type
+    const prefix = type === "rule" ? "K" : type === "pattern" ? "P" : "L";
+    const idPattern = new RegExp(`^\\| ${prefix}(\\d+)`, "gm");
+    let maxId = 0;
+    let match;
+    while ((match = idPattern.exec(existing)) !== null) {
+      const num = parseInt(match[1], 10);
+      if (num > maxId) maxId = num;
+    }
+    const nextId = `${prefix}${String(maxId + 1).padStart(3, "0")}`;
+
+    // Build the table row
+    let row: string;
+    if (type === "rule") {
+      row = `| ${nextId} | ${scope} | ${entry} | — | manual |`;
+    } else if (type === "pattern") {
+      row = `| ${nextId} | ${entry} | — | ${scope} |`;
+    } else {
+      row = `| ${nextId} | ${entry} | — | — | ${scope} |`;
+    }
+
+    // Find the right section and append after the table header
+    const sectionHeading = type === "rule" ? "## Rules" : type === "pattern" ? "## Patterns" : "## Lessons Learned";
+    const sectionIdx = existing.indexOf(sectionHeading);
+    if (sectionIdx !== -1) {
+      // Find the end of the table header row (the |---|...| line)
+      const afterHeading = existing.indexOf("\n", sectionIdx);
+      // Find the next section or end
+      const nextSection = existing.indexOf("\n## ", afterHeading + 1);
+      const insertPoint = nextSection !== -1 ? nextSection : existing.length;
+
+      // Insert row before the next section (or at end)
+      const before = existing.slice(0, insertPoint).trimEnd();
+      const after = existing.slice(insertPoint);
+      await saveFile(knowledgePath, before + "\n" + row + "\n" + after);
+    } else {
+      // Section not found — append at end
+      await saveFile(knowledgePath, existing.trimEnd() + "\n\n" + row + "\n");
+    }
+  } else {
+    // Create file from scratch with template header
+    const header = [
+      "# Project Knowledge",
+      "",
+      "Append-only register of project-specific rules, patterns, and lessons learned.",
+      "Agents read this before every unit. Add entries when you discover something worth remembering.",
+      "",
+    ].join("\n");
+
+    let content: string;
+    if (type === "rule") {
+      content = header + [
+        "## Rules",
+        "",
+        "| # | Scope | Rule | Why | Added |",
+        "|---|-------|------|-----|-------|",
+        `| K001 | ${scope} | ${entry} | — | manual |`,
+        "",
+        "## Patterns",
+        "",
+        "| # | Pattern | Where | Notes |",
+        "|---|---------|-------|-------|",
+        "",
+        "## Lessons Learned",
+        "",
+        "| # | What Happened | Root Cause | Fix | Scope |",
+        "|---|--------------|------------|-----|-------|",
+        "",
+      ].join("\n");
+    } else if (type === "pattern") {
+      content = header + [
+        "## Rules",
+        "",
+        "| # | Scope | Rule | Why | Added |",
+        "|---|-------|------|-----|-------|",
+        "",
+        "## Patterns",
+        "",
+        "| # | Pattern | Where | Notes |",
+        "|---|---------|-------|-------|",
+        `| P001 | ${entry} | — | ${scope} |`,
+        "",
+        "## Lessons Learned",
+        "",
+        "| # | What Happened | Root Cause | Fix | Scope |",
+        "|---|--------------|------------|-----|-------|",
+        "",
+      ].join("\n");
+    } else {
+      content = header + [
+        "## Rules",
+        "",
+        "| # | Scope | Rule | Why | Added |",
+        "|---|-------|------|-----|-------|",
+        "",
+        "## Patterns",
+        "",
+        "| # | Pattern | Where | Notes |",
+        "|---|---------|-------|-------|",
+        "",
+        "## Lessons Learned",
+        "",
+        "| # | What Happened | Root Cause | Fix | Scope |",
+        "|---|--------------|------------|-----|-------|",
+        `| L001 | ${entry} | — | — | ${scope} |`,
+        "",
+      ].join("\n");
+    }
+    await saveFile(knowledgePath, content);
+  }
+}
+
+export async function loadActiveOverrides(basePath: string): Promise<Override[]> {
+  const overridesPath = resolveGsdRootFile(basePath, "OVERRIDES");
+  const content = await loadFile(overridesPath);
+  if (!content) return [];
+  return parseOverrides(content).filter(o => o.scope === "active");
+}
+
+export function parseOverrides(content: string): Override[] {
+  const overrides: Override[] = [];
+  const blocks = content.split(/^## Override: /m).slice(1);
+
+  for (const block of blocks) {
+    const lines = block.split("\n");
+    const timestamp = lines[0]?.trim() ?? "";
+    let change = "";
+    let scope: "active" | "resolved" = "active";
+    let appliedAt = "";
+
+    for (const line of lines) {
+      const changeMatch = line.match(/^\*\*Change:\*\*\s*(.+)$/);
+      if (changeMatch) change = changeMatch[1].trim();
+      const scopeMatch = line.match(/^\*\*Scope:\*\*\s*(.+)$/);
+      if (scopeMatch) scope = scopeMatch[1].trim() as "active" | "resolved";
+      const appliedMatch = line.match(/^\*\*Applied-at:\*\*\s*(.+)$/);
+      if (appliedMatch) appliedAt = appliedMatch[1].trim();
+    }
+
+    if (change) {
+      overrides.push({ timestamp, change, scope, appliedAt });
+    }
+  }
+
+  return overrides;
+}
+
+export function formatOverridesSection(overrides: Override[]): string {
+  if (overrides.length === 0) return "";
+
+  const entries = overrides.map((o, i) => [
+    `${i + 1}. **${o.change}**`,
+    `   _Issued: ${o.timestamp} during ${o.appliedAt}_`,
+  ].join("\n")).join("\n");
+
+  return [
+    "## Active Overrides (supersede plan content)",
+    "",
+    "The following overrides were issued by the user and supersede any conflicting content in plan documents below. Follow these overrides even if they contradict the inlined task plan.",
+    "",
+    entries,
+    "",
+  ].join("\n");
+}
+
+export async function resolveAllOverrides(basePath: string): Promise<void> {
+  const overridesPath = resolveGsdRootFile(basePath, "OVERRIDES");
+  const content = await loadFile(overridesPath);
+  if (!content) return;
+  const updated = content.replace(/\*\*Scope:\*\* active/g, "**Scope:** resolved");
+  await saveFile(overridesPath, updated);
 }

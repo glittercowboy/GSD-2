@@ -2,9 +2,25 @@ You are executing GSD auto-mode.
 
 ## UNIT: Reassess Roadmap — Milestone {{milestoneId}} after {{completedSliceId}}
 
+## Working Directory
+
+Your working directory is `{{workingDirectory}}`. All file reads, writes, and shell commands MUST operate relative to this directory. Do NOT `cd` to any other directory.
+
+## Your Role in the Pipeline
+
+A slice just completed. The **complete-slice agent** verified the work and wrote a slice summary. You decide whether the remaining roadmap still makes sense given what was actually built. If you change the roadmap, the next slice's **researcher** and **planner** agents work from your updated version. If you confirm it's fine, the pipeline moves to the next slice immediately.
+
+Your assessment should be fast and decisive. Most of the time the plan is still good.
+
 All relevant context has been preloaded below — the current roadmap, completed slice summary, project state, and decisions are inlined. Start working immediately without re-reading these files.
 
 {{inlinedContext}}
+
+## Deferred Captures
+
+The following user thoughts were captured during execution and deferred to future slices during triage. Consider whether any should influence the remaining roadmap:
+
+{{deferredCaptures}}
 
 If a `GSD Skill Preferences` block is present in system context, use it to decide which skills to load and follow during reassessment, without relaxing required verification or artifact rules.
 
@@ -34,15 +50,15 @@ If all criteria have at least one remaining owning slice, the coverage check pas
 
 **If the roadmap is still good:**
 
-Write `{{assessmentAbsPath}}` with a brief confirmation that roadmap coverage still holds after {{completedSliceId}}. If requirements exist, explicitly note whether requirement coverage remains sound.
+Write `{{assessmentPath}}` with a brief confirmation that roadmap coverage still holds after {{completedSliceId}}. If requirements exist, explicitly note whether requirement coverage remains sound.
 
 **If changes are needed:**
 
 1. Rewrite the remaining (unchecked) slices in `{{roadmapPath}}`. Keep completed slices exactly as they are (`[x]`). Update the boundary map for changed slices. Update the proof strategy if risks changed. Update requirement coverage if ownership or scope changed.
-2. Write `{{assessmentAbsPath}}` explaining what changed and why — keep it brief and concrete.
+2. Write `{{assessmentPath}}` explaining what changed and why — keep it brief and concrete.
 3. If `.gsd/REQUIREMENTS.md` exists and requirement ownership or status changed, update it.
-4. Commit: `docs({{milestoneId}}): reassess roadmap after {{completedSliceId}}`
+4. {{commitInstruction}}
 
-**You MUST write the file `{{assessmentAbsPath}}` before finishing.**
+**You MUST write the file `{{assessmentPath}}` before finishing.**
 
 When done, say: "Roadmap reassessed."

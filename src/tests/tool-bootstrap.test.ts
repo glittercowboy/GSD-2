@@ -6,6 +6,9 @@ import { tmpdir } from "node:os";
 
 import { ensureManagedTools, resolveToolFromPath } from "../tool-bootstrap.js";
 
+const FD_TARGET = process.platform === "win32" ? "fd.exe" : "fd";
+const RG_TARGET = process.platform === "win32" ? "rg.exe" : "rg";
+
 function makeExecutable(dir: string, name: string, content = "#!/bin/sh\nexit 0\n"): string {
   const file = join(dir, name);
   writeFileSync(file, content);
@@ -39,10 +42,10 @@ test("ensureManagedTools provisions fd and rg into managed bin dir", () => {
     const provisioned = ensureManagedTools(targetBin, sourceBin);
 
     assert.equal(provisioned.length, 2);
-    assert.ok(existsSync(join(targetBin, "fd")));
-    assert.ok(existsSync(join(targetBin, "rg")));
-    assert.ok(lstatSync(join(targetBin, "fd")).isSymbolicLink() || lstatSync(join(targetBin, "fd")).isFile());
-    assert.ok(lstatSync(join(targetBin, "rg")).isSymbolicLink() || lstatSync(join(targetBin, "rg")).isFile());
+    assert.ok(existsSync(join(targetBin, FD_TARGET)));
+    assert.ok(existsSync(join(targetBin, RG_TARGET)));
+    assert.ok(lstatSync(join(targetBin, FD_TARGET)).isSymbolicLink() || lstatSync(join(targetBin, FD_TARGET)).isFile());
+    assert.ok(lstatSync(join(targetBin, RG_TARGET)).isSymbolicLink() || lstatSync(join(targetBin, RG_TARGET)).isFile());
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -52,7 +55,7 @@ test("ensureManagedTools copies executable when symlink target already exists as
   const tmp = mkdtempSync(join(tmpdir(), "gsd-tool-bootstrap-copy-"));
   const sourceBin = join(tmp, "source-bin");
   const targetBin = join(tmp, "target-bin");
-  const targetFd = join(targetBin, "fd");
+  const targetFd = join(targetBin, FD_TARGET);
 
   mkdirSync(sourceBin, { recursive: true });
   mkdirSync(targetBin, { recursive: true });

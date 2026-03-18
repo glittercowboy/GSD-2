@@ -3,28 +3,9 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { deriveState } from '../state.ts';
+import { createTestContext } from './test-helpers.ts';
 
-let passed = 0;
-let failed = 0;
-
-function assert(condition: boolean, message: string): void {
-  if (condition) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message}`);
-  }
-}
-
-function assertEq<T>(actual: T, expected: T, message: string): void {
-  if (JSON.stringify(actual) === JSON.stringify(expected)) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message} — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-  }
-}
-
+const { assertEq, assertTrue, report } = createTestContext();
 // ─── Fixture Helpers ───────────────────────────────────────────────────────
 
 function createFixtureBase(): string {
@@ -45,6 +26,12 @@ function writeMilestoneSummary(base: string, mid: string, content: string): void
   writeFileSync(join(dir, `${mid}-SUMMARY.md`), content);
 }
 
+function writeMilestoneValidation(base: string, mid: string): void {
+  const dir = join(base, '.gsd', 'milestones', mid);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${mid}-VALIDATION.md`), `---\nverdict: pass\nremediation_round: 0\n---\n\n# Validation\nPassed.`);
+}
+
 /**
  * Creates M00x-CONTEXT.md with a valid YAML frontmatter block.
  * frontmatter is the raw YAML lines between the --- delimiters.
@@ -58,6 +45,7 @@ function writeContext(base: string, mid: string, frontmatter: string): void {
 function writeSlicePlan(base: string, mid: string, sid: string, content: string): void {
   const dir = join(base, '.gsd', 'milestones', mid, 'slices', sid);
   mkdirSync(join(dir, 'tasks'), { recursive: true });
+  writeFileSync(join(dir, "tasks", "T01-PLAN.md"), "# T01 Plan\n");
   writeFileSync(join(dir, `${sid}-PLAN.md`), content);
 }
 
@@ -139,6 +127,7 @@ async function main(): Promise<void> {
 - [x] **S01: Done** \`risk:low\` \`depends:[]\`
   > After this: Done.
 `);
+      writeMilestoneValidation(base, 'M001');
       writeMilestoneSummary(base, 'M001', '# M001 Summary\n\nFirst milestone is complete.');
 
       // M002: depends on M001, now unblocked
@@ -158,7 +147,7 @@ async function main(): Promise<void> {
       assertEq(state.registry[0]?.status, 'complete', 'unblocked-deps: M001 is complete');
       assertEq(state.registry[1]?.status, 'active', 'unblocked-deps: M002 is active');
       assertEq(state.activeMilestone?.id, 'M002', 'unblocked-deps: activeMilestone is M002');
-      assert(state.phase !== 'blocked', 'unblocked-deps: phase is not blocked');
+      assertTrue(state.phase !== 'blocked', 'unblocked-deps: phase is not blocked');
     } finally {
       cleanup(base);
     }
@@ -197,8 +186,8 @@ async function main(): Promise<void> {
       const state = await deriveState(base);
 
       assertEq(state.phase, 'blocked', 'all-blocked: phase is blocked');
-      assert(state.activeMilestone === null || state.activeMilestone !== null, 'all-blocked: state is consistent');
-      assert(state.blockers.length > 0, 'all-blocked: blockers array is non-empty');
+      assertTrue(state.activeMilestone === null || state.activeMilestone !== null, 'all-blocked: state is consistent');
+      assertTrue(state.blockers.length > 0, 'all-blocked: blockers array is non-empty');
     } finally {
       cleanup(base);
     }
@@ -237,7 +226,7 @@ async function main(): Promise<void> {
       assertEq(state.registry[0]?.status, 'active', 'absent-context: M001 is active');
       assertEq(state.registry[1]?.status, 'pending', 'absent-context: M002 is pending');
       assertEq(state.activeMilestone?.id, 'M001', 'absent-context: activeMilestone is M001');
-      assert(state.phase !== 'blocked', 'absent-context: phase is not blocked');
+      assertTrue(state.phase !== 'blocked', 'absent-context: phase is not blocked');
     } finally {
       cleanup(base);
     }
@@ -271,13 +260,14 @@ async function main(): Promise<void> {
 - [x] **S01: Done** \`risk:low\` \`depends:[]\`
   > After this: Done.
 `);
+      writeMilestoneValidation(base, 'M002');
       writeMilestoneSummary(base, 'M002', '# M002 Summary\n\nSecond milestone is complete.');
 
       const state = await deriveState(base);
 
       assertEq(state.activeMilestone?.id, 'M001', 'forward-dep: activeMilestone is M001');
       assertEq(state.registry[1]?.status, 'complete', 'forward-dep: M002 is complete');
-      assert(state.phase !== 'blocked', 'forward-dep: phase is not blocked');
+      assertTrue(state.phase !== 'blocked', 'forward-dep: phase is not blocked');
     } finally {
       cleanup(base);
     }
@@ -316,23 +306,113 @@ async function main(): Promise<void> {
 
       assertEq(state.registry[0]?.status, 'active', 'empty-deps-list: M001 is active');
       assertEq(state.registry[1]?.status, 'pending', 'empty-deps-list: M002 is pending (M001 not done yet)');
-      assert(state.phase !== 'blocked', 'empty-deps-list: phase is not blocked');
+      assertTrue(state.phase !== 'blocked', 'empty-deps-list: phase is not blocked');
     } finally {
       cleanup(base);
     }
   }
 
-  // ═════════════════════════════════════════════════════════════════════════
-  // Results
-  // ═════════════════════════════════════════════════════════════════════════
+  // ─── Test Group 7: unique-id-deps ──────────────────────────────────────
+  // M004-0zjrg0 is complete, M005-b0m2hl depends_on M004-0zjrg0 → M005 should activate.
+  // Regression: parseContextDependsOn() used .toUpperCase(), converting "M004-0zjrg0"
+  // to "M004-0ZJRG0", breaking the case-sensitive lookup in completeMilestoneIds.
+  console.log('\n=== unique-id-deps: unique milestone IDs with lowercase hex suffix ===');
+  {
+    const base = createFixtureBase();
+    try {
+      // M004-0zjrg0: complete (all slices done + SUMMARY present)
+      writeRoadmap(base, 'M004-0zjrg0', `# M004-0zjrg0: First Unique Milestone
 
-  console.log(`\n${'='.repeat(40)}`);
-  console.log(`Results: ${passed} passed, ${failed} failed`);
-  if (failed > 0) {
-    process.exit(1);
-  } else {
-    console.log('All tests passed ✓');
+**Vision:** Complete milestone with unique ID.
+
+## Slices
+
+- [x] **S01: Done** \`risk:low\` \`depends:[]\`
+  > After this: Done.
+`);
+      writeMilestoneValidation(base, 'M004-0zjrg0');
+      writeMilestoneSummary(base, 'M004-0zjrg0', '# M004-0zjrg0 Summary\n\nComplete.');
+
+      // M005-b0m2hl: depends on M004-0zjrg0 (lowercase hex suffix)
+      writeContext(base, 'M005-b0m2hl', 'depends_on: [M004-0zjrg0]');
+
+      const state = await deriveState(base);
+
+      assertEq(state.registry.find(e => e.id === 'M004-0zjrg0')?.status, 'complete',
+        'unique-id-deps: M004-0zjrg0 is complete');
+      assertEq(state.registry.find(e => e.id === 'M005-b0m2hl')?.status, 'active',
+        'unique-id-deps: M005-b0m2hl is active (dep on M004-0zjrg0 met)');
+      assertEq(state.activeMilestone?.id, 'M005-b0m2hl',
+        'unique-id-deps: activeMilestone is M005-b0m2hl');
+      assertTrue(state.phase !== 'blocked',
+        'unique-id-deps: phase is not blocked');
+    } finally {
+      cleanup(base);
+    }
   }
+
+  // ─── Test Group 8: unique-id-deps-blocked ─────────────────────────────
+  // M004-0zjrg0 is NOT complete, M005-b0m2hl depends_on M004-0zjrg0 → M005 should be pending
+  console.log('\n=== unique-id-deps-blocked: unique ID dep not yet met ===');
+  {
+    const base = createFixtureBase();
+    try {
+      // M004-0zjrg0: incomplete (slice not done)
+      writeRoadmap(base, 'M004-0zjrg0', `# M004-0zjrg0: Incomplete Unique Milestone
+
+**Vision:** Still in progress.
+
+## Slices
+
+- [ ] **S01: In Progress** \`risk:low\` \`depends:[]\`
+  > After this: Done.
+`);
+      writeSlicePlan(base, 'M004-0zjrg0', 'S01', `# S01: In Progress
+
+**Goal:** Test dep blocking with unique IDs.
+
+## Tasks
+
+- [ ] **T01: Work** \`est:15m\`
+  Still doing work.
+`);
+
+      // M005-b0m2hl: depends on M004-0zjrg0 (still incomplete)
+      writeContext(base, 'M005-b0m2hl', 'depends_on: [M004-0zjrg0]');
+
+      const state = await deriveState(base);
+
+      assertEq(state.activeMilestone?.id, 'M004-0zjrg0',
+        'unique-id-deps-blocked: activeMilestone is M004-0zjrg0');
+      assertEq(state.registry.find(e => e.id === 'M005-b0m2hl')?.status, 'pending',
+        'unique-id-deps-blocked: M005-b0m2hl is pending (dep not met)');
+    } finally {
+      cleanup(base);
+    }
+  }
+
+  // ─── Test Group 9: parseContextDependsOn preserves case ───────────────
+  // Direct unit test: verify the parsed dep ID matches the input exactly
+  console.log('\n=== parseContextDependsOn: preserves case of unique IDs ===');
+  {
+    const { parseContextDependsOn } = await import('../files.ts');
+
+    const deps1 = parseContextDependsOn('---\ndepends_on: [M004-0zjrg0]\n---\n');
+    assertEq(deps1[0], 'M004-0zjrg0',
+      'parseContextDependsOn preserves lowercase hex suffix');
+
+    const deps2 = parseContextDependsOn('---\ndepends_on: [M001, M004-abc123]\n---\n');
+    assertEq(deps2[0], 'M001', 'preserves classic uppercase ID');
+    assertEq(deps2[1], 'M004-abc123', 'preserves mixed-case unique ID');
+
+    const deps3 = parseContextDependsOn('---\ndepends_on: []\n---\n');
+    assertEq(deps3.length, 0, 'empty deps returns empty array');
+
+    const deps4 = parseContextDependsOn(null);
+    assertEq(deps4.length, 0, 'null content returns empty array');
+  }
+
+  report();
 }
 
 main().catch((error) => {

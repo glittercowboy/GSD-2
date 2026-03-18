@@ -9,7 +9,7 @@ import type {
   RoadmapSliceEntry,
   SlicePlan,
   MilestoneRegistryEntry,
-} from './types.ts';
+} from './types.js';
 
 import {
   parseRoadmap,
@@ -18,21 +18,25 @@ import {
   loadFile,
   parseRequirementCounts,
   parseContextDependsOn,
-} from './files.ts';
+} from './files.js';
 
 import {
-  milestonesDir,
   resolveMilestonePath,
   resolveMilestoneFile,
   resolveSlicePath,
   resolveSliceFile,
   resolveTaskFile,
+  resolveTasksDir,
   resolveGsdRootFile,
-} from './paths.ts';
-import { getActiveSliceBranch } from './worktree.ts';
+  gsdRoot,
+} from './paths.js';
 
-import { readdirSync } from 'fs';
-import { join } from 'path';
+import { milestoneIdSort, findMilestoneIds } from './guided-flow.js';
+import { nativeBatchParseGsdFiles, type BatchParsedFile } from './native-parser-bridge.js';
+
+import { join, resolve } from 'path';
+import { existsSync, readdirSync } from 'node:fs';
+import { debugCount, debugTime } from './debug-logger.js';
 
 // ─── Query Functions ───────────────────────────────────────────────────────
 
@@ -50,25 +54,45 @@ export function isMilestoneComplete(roadmap: Roadmap): boolean {
   return roadmap.slices.length > 0 && roadmap.slices.every(s => s.done);
 }
 
+/**
+ * Check whether a VALIDATION file's verdict is terminal (pass or needs-attention).
+ * A non-terminal verdict (needs-remediation) means validation must re-run
+ * after remediation slices are executed.
+ */
+export function isValidationTerminal(validationContent: string): boolean {
+  const match = validationContent.match(/^---\n([\s\S]*?)\n---/);
+  if (!match) return false;
+  const verdict = match[1].match(/verdict:\s*(\S+)/);
+  if (!verdict) return false;
+  // 'pass' and 'needs-attention' are always terminal.
+  // 'needs-remediation' is treated as terminal to prevent infinite loops
+  // when no remediation slices exist in the roadmap (#832). The validation
+  // report is preserved on disk for manual review.
+  return verdict[1] === 'pass' || verdict[1] === 'needs-attention' || verdict[1] === 'needs-remediation';
+}
+
 // ─── State Derivation ──────────────────────────────────────────────────────
 
+// ── deriveState memoization ─────────────────────────────────────────────────
+// Cache the most recent deriveState() result keyed by basePath. Within a single
+// dispatch cycle (~100ms window), repeated calls return the cached value instead
+// of re-reading the entire .gsd/ tree from disk.
+
+interface StateCache {
+  basePath: string;
+  result: GSDState;
+  timestamp: number;
+}
+
+const CACHE_TTL_MS = 100;
+let _stateCache: StateCache | null = null;
+
 /**
- * Find all milestone directory IDs by scanning .gsd/milestones/.
- * Extracts the ID prefix (e.g. "M001") from directory names like "M001-PAYMENT-INTEGRATIONS".
+ * Invalidate the deriveState() cache. Call this whenever planning files on disk
+ * may have changed (unit completion, merges, file writes).
  */
-function findMilestoneIds(basePath: string): string[] {
-  const dir = milestonesDir(basePath);
-  try {
-    return readdirSync(dir, { withFileTypes: true })
-      .filter(d => d.isDirectory())
-      .map(d => {
-        const match = d.name.match(/^(M\d+)/);
-        return match ? match[1] : d.name;
-      })
-      .sort();
-  } catch {
-    return [];
-  }
+export function invalidateStateCache(): void {
+  _stateCache = null;
 }
 
 /**
@@ -76,7 +100,20 @@ function findMilestoneIds(basePath: string): string[] {
  */
 export async function getActiveMilestoneId(basePath: string): Promise<string | null> {
   const milestoneIds = findMilestoneIds(basePath);
+  // Parallel worker isolation
+  const milestoneLock = process.env.GSD_MILESTONE_LOCK;
+  if (milestoneLock) {
+    if (!milestoneIds.includes(milestoneLock)) return null;
+    // Locked milestone that is parked should not be active
+    const lockedParked = resolveMilestoneFile(basePath, milestoneLock, "PARKED");
+    if (lockedParked) return null;
+    return milestoneLock;
+  }
   for (const mid of milestoneIds) {
+    // Skip parked milestones — they are not eligible for active status
+    const parkedFile = resolveMilestoneFile(basePath, mid, "PARKED");
+    if (parkedFile) continue;
+
     const roadmapFile = resolveMilestoneFile(basePath, mid, "ROADMAP");
     const content = roadmapFile ? await loadFile(roadmapFile) : null;
     if (!content) {
@@ -84,6 +121,8 @@ export async function getActiveMilestoneId(basePath: string): Promise<string | n
       const summaryFile = resolveMilestoneFile(basePath, mid, "SUMMARY");
       if (summaryFile) continue; // completed milestone, skip
       return mid; // No roadmap and no summary — milestone is incomplete
+      // Note: draft-awareness (CONTEXT-DRAFT.md) is handled in deriveState(), not here.
+      // A draft milestone is still "active" — this function only determines which milestone is current.
     }
     const roadmap = parseRoadmap(content);
     if (!isMilestoneComplete(roadmap)) return mid;
@@ -94,10 +133,78 @@ export async function getActiveMilestoneId(basePath: string): Promise<string | n
 /**
  * Reconstruct GSD state from files on disk.
  * This is the source of truth — STATE.md is just a cache of this output.
+ *
+ * Uses native batch parsing when available: a single Rust call reads and parses
+ * every .md file under .gsd/, populating an in-memory cache that replaces all
+ * individual loadFile() calls during milestone/slice/task traversal.
+ * Falls back to sequential JS file reads when the native module is absent.
  */
 export async function deriveState(basePath: string): Promise<GSDState> {
+  // Return cached result if within the TTL window for the same basePath
+  if (
+    _stateCache &&
+    _stateCache.basePath === basePath &&
+    Date.now() - _stateCache.timestamp < CACHE_TTL_MS
+  ) {
+    return _stateCache.result;
+  }
+
+  const stopTimer = debugTime("derive-state-impl");
+  const result = await _deriveStateImpl(basePath);
+  stopTimer({ phase: result.phase, milestone: result.activeMilestone?.id });
+  debugCount("deriveStateCalls");
+  _stateCache = { basePath, result, timestamp: Date.now() };
+  return result;
+}
+
+async function _deriveStateImpl(basePath: string): Promise<GSDState> {
   const milestoneIds = findMilestoneIds(basePath);
-  const requirements = parseRequirementCounts(await loadFile(resolveGsdRootFile(basePath, "REQUIREMENTS")));
+
+  // ── Parallel worker isolation ──────────────────────────────────────────
+  // When GSD_MILESTONE_LOCK is set, this process is a parallel worker
+  // scoped to a single milestone. Filter the milestone list so this worker
+  // only sees its assigned milestone (all others are treated as if they
+  // don't exist). This gives each worker complete isolation without
+  // modifying any other state derivation logic.
+  const milestoneLock = process.env.GSD_MILESTONE_LOCK;
+  if (milestoneLock && milestoneIds.includes(milestoneLock)) {
+    milestoneIds.length = 0;
+    milestoneIds.push(milestoneLock);
+  }
+
+  // ── Batch-parse file cache ──────────────────────────────────────────────
+  // When the native Rust parser is available, read every .md file under .gsd/
+  // in one call and build an in-memory content map keyed by absolute path.
+  // This eliminates O(N) individual fs.readFile calls during traversal.
+  const fileContentCache = new Map<string, string>();
+  const gsdDir = gsdRoot(basePath);
+
+  // NOTE: We intentionally do NOT load from the SQLite DB here (#759).
+  // The DB's artifacts table is populated once during migrateFromMarkdown
+  // and is never updated when files change on disk (e.g. roadmap [x] updates,
+  // plan checkbox changes). Using stale DB content causes deriveState to
+  // return incorrect phase/slice state, leading to infinite skip loops.
+  // The native Rust batch parser is fast enough for state derivation.
+  const batchFiles = nativeBatchParseGsdFiles(gsdDir);
+  if (batchFiles) {
+    for (const f of batchFiles) {
+      const absPath = resolve(gsdDir, f.path);
+      fileContentCache.set(absPath, f.rawContent);
+    }
+  }
+
+  /**
+   * Load file content from batch cache first, falling back to disk read.
+   * Resolves the path to absolute before cache lookup.
+   */
+  async function cachedLoadFile(path: string): Promise<string | null> {
+    const abs = resolve(path);
+    const cached = fileContentCache.get(abs);
+    if (cached !== undefined) return cached;
+    return loadFile(path);
+  }
+
+  const requirements = parseRequirementCounts(await cachedLoadFile(resolveGsdRootFile(basePath, "REQUIREMENTS")));
 
   if (milestoneIds.length === 0) {
     return {
@@ -116,38 +223,70 @@ export async function deriveState(basePath: string): Promise<GSDState> {
     };
   }
 
-  // Pre-compute the set of complete milestone IDs for dependency checking.
-  // This allows forward references (M002 depending on M003) to resolve correctly.
+  // ── Single-pass milestone scan ──────────────────────────────────────────
+  // Parse each milestone's roadmap once, caching results. First pass determines
+  // completeness for dependency resolution; second pass builds the registry.
+  // With the batch cache, all file reads hit memory instead of disk.
+
+  // Phase 1: Build roadmap cache and completeness set
+  const roadmapCache = new Map<string, Roadmap>();
   const completeMilestoneIds = new Set<string>();
+
+  // Track parked milestone IDs so Phase 2 can check without re-reading disk
+  const parkedMilestoneIds = new Set<string>();
+
   for (const mid of milestoneIds) {
+    // Skip parked milestones — they do NOT count as complete (don't satisfy depends_on)
+    // But still parse their roadmap for title extraction in Phase 2.
+    const parkedFile = resolveMilestoneFile(basePath, mid, "PARKED");
+    if (parkedFile) {
+      parkedMilestoneIds.add(mid);
+      // Cache roadmap for title extraction (but don't add to completeMilestoneIds)
+      const prf = resolveMilestoneFile(basePath, mid, "ROADMAP");
+      const prc = prf ? await cachedLoadFile(prf) : null;
+      if (prc) roadmapCache.set(mid, parseRoadmap(prc));
+      continue;
+    }
+
     const rf = resolveMilestoneFile(basePath, mid, "ROADMAP");
-    const rc = rf ? await loadFile(rf) : null;
+    const rc = rf ? await cachedLoadFile(rf) : null;
     if (!rc) {
-      // No roadmap — milestone is complete if it has a summary
       const sf = resolveMilestoneFile(basePath, mid, "SUMMARY");
       if (sf) completeMilestoneIds.add(mid);
       continue;
     }
     const rmap = parseRoadmap(rc);
+    roadmapCache.set(mid, rmap);
     if (!isMilestoneComplete(rmap)) continue;
     const sf = resolveMilestoneFile(basePath, mid, "SUMMARY");
     if (sf) completeMilestoneIds.add(mid);
   }
 
-  // Build the registry and locate the active milestone in a single pass.
+  // Phase 2: Build registry using cached roadmaps (no re-parsing or re-reading)
   const registry: MilestoneRegistryEntry[] = [];
   let activeMilestone: ActiveRef | null = null;
   let activeRoadmap: Roadmap | null = null;
   let activeMilestoneFound = false;
+  let activeMilestoneHasDraft = false;
 
   for (const mid of milestoneIds) {
-    const roadmapFile = resolveMilestoneFile(basePath, mid, "ROADMAP");
-    const content = roadmapFile ? await loadFile(roadmapFile) : null;
-    if (!content) {
+    // Skip parked milestones — register them as 'parked' and move on
+    if (parkedMilestoneIds.has(mid)) {
+      const roadmap = roadmapCache.get(mid) ?? null;
+      const title = roadmap
+        ? roadmap.title.replace(/^M\d+(?:-[a-z0-9]{6})?[^:]*:\s*/, '')
+        : mid;
+      registry.push({ id: mid, title, status: 'parked' });
+      continue;
+    }
+
+    const roadmap = roadmapCache.get(mid) ?? null;
+
+    if (!roadmap) {
       // No roadmap — check if a summary exists (completed milestone without roadmap)
       const summaryFile = resolveMilestoneFile(basePath, mid, "SUMMARY");
       if (summaryFile) {
-        const summaryContent = await loadFile(summaryFile);
+        const summaryContent = await cachedLoadFile(summaryFile);
         const summaryTitle = summaryContent
           ? (parseSummary(summaryContent).title || mid)
           : mid;
@@ -157,24 +296,59 @@ export async function deriveState(basePath: string): Promise<GSDState> {
       }
       // No roadmap and no summary — treat as incomplete/active
       if (!activeMilestoneFound) {
-        activeMilestone = { id: mid, title: mid };
-        activeMilestoneFound = true;
-        registry.push({ id: mid, title: mid, status: 'active' });
+        // Check for CONTEXT-DRAFT.md to distinguish draft-seeded from blank milestones.
+        // A draft seed means the milestone has discussion material but no full context yet.
+        const contextFile = resolveMilestoneFile(basePath, mid, "CONTEXT");
+        if (!contextFile) {
+          const draftFile = resolveMilestoneFile(basePath, mid, "CONTEXT-DRAFT");
+          if (draftFile) activeMilestoneHasDraft = true;
+        }
+
+        // Check milestone-level dependencies before promoting to active.
+        // Without this, a queued milestone with depends_on in its CONTEXT
+        // frontmatter would be promoted to active even when its deps are unmet
+        // (the dep check only existed in the has-roadmap path previously).
+        const contextContent = contextFile ? await cachedLoadFile(contextFile) : null;
+        const deps = parseContextDependsOn(contextContent);
+        const depsUnmet = deps.some(dep => !completeMilestoneIds.has(dep));
+        if (depsUnmet) {
+          registry.push({ id: mid, title: mid, status: 'pending', dependsOn: deps });
+        } else {
+          activeMilestone = { id: mid, title: mid };
+          activeMilestoneFound = true;
+          registry.push({ id: mid, title: mid, status: 'active', ...(deps.length > 0 ? { dependsOn: deps } : {}) });
+        }
       } else {
         registry.push({ id: mid, title: mid, status: 'pending' });
       }
       continue;
     }
 
-    const roadmap = parseRoadmap(content);
-    const title = roadmap.title.replace(/^M\d+[^:]*:\s*/, '');
+    const title = roadmap.title.replace(/^M\d+(?:-[a-z0-9]{6})?[^:]*:\s*/, '');
     const complete = isMilestoneComplete(roadmap);
 
     if (complete) {
-      // All slices done — check if milestone summary exists
+      // All slices done — check validation and summary state
       const summaryFile = resolveMilestoneFile(basePath, mid, "SUMMARY");
-      if (!summaryFile && !activeMilestoneFound) {
-        // All slices complete but no summary written yet → completing-milestone
+      const validationFile = resolveMilestoneFile(basePath, mid, "VALIDATION");
+      const validationContent = validationFile ? await cachedLoadFile(validationFile) : null;
+      const validationTerminal = validationContent ? isValidationTerminal(validationContent) : false;
+
+      if (summaryFile) {
+        // Summary exists → milestone is complete regardless of validation state.
+        // The summary is the terminal artifact (#864).
+        registry.push({ id: mid, title, status: 'complete' });
+      } else if (!validationTerminal && !activeMilestoneFound) {
+        // No summary and no terminal validation → validating-milestone
+        activeMilestone = { id: mid, title };
+        activeRoadmap = roadmap;
+        activeMilestoneFound = true;
+        registry.push({ id: mid, title, status: 'active' });
+      } else if (!validationTerminal && activeMilestoneFound) {
+        // No summary and no terminal validation, but another milestone is already active
+        registry.push({ id: mid, title, status: 'pending' });
+      } else if (!activeMilestoneFound) {
+        // Terminal validation but no summary → completing-milestone
         activeMilestone = { id: mid, title };
         activeRoadmap = roadmap;
         activeMilestoneFound = true;
@@ -185,7 +359,7 @@ export async function deriveState(basePath: string): Promise<GSDState> {
     } else if (!activeMilestoneFound) {
       // Check milestone-level dependencies before promoting to active
       const contextFile = resolveMilestoneFile(basePath, mid, "CONTEXT");
-      const contextContent = contextFile ? await loadFile(contextFile) : null;
+      const contextContent = contextFile ? await cachedLoadFile(contextFile) : null;
       const deps = parseContextDependsOn(contextContent);
       const depsUnmet = deps.some(dep => !completeMilestoneIds.has(dep));
       if (depsUnmet) {
@@ -199,7 +373,7 @@ export async function deriveState(basePath: string): Promise<GSDState> {
       }
     } else {
       const contextFile2 = resolveMilestoneFile(basePath, mid, "CONTEXT");
-      const contextContent2 = contextFile2 ? await loadFile(contextFile2) : null;
+      const contextContent2 = contextFile2 ? await cachedLoadFile(contextFile2) : null;
       const deps2 = parseContextDependsOn(contextContent2);
       registry.push({ id: mid, title, status: 'pending', ...(deps2.length > 0 ? { dependsOn: deps2 } : {}) });
     }
@@ -211,8 +385,9 @@ export async function deriveState(basePath: string): Promise<GSDState> {
   };
 
   if (!activeMilestone) {
-    // Check whether any milestones are pending (dep-blocked) vs all complete
+    // Check whether any milestones are pending (dep-blocked) or parked
     const pendingEntries = registry.filter(entry => entry.status === 'pending');
+    const parkedEntries = registry.filter(entry => entry.status === 'parked');
     if (pendingEntries.length > 0) {
       // All incomplete milestones are dep-blocked — no progress possible
       const blockerDetails = pendingEntries
@@ -228,6 +403,24 @@ export async function deriveState(basePath: string): Promise<GSDState> {
           ? blockerDetails
           : ['All remaining milestones are dep-blocked but no deps listed — check CONTEXT.md files'],
         nextAction: 'Resolve milestone dependencies before proceeding.',
+        registry,
+        requirements,
+        progress: {
+          milestones: milestoneProgress,
+        },
+      };
+    }
+    if (parkedEntries.length > 0) {
+      // All non-complete milestones are parked — nothing active, but not "all complete"
+      const parkedIds = parkedEntries.map(e => e.id).join(', ');
+      return {
+        activeMilestone: null,
+        activeSlice: null,
+        activeTask: null,
+        phase: 'pre-planning',
+        recentDecisions: [],
+        blockers: [],
+        nextAction: `All remaining milestones are parked (${parkedIds}). Run /gsd unpark <id> or create a new milestone.`,
         registry,
         requirements,
         progress: {
@@ -254,15 +447,21 @@ export async function deriveState(basePath: string): Promise<GSDState> {
   }
 
   if (!activeRoadmap) {
-    // Active milestone exists but has no roadmap yet — needs planning
+    // Active milestone exists but has no roadmap yet.
+    // If a CONTEXT-DRAFT.md seed exists, it needs discussion before planning.
+    // Otherwise, it's a blank milestone ready for initial planning.
+    const phase = activeMilestoneHasDraft ? 'needs-discussion' as const : 'pre-planning' as const;
+    const nextAction = activeMilestoneHasDraft
+      ? `Discuss draft context for milestone ${activeMilestone.id}.`
+      : `Plan milestone ${activeMilestone.id}.`;
     return {
       activeMilestone,
       activeSlice: null,
       activeTask: null,
-      phase: 'pre-planning',
+      phase,
       recentDecisions: [],
       blockers: [],
-      nextAction: `Plan milestone ${activeMilestone.id}.`,
+      nextAction,
       registry,
       requirements,
       progress: {
@@ -271,12 +470,34 @@ export async function deriveState(basePath: string): Promise<GSDState> {
     };
   }
 
-  // Check if active milestone needs completion (all slices done, no summary)
+  // Check if active milestone needs validation or completion (all slices done)
   if (isMilestoneComplete(activeRoadmap)) {
+    const validationFile = resolveMilestoneFile(basePath, activeMilestone.id, "VALIDATION");
+    const validationContent = validationFile ? await cachedLoadFile(validationFile) : null;
+    const validationTerminal = validationContent ? isValidationTerminal(validationContent) : false;
     const sliceProgress = {
       done: activeRoadmap.slices.length,
       total: activeRoadmap.slices.length,
     };
+
+    if (!validationTerminal) {
+      return {
+        activeMilestone,
+        activeSlice: null,
+        activeTask: null,
+        phase: 'validating-milestone',
+        recentDecisions: [],
+        blockers: [],
+        nextAction: `Validate milestone ${activeMilestone.id} before completion.`,
+        registry,
+        requirements,
+        progress: {
+          milestones: milestoneProgress,
+          slices: sliceProgress,
+        },
+      };
+    }
+
     return {
       activeMilestone,
       activeSlice: null,
@@ -329,11 +550,9 @@ export async function deriveState(basePath: string): Promise<GSDState> {
     };
   }
 
-  const activeBranch = getActiveSliceBranch(basePath);
-
   // Check if the slice has a plan
   const planFile = resolveSliceFile(basePath, activeMilestone.id, activeSlice.id, "PLAN");
-  const slicePlanContent = planFile ? await loadFile(planFile) : null;
+  const slicePlanContent = planFile ? await cachedLoadFile(planFile) : null;
 
   if (!slicePlanContent) {
     return {
@@ -344,7 +563,7 @@ export async function deriveState(basePath: string): Promise<GSDState> {
       recentDecisions: [],
       blockers: [],
       nextAction: `Plan slice ${activeSlice.id} (${activeSlice.title}).`,
-      activeBranch: activeBranch ?? undefined,
+
       registry,
       requirements,
       progress: {
@@ -361,7 +580,7 @@ export async function deriveState(basePath: string): Promise<GSDState> {
   };
   const activeTaskEntry = slicePlan.tasks.find(t => !t.done);
 
-  if (!activeTaskEntry) {
+  if (!activeTaskEntry && slicePlan.tasks.length > 0) {
     // All tasks done but slice not marked complete
     return {
       activeMilestone,
@@ -371,7 +590,28 @@ export async function deriveState(basePath: string): Promise<GSDState> {
       recentDecisions: [],
       blockers: [],
       nextAction: `All tasks done in ${activeSlice.id}. Write slice summary and complete slice.`,
-      activeBranch: activeBranch ?? undefined,
+
+      registry,
+      requirements,
+      progress: {
+        milestones: milestoneProgress,
+        slices: sliceProgress,
+        tasks: taskProgress,
+      },
+    };
+  }
+
+  // Empty plan — no tasks defined yet, stay in planning phase
+  if (!activeTaskEntry) {
+    return {
+      activeMilestone,
+      activeSlice,
+      activeTask: null,
+      phase: 'planning',
+      recentDecisions: [],
+      blockers: [],
+      nextAction: `Slice ${activeSlice.id} has a plan file but no tasks. Add tasks to the plan.`,
+
       registry,
       requirements,
       progress: {
@@ -387,6 +627,34 @@ export async function deriveState(basePath: string): Promise<GSDState> {
     title: activeTaskEntry.title,
   };
 
+  // ── Task plan file check (#909) ──────────────────────────────────────
+  // The slice plan may reference tasks but per-task plan files may be
+  // missing — e.g. when the slice plan was pre-created during roadmapping.
+  // If the tasks dir exists but has literally zero files (empty dir from
+  // mkdir), fall back to planning so plan-slice generates task plans.
+  const tasksDir = resolveTasksDir(basePath, activeMilestone.id, activeSlice.id);
+  if (tasksDir && existsSync(tasksDir) && slicePlan.tasks.length > 0) {
+    const allFiles = readdirSync(tasksDir).filter(f => f.endsWith(".md"));
+    if (allFiles.length === 0) {
+      return {
+        activeMilestone,
+        activeSlice,
+        activeTask: null,
+        phase: 'planning',
+        recentDecisions: [],
+        blockers: [],
+        nextAction: `Task plan files missing for ${activeSlice.id}. Run plan-slice to generate task plans.`,
+        registry,
+        requirements,
+        progress: {
+          milestones: milestoneProgress,
+          slices: sliceProgress,
+          tasks: taskProgress,
+        },
+      };
+    }
+  }
+
   // ── Blocker detection: scan completed task summaries ──────────────────
   // If any completed task has blocker_discovered: true and no REPLAN.md
   // exists yet, transition to replanning-slice instead of executing.
@@ -395,7 +663,7 @@ export async function deriveState(basePath: string): Promise<GSDState> {
   for (const ct of completedTasks) {
     const summaryFile = resolveTaskFile(basePath, activeMilestone.id, activeSlice.id, ct.id, "SUMMARY");
     if (!summaryFile) continue;
-    const summaryContent = await loadFile(summaryFile);
+    const summaryContent = await cachedLoadFile(summaryFile);
     if (!summaryContent) continue;
     const summary = parseSummary(summaryContent);
     if (summary.frontmatter.blocker_discovered) {
@@ -417,7 +685,7 @@ export async function deriveState(basePath: string): Promise<GSDState> {
         recentDecisions: [],
         blockers: [`Task ${blockerTaskId} discovered a blocker requiring slice replan`],
         nextAction: `Task ${blockerTaskId} reported blocker_discovered. Replan slice ${activeSlice.id} before continuing.`,
-        activeBranch: activeBranch ?? undefined,
+  
         activeWorkspace: undefined,
         registry,
         requirements,
@@ -435,8 +703,8 @@ export async function deriveState(basePath: string): Promise<GSDState> {
   const sDir = resolveSlicePath(basePath, activeMilestone.id, activeSlice.id);
   const continueFile = sDir ? resolveSliceFile(basePath, activeMilestone.id, activeSlice.id, "CONTINUE") : null;
   // Also check legacy continue.md
-  const hasInterrupted = !!(continueFile && await loadFile(continueFile)) ||
-    !!(sDir && await loadFile(join(sDir, "continue.md")));
+  const hasInterrupted = !!(continueFile && await cachedLoadFile(continueFile)) ||
+    !!(sDir && await cachedLoadFile(join(sDir, "continue.md")));
 
   return {
     activeMilestone,
@@ -448,7 +716,6 @@ export async function deriveState(basePath: string): Promise<GSDState> {
     nextAction: hasInterrupted
       ? `Resume interrupted work on ${activeTask.id}: ${activeTask.title} in slice ${activeSlice.id}. Read continue.md first.`
       : `Execute ${activeTask.id}: ${activeTask.title} in slice ${activeSlice.id}.`,
-    activeBranch: activeBranch ?? undefined,
     registry,
     requirements,
     progress: {

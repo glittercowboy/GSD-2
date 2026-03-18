@@ -1,5 +1,5 @@
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { showInterviewRound, type Question, type RoundResult } from "../shared/interview-ui.js";
+import type { ExtensionAPI } from "@gsd/pi-coding-agent";
+import { showInterviewRound, type Question, type RoundResult } from "../shared/mod.js";
 
 export default function createSlashCommand(pi: ExtensionAPI) {
 	pi.registerCommand("create-slash-command", {
@@ -225,7 +225,7 @@ Rules you must follow exactly:
 - To show a text input dialog: \`await ctx.ui.input("prompt", "placeholder")\` — returns the string or null
 - \`pi\` is captured in closure from the outer \`export default function(pi: ExtensionAPI)\` — use it freely inside the handler
 - No \`ctx.session\`, no \`ctx.sendMessage\`, no \`args[]\` array — these do not exist
-- Import type: \`import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";\`
+- Import type: \`import type { ExtensionAPI, ExtensionCommandContext } from "@gsd/pi-coding-agent";\`
 - Export default: \`export default function <camelCaseName>(pi: ExtensionAPI) { ... }\`
 
 After writing the files, run \`/reload\` to load the new command.`;

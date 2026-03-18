@@ -10,28 +10,9 @@ import { parsePlanningDirectory } from '../migrate/parser.ts';
 import { validatePlanningDirectory } from '../migrate/validator.ts';
 
 import type { PlanningProject, ValidationResult } from '../migrate/types.ts';
+import { createTestContext } from './test-helpers.ts';
 
-let passed = 0;
-let failed = 0;
-
-function assert(condition: boolean, message: string): void {
-  if (condition) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message}`);
-  }
-}
-
-function assertEq<T>(actual: T, expected: T, message: string): void {
-  if (JSON.stringify(actual) === JSON.stringify(expected)) {
-    passed++;
-  } else {
-    failed++;
-    console.error(`  FAIL: ${message} — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-  }
-}
-
+const { assertEq, assertTrue, report } = createTestContext();
 // ─── Fixture Helpers ───────────────────────────────────────────────────────
 
 function createFixtureBase(): string {
@@ -333,31 +314,31 @@ Dashboard needs auth to be complete first.
 
       // Top-level structure
       assertEq(project.path, planning, 'project.path matches');
-      assert(project.project !== null, 'PROJECT.md parsed');
-      assert(project.roadmap !== null, 'ROADMAP.md parsed');
-      assert(project.requirements.length > 0, 'requirements parsed');
-      assert(project.state !== null, 'STATE.md parsed');
-      assert(project.config !== null, 'config.json parsed');
+      assertTrue(project.project !== null, 'PROJECT.md parsed');
+      assertTrue(project.roadmap !== null, 'ROADMAP.md parsed');
+      assertTrue(project.requirements.length > 0, 'requirements parsed');
+      assertTrue(project.state !== null, 'STATE.md parsed');
+      assertTrue(project.config !== null, 'config.json parsed');
 
       // Phases
-      assert('29-auth-system' in project.phases, 'phase 29 present');
-      assert('30-dashboard' in project.phases, 'phase 30 present');
+      assertTrue('29-auth-system' in project.phases, 'phase 29 present');
+      assertTrue('30-dashboard' in project.phases, 'phase 30 present');
 
       const phase29 = project.phases['29-auth-system'];
       assertEq(phase29?.number, 29, 'phase 29 number');
       assertEq(phase29?.slug, 'auth-system', 'phase 29 slug');
-      assert('01' in (phase29?.plans ?? {}), 'phase 29 has plan 01');
-      assert('01' in (phase29?.summaries ?? {}), 'phase 29 has summary 01');
-      assert((phase29?.research?.length ?? 0) > 0, 'phase 29 has research');
+      assertTrue('01' in (phase29?.plans ?? {}), 'phase 29 has plan 01');
+      assertTrue('01' in (phase29?.summaries ?? {}), 'phase 29 has summary 01');
+      assertTrue((phase29?.research?.length ?? 0) > 0, 'phase 29 has research');
 
       // Plan content (XML-in-markdown)
       const plan29 = phase29?.plans?.['01'];
-      assert(plan29 !== undefined, 'plan 29-01 exists');
-      assert(plan29?.objective?.includes('authentication') ?? false, 'plan objective extracted');
-      assert((plan29?.tasks?.length ?? 0) >= 3, 'plan tasks extracted');
-      assert(plan29?.context?.includes('JWT') ?? false, 'plan context extracted');
-      assert(plan29?.verification !== '', 'plan verification extracted');
-      assert(plan29?.successCriteria !== '', 'plan success criteria extracted');
+      assertTrue(plan29 !== undefined, 'plan 29-01 exists');
+      assertTrue(plan29?.objective?.includes('authentication') ?? false, 'plan objective extracted');
+      assertTrue((plan29?.tasks?.length ?? 0) >= 3, 'plan tasks extracted');
+      assertTrue(plan29?.context?.includes('JWT') ?? false, 'plan context extracted');
+      assertTrue(plan29?.verification !== '', 'plan verification extracted');
+      assertTrue(plan29?.successCriteria !== '', 'plan success criteria extracted');
 
       // Plan frontmatter
       assertEq(plan29?.frontmatter?.phase, '29-auth-system', 'plan frontmatter phase');
@@ -368,37 +349,37 @@ Dashboard needs auth to be complete first.
 
       // Summary content
       const summary29 = phase29?.summaries?.['01'];
-      assert(summary29 !== undefined, 'summary 29-01 exists');
+      assertTrue(summary29 !== undefined, 'summary 29-01 exists');
       assertEq(summary29?.frontmatter?.phase, '29-auth-system', 'summary frontmatter phase');
       assertEq(summary29?.frontmatter?.plan, '01', 'summary frontmatter plan');
       assertEq(summary29?.frontmatter?.subsystem, 'auth', 'summary frontmatter subsystem');
-      assert((summary29?.frontmatter?.tags?.length ?? 0) >= 2, 'summary frontmatter tags');
-      assert((summary29?.frontmatter?.provides?.length ?? 0) >= 2, 'summary frontmatter provides');
-      assert((summary29?.frontmatter?.affects?.length ?? 0) >= 1, 'summary frontmatter affects');
-      assert((summary29?.frontmatter?.['tech-stack']?.length ?? 0) >= 2, 'summary frontmatter tech-stack');
-      assert((summary29?.frontmatter?.['key-files']?.length ?? 0) >= 2, 'summary frontmatter key-files');
-      assert((summary29?.frontmatter?.['key-decisions']?.length ?? 0) >= 2, 'summary frontmatter key-decisions');
-      assert((summary29?.frontmatter?.['patterns-established']?.length ?? 0) >= 1, 'summary frontmatter patterns-established');
+      assertTrue((summary29?.frontmatter?.tags?.length ?? 0) >= 2, 'summary frontmatter tags');
+      assertTrue((summary29?.frontmatter?.provides?.length ?? 0) >= 2, 'summary frontmatter provides');
+      assertTrue((summary29?.frontmatter?.affects?.length ?? 0) >= 1, 'summary frontmatter affects');
+      assertTrue((summary29?.frontmatter?.['tech-stack']?.length ?? 0) >= 2, 'summary frontmatter tech-stack');
+      assertTrue((summary29?.frontmatter?.['key-files']?.length ?? 0) >= 2, 'summary frontmatter key-files');
+      assertTrue((summary29?.frontmatter?.['key-decisions']?.length ?? 0) >= 2, 'summary frontmatter key-decisions');
+      assertTrue((summary29?.frontmatter?.['patterns-established']?.length ?? 0) >= 1, 'summary frontmatter patterns-established');
       assertEq(summary29?.frontmatter?.duration, '2h', 'summary frontmatter duration');
       assertEq(summary29?.frontmatter?.completed, '2026-01-15', 'summary frontmatter completed');
 
       // Quick tasks
-      assert(project.quickTasks.length >= 1, 'quick tasks parsed');
+      assertTrue(project.quickTasks.length >= 1, 'quick tasks parsed');
       assertEq(project.quickTasks[0]?.number, 1, 'quick task number');
-      assert(project.quickTasks[0]?.plan !== null, 'quick task has plan');
-      assert(project.quickTasks[0]?.summary !== null, 'quick task has summary');
+      assertTrue(project.quickTasks[0]?.plan !== null, 'quick task has plan');
+      assertTrue(project.quickTasks[0]?.summary !== null, 'quick task has summary');
 
       // Milestones
-      assert(project.milestones.length >= 1, 'milestones parsed');
+      assertTrue(project.milestones.length >= 1, 'milestones parsed');
 
       // Root research
-      assert(project.research.length >= 1, 'root research parsed');
+      assertTrue(project.research.length >= 1, 'root research parsed');
 
       // Config
       assertEq(project.config?.projectName, 'test-project', 'config projectName');
 
       // State
-      assert(project.state?.currentPhase?.includes('30') ?? false, 'state current phase');
+      assertTrue(project.state?.currentPhase?.includes('30') ?? false, 'state current phase');
       assertEq(project.state?.status, 'in-progress', 'state status');
 
       // Validation
@@ -420,7 +401,7 @@ Dashboard needs auth to be complete first.
       const project = await parsePlanningDirectory(planning);
 
       assertEq(project.project, null, 'minimal: PROJECT.md is null');
-      assert(project.roadmap !== null, 'minimal: ROADMAP.md parsed');
+      assertTrue(project.roadmap !== null, 'minimal: ROADMAP.md parsed');
       assertEq(project.requirements.length, 0, 'minimal: no requirements');
       assertEq(project.state, null, 'minimal: no state');
       assertEq(project.config, null, 'minimal: no config');
@@ -442,8 +423,8 @@ Dashboard needs auth to be complete first.
       const result = await validatePlanningDirectory(join(base, 'nonexistent'));
 
       assertEq(result.valid, false, 'missing dir: validation fails');
-      assert(result.issues.length > 0, 'missing dir: has issues');
-      assert(
+      assertTrue(result.issues.length > 0, 'missing dir: has issues');
+      assertTrue(
         result.issues.some(i => i.severity === 'fatal'),
         'missing dir: has fatal issue'
       );
@@ -475,8 +456,8 @@ Dashboard needs auth to be complete first.
 
       const project = await parsePlanningDirectory(planning);
 
-      assert('45-core-infrastructure' in project.phases, 'dup nums: core-infrastructure phase present');
-      assert('45-logging-config' in project.phases, 'dup nums: logging-config phase present');
+      assertTrue('45-core-infrastructure' in project.phases, 'dup nums: core-infrastructure phase present');
+      assertTrue('45-logging-config' in project.phases, 'dup nums: logging-config phase present');
       assertEq(project.phases['45-core-infrastructure']?.number, 45, 'dup nums: both have number 45 (a)');
       assertEq(project.phases['45-logging-config']?.number, 45, 'dup nums: both have number 45 (b)');
     } finally {
@@ -499,13 +480,13 @@ Dashboard needs auth to be complete first.
       const project = await parsePlanningDirectory(planning);
       const plan = project.phases['29-auth-system']?.plans?.['01'];
 
-      assert(plan !== undefined, 'xml plan: plan exists');
-      assert(plan?.objective?.includes('authentication') ?? false, 'xml plan: objective extracted');
-      assert((plan?.tasks?.length ?? 0) === 3, 'xml plan: 3 tasks extracted');
-      assert(plan?.tasks?.[0]?.includes('auth middleware') ?? false, 'xml plan: first task content');
-      assert(plan?.context?.includes('JWT') ?? false, 'xml plan: context extracted');
-      assert(plan?.verification?.includes('Login returns') ?? false, 'xml plan: verification extracted');
-      assert(plan?.successCriteria?.includes('endpoints respond') ?? false, 'xml plan: success criteria extracted');
+      assertTrue(plan !== undefined, 'xml plan: plan exists');
+      assertTrue(plan?.objective?.includes('authentication') ?? false, 'xml plan: objective extracted');
+      assertTrue((plan?.tasks?.length ?? 0) === 3, 'xml plan: 3 tasks extracted');
+      assertTrue(plan?.tasks?.[0]?.includes('auth middleware') ?? false, 'xml plan: first task content');
+      assertTrue(plan?.context?.includes('JWT') ?? false, 'xml plan: context extracted');
+      assertTrue(plan?.verification?.includes('Login returns') ?? false, 'xml plan: verification extracted');
+      assertTrue(plan?.successCriteria?.includes('endpoints respond') ?? false, 'xml plan: success criteria extracted');
     } finally {
       cleanup(base);
     }
@@ -526,7 +507,7 @@ Dashboard needs auth to be complete first.
       const project = await parsePlanningDirectory(planning);
       const summary = project.phases['29-auth-system']?.summaries?.['01'];
 
-      assert(summary !== undefined, 'summary fm: summary exists');
+      assertTrue(summary !== undefined, 'summary fm: summary exists');
       assertEq(summary?.frontmatter?.phase, '29-auth-system', 'summary fm: phase');
       assertEq(summary?.frontmatter?.plan, '01', 'summary fm: plan');
       assertEq(summary?.frontmatter?.subsystem, 'auth', 'summary fm: subsystem');
@@ -580,11 +561,11 @@ Another orphan.
       const project = await parsePlanningDirectory(planning);
       const phase = project.phases['45-logging-config'];
 
-      assert(phase !== undefined, 'orphan: phase exists');
+      assertTrue(phase !== undefined, 'orphan: phase exists');
       assertEq(Object.keys(phase?.plans ?? {}).length, 0, 'orphan: no plans');
-      assert(Object.keys(phase?.summaries ?? {}).length >= 2, 'orphan: summaries preserved');
-      assert('04' in (phase?.summaries ?? {}), 'orphan: summary 04 present');
-      assert('05' in (phase?.summaries ?? {}), 'orphan: summary 05 present');
+      assertTrue(Object.keys(phase?.summaries ?? {}).length >= 2, 'orphan: summaries preserved');
+      assertTrue('04' in (phase?.summaries ?? {}), 'orphan: summary 04 present');
+      assertTrue('05' in (phase?.summaries ?? {}), 'orphan: summary 05 present');
     } finally {
       cleanup(base);
     }
@@ -610,9 +591,9 @@ Another orphan.
 
       const project = await parsePlanningDirectory(planning);
 
-      assert('29-auth-system' in project.phases, 'archive: normal phase present');
+      assertTrue('29-auth-system' in project.phases, 'archive: normal phase present');
       // Archive phases should not appear in the phases map
-      assert(!Object.keys(project.phases).some(k => k.includes('old-auth')), 'archive: archived phase not present');
+      assertTrue(!Object.keys(project.phases).some(k => k.includes('old-auth')), 'archive: archived phase not present');
     } finally {
       cleanup(base);
     }
@@ -642,10 +623,10 @@ Another orphan.
       assertEq(project.quickTasks.length, 2, 'quick: 2 quick tasks');
       assertEq(project.quickTasks[0]?.number, 1, 'quick: first task number');
       assertEq(project.quickTasks[0]?.slug, 'fix-login', 'quick: first task slug');
-      assert(project.quickTasks[0]?.plan !== null, 'quick: first task has plan');
-      assert(project.quickTasks[0]?.summary !== null, 'quick: first task has summary');
+      assertTrue(project.quickTasks[0]?.plan !== null, 'quick: first task has plan');
+      assertTrue(project.quickTasks[0]?.summary !== null, 'quick: first task has summary');
       assertEq(project.quickTasks[1]?.number, 2, 'quick: second task number');
-      assert(project.quickTasks[1]?.plan !== null, 'quick: second task has plan');
+      assertTrue(project.quickTasks[1]?.plan !== null, 'quick: second task has plan');
       assertEq(project.quickTasks[1]?.summary, null, 'quick: second task has no summary');
     } finally {
       cleanup(base);
@@ -662,27 +643,27 @@ Another orphan.
 
       const project = await parsePlanningDirectory(planning);
 
-      assert(project.roadmap !== null, 'ms roadmap: roadmap parsed');
-      assert((project.roadmap?.milestones?.length ?? 0) >= 2, 'ms roadmap: has milestone sections');
+      assertTrue(project.roadmap !== null, 'ms roadmap: roadmap parsed');
+      assertTrue((project.roadmap?.milestones?.length ?? 0) >= 2, 'ms roadmap: has milestone sections');
 
       // Check collapsed milestone
       const v20 = project.roadmap?.milestones?.find(m => m.id.includes('2.0'));
-      assert(v20 !== undefined, 'ms roadmap: v2.0 milestone found');
+      assertTrue(v20 !== undefined, 'ms roadmap: v2.0 milestone found');
       assertEq(v20?.collapsed, true, 'ms roadmap: v2.0 is collapsed');
-      assert((v20?.phases?.length ?? 0) >= 2, 'ms roadmap: v2.0 has phases');
-      assert(v20?.phases?.every(p => p.done) ?? false, 'ms roadmap: v2.0 phases all done');
+      assertTrue((v20?.phases?.length ?? 0) >= 2, 'ms roadmap: v2.0 has phases');
+      assertTrue(v20?.phases?.every(p => p.done) ?? false, 'ms roadmap: v2.0 phases all done');
 
       // Check active milestone
       const v25 = project.roadmap?.milestones?.find(m => m.id.includes('2.5'));
-      assert(v25 !== undefined, 'ms roadmap: v2.5 milestone found');
+      assertTrue(v25 !== undefined, 'ms roadmap: v2.5 milestone found');
       assertEq(v25?.collapsed, false, 'ms roadmap: v2.5 is not collapsed');
-      assert((v25?.phases?.length ?? 0) >= 3, 'ms roadmap: v2.5 has phases');
+      assertTrue((v25?.phases?.length ?? 0) >= 3, 'ms roadmap: v2.5 has phases');
 
       // Check completion state
       const phase29 = v25?.phases?.find(p => p.number === 29);
-      assert(phase29?.done === true, 'ms roadmap: phase 29 is done');
+      assertTrue(phase29?.done === true, 'ms roadmap: phase 29 is done');
       const phase30 = v25?.phases?.find(p => p.number === 30);
-      assert(phase30?.done === false, 'ms roadmap: phase 30 is not done');
+      assertTrue(phase30?.done === false, 'ms roadmap: phase 30 is not done');
     } finally {
       cleanup(base);
     }
@@ -706,17 +687,17 @@ Another orphan.
       const project = await parsePlanningDirectory(planning);
       const phase = project.phases['36-attachment-system'];
 
-      assert(phase !== undefined, 'extra: phase exists');
-      assert((phase?.extraFiles?.length ?? 0) >= 3, 'extra: non-standard files collected');
-      assert(
+      assertTrue(phase !== undefined, 'extra: phase exists');
+      assertTrue((phase?.extraFiles?.length ?? 0) >= 3, 'extra: non-standard files collected');
+      assertTrue(
         phase?.extraFiles?.some(f => f.fileName === 'BASELINE.md') ?? false,
         'extra: BASELINE.md collected'
       );
-      assert(
+      assertTrue(
         phase?.extraFiles?.some(f => f.fileName === 'BUNDLE-ANALYSIS.md') ?? false,
         'extra: BUNDLE-ANALYSIS.md collected'
       );
-      assert(
+      assertTrue(
         phase?.extraFiles?.some(f => f.fileName === 'depcheck-results.txt') ?? false,
         'extra: depcheck-results.txt collected'
       );
@@ -737,7 +718,7 @@ Another orphan.
       const result = await validatePlanningDirectory(planning);
 
       assertEq(result.valid, true, 'no roadmap: validation still passes');
-      assert(
+      assertTrue(
         result.issues.some(i => i.severity === 'warning' && i.file.includes('ROADMAP')),
         'no roadmap: warning issue mentions ROADMAP'
       );
@@ -758,7 +739,7 @@ Another orphan.
       const result = await validatePlanningDirectory(planning);
 
       assertEq(result.valid, true, 'no project: validation passes (warning only)');
-      assert(
+      assertTrue(
         result.issues.some(i => i.severity === 'warning' && i.file.includes('PROJECT')),
         'no project: warning issue mentions PROJECT'
       );
@@ -767,17 +748,7 @@ Another orphan.
     }
   }
 
-  // ═════════════════════════════════════════════════════════════════════════
-  // Results
-  // ═════════════════════════════════════════════════════════════════════════
-
-  console.log(`\n${'='.repeat(40)}`);
-  console.log(`Results: ${passed} passed, ${failed} failed`);
-  if (failed > 0) {
-    process.exit(1);
-  } else {
-    console.log('All tests passed ✓');
-  }
+  report();
 }
 
 main().catch((error) => {

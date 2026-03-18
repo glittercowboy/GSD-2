@@ -32,13 +32,13 @@ estimated_files: {{estimatedFiles}}
 
 ## Observability Impact
 
-<!-- If this task creates or changes a runtime boundary, async flow, API, UI state,
-     background process, or error path, explain how it improves or depends on
-     future agent observability. Use "None" when genuinely not applicable. -->
+<!-- OMIT THIS SECTION ENTIRELY for simple tasks that don't touch runtime boundaries,
+     async flows, APIs, background processes, or error paths.
+     Include it only when the task meaningfully changes how failures are detected or diagnosed. -->
 
-- Signals added/changed: {{structured logs, statuses, errors, metrics, or None}}
-- How a future agent inspects this: {{command, endpoint, file, UI state, or None}}
-- Failure state exposed: {{what becomes visible on failure, or None}}
+- Signals added/changed: {{structured logs, statuses, errors, metrics}}
+- How a future agent inspects this: {{command, endpoint, file, UI state}}
+- Failure state exposed: {{what becomes visible on failure}}
 
 ## Inputs
 

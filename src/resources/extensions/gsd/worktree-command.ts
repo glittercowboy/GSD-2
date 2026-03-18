@@ -10,27 +10,30 @@
  *   /worktree remove <name> — remove a worktree and its branch
  */
 
-import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@gsd/pi-coding-agent";
 import { loadPrompt } from "./prompt-loader.js";
-import { autoCommitCurrentBranch } from "./worktree.js";
-import { showConfirm } from "../shared/confirm-ui.js";
+import { autoCommitCurrentBranch, getMainBranch, resolveGitHeadPath, nudgeGitBranchCache } from "./worktree.js";
+import { runWorktreePostCreateHook } from "./auto-worktree.js";
+import { showConfirm } from "../shared/mod.js";
 import { gsdRoot, milestonesDir } from "./paths.js";
 import {
   createWorktree,
   listWorktrees,
   removeWorktree,
+  mergeWorktreeToMain,
   diffWorktreeAll,
   diffWorktreeNumstat,
-  getMainBranch,
   getWorktreeGSDDiff,
   getWorktreeCodeDiff,
   getWorktreeLog,
   worktreeBranchName,
   worktreePath,
 } from "./worktree-manager.js";
+import { inferCommitType } from "./git-service.js";
 import type { FileLineStat } from "./worktree-manager.js";
-import { existsSync, realpathSync, readFileSync, readdirSync, rmSync, unlinkSync, utimesSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import { existsSync, realpathSync, readdirSync, rmSync, unlinkSync } from "node:fs";
+import { nativeMergeAbort } from "./native-git-bridge.js";
+import { join, sep } from "node:path";
 
 /**
  * Tracks the original project root so we can switch back.
@@ -43,57 +46,11 @@ export function getWorktreeOriginalCwd(): string | null {
   return originalCwd;
 }
 
-/**
- * Resolve the git HEAD file path for a given directory.
- * Handles both normal repos (.git is a directory) and worktrees (.git is a file).
- */
-function resolveGitHeadPath(dir: string): string | null {
-  const gitPath = join(dir, ".git");
-  if (!existsSync(gitPath)) return null;
-
-  try {
-    const content = readFileSync(gitPath, "utf8").trim();
-    if (content.startsWith("gitdir: ")) {
-      // Worktree — .git is a file pointing to the real gitdir
-      const gitDir = resolve(dir, content.slice(8));
-      const headPath = join(gitDir, "HEAD");
-      return existsSync(headPath) ? headPath : null;
-    }
-    // Normal repo — .git is a directory
-    const headPath = join(dir, ".git", "HEAD");
-    return existsSync(headPath) ? headPath : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Nudge pi's FooterDataProvider to re-read the git branch.
- *
- * The footer caches the branch and watches a single .git dir for changes.
- * After process.chdir() into a worktree (or back), the watcher is stale —
- * it's still watching the old git dir. We touch HEAD in both the old and
- * new git dirs to ensure the watcher fires regardless of which one it's
- * monitoring. This clears cachedBranch; the next getGitBranch() call uses
- * the new process.cwd() and picks up the correct branch.
- */
-function nudgeGitBranchCache(previousCwd: string): void {
-  const now = new Date();
-  for (const dir of [previousCwd, process.cwd()]) {
-    try {
-      const headPath = resolveGitHeadPath(dir);
-      if (headPath) utimesSync(headPath, now, now);
-    } catch {
-      // Best-effort — branch display may be stale
-    }
-  }
-}
-
 /** Get the name of the active worktree, or null if not in one. */
 export function getActiveWorktreeName(): string | null {
   if (!originalCwd) return null;
   const cwd = process.cwd();
-  const wtDir = join(originalCwd, ".gsd", "worktrees");
+  const wtDir = join(gsdRoot(originalCwd), "worktrees");
   if (!cwd.startsWith(wtDir)) return null;
   const rel = cwd.slice(wtDir.length + 1);
   const name = rel.split("/")[0] ?? rel.split("\\")[0];
@@ -314,7 +271,7 @@ function hasExistingMilestones(wtPath: string): boolean {
   if (!existsSync(mDir)) return false;
   try {
     const entries = readdirSync(mDir, { withFileTypes: true })
-      .filter(d => d.isDirectory() && /^M\d+/.test(d.name));
+      .filter(d => d.isDirectory() && /^M\d+(?:-[a-z0-9]{6})?/.test(d.name));
     return entries.length > 0;
   } catch {
     return false;
@@ -349,12 +306,19 @@ async function handleCreate(
   ctx: ExtensionCommandContext,
 ): Promise<void> {
   try {
+    // Auto-commit dirty files before leaving current workspace (must happen
+    // before createWorktree so the new worktree forks from committed HEAD)
+    const commitMsg = autoCommitCurrentBranch(basePath, "worktree-switch", name);
+
     // Create from the main tree, not from inside another worktree
     const mainBase = originalCwd ?? basePath;
     const info = createWorktree(mainBase, name);
 
-    // Auto-commit dirty files before leaving current workspace
-    const commitMsg = autoCommitCurrentBranch(basePath, "worktree-switch", name);
+    // Run user-configured post-create hook (#597) — e.g. copy .env, symlink assets
+    const hookError = runWorktreePostCreateHook(mainBase, info.path);
+    if (hookError) {
+      ctx.ui.notify(hookError, "warning");
+    }
 
     // Track original cwd before switching
     if (!originalCwd) originalCwd = basePath;
@@ -655,9 +619,8 @@ async function handleMerge(
       return;
     }
 
-    // Switch to the main tree before dispatching the merge.
-    // The LLM needs to run git merge --squash from the main branch, and if
-    // it later removes the worktree, the agent's CWD must not be inside it.
+    // Switch to the main tree before merging.
+    // Must be on the main branch to run git merge --squash.
     if (originalCwd) {
       const prevCwd = process.cwd();
       process.chdir(basePath);
@@ -665,6 +628,46 @@ async function handleMerge(
       originalCwd = null;
     }
 
+    // --- Deterministic merge path (preferred) ---
+    // Try a direct squash-merge first. Only fall back to LLM on conflict.
+    const commitType = inferCommitType(name);
+    const commitMessage = `${commitType}(${name}): merge worktree ${name}`;
+
+    try {
+      mergeWorktreeToMain(basePath, name, commitMessage);
+      ctx.ui.notify(
+        [
+          `${CLR.ok("✓")} Merged ${CLR.name(name)} → ${CLR.branch(mainBranch)} ${CLR.muted("(deterministic squash)")}`,
+          "",
+          `  ${totalChanges} file${totalChanges === 1 ? "" : "s"} changed, ${CLR.ok(`+${totalAdded}`)} ${RED}-${totalRemoved}${RESET} lines`,
+          `  ${CLR.muted("commit:")} ${commitMessage}`,
+        ].join("\n"),
+        "info",
+      );
+      return;
+    } catch (mergeErr) {
+      const mergeMsg = mergeErr instanceof Error ? mergeErr.message : String(mergeErr);
+      const isConflict = /conflict/i.test(mergeMsg);
+
+      if (isConflict) {
+        // Abort the failed merge so the working tree is clean for LLM retry
+        try {
+          nativeMergeAbort(basePath);
+        } catch { /* already clean */ }
+
+        ctx.ui.notify(
+          `${CLR.muted("Deterministic merge hit conflicts — falling back to LLM-guided merge.")}`,
+          "warning",
+        );
+        // Fall through to LLM dispatch below
+      } else {
+        // Non-conflict error — surface it directly, don't fall back
+        ctx.ui.notify(`Failed to merge: ${mergeMsg}`, "error");
+        return;
+      }
+    }
+
+    // --- LLM fallback path (conflict resolution) ---
     // Format file lists for the prompt
     const formatFiles = (files: string[]) =>
       files.length > 0 ? files.map(f => `- \`${f}\``).join("\n") : "_(none)_";

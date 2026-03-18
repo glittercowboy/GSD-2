@@ -1,0 +1,187 @@
+# Troubleshooting
+
+## `/gsd doctor`
+
+The built-in diagnostic tool validates `.gsd/` integrity:
+
+```
+/gsd doctor
+```
+
+It checks:
+- File structure and naming conventions
+- Roadmap ↔ slice ↔ task referential integrity
+- Completion state consistency
+- Git worktree health (worktree and branch modes only — skipped in none mode)
+- Stale lock files and orphaned runtime records
+
+## Common Issues
+
+### Auto mode loops on the same unit
+
+**Symptoms:** The same unit (e.g., `research-slice` or `plan-slice`) dispatches repeatedly until hitting the dispatch limit.
+
+**Causes:**
+- Stale cache after a crash — the in-memory file listing doesn't reflect new artifacts
+- The LLM didn't produce the expected artifact file
+
+**Fix:** Run `/gsd doctor` to repair state, then resume with `/gsd auto`. If the issue persists, check that the expected artifact file exists on disk.
+
+### Auto mode stops with "Loop detected"
+
+**Cause:** A unit failed to produce its expected artifact twice in a row.
+
+**Fix:** Check the task plan for clarity. If the plan is ambiguous, refine it manually, then `/gsd auto` to resume.
+
+### Wrong files in worktree
+
+**Symptoms:** Planning artifacts or code appear in the wrong directory.
+
+**Cause:** The LLM wrote to the main repo instead of the worktree.
+
+**Fix:** This was fixed in v2.14+. If you're on an older version, update. The dispatch prompt now includes explicit working directory instructions.
+
+### `npm install -g gsd-pi` fails
+
+**Common causes:**
+- Missing workspace packages — fixed in v2.10.4+
+- `postinstall` hangs on Linux (Playwright `--with-deps` triggering sudo) — fixed in v2.3.6+
+- Node.js version too old — requires ≥ 20.6.0
+
+### Provider errors during auto mode
+
+**Symptoms:** Auto mode pauses with a provider error (rate limit, server error, auth failure).
+
+**How GSD handles it (v2.26):**
+
+| Error type | Auto-resume? | Delay |
+|-----------|-------------|-------|
+| Rate limit (429, "too many requests") | ✅ Yes | retry-after header or 60s |
+| Server error (500, 502, 503, "overloaded") | ✅ Yes | 30s |
+| Auth/billing ("unauthorized", "invalid key") | ❌ No | Manual resume |
+
+For transient errors, GSD pauses briefly and resumes automatically. For permanent errors, configure fallback models:
+
+```yaml
+models:
+  execution:
+    model: claude-sonnet-4-6
+    fallbacks:
+      - openrouter/minimax/minimax-m2.5
+```
+
+**Headless mode:** `gsd headless auto` auto-restarts the entire process on crash (default 3 attempts with exponential backoff). Combined with provider error auto-resume, this enables true overnight unattended execution.
+
+### Budget ceiling reached
+
+**Symptoms:** Auto mode pauses with "Budget ceiling reached."
+
+**Fix:** Increase `budget_ceiling` in preferences, or switch to `budget` token profile to reduce per-unit cost, then resume with `/gsd auto`.
+
+### Stale lock file
+
+**Symptoms:** Auto mode won't start, says another session is running.
+
+**Fix:** If no other session is actually running, delete `.gsd/auto.lock` manually. GSD includes stale lock detection (checks if the PID is still alive), but edge cases exist.
+
+### Git merge conflicts
+
+**Symptoms:** Worktree merge fails on `.gsd/` files.
+
+**Fix:** GSD auto-resolves conflicts on `.gsd/` runtime files. For content conflicts in code files, the LLM is given an opportunity to resolve them via a fix-merge session. If that fails, manual resolution is needed.
+
+## Recovery Procedures
+
+### Reset auto mode state
+
+```bash
+rm .gsd/auto.lock
+rm .gsd/completed-units.json
+```
+
+Then `/gsd auto` to restart from current disk state.
+
+### Reset routing history
+
+If adaptive model routing is producing bad results, clear the routing history:
+
+```bash
+rm .gsd/routing-history.json
+```
+
+### Full state rebuild
+
+```
+/gsd doctor
+```
+
+Doctor rebuilds `STATE.md` from plan and roadmap files on disk and fixes detected inconsistencies.
+
+## Getting Help
+
+- **GitHub Issues:** [github.com/gsd-build/GSD-2/issues](https://github.com/gsd-build/GSD-2/issues)
+- **Dashboard:** `Ctrl+Alt+G` or `/gsd status` for real-time diagnostics
+- **Forensics:** `/gsd forensics` for structured post-mortem analysis of auto-mode failures
+- **Session logs:** `.gsd/activity/` contains JSONL session dumps for crash forensics
+
+## Windows-Specific Issues
+
+### LSP returns ENOENT on Windows (MSYS2/Git Bash)
+
+**Symptoms:** LSP initialization fails with `ENOENT` or resolves POSIX-style paths like `/c/Users/...` instead of `C:\Users\...`.
+
+**Cause:** The `which` command in MSYS2/Git Bash returns POSIX paths that Node.js `spawn()` can't resolve.
+
+**Fix:** Updated in v2.29+ to use `where.exe` on Windows. Upgrade to the latest version.
+
+### EBUSY errors during WXT/extension builds
+
+**Symptoms:** `EBUSY: resource busy or locked, rmdir .output/chrome-mv3` when building browser extensions.
+
+**Cause:** A Chromium browser has the extension loaded from the build output directory, preventing deletion.
+
+**Fix:** Close the browser extension, or set a different `outDirTemplate` in your WXT config to avoid the locked directory.
+
+## Database Issues
+
+### "GSD database is not available"
+
+**Symptoms:** `gsd_save_decision`, `gsd_update_requirement`, or `gsd_save_summary` fail with this error.
+
+**Cause:** The SQLite database wasn't initialized. This happens in manual `/gsd` sessions (non-auto mode) on versions before v2.29.
+
+**Fix:** Updated in v2.29+ to auto-initialize the database on first tool call. Upgrade to the latest version.
+
+## Verification Issues
+
+### Verification gate fails with shell syntax error
+
+**Symptoms:** `stderr: /bin/sh: 1: Syntax error: "(" unexpected` during verification checks.
+
+**Cause:** A description-like string (e.g., `All 10 checks pass (build, lint)`) was treated as a shell command. This can happen when task plans have `verify:` fields with prose instead of actual commands.
+
+**Fix:** Updated in v2.29+ to filter preference commands through `isLikelyCommand()`. Ensure `verification_commands` in preferences contains only valid shell commands, not descriptions.
+
+## LSP (Language Server Protocol)
+
+### "LSP isn't available in this workspace"
+
+GSD auto-detects language servers based on project files (e.g. `package.json` → TypeScript, `Cargo.toml` → Rust, `go.mod` → Go). If no servers are detected, the agent skips LSP features.
+
+**Check status:**
+```
+lsp status
+```
+
+This shows which servers are active and, if none are found, diagnoses why — including which project markers were detected but which server commands are missing.
+
+**Common fixes:**
+
+| Project type | Install command |
+|-------------|-----------------|
+| TypeScript/JavaScript | `npm install -g typescript-language-server typescript` |
+| Python | `pip install pyright` or `pip install python-lsp-server` |
+| Rust | `rustup component add rust-analyzer` |
+| Go | `go install golang.org/x/tools/gopls@latest` |
+
+After installing, run `lsp reload` to restart detection without restarting GSD.

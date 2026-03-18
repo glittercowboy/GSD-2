@@ -1,6 +1,9 @@
 
-# ── GSD (user project artifacts — never commit) ──
-.gsd/
+# ── GSD project state (development-only, lives in worktree branches) ──
+
+.claude/
+RELEASE-GUIDE.md
+*.tgz
 .DS_Store
 Thumbs.db
 *.swp
@@ -15,7 +18,8 @@ Thumbs.db
 node_modules/
 .next/
 /dist/
-!/pkg/dist/
+!/pkg/dist/modes/
+!/pkg/dist/core/export-html/
 build/
 __pycache__/
 *.pyc
@@ -23,23 +27,37 @@ __pycache__/
 venv/
 target/
 vendor/
+!packages/pi-coding-agent/src/core/export-html/vendor/
+!pkg/dist/core/export-html/vendor/
 *.log
 coverage/
 .cache/
 tmp/
-.planning
+
+# ── Workspace packages ──
+packages/*/dist/
+packages/*/node_modules/
 
 # ── GSD baseline (auto-generated) ──
 dist/
+!/pkg/dist/modes/
+!/pkg/dist/core/export-html/
 .bg_shell
 .gsd*.tgz
 .artifacts/
 AGENTS.md
 .bg-shell/
 TODOS.md
+.planning/
+.audits/
+docs/coherence-audit/
 
-# ── GSD baseline (auto-generated) ──
+# ── GSD project state (per-worktree, never committed) ──
 .gsd/
+
+# ── Stale lock files (npm is canonical) ──
+pnpm-lock.yaml
+bun.lock
 
 # ── Mission Control ──
 packages/*/node_modules/
@@ -52,7 +70,3 @@ packages/mission-control/src-tauri/target/
 packages/mission-control/e2e/reports/
 packages/mission-control/test-results/
 packages/mission-control/playwright-report/
-# Root-level leftovers (removed — kept here for safety)
-/e2e/reports/
-/test-results/
-/playwright-report/
