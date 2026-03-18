@@ -1,9 +1,10 @@
 "use client"
 
 import { useEffect, useState, useCallback, useRef, useSyncExternalStore } from "react"
-import { FolderOpen, Loader2, AlertCircle, Layers, Sparkles, ArrowUpCircle, GitBranch, FolderKanban, CheckCircle2, FolderRoot } from "lucide-react"
+import { FolderOpen, Loader2, AlertCircle, Layers, Sparkles, ArrowUpCircle, GitBranch, CheckCircle2, FolderRoot, ChevronDown, ExternalLink } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useProjectStoreManager } from "@/lib/project-store-manager"
+import { useGSDWorkspaceState, getLiveWorkspaceIndex, getLiveAutoDashboard, formatCost, getCurrentSlice } from "@/lib/gsd-workspace-store"
 import { Button } from "@/components/ui/button"
 
 // ─── Types (mirroring server-side ProjectMetadata) ─────────────────────────
@@ -22,12 +23,21 @@ interface ProjectDetectionSignals {
   hasPyproject?: boolean
 }
 
+interface ProjectProgressInfo {
+  activeMilestone: string | null
+  activeSlice: string | null
+  phase: string | null
+  milestonesCompleted: number
+  milestonesTotal: number
+}
+
 interface ProjectMetadata {
   name: string
   path: string
   kind: ProjectDetectionKind
   signals: ProjectDetectionSignals
   lastModified: number
+  progress?: ProjectProgressInfo | null
 }
 
 // ─── Kind badge config ─────────────────────────────────────────────────────
@@ -83,7 +93,7 @@ export function ProjectsView() {
   const [error, setError] = useState<string | null>(null)
 
   const loadProjects = useCallback(async (root: string) => {
-    const projRes = await fetch(`/api/projects?root=${encodeURIComponent(root)}`)
+    const projRes = await fetch(`/api/projects?root=${encodeURIComponent(root)}&detail=true`)
     if (!projRes.ok) throw new Error(`Failed to discover projects: ${projRes.status}`)
     return await projRes.json() as ProjectMetadata[]
   }, [])
@@ -138,7 +148,9 @@ export function ProjectsView() {
   }, [loadProjects])
 
   const [switchingTo, setSwitchingTo] = useState<string | null>(null)
+  const [expandedProject, setExpandedProject] = useState<string | null>(null)
   const switchPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const workspaceState = useGSDWorkspaceState()
 
   // Clean up poll on unmount
   useEffect(() => {
@@ -252,7 +264,7 @@ export function ProjectsView() {
     )
   }
 
-  // ─── Project grid ──────────────────────────────────────────────────────
+  // ─── Project list ──────────────────────────────────────────────────────
 
   return (
     <>
@@ -269,59 +281,197 @@ export function ProjectsView() {
           </p>
         </div>
 
-        {/* Grid */}
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {/* List */}
+        <div className="flex flex-col gap-2">
           {projects.map((project) => {
             const isActive = activeProjectCwd === project.path
+            const isExpanded = expandedProject === project.path
             const config = KIND_CONFIG[project.kind]
             const BadgeIcon = config.icon
             const signalText = describeSignals(project.signals)
 
             return (
-              <button
-                key={project.path}
-                onClick={() => handleSelectProject(project)}
-                className={cn(
-                  "group relative flex flex-col gap-3 rounded-lg border p-4 text-left transition-all",
-                  "hover:bg-accent/50",
-                  isActive
-                    ? "border-primary/40 bg-primary/5 ring-1 ring-primary/20"
-                    : "border-border bg-card",
-                )}
-              >
-                {/* Active indicator dot */}
-                {isActive && (
-                  <div className="absolute right-3 top-3 h-2 w-2 rounded-full bg-primary animate-pulse" />
-                )}
+              <div key={project.path} className="flex flex-col">
+                {/* Row */}
+                <button
+                  onClick={() => setExpandedProject(isExpanded ? null : project.path)}
+                  onDoubleClick={() => handleSelectProject(project)}
+                  className={cn(
+                    "group relative flex items-center gap-3 rounded-lg border px-4 py-3 text-left transition-all",
+                    "hover:bg-accent/50",
+                    isActive
+                      ? "border-primary/40 bg-primary/5 ring-1 ring-primary/20"
+                      : "border-border bg-card",
+                    isExpanded && "rounded-b-none border-b-0",
+                  )}
+                >
+                  {/* Active indicator dot */}
+                  {isActive && (
+                    <div className="h-2 w-2 shrink-0 rounded-full bg-primary animate-pulse" />
+                  )}
 
-                {/* Name */}
-                <div className="space-y-1 pr-4">
+                  {/* Name */}
                   <h3 className="text-sm font-semibold text-foreground truncate">{project.name}</h3>
-                  <p className="text-[11px] text-muted-foreground/60 font-mono truncate">{project.path}</p>
-                </div>
 
-                {/* Kind badge + signal chips */}
-                <div className="flex items-center gap-2 flex-wrap">
+                  {/* Kind badge */}
                   <span
                     className={cn(
-                      "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium",
+                      "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium shrink-0",
                       config.className,
                     )}
                   >
                     <BadgeIcon className="h-3 w-3" />
                     {config.label}
                   </span>
+
+                  {/* Signal chips */}
                   {signalText && (
-                    <span className="text-[10px] text-muted-foreground/50">{signalText}</span>
+                    <span className="text-[10px] text-muted-foreground/50 shrink-0 hidden sm:inline">{signalText}</span>
                   )}
-                </div>
-              </button>
+
+                  {/* Spacer */}
+                  <div className="flex-1" />
+
+                  {/* Chevron */}
+                  <ChevronDown
+                    className={cn(
+                      "h-4 w-4 text-muted-foreground/40 transition-transform shrink-0",
+                      isExpanded && "rotate-180",
+                    )}
+                  />
+                </button>
+
+                {/* Expanded detail */}
+                {isExpanded && (
+                  <div
+                    className={cn(
+                      "rounded-b-lg border border-t-0 px-4 py-3 space-y-3",
+                      isActive
+                        ? "border-primary/40 bg-primary/5"
+                        : "border-border bg-card",
+                    )}
+                  >
+                    {/* Path */}
+                    <p className="text-[11px] text-muted-foreground/60 font-mono truncate">{project.path}</p>
+
+                    {/* Progress detail */}
+                    {isActive ? (
+                      <ActiveProjectDetail workspaceState={workspaceState} />
+                    ) : (
+                      <InactiveProjectDetail progress={project.progress ?? null} />
+                    )}
+
+                    {/* Open button */}
+                    <div className="flex justify-end pt-1">
+                      <Button
+                        size="sm"
+                        variant={isActive ? "default" : "outline"}
+                        className="gap-1.5 h-8 text-xs"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleSelectProject(project)
+                        }}
+                      >
+                        <ExternalLink className="h-3 w-3" />
+                        {isActive ? "Go to Dashboard" : "Open"}
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
             )
           })}
         </div>
       </div>
     </div>
     </>
+  )
+}
+
+// ─── Active project detail (reads from workspace store) ────────────────
+
+function ActiveProjectDetail({ workspaceState }: { workspaceState: ReturnType<typeof useGSDWorkspaceState> }) {
+  const workspace = getLiveWorkspaceIndex(workspaceState)
+  const dashboard = getLiveAutoDashboard(workspaceState)
+  const currentSlice = getCurrentSlice(workspace)
+
+  if (!workspace) {
+    return <p className="text-xs text-muted-foreground italic">Workspace not loaded</p>
+  }
+
+  // Find active milestone
+  const activeMilestone = workspace.milestones.find(
+    (m) => m.id === workspace.active.milestoneId
+  )
+
+  // Count tasks across all slices in the active milestone
+  let tasksDone = 0
+  let tasksTotal = 0
+  if (activeMilestone) {
+    for (const slice of activeMilestone.slices) {
+      for (const task of slice.tasks) {
+        tasksTotal++
+        if (task.done) tasksDone++
+      }
+    }
+  }
+
+  const cost = dashboard?.totalCost ?? 0
+
+  return (
+    <div className="flex flex-wrap gap-x-8 gap-y-2 text-xs">
+      <div className="space-y-0.5 min-w-[140px]">
+        <p className="text-muted-foreground/60 uppercase tracking-wider text-[10px] font-medium">Milestone</p>
+        <p className="text-foreground font-medium truncate">
+          {activeMilestone ? `${activeMilestone.id}: ${activeMilestone.title}` : "None"}
+        </p>
+      </div>
+      <div className="space-y-0.5 min-w-[140px]">
+        <p className="text-muted-foreground/60 uppercase tracking-wider text-[10px] font-medium">Active Slice</p>
+        <p className="text-foreground font-medium truncate">
+          {currentSlice ? `${currentSlice.id}: ${currentSlice.title}` : "None"}
+        </p>
+      </div>
+      <div className="space-y-0.5 min-w-[100px]">
+        <p className="text-muted-foreground/60 uppercase tracking-wider text-[10px] font-medium">Tasks</p>
+        <p className="text-foreground font-medium">
+          {tasksDone} / {tasksTotal} done
+        </p>
+      </div>
+      <div className="space-y-0.5 min-w-[100px]">
+        <p className="text-muted-foreground/60 uppercase tracking-wider text-[10px] font-medium">Session Cost</p>
+        <p className="text-foreground font-medium">{formatCost(cost)}</p>
+      </div>
+    </div>
+  )
+}
+
+// ─── Inactive project detail (reads from API progress) ─────────────────
+
+function InactiveProjectDetail({ progress }: { progress: ProjectProgressInfo | null }) {
+  if (!progress) {
+    return <p className="text-xs text-muted-foreground italic">No progress data available</p>
+  }
+
+  return (
+    <div className="flex flex-wrap gap-x-8 gap-y-2 text-xs">
+      <div className="space-y-0.5 min-w-[140px]">
+        <p className="text-muted-foreground/60 uppercase tracking-wider text-[10px] font-medium">Milestone</p>
+        <p className="text-foreground font-medium truncate">{progress.activeMilestone ?? "None"}</p>
+      </div>
+      <div className="space-y-0.5 min-w-[140px]">
+        <p className="text-muted-foreground/60 uppercase tracking-wider text-[10px] font-medium">Active Slice</p>
+        <p className="text-foreground font-medium truncate">{progress.activeSlice ?? "None"}</p>
+      </div>
+      <div className="space-y-0.5 min-w-[100px]">
+        <p className="text-muted-foreground/60 uppercase tracking-wider text-[10px] font-medium">Phase</p>
+        <p className="text-foreground font-medium">{progress.phase ?? "Unknown"}</p>
+      </div>
+      <div className="space-y-0.5 min-w-[100px]">
+        <p className="text-muted-foreground/60 uppercase tracking-wider text-[10px] font-medium">Milestones</p>
+        <p className="text-foreground font-medium">{progress.milestonesCompleted} / {progress.milestonesTotal}</p>
+      </div>
+    </div>
   )
 }
 

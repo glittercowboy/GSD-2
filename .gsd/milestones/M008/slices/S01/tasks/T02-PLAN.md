@@ -74,3 +74,12 @@ Critical constraints:
 ## Expected Output
 
 - `web/components/gsd/projects-view.tsx` — redesigned from grid to expandable list with detail panels, both exports preserved, build passes
+
+## Observability Impact
+
+- **New state:** `expandedProject` (string | null) in `ProjectsView` — tracks which project path is expanded. Inspectable via React DevTools.
+- **API change:** Fetch URL now includes `?detail=true`, so `/api/projects` returns `progress` field on each project. Visible in Network tab.
+- **Active project detail:** Reads from `getLiveWorkspaceIndex()` and `getLiveAutoDashboard()` — same live state as dashboard. No new observability surface needed.
+- **Non-active project detail:** Reads from `project.progress` (API response). `null` progress → detail shows "No progress data" message (not an error).
+- **Interaction model change:** Single-click no longer navigates — only expands. Double-click or "Open" button navigates. This is a behavioral change from the current instant-navigate pattern.
+- **Failure visibility:** Projects with `progress: null` render gracefully in the detail panel.

@@ -43,20 +43,19 @@
   - Verify: `npm run build:web-host` exits 0
   - Done when: API returns `progress` field on each project when `?detail=true` is passed; build passes
 
-- [ ] **T02: Redesign projects-view from grid to expandable list** `est:1h`
+- [x] **T02: Redesign projects-view from grid to expandable list** `est:1h`
   - Why: This is the core UI change — replace grid layout with vertical list, add expand/collapse interaction with detail panel, consume progress data from both workspace store (active) and API (non-active).
   - Files: `web/components/gsd/projects-view.tsx`
   - Do: Replace `grid grid-cols-*` with `flex flex-col gap-2`. Each row is a clickable div showing project name, kind badge, and signal chips on one line. Add `expandedProject` state (path or null). Single click toggles expansion. Expanded section renders: for active project — milestone/slice name, task progress bar, cost from `getLiveAutoDashboard()`; for non-active — milestone name, slice name, phase, milestone tally from API `progress` field. Add explicit "Open" button in expanded section for navigation, plus double-click on row. Preserve `ProjectsView` and `DevRootSettingsSection` exports. Do NOT touch `FolderPickerDialog`, `DevRootSetup`, or `KIND_CONFIG` colors (S03 handles colors).
   - Verify: `npm run build:web-host` exits 0, `rg "grid grid-cols" web/components/gsd/projects-view.tsx` returns empty, both exports still imported by consumers
   - Done when: Projects render as a styled list with expandable detail; build passes
 
-## Files Likely Touched
+## Observability / Diagnostics
 
-- `src/web/project-discovery-service.ts`
-- `web/app/api/projects/route.ts`
-- `web/components/gsd/projects-view.tsx`
-: null` rather than throwing. Parse failures for individual fields yield `null` for that field while preserving others.
+- **API inspection:** `curl "http://localhost:3000/api/projects?root=...&detail=true"` returns projects with `progress` field. Omitting `detail` returns without `progress` (backward-compatible).
+- **Failure shape:** Missing/unreadable `STATE.md` → `progress: null` rather than throwing. Parse failures for individual fields yield `null` for that field while preserving others.
 - **Browser diagnostics:** Network tab shows `/api/projects?detail=true` request and response shape. Console errors from fetch failures are logged by the existing error boundary.
+- **UI state inspection:** `expandedProject` state in `ProjectsView` tracks which project path is expanded (or null). Click a row to toggle. Active project detail pulls from workspace store; non-active from API `progress` field.
 - **Redaction:** No secrets or credentials involved in this slice.
 
 ## Files Likely Touched
