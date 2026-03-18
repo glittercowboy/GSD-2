@@ -1607,6 +1607,15 @@ async function dispatchNextUnit(
     }
   }
 
+  // Cache-optimize prompt section ordering
+  try {
+    const { reorderForCaching } = await import("./prompt-ordering.js");
+    finalPrompt = reorderForCaching(finalPrompt);
+  } catch (reorderErr) {
+    const msg = reorderErr instanceof Error ? reorderErr.message : String(reorderErr);
+    process.stderr.write(`[gsd] prompt reorder failed (non-fatal): ${msg}\n`);
+  }
+
   // Select and apply model
   const modelResult = await selectAndApplyModel(ctx, pi, unitType, unitId, s.basePath, prefs, s.verbose, s.autoModeStartModel);
   s.currentUnitRouting = modelResult.routing;
