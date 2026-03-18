@@ -74,6 +74,13 @@ Complete the message stream with all block types and polish the overall visual q
 - Streamdown caret: requires `import "streamdown/styles.css"` and `caret="block" isAnimating={bool}` on the component (already set in T02's AssistantBlock)
 - Phosphor icons: `SparkleIcon`, `CaretRight`, `Check`, `X` from `@phosphor-icons/react`
 
+## Observability Impact
+
+- **New inspection surfaces:** UserBlock and ToolStub are visible in React DevTools component tree. ToolStub's `status` prop reflects the live tool execution state (`running` → `done`/`error`).
+- **Diagnostic path:** Inspect block rendering: open React DevTools → find `MessageStream` → check child components are `UserBlock`, `ToolStub`, or `AssistantBlock` with correct props. Empty state renders when `blocks.length === 0`.
+- **Failure visibility:** If streamdown caret CSS fails to load, the block caret animation won't appear during streaming — visible immediately as a missing cursor. If Phosphor icons fail to import, ToolStub status indicators will be blank (React error boundary would catch).
+- **Auto-scroll diagnostics:** `isNearBottom` ref can be inspected via React DevTools on the MessageStream component. If auto-scroll misbehaves, check that `scrollRef.current.scrollHeight - scrollTop - clientHeight < 80` is evaluating correctly.
+
 ## Expected Output
 
 - `studio/src/renderer/src/components/message-stream/UserBlock.tsx` — styled user prompt display

@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "streamdown/styles.css";
 
 @font-face {
   font-family: 'Inter';

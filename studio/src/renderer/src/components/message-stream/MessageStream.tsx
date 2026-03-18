@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react'
-import { SparkleIcon } from '@phosphor-icons/react'
+import { Sparkle } from '@phosphor-icons/react'
 import { Text } from '../ui/Text'
 import { useSessionStore } from '@/stores/session-store'
 import { buildMessageBlocks, type MessageBlock } from '@/lib/message-model'
 import { AssistantBlock } from './AssistantBlock'
+import { UserBlock } from './UserBlock'
+import { ToolStub } from './ToolStub'
 
 // ---------------------------------------------------------------------------
 // Empty state — shown when no messages yet
@@ -13,34 +15,11 @@ function EmptyState() {
   return (
     <div className="flex flex-1 items-center justify-center">
       <div className="flex flex-col items-center gap-3 text-center">
-        <SparkleIcon size={32} weight="duotone" className="text-accent/50" />
+        <Sparkle size={32} weight="duotone" className="text-accent/50" />
         <Text className="text-text-tertiary">
           Send a prompt to start a session
         </Text>
       </div>
-    </div>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Block renderers (T02: AssistantBlock uses Streamdown; tool/user stubs stay until T03)
-// ---------------------------------------------------------------------------
-
-function ToolUseBlockStub({ block }: { block: Extract<MessageBlock, { type: 'tool-use' }> }) {
-  return (
-    <div className="flex items-center gap-2 rounded-[8px] border border-border bg-bg-secondary/40 px-4 py-2 text-[12px] text-text-tertiary">
-      <span className="font-medium text-text-secondary">{block.toolName}</span>
-      <span className="text-[11px]">
-        {block.status === 'running' ? '⟳ running…' : block.status === 'error' ? '✕ error' : '✓ done'}
-      </span>
-    </div>
-  )
-}
-
-function UserPromptBlock({ block }: { block: Extract<MessageBlock, { type: 'user-prompt' }> }) {
-  return (
-    <div className="rounded-[8px] border-l-2 border-accent/40 bg-accent/5 px-4 py-3 text-[14px] leading-6 text-text-primary">
-      {block.text}
     </div>
   )
 }
@@ -54,9 +33,9 @@ function BlockRenderer({ block, isLastAssistant }: { block: MessageBlock; isLast
     case 'assistant-text':
       return <AssistantBlock content={block.content} isLastBlock={isLastAssistant} />
     case 'tool-use':
-      return <ToolUseBlockStub block={block} />
+      return <ToolStub toolName={block.toolName} status={block.status} />
     case 'user-prompt':
-      return <UserPromptBlock block={block} />
+      return <UserBlock text={block.text} />
   }
 }
 
@@ -86,12 +65,12 @@ export function MessageStream() {
     isNearBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < threshold
   }, [])
 
-  // Auto-scroll when content changes, but only if user hasn't scrolled up.
+  // Auto-scroll when blocks change, but only if user hasn't scrolled up.
   useEffect(() => {
     if (isNearBottom.current && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight
     }
-  }, [events.length])
+  }, [blocks])
 
   if (blocks.length === 0) {
     return <EmptyState />
@@ -103,7 +82,7 @@ export function MessageStream() {
       onScroll={handleScroll}
       className="min-h-0 flex-1 overflow-auto"
     >
-      <div className="mx-auto flex max-w-3xl flex-col gap-3 px-6 py-4">
+      <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-6 py-6">
         {blocks.map((block, idx) => (
           <BlockRenderer
             key={block.id}

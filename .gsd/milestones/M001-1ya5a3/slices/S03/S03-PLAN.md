@@ -58,7 +58,7 @@
   - Verify: `npm run build -w studio` succeeds (confirms Shiki WASM bundles correctly in Electron/Vite). Dev app renders code blocks with syntax highlighting, tables as styled tables, headings with hierarchy, inline code styled differently from block code.
   - Done when: all markdown elements render with design-system styling, code blocks show Shiki highlighting, streaming cursor appears during generation.
 
-- [ ] **T03: Add UserBlock, ToolStub, and polish streaming UX** `est:25m`
+- [x] **T03: Add UserBlock, ToolStub, and polish streaming UX** `est:25m`
   - Why: Completes the message stream with all block types, polishes spacing/typography rhythm, and ensures scroll behavior is correct. This is the final quality pass that makes S03 demo-ready. Also imports `streamdown/styles.css` for caret animations.
   - Files: `studio/src/renderer/src/components/message-stream/UserBlock.tsx`, `studio/src/renderer/src/components/message-stream/ToolStub.tsx`, `studio/src/renderer/src/components/message-stream/MessageStream.tsx`, `studio/src/renderer/src/styles/index.css`
   - Do: Create `UserBlock.tsx` — styled display of the user's prompt text with subtle visual distinction (left border or icon). Create `ToolStub.tsx` — minimal placeholder for tool_execution events showing tool name + chevron indicator, collapsed appearance, muted styling. Wire both into MessageStream's block rendering switch. Import `streamdown/styles.css` in the main CSS for caret animations. Polish MessageStream spacing: gaps between blocks, max-width constraint, proper document rhythm. Ensure auto-scroll uses the isNearBottom pattern (80px threshold from S02) triggered by content changes. Add empty state when no messages.
