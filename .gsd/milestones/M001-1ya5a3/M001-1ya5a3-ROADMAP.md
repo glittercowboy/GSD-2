@@ -57,10 +57,10 @@ This milestone is complete only when all are true:
 - [x] **S01: Electron Shell + Design System Foundation** `risk:high` `depends:[]`
   > After this: App launches as a native desktop window with the three-column resizable layout, dark theme, amber accent, Inter + JetBrains Mono loaded, Phosphor icons rendering. Panels show placeholder content.
 
-- [ ] **S02: gsd-2 RPC Connection + Event Stream** `risk:high` `depends:[S01]`
+- [x] **S02: gsd-2 RPC Connection + Event Stream** `risk:high` `depends:[S01]`
   > After this: App spawns gsd-2, connects via JSON-RPC. Raw events stream into the center panel as formatted output — proof the pipe works end-to-end.
 
-- [ ] **S03: Message Stream + Markdown Rendering** `risk:high` `depends:[S02]`
+- [x] **S03: Message Stream + Markdown Rendering** `risk:high` `depends:[S02]`
   > After this: Agent text streams in real-time with beautiful typography — headings, code blocks with Shiki syntax highlighting, tables, inline code, lists. Continuous document flow.
 
 - [ ] **S04: Tool Cards — The Art** `risk:high` `depends:[S03]`
