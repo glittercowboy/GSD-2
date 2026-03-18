@@ -198,23 +198,6 @@ async function readRoadmapWithFallback(gsdDir: string, active_milestone: string)
     return primary;
   }
 
-  // Fallback: scan .gsd/milestones/ for any *-ROADMAP.md
-  const milestonesDir = join(gsdDir, "milestones");
-  console.log(`[state-deriver] Primary not found; scanning: ${milestonesDir}`);
-  try {
-    const entries = await readdir(milestonesDir);
-    for (const entry of entries) {
-      const roadmapPath = join(milestonesDir, entry, `${entry}-ROADMAP.md`);
-      const scanned = await readFileText(roadmapPath);
-      if (scanned) {
-        console.log(`[state-deriver] Roadmap found via scan: ${roadmapPath}`);
-        return scanned;
-      }
-    }
-  } catch (err) {
-    console.log(`[state-deriver] Milestones scan failed: ${err}`);
-  }
-
   console.log(`[state-deriver] No roadmap found for milestone: ${active_milestone}`);
   return null;
 }
@@ -615,7 +598,26 @@ export async function buildFullState(gsdDir: string): Promise<GSD2State> {
     // milestones/ dir not present — fall back to active milestone only
   }
 
-  // Always ensure the active roadmap is included (scan only finds milestones/ subdirs)
+  // Also scan gsdDir root for M{NNN}-ROADMAP.md files (flat layout, not in milestones/ subdir)
+  try {
+    const rootEntries = await readdir(gsdDir);
+    for (const entry of rootEntries) {
+      const match = entry.match(/^(M\d+)-ROADMAP\.md$/i);
+      if (!match) continue;
+      const mId = match[1].toUpperCase();
+      if (allMilestones.some((m) => m.milestoneId === mId)) continue;
+      const raw = await readFileText(join(gsdDir, entry));
+      if (raw) {
+        const parsed = parseRoadmap(raw);
+        allMilestones.push(parsed);
+      }
+    }
+    allMilestones.sort((a, b) => a.milestoneId.localeCompare(b.milestoneId));
+  } catch {
+    // gsdDir not present or not readable
+  }
+
+  // Always ensure the active roadmap is included as final safety net
   if (roadmap) {
     const alreadyIncluded = allMilestones.some((m) => m.milestoneId === roadmap.milestoneId);
     if (!alreadyIncluded) {
