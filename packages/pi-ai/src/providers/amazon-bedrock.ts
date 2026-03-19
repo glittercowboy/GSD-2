@@ -1,7 +1,6 @@
 import {
 	BedrockRuntimeClient,
 	type BedrockRuntimeClientConfig,
-	StopReason as BedrockStopReason,
 	type Tool as BedrockTool,
 	CachePointType,
 	CacheTTL,
@@ -28,7 +27,6 @@ import type {
 	Context,
 	Model,
 	SimpleStreamOptions,
-	StopReason,
 	StreamFunction,
 	StreamOptions,
 	TextContent,
@@ -42,6 +40,7 @@ import type {
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
+import { mapBedrockStopReason } from "../utils/stop-reason.js";
 import { adjustMaxTokensForThinking, buildBaseOptions, clampReasoning } from "./simple-options.js";
 import { transformMessages } from "./transform-messages.js";
 
@@ -175,7 +174,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
 				} else if (item.contentBlockStop) {
 					handleContentBlockStop(item.contentBlockStop, blocks, output, stream);
 				} else if (item.messageStop) {
-					output.stopReason = mapStopReason(item.messageStop.stopReason);
+					output.stopReason = mapBedrockStopReason(item.messageStop.stopReason);
 				} else if (item.metadata) {
 					handleMetadata(item.metadata, model, output);
 				} else if (item.internalServerException) {
@@ -661,20 +660,6 @@ function convertToolConfig(
 	return { tools: bedrockTools, toolChoice: bedrockToolChoice };
 }
 
-function mapStopReason(reason: string | undefined): StopReason {
-	switch (reason) {
-		case BedrockStopReason.END_TURN:
-		case BedrockStopReason.STOP_SEQUENCE:
-			return "stop";
-		case BedrockStopReason.MAX_TOKENS:
-		case BedrockStopReason.MODEL_CONTEXT_WINDOW_EXCEEDED:
-			return "length";
-		case BedrockStopReason.TOOL_USE:
-			return "toolUse";
-		default:
-			return "error";
-	}
-}
 
 function buildAdditionalModelRequestFields(
 	model: Model<"bedrock-converse-stream">,

@@ -18,7 +18,6 @@ import type {
 	Context,
 	ImageContent,
 	Model,
-	StopReason,
 	TextContent,
 	TextSignatureV1,
 	ThinkingContent,
@@ -30,6 +29,7 @@ import type { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { shortHash } from "../utils/hash.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
+import { mapOpenAIResponsesStopReason } from "../utils/stop-reason.js";
 import { transformMessages } from "./transform-messages.js";
 
 // =============================================================================
@@ -462,7 +462,7 @@ export async function processResponsesStream<TApi extends Api>(
 				options.applyServiceTierPricing(output.usage, serviceTier);
 			}
 			// Map status to stop reason
-			output.stopReason = mapStopReason(response?.status);
+			output.stopReason = mapOpenAIResponsesStopReason(response?.status);
 			if (output.content.some((b) => b.type === "toolCall") && output.stopReason === "stop") {
 				output.stopReason = "toolUse";
 			}
@@ -474,23 +474,3 @@ export async function processResponsesStream<TApi extends Api>(
 	}
 }
 
-function mapStopReason(status: OpenAI.Responses.ResponseStatus | undefined): StopReason {
-	if (!status) return "stop";
-	switch (status) {
-		case "completed":
-			return "stop";
-		case "incomplete":
-			return "length";
-		case "failed":
-		case "cancelled":
-			return "error";
-		// These two are wonky ...
-		case "in_progress":
-		case "queued":
-			return "stop";
-		default: {
-			const _exhaustive: never = status;
-			throw new Error(`Unhandled stop reason: ${_exhaustive}`);
-		}
-	}
-}

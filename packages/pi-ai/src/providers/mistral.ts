@@ -26,7 +26,6 @@ import type {
 	Message,
 	Model,
 	SimpleStreamOptions,
-	StopReason,
 	StreamFunction,
 	StreamOptions,
 	TextContent,
@@ -38,6 +37,7 @@ import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { shortHash } from "../utils/hash.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
+import { mapMistralStopReason } from "../utils/stop-reason.js";
 import { buildBaseOptions, clampReasoning } from "./simple-options.js";
 import { transformMessages } from "./transform-messages.js";
 
@@ -311,7 +311,7 @@ async function consumeChatStream(
 		if (!choice) continue;
 
 		if (choice.finishReason) {
-			output.stopReason = mapChatStopReason(choice.finishReason);
+			output.stopReason = mapMistralStopReason(choice.finishReason);
 		}
 
 		const delta = choice.delta;
@@ -579,19 +579,3 @@ function mapToolChoice(
 	};
 }
 
-function mapChatStopReason(reason: string | null): StopReason {
-	if (reason === null) return "stop";
-	switch (reason) {
-		case "stop":
-			return "stop";
-		case "length":
-		case "model_length":
-			return "length";
-		case "tool_calls":
-			return "toolUse";
-		case "error":
-			return "error";
-		default:
-			return "stop";
-	}
-}

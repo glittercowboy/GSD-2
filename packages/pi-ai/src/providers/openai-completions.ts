@@ -19,7 +19,6 @@ import type {
 	Model,
 	OpenAICompletionsCompat,
 	SimpleStreamOptions,
-	StopReason,
 	StreamFunction,
 	StreamOptions,
 	TextContent,
@@ -31,6 +30,7 @@ import type {
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
+import { mapOpenAICompletionsStopReason } from "../utils/stop-reason.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import { buildBaseOptions, clampReasoning } from "./simple-options.js";
 import { transformMessages } from "./transform-messages.js";
@@ -167,7 +167,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 				if (!choice) continue;
 
 				if (choice.finish_reason) {
-					output.stopReason = mapStopReason(choice.finish_reason);
+					output.stopReason = mapOpenAICompletionsStopReason(choice.finish_reason);
 				}
 
 				if (choice.delta) {
@@ -735,27 +735,6 @@ function convertTools(
 	}));
 }
 
-function mapStopReason(reason: ChatCompletionChunk.Choice["finish_reason"]): StopReason {
-	if (reason === null) return "stop";
-	switch (reason) {
-		case "stop":
-			return "stop";
-		case "length":
-			return "length";
-		case "function_call":
-		case "tool_calls":
-			return "toolUse";
-		case "content_filter":
-			return "error";
-		default:
-			// Third-party and community models (e.g. Qwen GGUF quants) may emit
-			// non-standard finish_reason values like "eos_token", "eos", or
-			// "end_of_turn". The OpenAI spec defines finish_reason as a string,
-			// so we treat unrecognized values as a normal stop rather than
-			// throwing — which would abort in-flight tool calls (#863).
-			return "stop";
-	}
-}
 
 /**
  * Detect compatibility settings from provider and baseUrl for known providers.

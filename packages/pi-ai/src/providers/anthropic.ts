@@ -18,7 +18,6 @@ import type {
 	Model,
 	ServerToolUseContent,
 	SimpleStreamOptions,
-	StopReason,
 	StreamFunction,
 	StreamOptions,
 	TextContent,
@@ -32,6 +31,7 @@ import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 
+import { mapAnthropicStopReason } from "../utils/stop-reason.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import { adjustMaxTokensForThinking, buildBaseOptions } from "./simple-options.js";
 import { transformMessages } from "./transform-messages.js";
@@ -472,7 +472,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 					}
 				} else if (event.type === "message_delta") {
 					if (event.delta.stop_reason) {
-						output.stopReason = mapStopReason(event.delta.stop_reason);
+						output.stopReason = mapAnthropicStopReason(event.delta.stop_reason);
 					}
 					// Only update usage fields if present (not null).
 					// Preserves input_tokens from message_start when proxies omit it in message_delta.
@@ -993,24 +993,3 @@ function convertTools(tools: Tool[], isOAuthToken: boolean): Anthropic.Messages.
 	});
 }
 
-function mapStopReason(reason: Anthropic.Messages.StopReason | string): StopReason {
-	switch (reason) {
-		case "end_turn":
-			return "stop";
-		case "max_tokens":
-			return "length";
-		case "tool_use":
-			return "toolUse";
-		case "refusal":
-			return "error";
-		case "pause_turn": // Stop is good enough -> resubmit
-			return "stop";
-		case "stop_sequence":
-			return "stop"; // We don't supply stop sequences, so this should never happen
-		case "sensitive": // Content flagged by safety filters (not yet in SDK types)
-			return "error";
-		default:
-			// Handle unknown stop reasons gracefully (API may add new values)
-			throw new Error(`Unhandled stop reason: ${reason}`);
-	}
-}
