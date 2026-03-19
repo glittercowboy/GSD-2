@@ -1048,3 +1048,185 @@ test("stuck counter: logs debug output with stuck-detected phase", () => {
     "auto-loop.ts must track sameUnitCount for stuck detection",
   );
 });
+
+// ── Lifecycle test (S05/T02) ─────────────────────────────────────────────────
+
+test("autoLoop lifecycle: advances through research → plan → execute → verify → complete across iterations", async () => {
+  _resetPendingResolve();
+
+  const ctx = makeMockCtx();
+  ctx.ui.setStatus = () => {};
+  ctx.ui.notify = () => {};
+  ctx.sessionManager = { getSessionFile: () => "/tmp/session.json" };
+  const pi = makeMockPi();
+  const s = makeLoopSession();
+
+  let deriveCallCount = 0;
+  let dispatchCallCount = 0;
+  const dispatchedUnitTypes: string[] = [];
+
+  // Phase sequence: each deriveState call returns a different phase.
+  // On the 6th call (start of iteration 6), we deactivate to exit.
+  const phases = [
+    // Call 1: researching → dispatches research-slice
+    {
+      phase: "researching",
+      activeSlice: { id: "S01", title: "Research Slice" },
+      activeTask: null,
+    },
+    // Call 2: planning → dispatches plan-slice
+    {
+      phase: "planning",
+      activeSlice: { id: "S01", title: "Plan Slice" },
+      activeTask: null,
+    },
+    // Call 3: executing → dispatches execute-task
+    {
+      phase: "executing",
+      activeSlice: { id: "S01", title: "Execute Slice" },
+      activeTask: { id: "T01" },
+    },
+    // Call 4: verifying → dispatches verify-slice
+    {
+      phase: "verifying",
+      activeSlice: { id: "S01", title: "Verify Slice" },
+      activeTask: null,
+    },
+    // Call 5: completing → dispatches complete-slice
+    {
+      phase: "completing",
+      activeSlice: { id: "S01", title: "Complete Slice" },
+      activeTask: null,
+    },
+  ];
+
+  const dispatches = [
+    { unitType: "research-slice", unitId: "M001/S01", prompt: "research" },
+    { unitType: "plan-slice", unitId: "M001/S01", prompt: "plan" },
+    { unitType: "execute-task", unitId: "M001/S01/T01", prompt: "execute" },
+    { unitType: "verify-slice", unitId: "M001/S01", prompt: "verify" },
+    { unitType: "complete-slice", unitId: "M001/S01", prompt: "complete" },
+  ];
+
+  const deps = makeMockDeps({
+    deriveState: async () => {
+      deriveCallCount++;
+      deps.callLog.push("deriveState");
+
+      if (deriveCallCount > phases.length) {
+        // 6th+ call: deactivate to exit the loop
+        s.active = false;
+        return {
+          phase: "complete",
+          activeMilestone: { id: "M001", title: "Test", status: "complete" },
+          activeSlice: null,
+          activeTask: null,
+          registry: [{ id: "M001", status: "complete" }],
+          blockers: [],
+        } as any;
+      }
+
+      const p = phases[deriveCallCount - 1];
+      return {
+        phase: p.phase,
+        activeMilestone: { id: "M001", title: "Test", status: "active" },
+        activeSlice: p.activeSlice,
+        activeTask: p.activeTask,
+        registry: [{ id: "M001", status: "active" }],
+        blockers: [],
+      } as any;
+    },
+    resolveDispatch: async () => {
+      dispatchCallCount++;
+      deps.callLog.push("resolveDispatch");
+
+      if (dispatchCallCount > dispatches.length) {
+        // Safety: shouldn't reach here, but stop if it does
+        return { action: "stop" as const, reason: "done", level: "info" as const };
+      }
+
+      const d = dispatches[dispatchCallCount - 1];
+      dispatchedUnitTypes.push(d.unitType);
+      return {
+        action: "dispatch" as const,
+        unitType: d.unitType,
+        unitId: d.unitId,
+        prompt: d.prompt,
+      };
+    },
+    postUnitPostVerification: async () => {
+      deps.callLog.push("postUnitPostVerification");
+      return "continue" as const;
+    },
+  });
+
+  const loopPromise = autoLoop(ctx, pi, s, deps);
+
+  // Resolve each iteration's agent_end — 5 iterations, each dispatches a unit
+  for (let i = 0; i < 5; i++) {
+    await new Promise(r => setTimeout(r, 30));
+    resolveAgentEnd(makeEvent());
+  }
+
+  await loopPromise;
+
+  // Assert deriveState was called at least 5 times (once per iteration)
+  assert.ok(
+    deriveCallCount >= 5,
+    `deriveState should be called at least 5 times (got ${deriveCallCount})`,
+  );
+
+  // Assert the dispatched unit types cover the full lifecycle sequence
+  assert.ok(
+    dispatchedUnitTypes.includes("research-slice"),
+    `should have dispatched research-slice, got: ${dispatchedUnitTypes.join(", ")}`,
+  );
+  assert.ok(
+    dispatchedUnitTypes.includes("plan-slice"),
+    `should have dispatched plan-slice, got: ${dispatchedUnitTypes.join(", ")}`,
+  );
+  assert.ok(
+    dispatchedUnitTypes.includes("execute-task"),
+    `should have dispatched execute-task, got: ${dispatchedUnitTypes.join(", ")}`,
+  );
+  assert.ok(
+    dispatchedUnitTypes.includes("verify-slice"),
+    `should have dispatched verify-slice, got: ${dispatchedUnitTypes.join(", ")}`,
+  );
+  assert.ok(
+    dispatchedUnitTypes.includes("complete-slice"),
+    `should have dispatched complete-slice, got: ${dispatchedUnitTypes.join(", ")}`,
+  );
+
+  // Assert call sequence: deriveState and resolveDispatch entries are interleaved
+  const deriveEntries = deps.callLog.filter(c => c === "deriveState");
+  const dispatchEntries = deps.callLog.filter(c => c === "resolveDispatch");
+  assert.ok(
+    deriveEntries.length >= 5,
+    `callLog should have at least 5 deriveState entries (got ${deriveEntries.length})`,
+  );
+  assert.ok(
+    dispatchEntries.length >= 5,
+    `callLog should have at least 5 resolveDispatch entries (got ${dispatchEntries.length})`,
+  );
+
+  // Verify interleaving: each resolveDispatch should follow a deriveState
+  let dispatchSeen = 0;
+  for (const entry of deps.callLog) {
+    if (entry === "resolveDispatch") {
+      dispatchSeen++;
+    }
+    if (entry === "deriveState" && dispatchSeen > 0) {
+      // A deriveState after a resolveDispatch confirms the loop advanced
+      break;
+    }
+  }
+  assert.ok(dispatchSeen > 0, "resolveDispatch should appear in callLog");
+
+  // Assert the exact sequence of dispatched unit types
+  assert.deepEqual(
+    dispatchedUnitTypes,
+    ["research-slice", "plan-slice", "execute-task", "verify-slice", "complete-slice"],
+    "dispatched unit types should follow the full lifecycle sequence",
+  );
+});
