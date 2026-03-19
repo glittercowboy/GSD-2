@@ -577,8 +577,7 @@ function resolveBlobRefsInEntries(entries: FileEntry[], blobStore: BlobStore): v
 	}
 }
 
-/** Exported for testing */
-export function loadEntriesFromFile(filePath: string): FileEntry[] {
+function loadEntriesFromFile(filePath: string): FileEntry[] {
 	if (!existsSync(filePath)) return [];
 
 	const content = readFileSync(filePath, "utf8");
@@ -620,8 +619,7 @@ function isValidSessionFile(filePath: string): boolean {
 	}
 }
 
-/** Exported for testing */
-export function findMostRecentSession(sessionDir: string): string | null {
+function findMostRecentSession(sessionDir: string): string | null {
 	try {
 		const files = readdirSync(sessionDir)
 			.filter((f) => f.endsWith(".jsonl"))

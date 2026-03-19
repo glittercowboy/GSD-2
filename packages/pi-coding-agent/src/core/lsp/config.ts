@@ -319,14 +319,3 @@ export function getServersForFile(config: LspConfig, filePath: string): Array<[s
 	});
 }
 
-export function getServerForFile(config: LspConfig, filePath: string): [string, ServerConfig] | null {
-	const servers = getServersForFile(config, filePath);
-	return servers.length > 0 ? servers[0] : null;
-}
-
-export function hasCapability(
-	config: ServerConfig,
-	capability: keyof NonNullable<ServerConfig["capabilities"]>,
-): boolean {
-	return config.capabilities?.[capability] === true;
-}

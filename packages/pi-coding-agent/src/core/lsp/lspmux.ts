@@ -172,7 +172,7 @@ export interface LspmuxWrappedCommand {
 	env?: Record<string, string>;
 }
 
-export function wrapWithLspmux(
+function wrapWithLspmux(
 	originalCommand: string,
 	originalArgs: string[] | undefined,
 	state: LspmuxState,
