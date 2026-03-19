@@ -466,3 +466,44 @@ test("parked milestone is not treated as active or complete", async () => {
     rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+// ─── Phase 5: Defensive Guards ───────────────────────────────────────────
+
+test("dispatch returns stop when phase=summarizing but activeSlice is null (corrupt state)", async () => {
+  const corruptState: GSDState = {
+    activeMilestone: { id: "M001", title: "Test" },
+    activeSlice: null, // BUG: summarizing should always have activeSlice
+    activeTask: null,
+    phase: "summarizing",
+    recentDecisions: [],
+    blockers: [],
+    nextAction: "",
+    registry: [{ id: "M001", title: "Test", status: "active" }],
+    requirements: { active: 0, validated: 0, deferred: 0, outOfScope: 0 },
+    progress: { milestones: { done: 0, total: 1 } },
+  };
+  const result = await resolveDispatch({
+    basePath: "/tmp/fake", mid: "M001", midTitle: "Test", state: corruptState, prefs: undefined,
+  });
+  assert.equal(result.action, "stop", "should stop instead of crashing");
+  assert.ok((result as any).reason.includes("no active slice"), `reason should mention missing slice: ${(result as any).reason}`);
+});
+
+test("dispatch returns stop when phase=executing but activeSlice is null (corrupt state)", async () => {
+  const corruptState: GSDState = {
+    activeMilestone: { id: "M001", title: "Test" },
+    activeSlice: null,
+    activeTask: { id: "T01", title: "Task" },
+    phase: "executing",
+    recentDecisions: [],
+    blockers: [],
+    nextAction: "",
+    registry: [{ id: "M001", title: "Test", status: "active" }],
+    requirements: { active: 0, validated: 0, deferred: 0, outOfScope: 0 },
+    progress: { milestones: { done: 0, total: 1 } },
+  };
+  const result = await resolveDispatch({
+    basePath: "/tmp/fake", mid: "M001", midTitle: "Test", state: corruptState, prefs: undefined,
+  });
+  assert.equal(result.action, "stop", "should stop instead of crashing");
+});
