@@ -24,24 +24,19 @@ One command. Walk away. Come back to a built project with clean git history.
 
 ---
 
-## What's New in v2.32
+## What's New in v2.33
 
-- **Simplified pipeline** — research merged into planning, mechanical completion (ADR-003)
-- **Always-on health widget** — 🟢🟡🔴 traffic-light indicator in the progress widget and visualizer health tab
-- **Environment health checks** — progress scoring and status integration for auto-mode
-- **Extension registry** — user-managed enable/disable for bundled and custom extensions
-- **Built-in skill authoring** — create and distribute custom skills from within GSD
-- **Workflow templates** — right-sized workflows for every task type (research, plan, execute, complete)
-- **AWS Bedrock auth** — automatic credential refresh via the new `aws-auth` extension
-- **`-w` / `--worktree` CLI flag** — launch isolated worktree sessions from the command line
-- **Native MCP client** — replaced MCPorter with a built-in MCP client for better reliability
-- **External state directory** — `.gsd/` now lives in `~/.gsd/projects/` with a symlink (ADR-002)
-- **Model health indicator** — live health status based on error trends and consecutive failures
-- **Quick-task branch cleanup** — `/gsd quick` branches auto-merge back after completion
-- **Windows EPERM fallback** — migration rename uses copy+delete when NTFS blocks rename
-- **Worktree identity fix** — stable project hash across worktrees and main repo
-- **Crash recovery guidance** — actionable next-step messages based on what was interrupted
-- **UAT verdict gating** — non-PASS verdicts now block slice progression instead of being ignored
+- **Dispatch loop hardening** — defensive guards, reentrancy protection, and 125 new regression tests covering the full `deriveState → resolveDispatch` chain without an LLM
+- **Live regression test harness** — post-build pipeline validation that catches dispatch, parser, and lock lifecycle regressions before promotion
+- **Unified error handling** — `getErrorMessage()` helper replaces 65 inline duplicates across the codebase
+- **Centralized unit ID parsing** — `parseUnitId()` eliminates fragile regex patterns scattered across dispatch, recovery, and metrics code
+- **Milestone merge consolidation** — `tryMergeMilestone()` replaces 4 duplicate merge paths in the auto-mode loop
+- **Lock alignment fix** — retry lock path now matches primary lock settings, preventing `ECOMPROMISED` errors on resume
+- **NixOS/nix-darwin support** — symlinks in `.gsd/` are skipped during `makeTreeWritable` to prevent `EPERM` failures
+- **Windows EPERM fallback** — `.gsd/` migration uses copy+delete when NTFS blocks direct rename
+- **Worktree identity fix** — stable project hash resolved from main repo root, not worktree path
+- **Quick-task branch cleanup** — `/gsd quick` branches auto-merge back to the original branch after completion
+- **Crash recovery guidance** — actionable next-step messages based on what was interrupted and what state survived
 
 See the full [Changelog](./CHANGELOG.md) for details.
 
