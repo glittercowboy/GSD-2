@@ -138,9 +138,9 @@ function render(w: number, healthState: { icon: string; color: string; summary: 
   lines.push(rightAlign(actionLeft, phaseBadge, w));
 
   // Two-column body
-  const minTwoColWidth = 100;
-  const rightColFixed = 44;
-  const colGap = 5;
+  const minTwoColWidth = 76;
+  const rightColFixed = w >= 100 ? 44 : Math.max(28, Math.floor(w * 0.4));
+  const colGap = w >= 100 ? 5 : 3;
   const hasTasks = !noMilestone;
   const useTwoCol = w >= minTwoColWidth && hasTasks;
   const rightColWidth = useTwoCol ? rightColFixed : 0;

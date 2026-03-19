@@ -389,9 +389,9 @@ export function updateProgressWidget(
         // ── Two-column body ─────────────────────────────────────────────
         // Left: progress, health, next, stats   Right: task checklist
         const divider = theme.fg("dim", "│");
-        const minTwoColWidth = 100;
-        const rightColFixed = 44;
-        const colGap = 5;
+        const minTwoColWidth = 76;
+        const rightColFixed = width >= 100 ? 44 : Math.max(28, Math.floor(width * 0.4));
+        const colGap = width >= 100 ? 5 : 3;
         const roadmapSlices = mid ? getRoadmapSlicesSync() : null;
         const taskDetailsCol = roadmapSlices?.taskDetails ?? null;
         const useTwoCol = width >= minTwoColWidth && taskDetailsCol !== null && taskDetailsCol.length > 0;
