@@ -25,12 +25,14 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface McpServerConfig {
 	name: string;
 	transport: "stdio" | "http" | "unknown";
+	sourcePath?: string;
 	command?: string;
 	args?: string[];
 	env?: Record<string, string>;
@@ -90,6 +92,7 @@ function readConfigs(): McpServerConfig[] {
 				servers.push({
 					name,
 					transport,
+					sourcePath: configPath,
 					...(hasCommand && {
 						command: config.command as string,
 						args: Array.isArray(config.args) ? (config.args as string[]) : undefined,
@@ -112,6 +115,66 @@ function readConfigs(): McpServerConfig[] {
 
 function getServerConfig(name: string): McpServerConfig | undefined {
 	return readConfigs().find((s) => s.name === name);
+}
+
+function formatServerRef(config: McpServerConfig): string {
+	return config.sourcePath ? `${config.name} (${config.sourcePath})` : config.name;
+}
+
+function formatMcpConnectionError(config: McpServerConfig, err: unknown): Error {
+	const message = err instanceof Error ? err.message : String(err);
+	const serverRef = formatServerRef(config);
+
+	if (config.transport === "stdio") {
+		if (config.command && !existsSync(config.command)) {
+			return new Error(
+				`Server "${serverRef}" is configured with a missing command path: ${config.command}`,
+			);
+		}
+
+		const scriptPath = config.args?.[0];
+		if (scriptPath && scriptPath.startsWith("/") && !existsSync(scriptPath)) {
+			return new Error(
+				`Server "${serverRef}" is configured with a missing script path: ${scriptPath}`,
+			);
+		}
+
+		if (/Request timed out/i.test(message)) {
+			return new Error(
+				`Timed out connecting to MCP server "${serverRef}". The process started but did not complete the MCP handshake within 30s. ` +
+				`Verify the command starts a real MCP server and that any backend dependencies are reachable.`,
+			);
+		}
+
+		if (/Connection closed/i.test(message)) {
+			let extra = "The server process exited before responding to MCP requests.";
+			if (config.command) {
+				const probe = spawnSync(config.command, config.args ?? [], {
+					cwd: config.cwd,
+					env: config.env ? { ...process.env, ...config.env } as Record<string, string> : process.env,
+					encoding: "utf8",
+					timeout: 5000,
+				});
+				const stderr = (probe.stderr || "").trim();
+				const stdout = (probe.stdout || "").trim();
+				const combined = stderr || stdout;
+				if (combined) {
+					extra += ` Startup output: ${combined.slice(0, 300)}`;
+				} else if (typeof probe.status === "number") {
+					extra += ` Exit code: ${probe.status}.`;
+				}
+			}
+			return new Error(`Failed to connect to MCP server "${serverRef}": ${extra}`);
+		}
+	}
+
+	if (config.transport === "http" && /fetch failed|ECONNREFUSED|ENOTFOUND|404|405/i.test(message)) {
+		return new Error(
+			`Failed to connect to MCP server "${serverRef}" at ${config.url}. Verify the URL is correct and the HTTP MCP endpoint is running. Original error: ${message}`,
+		);
+	}
+
+	return new Error(`Failed to connect to MCP server "${serverRef}": ${message}`);
 }
 
 async function getOrConnect(name: string, signal?: AbortSignal): Promise<Client> {
@@ -138,9 +201,13 @@ async function getOrConnect(name: string, signal?: AbortSignal): Promise<Client>
 		throw new Error(`Server "${name}" has unsupported transport: ${config.transport}`);
 	}
 
-	await client.connect(transport, { signal, timeout: 30000 });
-	connections.set(name, { client, transport });
-	return client;
+	try {
+		await client.connect(transport, { signal, timeout: 30000 });
+		connections.set(name, { client, transport });
+		return client;
+	} catch (err: unknown) {
+		throw formatMcpConnectionError(config, err);
+	}
 }
 
 async function closeAll(): Promise<void> {
