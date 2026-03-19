@@ -16,7 +16,7 @@ import type {
 } from "@gsd/pi-coding-agent";
 
 import type { AutoSession } from "./auto/session.js";
-import { NEW_SESSION_TIMEOUT_MS, MAX_SKIP_DEPTH } from "./auto/session.js";
+import { NEW_SESSION_TIMEOUT_MS } from "./auto/session.js";
 import type { GSDPreferences } from "./preferences.js";
 import type { GSDState } from "./types.js";
 import type { CloseoutOptions } from "./auto-unit-closeout.js";
@@ -210,7 +210,6 @@ export interface LoopDeps {
   getCurrentBranch: (basePath: string) => string;
   autoWorktreeBranch: (milestoneId: string) => string;
   resolveMilestoneFile: (basePath: string, milestoneId: string, fileType: string) => string | null;
-  completedKeysPath: (basePath: string) => string;
   reconcileMergeState: (basePath: string, ctx: ExtensionContext) => boolean;
 
   // Budget/context/secrets
@@ -231,14 +230,9 @@ export interface LoopDeps {
   collectObservabilityWarnings: (ctx: ExtensionContext, basePath: string, unitType: string, unitId: string) => Promise<unknown[]>;
   buildObservabilityRepairBlock: (issues: unknown[]) => string | null;
 
-  // Idempotency + stuck detection
-  checkIdempotency: (ictx: { s: AutoSession; unitType: string; unitId: string; basePath: string; notify: (msg: string, level: string) => void }) => { action: string; reason?: string };
-  checkStuckAndRecover: (sctx: { s: AutoSession; ctx: ExtensionContext; unitType: string; unitId: string; basePath: string; buildSnapshotOpts: () => CloseoutOptions & Record<string, unknown> }) => Promise<{ action: string; reason?: string; notifyMessage?: string; dispatchAgain?: boolean }>;
-
   // Unit closeout + runtime records
   closeoutUnit: (ctx: ExtensionContext, basePath: string, unitType: string, unitId: string, startedAt: number, opts?: CloseoutOptions & Record<string, unknown>) => Promise<void>;
   verifyExpectedArtifact: (unitType: string, unitId: string, basePath: string) => boolean;
-  persistCompletedKey: (basePath: string, key: string) => void;
   clearUnitRuntimeRecord: (basePath: string, unitType: string, unitId: string) => void;
   writeUnitRuntimeRecord: (basePath: string, unitType: string, unitId: string, startedAt: number, record: Record<string, unknown>) => void;
   recordOutcome: (unitType: string, tier: string, success: boolean) => void;
@@ -291,6 +285,8 @@ export async function autoLoop(
 ): Promise<void> {
   debugLog("autoLoop", { phase: "enter" });
   let iteration = 0;
+  let lastDerivedUnit = "";
+  let sameUnitCount = 0;
 
   while (s.active) {
     iteration++;
@@ -302,13 +298,6 @@ export async function autoLoop(
     }
 
     // ── Phase 1: Pre-dispatch ───────────────────────────────────────────
-
-    // Reentrancy guard (skip depth)
-    if (s.skipDepth > MAX_SKIP_DEPTH) {
-      s.skipDepth = 0;
-      ctx.ui.notify(`Skipped ${MAX_SKIP_DEPTH}+ completed units. Yielding to UI before continuing.`, "info");
-      await new Promise(r => setTimeout(r, 200));
-    }
 
     // Resource version guard
     const staleMsg = deps.checkResourcesStale(s.resourceVersionOnStart);
@@ -410,20 +399,12 @@ export async function autoLoop(
         }
       }
 
-      // Reset stuck detection for new milestone
+      // Reset dispatch counters for new milestone
       s.unitDispatchCount.clear();
       s.unitRecoveryCount.clear();
-      s.unitConsecutiveSkips.clear();
       s.unitLifetimeDispatches.clear();
-      try {
-        const file = deps.completedKeysPath(s.basePath);
-        if (deps.existsSync(file)) {
-          deps.atomicWriteSync(file, JSON.stringify([]));
-        }
-        s.completedKeySet.clear();
-      } catch (e) {
-        debugLog("completed-keys-reset-failed", { error: e instanceof Error ? e.message : String(e) });
-      }
+      lastDerivedUnit = "";
+      sameUnitCount = 0;
 
       // Worktree lifecycle on milestone transition
       if (deps.isInAutoWorktree(s.basePath) && s.originalBasePath && deps.shouldUseWorktreeIsolation()) {
@@ -591,15 +572,6 @@ export async function autoLoop(
     if (state.phase === "complete") {
       if (s.currentUnit) {
         await deps.closeoutUnit(ctx, s.basePath, s.currentUnit.type, s.currentUnit.id, s.currentUnit.startedAt, deps.buildSnapshotOpts(s.currentUnit.type, s.currentUnit.id));
-      }
-      try {
-        const file = deps.completedKeysPath(s.basePath);
-        if (deps.existsSync(file)) {
-          deps.atomicWriteSync(file, JSON.stringify([]));
-        }
-        s.completedKeySet.clear();
-      } catch (e) {
-        debugLog("completed-keys-reset-failed", { error: e instanceof Error ? e.message : String(e) });
       }
       // Milestone merge on complete
       if (s.currentMilestoneId && deps.isInAutoWorktree(s.basePath) && s.originalBasePath) {
@@ -780,6 +752,24 @@ export async function autoLoop(
     let prompt = dispatchResult.prompt;
     const pauseAfterUatDispatch = dispatchResult.pauseAfterDispatch ?? false;
 
+    // ── Same-unit stuck counter ──
+    const derivedKey = `${unitType}/${unitId}`;
+    if (derivedKey === lastDerivedUnit && !s.pendingVerificationRetry) {
+      sameUnitCount++;
+      if (sameUnitCount >= 5) {
+        debugLog("autoLoop", { phase: "stuck-detected", unitType, unitId, sameUnitCount });
+        await deps.stopAuto(ctx, pi, `Stuck: ${unitType} ${unitId} derived ${sameUnitCount} consecutive times without progress`);
+        ctx.ui.notify(`Stuck on ${unitType} ${unitId} — deriveState returns the same unit after ${sameUnitCount} attempts. The expected artifact was not written.`, "error");
+        break;
+      }
+    } else {
+      if (derivedKey !== lastDerivedUnit) {
+        debugLog("autoLoop", { phase: "stuck-counter-reset", from: lastDerivedUnit, to: derivedKey });
+      }
+      lastDerivedUnit = derivedKey;
+      sameUnitCount = 0;
+    }
+
     // Pre-dispatch hooks
     const preDispatchResult = deps.runPreDispatchHooks(unitType, unitId, prompt, s.basePath);
     if (preDispatchResult.firedHooks.length > 0) {
@@ -809,56 +799,6 @@ export async function autoLoop(
 
     const observabilityIssues = await deps.collectObservabilityWarnings(ctx, s.basePath, unitType, unitId);
 
-    // Idempotency check
-    const idempotencyResult = deps.checkIdempotency({
-      s,
-      unitType,
-      unitId,
-      basePath: s.basePath,
-      notify: (msg: string, level: string) => ctx.ui.notify(msg, level as "info" | "warning" | "error"),
-    });
-
-    if (idempotencyResult.action === "skip") {
-      if (idempotencyResult.reason === "completed" || idempotencyResult.reason === "fallback-persisted" || idempotencyResult.reason === "phantom-loop-cleared" || idempotencyResult.reason === "evicted") {
-        if (!s.active) break;
-        s.skipDepth++;
-        await new Promise(r => setTimeout(r, idempotencyResult.reason === "phantom-loop-cleared" ? 50 : 150));
-        continue;
-      }
-    } else if (idempotencyResult.action === "stop") {
-      await deps.stopAuto(ctx, pi, idempotencyResult.reason);
-      ctx.ui.notify(
-        `Hard loop detected: ${unitType} ${unitId} hit lifetime cap during skip cycle.`,
-        "error",
-      );
-      debugLog("autoLoop", { phase: "exit", reason: "idempotency-stop" });
-      break;
-    }
-    // "rerun" and "proceed" fall through to stuck detection
-
-    // Stuck detection
-    const stuckResult = await deps.checkStuckAndRecover({
-      s,
-      ctx,
-      unitType,
-      unitId,
-      basePath: s.basePath,
-      buildSnapshotOpts: () => deps.buildSnapshotOpts(unitType, unitId),
-    });
-
-    if (stuckResult.action === "stop") {
-      await deps.stopAuto(ctx, pi, stuckResult.reason);
-      if (stuckResult.notifyMessage) {
-        ctx.ui.notify(stuckResult.notifyMessage, "error");
-      }
-      debugLog("autoLoop", { phase: "exit", reason: "stuck-stop" });
-      break;
-    }
-    if (stuckResult.action === "recovered" && stuckResult.dispatchAgain) {
-      await new Promise(r => setImmediate(r));
-      continue;
-    }
-
     // ── Phase 4: Unit execution ─────────────────────────────────────────
 
     debugLog("autoLoop", { phase: "unit-execution", iteration, unitType, unitId });
@@ -881,11 +821,6 @@ export async function autoLoop(
       const isHookUnit = s.currentUnit.type.startsWith("hook/");
       const artifactVerified = isHookUnit || deps.verifyExpectedArtifact(s.currentUnit.type, s.currentUnit.id, s.basePath);
       if (closeoutKey !== incomingKey && artifactVerified) {
-        if (!isHookUnit) {
-          deps.persistCompletedKey(s.basePath, closeoutKey);
-          s.completedKeySet.add(closeoutKey);
-        }
-
         s.completedUnits.push({
           type: s.currentUnit.type,
           id: s.currentUnit.id,

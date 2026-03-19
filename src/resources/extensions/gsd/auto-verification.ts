@@ -21,7 +21,6 @@ import {
   runDependencyAudit,
 } from "./verification-gate.js";
 import { writeVerificationJSON } from "./verification-evidence.js";
-import { removePersistedKey } from "./auto-recovery.js";
 import type { AutoSession, PendingVerificationRetry } from "./auto/session.js";
 import { join } from "node:path";
 
@@ -100,7 +99,6 @@ export async function runPostUnitVerification(
     // Auto-fix retry preferences
     const autoFixEnabled = prefs?.verification_auto_fix !== false;
     const maxRetries = typeof prefs?.verification_max_retries === "number" ? prefs.verification_max_retries : 2;
-    const completionKey = `${s.currentUnit.type}/${s.currentUnit.id}`;
 
     if (result.checks.length > 0) {
       const passCount = result.checks.filter(c => c.exitCode === 0).length;
@@ -162,8 +160,6 @@ export async function runPostUnitVerification(
         attempt: nextAttempt,
       };
       ctx.ui.notify(`Verification failed — auto-fix attempt ${nextAttempt}/${maxRetries}`, "warning");
-      s.completedKeySet.delete(completionKey);
-      removePersistedKey(s.basePath, completionKey);
       // Return "retry" — the autoLoop while loop will re-iterate with the retry context
       return "retry";
     } else {

@@ -29,8 +29,6 @@ import {
 } from "./worktree.js";
 import {
   verifyExpectedArtifact,
-  persistCompletedKey,
-  removePersistedKey,
 } from "./auto-recovery.js";
 import { writeUnitRuntimeRecord, clearUnitRuntimeRecord } from "./unit-runtime.js";
 import { resolveAutoSupervisorConfig, loadEffectiveGSDPreferences } from "./preferences.js";
@@ -266,17 +264,12 @@ export async function postUnitPreVerification(pctx: PostUnitContext): Promise<"d
       }
     }
 
-    // Artifact verification and completion persistence
+    // Artifact verification
     let triggerArtifactVerified = false;
     if (!s.currentUnit.type.startsWith("hook/")) {
       try {
         triggerArtifactVerified = verifyExpectedArtifact(s.currentUnit.type, s.currentUnit.id, s.basePath);
         if (triggerArtifactVerified) {
-          const completionKey = `${s.currentUnit.type}/${s.currentUnit.id}`;
-          if (!s.completedKeySet.has(completionKey)) {
-            persistCompletedKey(s.basePath, completionKey);
-            s.completedKeySet.add(completionKey);
-          }
           invalidateAllCaches();
         }
       } catch {
@@ -404,14 +397,11 @@ export async function postUnitPostVerification(pctx: PostUnitContext): Promise<"
     if (isRetryPending()) {
       const trigger = consumeRetryTrigger();
       if (trigger) {
-        const triggerKey = `${trigger.unitType}/${trigger.unitId}`;
-        s.completedKeySet.delete(triggerKey);
-        removePersistedKey(s.basePath, triggerKey);
         ctx.ui.notify(
           `Hook requested retry of ${trigger.unitType} ${trigger.unitId}.`,
           "info",
         );
-        // Fall through to normal dispatch
+        // Fall through to normal dispatch — deriveState will re-derive the unit
       }
     }
   }

@@ -25,7 +25,6 @@ import {
 import { invalidateAllCaches } from "./cache.js";
 import { synthesizeCrashRecovery } from "./session-forensics.js";
 import { writeLock, clearLock, readCrashLock, formatCrashInfo, isLockProcessAlive } from "./crash-recovery.js";
-import { selfHealRuntimeRecords } from "./auto-recovery.js";
 import { ensureGitignore, untrackRuntimeFiles } from "./gitignore.js";
 import { nativeIsRepo, nativeInit, nativeAddAll, nativeCommit } from "./native-git-bridge.js";
 import { GitServiceImpl } from "./git-service.js";
@@ -47,7 +46,6 @@ import { restoreHookState, resetHookState, clearPersistedHookState } from "./pos
 import { resetProactiveHealing } from "./doctor-proactive.js";
 import { snapshotSkills } from "./skill-discovery.js";
 import { isDbAvailable } from "./gsd-db.js";
-import { loadPersistedKeys } from "./auto-recovery.js";
 import { hideFooter } from "./auto-dashboard.js";
 import { debugLog, enableDebug, isDebugEnabled, getDebugLogPath } from "./debug-logger.js";
 import type { AutoSession } from "./auto/session.js";
@@ -287,11 +285,8 @@ export async function bootstrapAutoSession(
   s.basePath = base;
   s.unitDispatchCount.clear();
   s.unitRecoveryCount.clear();
-  s.unitConsecutiveSkips.clear();
   s.lastBudgetAlertLevel = 0;
   s.unitLifetimeDispatches.clear();
-  s.completedKeySet.clear();
-  loadPersistedKeys(base, s.completedKeySet);
   resetHookState();
   restoreHookState(base);
   resetProactiveHealing();
@@ -340,11 +335,6 @@ export async function bootstrapAutoSession(
         ctx.ui.notify(`Created auto-worktree at ${wtPath}`, "info");
       }
       registerSigtermHandler(s.originalBasePath);
-
-      // Load completed keys from BOTH locations
-      if (s.basePath !== s.originalBasePath) {
-        loadPersistedKeys(s.basePath, s.completedKeySet);
-      }
     } catch (err) {
       ctx.ui.notify(
         `Auto-worktree setup failed: ${err instanceof Error ? err.message : String(err)}. Continuing in project root.`,
@@ -430,9 +420,6 @@ export async function bootstrapAutoSession(
       "warning",
     );
   }
-
-  // Self-heal: clear stale runtime records
-  await selfHealRuntimeRecords(s.basePath, ctx, s.completedKeySet);
 
   // Self-heal: remove stale .git/index.lock
   try {

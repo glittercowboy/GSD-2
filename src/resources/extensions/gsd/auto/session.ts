@@ -57,9 +57,7 @@ export interface PendingVerificationRetry {
 export const MAX_UNIT_DISPATCHES = 3;
 export const STUB_RECOVERY_THRESHOLD = 2;
 export const MAX_LIFETIME_DISPATCHES = 6;
-export const MAX_CONSECUTIVE_SKIPS = 3;
 export const DISPATCH_GAP_TIMEOUT_MS = 5_000;
-export const MAX_SKIP_DEPTH = 20;
 export const NEW_SESSION_TIMEOUT_MS = 30_000;
 export const DISPATCH_HANG_TIMEOUT_MS = 60_000;
 
@@ -82,8 +80,6 @@ export class AutoSession {
   readonly unitDispatchCount = new Map<string, number>();
   readonly unitLifetimeDispatches = new Map<string, number>();
   readonly unitRecoveryCount = new Map<string, number>();
-  readonly unitConsecutiveSkips = new Map<string, number>();
-  readonly completedKeySet = new Set<string>();
 
   // ── Timers ───────────────────────────────────────────────────────────────
   unitTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
@@ -116,8 +112,6 @@ export class AutoSession {
   handlingAgentEnd = false;
   pendingAgentEndRetry = false;
   dispatching = false;
-  skipDepth = 0;
-  readonly recentlyEvictedKeys = new Set<string>();
 
   // ── Metrics ──────────────────────────────────────────────────────────────
   autoStartTime = 0;
@@ -141,7 +135,6 @@ export class AutoSession {
   resetDispatchCounters(): void {
     this.unitDispatchCount.clear();
     this.unitLifetimeDispatches.clear();
-    this.unitConsecutiveSkips.clear();
   }
 
   get lockBasePath(): string {
@@ -175,9 +168,6 @@ export class AutoSession {
     this.unitDispatchCount.clear();
     this.unitLifetimeDispatches.clear();
     this.unitRecoveryCount.clear();
-    this.unitConsecutiveSkips.clear();
-    // Note: completedKeySet is intentionally NOT cleared — it persists
-    // across restarts to prevent re-dispatching completed units.
 
     // Unit
     this.currentUnit = null;
@@ -203,8 +193,6 @@ export class AutoSession {
     this.handlingAgentEnd = false;
     this.pendingAgentEndRetry = false;
     this.dispatching = false;
-    this.skipDepth = 0;
-    this.recentlyEvictedKeys.clear();
 
     // Metrics
     this.autoStartTime = 0;
@@ -225,10 +213,8 @@ export class AutoSession {
       currentMilestoneId: this.currentMilestoneId,
       currentUnit: this.currentUnit,
       completedUnits: this.completedUnits.length,
-      completedKeySet: this.completedKeySet.size,
       unitDispatchCount: Object.fromEntries(this.unitDispatchCount),
       dispatching: this.dispatching,
-      skipDepth: this.skipDepth,
     };
   }
 }
