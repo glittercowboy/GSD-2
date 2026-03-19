@@ -8,7 +8,7 @@
 
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, symlinkSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
 
@@ -112,9 +112,16 @@ export function externalGsdRoot(basePath: string): string {
 export function ensureGsdSymlink(projectPath: string): string {
   const externalPath = externalGsdRoot(projectPath);
   const localGsd = join(projectPath, ".gsd");
+  const inWorktree = isInsideWorktree(projectPath);
 
   // Ensure external directory exists
   mkdirSync(externalPath, { recursive: true });
+
+  const replaceWithSymlink = (): string => {
+    rmSync(localGsd, { recursive: true, force: true });
+    symlinkSync(externalPath, localGsd, "junction");
+    return externalPath;
+  };
 
   if (!existsSync(localGsd)) {
     // Nothing exists yet — create symlink
@@ -131,13 +138,22 @@ export function ensureGsdSymlink(projectPath: string): string {
       if (target === externalPath) {
         return externalPath; // correct symlink, no-op
       }
-      // Symlink exists but points elsewhere — leave it for now
-      // (could be a custom override or stale symlink)
+      // In a worktree, mismatched symlinks are always stale. Heal them so
+      // the worktree points at the same external state dir as the main repo.
+      if (inWorktree) {
+        return replaceWithSymlink();
+      }
+      // Outside worktrees, preserve custom overrides or legacy symlinks.
       return target;
     }
 
     if (stat.isDirectory()) {
-      // Real directory — migration will handle this later.
+      // In a worktree, a real .gsd directory is stale local state. Replace it
+      // with the canonical symlink so state stays shared with the main repo.
+      if (inWorktree) {
+        return replaceWithSymlink();
+      }
+      // Real directory in the main repo — migration will handle this later.
       // Return the local path so existing code still works.
       return localGsd;
     }
