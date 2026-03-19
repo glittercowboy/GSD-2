@@ -26,6 +26,7 @@ import type {
 import { createBashTool, createWriteTool, createReadTool, createEditTool, isToolCallEventType } from "@gsd/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 
+import { execSync } from "node:child_process";
 import { debugLog, debugTime } from "./debug-logger.js";
 import { registerGSDCommand } from "./commands.js";
 import { loadToolApiKeys } from "./commands-config.js";
@@ -610,7 +611,48 @@ export default function (pi: ExtensionAPI) {
       const logoText = GSD_LOGO_LINES.map((line) => theme.fg("accent", line)).join("\n");
       const titleLine = `  ${theme.bold("Get Shit Done")} ${theme.fg("dim", `v${version}`)}`;
 
-      const headerContent = `${logoText}\n${titleLine}`;
+      // Release notes — show recent commits since last release
+      let releaseLines = "";
+      try {
+        const { resolve, dirname } = require("node:path") as typeof import("node:path");
+        const binPath = process.env.GSD_BIN_PATH || process.argv[1] || "";
+        const root = binPath ? resolve(dirname(binPath), "..") : "";
+        if (root) {
+          let lastRelease = "";
+          try {
+            execSync(`git rev-parse "v${version}" 2>/dev/null`, { cwd: root });
+            lastRelease = `v${version}`;
+          } catch {
+            try {
+              lastRelease = execSync(
+                `git log --all --format=%H --grep="release: v${version}" -1`,
+                { cwd: root, encoding: "utf8" },
+              ).trim();
+            } catch { /* ignore */ }
+          }
+          const range = lastRelease ? `${lastRelease}..HEAD` : "-10";
+          const log = execSync(`git log ${range} --oneline --no-merges`, {
+            cwd: root, encoding: "utf8",
+          }).trim();
+          if (log) {
+            const commits = log.split("\n");
+            releaseLines = `\n  ${theme.bold(`Changes since v${version}:`)}`;
+            for (const c of commits) {
+              const m = c.match(/^([a-f0-9]+)\s+(.*)$/);
+              if (!m) continue;
+              const [, hash, msg] = m;
+              let icon = "•";
+              if (msg.startsWith("feat")) icon = "✦";
+              else if (msg.startsWith("fix")) icon = "✧";
+              else if (msg.startsWith("refactor")) icon = "↻";
+              releaseLines += `\n  ${icon} ${theme.fg("dim", hash)} ${msg}`;
+            }
+            releaseLines += `\n  ${theme.fg("dim", `${commits.length} commit(s) since last release`)}`;
+          }
+        }
+      } catch { /* non-fatal */ }
+
+      const headerContent = `${logoText}\n${titleLine}${releaseLines}`;
       ctx.ui.setHeader((_ui, _theme) => new Text(headerContent, 1, 0));
     } catch {
       // RPC mode — no TUI, skip header rendering
