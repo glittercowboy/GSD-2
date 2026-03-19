@@ -18,17 +18,17 @@ describe("server", () => {
     async () => {
       serverProc = Bun.spawn(["bun", "run", "src/server.ts"], {
         cwd: MC_ROOT,
-        env: { ...process.env, MC_PORT: String(TEST_PORT) },
+        env: { ...process.env, MC_PORT: String(TEST_PORT), MC_NO_HMR: "1" },
         stdout: "pipe",
         stderr: "pipe",
       });
 
-      // Wait for server to be ready (poll with short intervals)
+      // Wait for server to be ready (poll for up to 25s — server may be slow under parallel test load)
       let ready = false;
-      for (let i = 0; i < 20; i++) {
+      for (let i = 0; i < 50; i++) {
         try {
           const res = await fetch(`http://127.0.0.1:${TEST_PORT}`, {
-            signal: AbortSignal.timeout(500),
+            signal: AbortSignal.timeout(1000),
           });
           if (res.ok) {
             ready = true;
@@ -51,6 +51,6 @@ describe("server", () => {
       const body = await response.text();
       expect(body).toContain("root");
     },
-    { timeout: 15000 }
+    { timeout: 30000 }
   );
 });

@@ -22,6 +22,11 @@
   },
   "files": [
     "dist",
+    "packages/pi-coding-agent",
+    "packages/pi-agent-core",
+    "packages/pi-ai",
+    "packages/pi-tui",
+    "packages/native",
     "pkg",
     "src/resources",
     "scripts/postinstall.js",

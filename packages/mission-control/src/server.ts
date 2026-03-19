@@ -67,10 +67,7 @@ const server = Bun.serve({
   routes: {
     "/": homepage,
   },
-  development: {
-    hmr: true,
-    console: true,
-  },
+  development: process.env.MC_NO_HMR ? false : { hmr: true, console: true },
   async fetch(req) {
     const url = new URL(req.url);
     const { pathname } = url;

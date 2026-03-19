@@ -20,13 +20,15 @@ describe("workspace structure", () => {
     expect(pkg.bin).toBeDefined();
   });
 
-  it("MONO-03: root package.json files field does NOT include packages entries", async () => {
+  it("MONO-03: root package.json files field does NOT include mission-control (Tauri app should not ship in npm)", async () => {
     const pkg = await Bun.file(join(ROOT, "package.json")).json();
     expect(pkg.files).toBeDefined();
-    const hasPackages = pkg.files.some((f: string) =>
-      f.startsWith("packages")
+    // The bare "packages" entry would include mission-control (68MB Tauri app).
+    // Each workspace package must be listed explicitly so mission-control is excluded.
+    const includesMissionControl = pkg.files.some((f: string) =>
+      f === "packages" || f.startsWith("packages/mission-control")
     );
-    expect(hasPackages).toBe(false);
+    expect(includesMissionControl).toBe(false);
   });
 
   it("bunfig.toml exists in mission-control", async () => {
