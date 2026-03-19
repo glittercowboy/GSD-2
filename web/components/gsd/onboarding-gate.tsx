@@ -9,9 +9,7 @@ import { Progress } from "@/components/ui/progress"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import {
-  getOnboardingPresentation,
   type WorkspaceOnboardingProviderState,
-  type WorkspaceOnboardingState,
   useGSDWorkspaceActions,
   useGSDWorkspaceState,
 } from "@/lib/gsd-workspace-store"
@@ -36,6 +34,8 @@ const WIZARD_STEPS: WizardStep[] = [
   { id: "optional", label: "Integrations", shortLabel: "Extras" },
   { id: "ready", label: "Ready", shortLabel: "Ready" },
 ]
+
+const EMPTY_PROVIDERS: WorkspaceOnboardingProviderState[] = []
 
 // ─── Helpers ────────────────────────────────────────────────────────
 
@@ -84,41 +84,23 @@ export function OnboardingGate() {
 
   const onboarding = workspace.boot?.onboarding
   const forceVisible = devOverrides.isActive("forceOnboarding")
-  const presentation = getOnboardingPresentation(workspace)
   const isBusy = workspace.onboardingRequestState !== "idle"
 
   // ─── Wizard state ───
   const [stepIndex, setStepIndex] = useState(1)
-  const [[page, direction], setPage] = useState([1, 0])
+  const [[, direction], setPage] = useState<[number, number]>([1, 0])
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null)
   const [dismissedAfterSuccess, setDismissedAfterSuccess] = useState(false)
 
-  // Sync selected provider from onboarding state
-  useEffect(() => {
-    const providers = onboarding?.required.providers ?? []
-    if (providers.length === 0) return
-
-    setSelectedProviderId((prev) => {
-      if (onboarding?.activeFlow?.providerId) return onboarding.activeFlow.providerId
-      if (prev && providers.some((p) => p.id === prev)) return prev
-      return chooseDefaultProvider(providers)
-    })
-  }, [onboarding])
-
-  // Auto-advance to ready when validation succeeds + bridge is done
-  useEffect(() => {
-    if (!onboarding) return
-    const isUnlocked = !onboarding.locked
-    const bridgeDone = onboarding.bridgeAuthRefresh.phase === "succeeded" || onboarding.bridgeAuthRefresh.phase === "idle"
-    if (isUnlocked && bridgeDone && stepIndex === 2) {
-      // Jump to optional or ready
-      paginate(3)
+  const providers = onboarding?.required.providers ?? EMPTY_PROVIDERS
+  const effectiveSelectedProviderId = useMemo(() => {
+    if (onboarding?.activeFlow?.providerId) return onboarding.activeFlow.providerId
+    if (selectedProviderId && providers.some((provider) => provider.id === selectedProviderId)) {
+      return selectedProviderId
     }
-  }, [onboarding?.locked, onboarding?.bridgeAuthRefresh.phase])
-
-  const selectedProvider = useMemo(() => {
-    return onboarding?.required.providers.find((p) => p.id === selectedProviderId) ?? null
-  }, [onboarding?.required.providers, selectedProviderId])
+    return chooseDefaultProvider(providers)
+  }, [onboarding?.activeFlow?.providerId, providers, selectedProviderId])
+  const shouldHideAfterSuccess = dismissedAfterSuccess && !onboarding?.locked && !isBusy
 
   const paginate = useCallback(
     (newIndex: number) => {
@@ -128,15 +110,26 @@ export function OnboardingGate() {
     [stepIndex],
   )
 
+  // Auto-advance to ready when validation succeeds + bridge is done
+  useEffect(() => {
+    if (!onboarding) return
+    const isUnlocked = !onboarding.locked
+    const bridgeDone = onboarding.bridgeAuthRefresh.phase === "succeeded" || onboarding.bridgeAuthRefresh.phase === "idle"
+    if (!isUnlocked || !bridgeDone || stepIndex !== 2) return
+
+    const advanceTimer = window.setTimeout(() => {
+      paginate(3)
+    }, 0)
+    return () => window.clearTimeout(advanceTimer)
+  }, [onboarding, paginate, stepIndex])
+
+  const selectedProvider = useMemo(() => {
+    return providers.find((provider) => provider.id === effectiveSelectedProviderId) ?? null
+  }, [effectiveSelectedProviderId, providers])
+
   const progressPercent = useMemo(() => {
     return Math.round((stepIndex / (WIZARD_STEPS.length - 1)) * 100)
   }, [stepIndex])
-
-  useEffect(() => {
-    if (onboarding?.locked || isBusy) {
-      setDismissedAfterSuccess(false)
-    }
-  }, [onboarding?.locked, isBusy])
 
   // ─── Gate check ───
   if (!onboarding) return null
@@ -146,7 +139,7 @@ export function OnboardingGate() {
       onboarding.lastValidation?.status === "succeeded" &&
       (onboarding.bridgeAuthRefresh.phase === "succeeded" || onboarding.bridgeAuthRefresh.phase === "idle")
     )
-  if (!forceVisible && (onboardingSettled || (dismissedAfterSuccess && !isBusy))) return null
+  if (!forceVisible && (onboardingSettled || shouldHideAfterSuccess)) return null
 
   // ─── Render ───
   return (
@@ -228,7 +221,7 @@ export function OnboardingGate() {
               {stepIndex === 1 && (
                 <StepProvider
                   providers={onboarding.required.providers}
-                  selectedId={selectedProviderId}
+                  selectedId={effectiveSelectedProviderId}
                   onSelect={(id) => {
                     setSelectedProviderId(id)
                     paginate(2)

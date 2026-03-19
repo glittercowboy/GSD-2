@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, useCallback, useRef } from "react"
+import { useEffect, useState, useCallback } from "react"
 import * as TabsPrimitive from "@radix-ui/react-tabs"
 import {
   CheckCircle2,
@@ -20,25 +20,14 @@ import {
   Bot,
   RotateCcw,
   ChevronRight,
-  Zap,
-  TrendingUp,
   AlertCircle,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type {
   VisualizerData,
-  VisualizerMilestone,
   VisualizerSlice,
   VisualizerTask,
-  PhaseAggregate,
-  ModelAggregate,
-  SliceAggregate,
-  UnitMetrics,
-  AgentActivityInfo,
-  ChangelogEntry,
-  CriticalPathInfo,
   ProjectTotals,
-  TokenCounts,
 } from "@/lib/visualizer-types"
 import {
   formatCost,
@@ -712,16 +701,30 @@ function ProjectionsSection({
 // ─── Timeline Tab ─────────────────────────────────────────────────────────────
 
 function TimelineTab({ data }: { data: VisualizerData }) {
+  const sorted = [...data.units].sort((a, b) => a.startedAt - b.startedAt)
+  const recent = sorted.slice(-30)
+  const hasRunningUnit = recent.some((u) => !u.finishedAt || u.finishedAt === 0)
+  const [runningNow, setRunningNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    if (!hasRunningUnit) return
+    const interval = window.setInterval(() => {
+      setRunningNow(Date.now())
+    }, 1000)
+    return () => window.clearInterval(interval)
+  }, [hasRunningUnit])
+
+  const referenceNow = hasRunningUnit ? runningNow : 0
+  const durationForUnit = useCallback(
+    (unit: VisualizerData["units"][number]) => (unit.finishedAt || referenceNow) - unit.startedAt,
+    [referenceNow],
+  )
+
   if (data.units.length === 0) {
     return <EmptyState message="No execution history yet." icon={Clock} />
   }
 
-  const sorted = [...data.units].sort((a, b) => a.startedAt - b.startedAt)
-  const recent = sorted.slice(-30)
-  const maxDuration = Math.max(
-    ...recent.map((u) => (u.finishedAt || Date.now()) - u.startedAt),
-    1,
-  )
+  const maxDuration = Math.max(...recent.map(durationForUnit), 1)
 
   return (
     <div className="space-y-4">
@@ -747,7 +750,7 @@ function TimelineTab({ data }: { data: VisualizerData }) {
 
         <div className="divide-y divide-border/40">
           {[...recent].reverse().map((unit, i) => {
-            const duration = (unit.finishedAt || Date.now()) - unit.startedAt
+            const duration = durationForUnit(unit)
             const pct = (duration / maxDuration) * 100
             const isRunning = !unit.finishedAt || unit.finishedAt === 0
             return (

@@ -8,14 +8,11 @@ import {
   Clock,
   Database,
   Download,
-  FileText,
   GitBranch,
-  Hash,
   Layers,
   ListChecks,
   LoaderCircle,
   Navigation,
-  Package,
   RefreshCw,
   RotateCcw,
   Scissors,
@@ -49,7 +46,6 @@ import type {
 import { cn } from "@/lib/utils"
 import {
   formatCost,
-  formatTokens,
   getLiveWorkspaceIndex,
   useGSDWorkspaceActions,
   useGSDWorkspaceState,

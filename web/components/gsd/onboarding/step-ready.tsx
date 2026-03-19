@@ -23,7 +23,7 @@ export function StepReady({ providerLabel, onFinish }: StepReadyProps) {
       </div>
 
       <h2 className="text-3xl font-bold tracking-tight text-foreground md:text-4xl">
-        You're all set
+        You’re all set
       </h2>
 
       <p className="mt-3 max-w-md text-base leading-relaxed text-muted-foreground md:text-lg">

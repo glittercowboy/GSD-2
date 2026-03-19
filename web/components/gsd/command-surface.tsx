@@ -4,7 +4,6 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import {
   Archive,
   ArrowRightLeft,
-  ArrowUpRight,
   Brain,
   Check,
   ChevronRight,
@@ -23,7 +22,6 @@ import {
   Radio,
   RefreshCw,
   Search,
-  Settings2,
   ShieldCheck,
   SquareTerminal,
   X,
@@ -33,7 +31,6 @@ import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Field, FieldContent, FieldDescription, FieldGroup, FieldLabel, FieldTitle } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import {
@@ -352,13 +349,9 @@ export function CommandSurface() {
     loadHistoryData,
     loadInspectData,
     loadHooksData,
-    loadExportData,
     loadUndoInfo,
     loadCleanupData,
     loadSteerData,
-    executeUndoAction,
-    executeCleanupAction,
-    sendSteer,
   } = useGSDWorkspaceActions()
 
   const { commandSurface } = workspace
@@ -371,7 +364,6 @@ export function CommandSurface() {
   const settingsRequests = commandSurface.settingsRequests
   const currentModelLabel = getModelLabel(workspace.boot?.bridge)
   const currentSessionLabel = getSessionLabelFromBridge(workspace.boot?.bridge)
-  const currentSessionFile = workspace.boot?.bridge.activeSessionFile ?? workspace.boot?.bridge.sessionState?.sessionFile ?? null
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({})
   const [flowInput, setFlowInput] = useState("")
   const commandSurfaceViewportRef = useRef<HTMLDivElement>(null)
@@ -530,7 +522,10 @@ export function CommandSurface() {
   }, [commandSurface.open, commandSurface.section, commandSurface.selectedTarget, sessionBrowser.sessions, selectCommandSurfaceTarget])
 
   useEffect(() => {
-    setFlowInput("")
+    const resetTimer = window.setTimeout(() => {
+      setFlowInput("")
+    }, 0)
+    return () => window.clearTimeout(resetTimer)
   }, [activeFlow?.flowId])
 
   // ─── Toast on action results ───────────────────────────────────────
@@ -557,9 +552,6 @@ export function CommandSurface() {
   const selectedForkTarget = commandSurface.selectedTarget?.kind === "fork" ? commandSurface.selectedTarget : null
   const selectedSessionTarget = commandSurface.selectedTarget?.kind === "session" ? commandSurface.selectedTarget : null
   const selectedCompactTarget = commandSurface.selectedTarget?.kind === "compact" ? commandSurface.selectedTarget : null
-  const selectedRenameSession =
-    selectedNameTarget?.sessionPath ? sessionBrowser.sessions.find((session) => session.path === selectedNameTarget.sessionPath) ?? null : null
-
   const selectedAuthIntent = currentAuthIntent(commandSurface.activeSurface, commandSurface.selectedTarget)
   const selectedAuthProvider = onboarding?.required.providers.find((provider) => provider.id === selectedAuthTarget?.providerId) ?? null
   const modelQuery = (selectedModelTarget?.query ?? commandSurface.args).trim().toLowerCase()
@@ -1344,9 +1336,6 @@ export function CommandSurface() {
   const renderSessionBrowserSection = (mode: "resume" | "name") => {
     const renameMode = mode === "name"
     const selectedSessionPath = renameMode ? selectedNameTarget?.sessionPath : selectedResumeTarget?.sessionPath
-    const selectedSession = selectedSessionPath
-      ? sessionBrowser.sessions.find((session) => session.path === selectedSessionPath) ?? null
-      : null
 
     return (
       <div className="space-y-4" data-testid={renameMode ? "command-surface-name" : "command-surface-resume"}>

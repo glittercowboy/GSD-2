@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import { CheckSquare, MessageSquare, Send, TextCursorInput, Type } from "lucide-react"
 
 import { Button } from "@/components/ui/button"

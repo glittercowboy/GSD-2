@@ -7,13 +7,11 @@ import {
   CheckCircle2,
   Cpu,
   DollarSign,
-  Layers,
   LoaderCircle,
   Radio,
   RefreshCw,
   Settings,
   Type,
-  Zap,
 } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
@@ -21,11 +19,7 @@ import { Button } from "@/components/ui/button"
 import type {
   SettingsData,
   SettingsPatternHistory,
-  SettingsPreferencesData,
-  SettingsProjectTotals,
   SettingsRoutingHistory,
-  SettingsBudgetAllocation,
-  SettingsDynamicRoutingConfig,
 } from "@/lib/settings-types"
 import { cn } from "@/lib/utils"
 import {
@@ -535,13 +529,12 @@ interface RemoteQuestionsApiResponse {
 }
 
 export function RemoteQuestionsPanel() {
-  const { state, data, busy, refresh } = useSettingsData()
+  const { data, busy, refresh } = useSettingsData()
   const existingConfig = data?.preferences?.remoteQuestions ?? null
 
   // API-only state (env var info)
   const [envVarSet, setEnvVarSet] = useState(false)
   const [envVarName, setEnvVarName] = useState<string | null>(null)
-  const [apiStatus, setApiStatus] = useState<string>("not_configured")
   const [apiLoading, setApiLoading] = useState(true)
 
   // Form fields
@@ -575,7 +568,6 @@ export function RemoteQuestionsPanel() {
       const json: RemoteQuestionsApiResponse = await res.json()
       setEnvVarSet(json.envVarSet)
       setEnvVarName(json.envVarName)
-      setApiStatus(json.status)
       setIsConfigured(json.status === "configured" && json.config !== null)
       if (json.config) {
         setChannel(json.config.channel)

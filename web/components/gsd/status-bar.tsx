@@ -67,9 +67,16 @@ export function StatusBar() {
   }, [])
 
   useEffect(() => {
-    fetchProjectTotals()
-    const interval = setInterval(fetchProjectTotals, 30_000)
-    return () => clearInterval(interval)
+    const timeout = window.setTimeout(() => {
+      void fetchProjectTotals()
+    }, 0)
+    const interval = window.setInterval(() => {
+      void fetchProjectTotals()
+    }, 30_000)
+    return () => {
+      window.clearTimeout(timeout)
+      window.clearInterval(interval)
+    }
   }, [fetchProjectTotals])
 
   return (

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useCallback, useState } from "react"
 import { useTheme } from "next-themes"
-import { Plus, X, TerminalSquare, Trash2, Loader2, ImagePlus } from "lucide-react"
+import { Plus, X, TerminalSquare, Loader2, ImagePlus } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { validateImageFile } from "@/lib/image-utils"
 import "@xterm/xterm/css/xterm.css"
@@ -375,7 +375,7 @@ function TerminalInstance({
       termRef.current = null
       fitAddonRef.current = null
     }
-  }, [sessionId, command, commandArgsKey, sendInput, sendResize])
+  }, [sessionId, command, commandArgs, commandArgsKey, fontSize, isDark, sendInput, sendResize])
 
   // Focus on click
   const handleClick = useCallback(() => {
@@ -566,7 +566,6 @@ export function ShellTerminal({ className, command, commandArgs, sessionPrefix, 
         body: JSON.stringify(command ? { command } : {}),
       })
       const data = (await res.json()) as { id: string }
-      const index = tabs.length + 1
       const newTab: TerminalTab = {
         id: data.id,
         label: commandLabel,
@@ -577,7 +576,7 @@ export function ShellTerminal({ className, command, commandArgs, sessionPrefix, 
     } catch {
       /* network error */
     }
-  }, [tabs.length, command])
+  }, [command, commandLabel])
 
   const closeTab = useCallback(
     (id: string) => {
@@ -586,15 +585,13 @@ export function ShellTerminal({ className, command, commandArgs, sessionPrefix, 
       void fetch(`/api/terminal/sessions?id=${encodeURIComponent(id)}`, {
         method: "DELETE",
       })
-      setTabs((prev) => prev.filter((t) => t.id !== id))
+      const remaining = tabs.filter((t) => t.id !== id)
+      setTabs(remaining)
       if (activeTabId === id) {
-        setActiveTabId((prev) => {
-          const remaining = tabs.filter((t) => t.id !== id)
-          return remaining[remaining.length - 1]?.id ?? "default"
-        })
+        setActiveTabId(remaining[remaining.length - 1]?.id ?? defaultId)
       }
     },
-    [tabs, activeTabId],
+    [tabs, activeTabId, defaultId],
   )
 
   const updateConnection = useCallback(

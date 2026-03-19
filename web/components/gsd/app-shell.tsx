@@ -1,5 +1,6 @@
 "use client"
 
+import Image from "next/image"
 import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from "react"
 import { Sidebar, MilestoneExplorer, CollapsedMilestoneSidebar } from "@/components/gsd/sidebar"
 import { ShellTerminal } from "@/components/gsd/shell-terminal"
@@ -22,10 +23,8 @@ import {
   GSDWorkspaceProvider,
   getCurrentScopeLabel,
   getProjectDisplayName,
-  getSessionLabelFromBridge,
   getStatusPresentation,
   getVisibleWorkspaceError,
-  shortenPath,
   useGSDWorkspaceState,
   useGSDWorkspaceActions,
 } from "@/lib/gsd-workspace-store"
@@ -35,36 +34,6 @@ import { Badge } from "@/components/ui/badge"
 import { ProjectsView } from "@/components/gsd/projects-view"
 import { UpdateBanner } from "@/components/gsd/update-banner"
 import { InstallPromptBanner } from "@/components/gsd/install-prompt-banner"
-
-function statusPillClass(tone: ReturnType<typeof getStatusPresentation>["tone"]): string {
-  switch (tone) {
-    case "success":
-      return "border-success/30 bg-success/10 text-success"
-    case "warning":
-      return "border-warning/30 bg-warning/10 text-warning"
-    case "danger":
-      return "border-destructive/30 bg-destructive/10 text-destructive"
-    case "info":
-      return "border-foreground/15 bg-accent/60 text-foreground"
-    default:
-      return "border-border bg-card text-muted-foreground"
-  }
-}
-
-function connectionDotClass(tone: ReturnType<typeof getStatusPresentation>["tone"]): string {
-  switch (tone) {
-    case "success":
-      return "bg-success"
-    case "warning":
-      return "bg-warning"
-    case "danger":
-      return "bg-destructive"
-    case "info":
-      return "bg-foreground/70"
-    default:
-      return "bg-muted-foreground/50"
-  }
-}
 
 const KNOWN_VIEWS = new Set(["dashboard", "power", "chat", "roadmap", "files", "activity", "visualize", "projects"])
 
@@ -76,6 +45,7 @@ function WorkspaceChrome() {
   const [activeView, setActiveView] = useState("dashboard")
   const [isTerminalExpanded, setIsTerminalExpanded] = useState(false)
   const [terminalHeight, setTerminalHeight] = useState(300)
+  const [terminalDragActive, setTerminalDragActive] = useState(false)
   const isDraggingTerminal = useRef(false)
   const didDragTerminal = useRef(false)
   const dragStartY = useRef(0)
@@ -92,30 +62,25 @@ function WorkspaceChrome() {
   const status = getStatusPresentation(workspace)
   const projectPath = workspace.boot?.project.cwd
   const projectLabel = getProjectDisplayName(projectPath)
-  const sessionLabel = getSessionLabelFromBridge(workspace.boot?.bridge)
   const titleOverride = workspace.titleOverride?.trim() || null
   const scopeLabel = getCurrentScopeLabel(workspace.boot?.workspace)
-  const runtimeLabel = workspace.boot?.auto.active
-    ? workspace.boot.auto.paused
-      ? "PAUSED"
-      : workspace.boot.auto.stepMode
-        ? "STEP"
-        : "AUTO"
-    : "LIVE"
   const visibleError = getVisibleWorkspaceError(workspace)
 
   // Restore persisted view once boot provides projectCwd
   useEffect(() => {
     if (viewRestored || !projectPath) return
-    try {
-      const stored = sessionStorage.getItem(viewStorageKey(projectPath))
-      if (stored && KNOWN_VIEWS.has(stored)) {
-        setActiveView(stored)
+    const restoreTimer = window.setTimeout(() => {
+      try {
+        const stored = sessionStorage.getItem(viewStorageKey(projectPath))
+        if (stored && KNOWN_VIEWS.has(stored)) {
+          setActiveView(stored)
+        }
+      } catch {
+        // sessionStorage may be unavailable (e.g. SSR, iframe sandbox)
       }
-    } catch {
-      // sessionStorage may be unavailable (e.g. SSR, iframe sandbox)
-    }
-    setViewRestored(true)
+      setViewRestored(true)
+    }, 0)
+    return () => window.clearTimeout(restoreTimer)
   }, [projectPath, viewRestored])
 
   // Persist view changes to sessionStorage
@@ -130,12 +95,15 @@ function WorkspaceChrome() {
 
   // Restore sidebar collapsed state from localStorage
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem("gsd-sidebar-collapsed")
-      if (stored === "true") setSidebarCollapsed(true)
-    } catch {
-      // localStorage may be unavailable
-    }
+    const restoreTimer = window.setTimeout(() => {
+      try {
+        const stored = localStorage.getItem("gsd-sidebar-collapsed")
+        if (stored === "true") setSidebarCollapsed(true)
+      } catch {
+        // localStorage may be unavailable
+      }
+    }, 0)
+    return () => window.clearTimeout(restoreTimer)
   }, [])
 
   // Persist sidebar collapsed state
@@ -195,6 +163,7 @@ function WorkspaceChrome() {
     const handleMouseUp = () => {
       isDraggingTerminal.current = false
       isDraggingSidebar.current = false
+      setTerminalDragActive(false)
       document.body.style.cursor = ""
       document.body.style.userSelect = ""
     }
@@ -209,6 +178,7 @@ function WorkspaceChrome() {
   const handleTerminalDragStart = useCallback(
     (e: React.MouseEvent) => {
       isDraggingTerminal.current = true
+      setTerminalDragActive(true)
       dragStartY.current = e.clientY
       dragStartHeight.current = terminalHeight
       document.body.style.cursor = "row-resize"
@@ -248,15 +218,17 @@ function WorkspaceChrome() {
       <header className="flex h-12 flex-shrink-0 items-center justify-between border-b border-border bg-card px-4">
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2">
-            <img
+            <Image
               src="/logo-black.svg"
               alt="GSD"
+              width={57}
               height={16}
               className="shrink-0 h-4 w-auto dark:hidden"
             />
-            <img
+            <Image
               src="/logo-white.svg"
               alt="GSD"
+              width={57}
               height={16}
               className="shrink-0 h-4 w-auto hidden dark:block"
             />
@@ -388,7 +360,7 @@ function WorkspaceChrome() {
               {/* Terminal content */}
               <div
                 className="overflow-hidden"
-                style={{ height: isTerminalExpanded ? terminalHeight : 0, transition: isDraggingTerminal.current ? "none" : "height 200ms" }}
+                style={{ height: isTerminalExpanded ? terminalHeight : 0, transition: terminalDragActive ? "none" : "height 200ms" }}
               >
                 <ShellTerminal className="h-full" />
               </div>

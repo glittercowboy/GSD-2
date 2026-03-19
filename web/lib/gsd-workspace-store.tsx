@@ -19,8 +19,6 @@ import {
   applyCommandSurfaceActionResult,
   closeCommandSurfaceState,
   createInitialCommandSurfaceState,
-  createInitialDiagnosticsPhaseState,
-  createInitialDoctorState,
   openCommandSurfaceState,
   selectCommandSurfaceStateTarget,
   setCommandSurfacePending,
@@ -617,10 +615,6 @@ function hasAttachedSession(bridge: BridgeRuntimeSnapshot | null | undefined): b
 function normalizeClientError(error: unknown): string {
   if (error instanceof Error) return error.message
   return String(error)
-}
-
-function getPromptCommandType(bridge: BridgeRuntimeSnapshot | null | undefined): "prompt" | "follow_up" {
-  return bridge?.sessionState?.isStreaming ? "follow_up" : "prompt"
 }
 
 function getCommandInputLabel(command: WorkspaceBridgeCommand): string {
@@ -4231,7 +4225,6 @@ export class GSDWorkspaceStore {
   private async reloadLiveState(
     domains: LiveStateInvalidationDomain[],
     reason: LiveStateInvalidationReason,
-    source: LiveStateInvalidationSource,
   ): Promise<void> {
     const requestedDomains = domains.filter((domain) => domain === "auto" || domain === "workspace" || domain === "resumable_sessions")
 
@@ -4390,7 +4383,7 @@ export class GSDWorkspaceStore {
         : this.state.commandSurface,
     })
     this.refreshOpenCommandSurfacesForInvalidation(event)
-    void this.reloadLiveState(event.domains, event.reason, event.source)
+    void this.reloadLiveState(event.domains, event.reason)
   }
 
   refreshOnboarding = async (): Promise<WorkspaceOnboardingState | null> => {

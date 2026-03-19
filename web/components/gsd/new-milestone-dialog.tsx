@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from "react"
 import { Loader2, Milestone, Send, Sparkles, User } from "lucide-react"
-import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -41,9 +40,9 @@ export function NewMilestoneDialog({ open, onOpenChange }: NewMilestoneDialogPro
   const [hasStarted, setHasStarted] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
-  const prevStreamingRef = useRef("")
   const prevTranscriptLenRef = useRef(0)
   const prevTerminalLenRef = useRef(0)
+  const didInitializeOpenRef = useRef(false)
 
   const bridge = state.boot?.bridge ?? null
   const isStreaming = Boolean(state.boot?.bridge.sessionState?.isStreaming)
@@ -54,10 +53,17 @@ export function NewMilestoneDialog({ open, onOpenChange }: NewMilestoneDialogPro
 
   // Capture baseline terminal state when dialog opens
   useEffect(() => {
-    if (open) {
-      prevTerminalLenRef.current = state.terminalLines.length
-      prevTranscriptLenRef.current = state.liveTranscript.length
-      prevStreamingRef.current = ""
+    if (!open) {
+      didInitializeOpenRef.current = false
+      return
+    }
+    if (didInitializeOpenRef.current) return
+
+    didInitializeOpenRef.current = true
+    prevTerminalLenRef.current = state.terminalLines.length
+    prevTranscriptLenRef.current = state.liveTranscript.length
+
+    const resetTimer = window.setTimeout(() => {
       setMessages([{
         id: "system-0",
         role: "system",
@@ -66,8 +72,10 @@ export function NewMilestoneDialog({ open, onOpenChange }: NewMilestoneDialogPro
       }])
       setHasStarted(false)
       setInput("")
-    }
-  }, [open])
+    }, 0)
+
+    return () => window.clearTimeout(resetTimer)
+  }, [open, state.liveTranscript.length, state.terminalLines.length])
 
   // Watch for new terminal lines and streaming text, convert to chat messages
   useEffect(() => {
@@ -109,9 +117,19 @@ export function NewMilestoneDialog({ open, onOpenChange }: NewMilestoneDialogPro
     }
 
     if (newMessages.length > 0) {
-      setMessages(prev => [...prev, ...newMessages])
+      const appendTimer = window.setTimeout(() => {
+        setMessages((prev) => [...prev, ...newMessages])
+      }, 0)
+      return () => window.clearTimeout(appendTimer)
     }
-  }, [open, hasStarted, state.liveTranscript, state.terminalLines])
+  }, [
+    open,
+    hasStarted,
+    state.liveTranscript,
+    state.liveTranscript.length,
+    state.terminalLines,
+    state.terminalLines.length,
+  ])
 
   // Auto-scroll to bottom
   useEffect(() => {

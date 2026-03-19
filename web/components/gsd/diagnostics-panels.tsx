@@ -6,11 +6,9 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import type {
   DoctorIssue,
-  DoctorSeverity,
   ForensicAnomaly,
   ForensicReport,
   DoctorReport,
-  SkillHealthEntry,
   SkillHealthReport,
   SkillHealSuggestion,
 } from "@/lib/diagnostics-types"

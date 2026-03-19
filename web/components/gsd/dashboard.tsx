@@ -25,7 +25,6 @@ import {
   getCurrentBranch,
   getCurrentSlice,
   getLiveAutoDashboard,
-  getLiveResumableSessions,
   getLiveWorkspaceIndex,
   type WorkspaceTerminalLine,
   type TerminalLineType,
@@ -105,19 +104,6 @@ function activityDotColor(type: TerminalLineType): string {
   }
 }
 
-function formatRelativeTime(isoDate: string): string {
-  const now = Date.now()
-  const then = new Date(isoDate).getTime()
-  const diffMs = now - then
-  if (diffMs < 60_000) return "just now"
-  const minutes = Math.floor(diffMs / 60_000)
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  return `${days}d ago`
-}
-
 interface DashboardProps {
   onSwitchView?: (view: string) => void
   onExpandTerminal?: () => void
@@ -125,23 +111,15 @@ interface DashboardProps {
 
 export function Dashboard({ onSwitchView, onExpandTerminal }: DashboardProps = {}) {
   const state = useGSDWorkspaceState()
-  const {
-    sendCommand,
-    submitInput,
-    switchSessionFromSurface,
-    openCommandSurface,
-    setCommandSurfaceSection,
-  } = useGSDWorkspaceActions()
+  const { sendCommand } = useGSDWorkspaceActions()
   const [milestoneDialogOpen, setMilestoneDialogOpen] = useState(false)
   const [guidedDialog, setGuidedDialog] = useState<{ open: boolean; command: string } | null>(null)
   const lastSentCommandRef = useRef<string | null>(null)
   const boot = state.boot
   const workspace = getLiveWorkspaceIndex(state)
   const auto = getLiveAutoDashboard(state)
-  const resumableSessions = getLiveResumableSessions(state)
   const bridge = boot?.bridge ?? null
   const freshness = state.live.freshness
-  const recoverySummary = state.live.recoverySummary
 
   const elapsed = auto?.elapsed ?? 0
   const totalCost = auto?.totalCost ?? 0
@@ -151,8 +129,6 @@ export function Dashboard({ onSwitchView, onExpandTerminal }: DashboardProps = {
   const doneTasks = currentSlice?.tasks.filter((t) => t.done).length ?? 0
   const totalTasks = currentSlice?.tasks.length ?? 0
   const progressPercent = totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0
-  const recentSessions = resumableSessions.slice(0, 3)
-  const activeSessionPath = bridge?.activeSessionFile ?? bridge?.sessionState?.sessionFile ?? null
 
   const scopeLabel = getCurrentScopeLabel(workspace)
   const branch = getCurrentBranch(workspace)
@@ -174,21 +150,6 @@ export function Dashboard({ onSwitchView, onExpandTerminal }: DashboardProps = {
   const handleWorkflowAction = (command: string) => {
     void sendCommand(buildPromptCommand(command, bridge))
     onExpandTerminal?.()
-  }
-
-  const handleNewSession = async () => {
-    await submitInput("/new")
-    onExpandTerminal?.()
-  }
-
-  const handleSwitchSession = async (session: { path: string }) => {
-    await switchSessionFromSurface(session.path)
-    onExpandTerminal?.()
-  }
-
-  const handleOpenRecovery = () => {
-    openCommandSurface("settings", { source: "surface" })
-    setCommandSurfaceSection("recovery")
   }
 
   const handlePrimaryAction = () => {
@@ -250,7 +211,6 @@ export function Dashboard({ onSwitchView, onExpandTerminal }: DashboardProps = {
             onOpenChange={(open) => {
               if (!open) setGuidedDialog(null)
             }}
-            command={guidedDialog.command}
             detectionKind={detection.kind}
           />
         )}

@@ -1,14 +1,15 @@
 "use client"
 
+import Image from "next/image"
 import { useEffect, useRef, useCallback, useState, useMemo, KeyboardEvent, DragEvent, ClipboardEvent } from "react"
-import { MessagesSquare, SendHorizonal, Check, Eye, EyeOff, Play, Loader2, Milestone, X, MessageCircle, FileEdit, FilePlus, Terminal, ChevronDown, ChevronRight, MoreHorizontal, Zap, Square, Pause, BarChart3, LayoutGrid, ListOrdered, History, Compass, PenLine, Inbox, SkipForward, Undo2, BookOpen, Settings, SlidersHorizontal, Stethoscope, FileOutput, Trash2, Globe, ImagePlus, type LucideIcon } from "lucide-react"
+import { MessagesSquare, SendHorizonal, Check, Eye, EyeOff, Play, Loader2, Milestone, X, MessageCircle, FileEdit, FilePlus, Terminal, ChevronDown, ChevronRight, MoreHorizontal, Zap, Square, Pause, BarChart3, LayoutGrid, ListOrdered, History, Compass, PenLine, Inbox, SkipForward, Undo2, BookOpen, Settings, SlidersHorizontal, Stethoscope, FileOutput, Trash2, Globe, type LucideIcon } from "lucide-react"
 import { AnimatePresence, motion } from "motion/react"
 import { cn } from "@/lib/utils"
 import { Input } from "@/components/ui/input"
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip"
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover"
 import { ChatMessage, TuiPrompt } from "@/lib/pty-chat-parser"
-import { PendingImage, processImageFile, validateImageFile, generateImageId, MAX_PENDING_IMAGES } from "@/lib/image-utils"
+import { PendingImage, processImageFile, generateImageId, MAX_PENDING_IMAGES } from "@/lib/image-utils"
 import {
   useGSDWorkspaceState,
   useGSDWorkspaceActions,
@@ -661,7 +662,7 @@ function MarkdownContent({ content }: { content: string }) {
       })
 
     return () => { cancelled = true }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   }, [content, isDark]) // re-render when content changes (streaming) or theme toggles
 
   if (!ready) {
@@ -1055,18 +1056,6 @@ function StreamingCursor() {
   )
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-}
-
-function stripInitialCommandEcho(content: string, initialCommand: string): string {
-  const trimmedCommand = initialCommand.trim()
-  if (!trimmedCommand) return content
-
-  const prefixPattern = new RegExp(`^${escapeRegExp(trimmedCommand)}(?:\n+)?`)
-  return content.replace(prefixPattern, "").replace(/^\n+/, "")
-}
-
 function stripTerminalChrome(content: string): string {
   return content
     .split("\n")
@@ -1347,10 +1336,13 @@ function ChatBubble({
           {message.images && message.images.length > 0 && (
             <div className="flex gap-1.5 mb-2 flex-wrap">
               {message.images.map((img, idx) => (
-                <img
+                <Image
                   key={idx}
                   src={`data:${img.mimeType};base64,${img.data}`}
                   alt={`Attached image ${idx + 1}`}
+                  width={32}
+                  height={32}
+                  unoptimized
                   className="h-8 w-8 rounded object-cover border border-primary-foreground/20"
                 />
               ))}
@@ -1675,9 +1667,12 @@ function ChatInputBar({
             <div className="flex items-center gap-2 px-3 pt-2.5 pb-1 flex-wrap">
               {pendingImages.map((img) => (
                 <div key={img.id} className="relative group flex-shrink-0">
-                  <img
+                  <Image
                     src={img.previewUrl}
                     alt="Pending image"
+                    width={48}
+                    height={48}
+                    unoptimized
                     className="h-12 w-12 rounded-lg object-cover border border-border/50"
                   />
                   <button
@@ -1909,7 +1904,6 @@ function StructuredTerminalActionPane({
   const inputQueueRef = useRef<string[]>([])
   const flushingRef = useRef(false)
   const screenUpdateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const messageIdRef = useRef(createLocalMessageId())
   const commandArgsKey = (commandArgs ?? []).join("\u0000")
   const [terminalFontSize] = useTerminalFontSize()
 
@@ -2100,7 +2094,7 @@ function StructuredTerminalActionPane({
       hostElementRef.current?.remove()
       hostElementRef.current = null
     }
-  }, [sessionId, command, commandArgsKey, updateParsedScreen])
+  }, [sessionId, command, commandArgs, commandArgsKey, updateParsedScreen])
 
   useEffect(() => {
     if (commandInProgress || messages.length > 0) return
@@ -2429,6 +2423,7 @@ export function ChatPane({ className, onOpenAction }: ChatPaneProps) {
     const allMessages: ChatMessage[] = []
     const transcriptBlocks = state.liveTranscript
     const userMsgs = userMessages
+    const latestUserTimestamp = userMsgs.at(-1)?.timestamp ?? 0
 
     // Interleave: turns alternate user → assistant.
     // Each transcript block corresponds to one assistant turn.
@@ -2447,7 +2442,7 @@ export function ChatPane({ className, onOpenAction }: ChatPaneProps) {
             role: "assistant",
             content: block,
             complete: true,
-            timestamp: Date.now() - (transcriptBlocks.length - i) * 1000,
+            timestamp: i + 1,
           })
         }
       }
@@ -2464,7 +2459,7 @@ export function ChatPane({ className, onOpenAction }: ChatPaneProps) {
         role: "assistant",
         content: streamingContent || "",
         complete: false,
-        timestamp: Date.now(),
+        timestamp: latestUserTimestamp + transcriptBlocks.length + 1,
       })
     }
 

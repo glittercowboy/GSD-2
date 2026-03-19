@@ -142,8 +142,10 @@ function CodeViewer({ content, filepath, shikiTheme = "github-dark-default" }: {
     let cancelled = false
 
     if (!lang) {
-      setReady(true)
-      return
+      const readyTimer = window.setTimeout(() => {
+        setReady(true)
+      }, 0)
+      return () => window.clearTimeout(readyTimer)
     }
 
     getHighlighter().then((highlighter) => {

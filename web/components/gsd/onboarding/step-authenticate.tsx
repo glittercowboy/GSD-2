@@ -68,14 +68,19 @@ export function StepAuthenticate({
 
   // Clear API key on successful validation
   useEffect(() => {
-    if (lastValidation?.status === "succeeded") {
+    if (lastValidation?.status !== "succeeded") return
+    const resetTimer = window.setTimeout(() => {
       setApiKey("")
-    }
+    }, 0)
+    return () => window.clearTimeout(resetTimer)
   }, [lastValidation?.checkedAt, lastValidation?.status])
 
   // Clear flow input when flow changes
   useEffect(() => {
-    setFlowInput("")
+    const resetTimer = window.setTimeout(() => {
+      setFlowInput("")
+    }, 0)
+    return () => window.clearTimeout(resetTimer)
   }, [activeFlow?.flowId])
 
   return (
@@ -86,7 +91,7 @@ export function StepAuthenticate({
         </h2>
         <p className="mt-2 text-sm leading-relaxed text-muted-foreground md:text-base">
           {provider.supports.apiKey
-            ? "Enter your API key below. It's validated before saving — nothing is persisted until the provider accepts it."
+            ? "Enter your API key below. It’s validated before saving — nothing is persisted until the provider accepts it."
             : "This provider uses browser sign-in. Start the flow and follow the instructions."}
         </p>
       </div>
@@ -141,7 +146,7 @@ export function StepAuthenticate({
         <Card className="mt-6 border-border/50 bg-card/40 shadow-none">
           <CardHeader className="gap-1 pb-4">
             <CardTitle className="text-base">API key</CardTitle>
-            <CardDescription>Paste the key — it's sent server-side for validation only.</CardDescription>
+            <CardDescription>Paste the key — it’s sent server-side for validation only.</CardDescription>
           </CardHeader>
           <CardContent>
             <form

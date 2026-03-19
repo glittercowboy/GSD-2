@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react"
+import { useMemo, useState, useSyncExternalStore } from "react"
 import {
   ChevronRight,
   ChevronDown,
@@ -78,9 +78,6 @@ export function NavRail({ activeView, onViewChange, isConnecting = false }: NavR
   const activeProjectCwd = useSyncExternalStore(manager.subscribe, manager.getSnapshot, manager.getSnapshot)
   const [exitDialogOpen, setExitDialogOpen] = useState(false)
   const { theme, setTheme } = useTheme()
-  const [mounted, setMounted] = useState(false)
-
-  useEffect(() => { setMounted(true) }, [])
 
   const cycleTheme = () => {
     if (theme === "system") setTheme("light")
@@ -88,8 +85,8 @@ export function NavRail({ activeView, onViewChange, isConnecting = false }: NavR
     else setTheme("system")
   }
 
-  const themeIcon = !mounted ? Monitor : theme === "light" ? Sun : theme === "dark" ? Moon : Monitor
-  const themeLabel = !mounted ? "Theme" : theme === "light" ? "Light" : theme === "dark" ? "Dark" : "System"
+  const themeIcon = theme === "light" ? Sun : theme === "dark" ? Moon : Monitor
+  const themeLabel = theme === "light" ? "Light" : theme === "dark" ? "Dark" : "System"
   const ThemeIcon = themeIcon
 
   const navItems = [
@@ -325,7 +322,7 @@ export function MilestoneExplorer({ isConnecting = false, width, onCollapse }: {
   const [milestoneDialogOpen, setMilestoneDialogOpen] = useState(false)
 
   const liveWorkspace = getLiveWorkspaceIndex(workspace)
-  const milestones = liveWorkspace?.milestones ?? []
+  const milestones = useMemo(() => liveWorkspace?.milestones ?? [], [liveWorkspace?.milestones])
   const activeScope = liveWorkspace?.active
   const auto = getLiveAutoDashboard(workspace)
   const bridge = workspace.boot?.bridge ?? null
@@ -371,20 +368,22 @@ export function MilestoneExplorer({ isConnecting = false, width, onCollapse }: {
     setCommandSurfaceSection("recovery")
   }
 
-  useEffect(() => {
-    if (!activeScope?.milestoneId) return
-    setExpandedMilestones((previous) =>
-      previous.includes(activeScope.milestoneId!) ? previous : [...previous, activeScope.milestoneId!],
-    )
-    if (activeScope.sliceId) {
-      const sliceKey = `${activeScope.milestoneId}-${activeScope.sliceId}`
-      setExpandedSlices((previous) => (previous.includes(sliceKey) ? previous : [...previous, sliceKey]))
-    }
-  }, [activeScope?.milestoneId, activeScope?.sliceId])
+  const effectiveExpandedMilestones =
+    activeScope?.milestoneId && !expandedMilestones.includes(activeScope.milestoneId)
+      ? [...expandedMilestones, activeScope.milestoneId]
+      : expandedMilestones
 
-  const milestoneStatus = useMemo(() => {
-    return new Map(milestones.map((milestone) => [milestone.id, getMilestoneStatus(milestone, activeScope ?? {})]))
-  }, [milestones, activeScope])
+  const effectiveExpandedSlices =
+    activeScope?.milestoneId && activeScope.sliceId
+      ? (() => {
+          const sliceKey = `${activeScope.milestoneId}-${activeScope.sliceId}`
+          return expandedSlices.includes(sliceKey) ? expandedSlices : [...expandedSlices, sliceKey]
+        })()
+      : expandedSlices
+
+  const milestoneStatus = new Map(
+    milestones.map((milestone) => [milestone.id, getMilestoneStatus(milestone, activeScope ?? {})]),
+  )
 
   const toggleMilestone = (id: string) => {
     setExpandedMilestones((prev) =>
@@ -463,7 +462,7 @@ export function MilestoneExplorer({ isConnecting = false, width, onCollapse }: {
           )}
 
           {milestones.map((milestone) => {
-            const milestoneOpen = expandedMilestones.includes(milestone.id)
+            const milestoneOpen = effectiveExpandedMilestones.includes(milestone.id)
             const milestoneActive = activeScope?.milestoneId === milestone.id
             const status = milestoneStatus.get(milestone.id) ?? "pending"
 
@@ -491,7 +490,7 @@ export function MilestoneExplorer({ isConnecting = false, width, onCollapse }: {
                   <div className="ml-4">
                     {milestone.slices.map((slice) => {
                       const sliceKey = `${milestone.id}-${slice.id}`
-                      const sliceOpen = expandedSlices.includes(sliceKey)
+                      const sliceOpen = effectiveExpandedSlices.includes(sliceKey)
                       const sliceStatus = getSliceStatus(milestone.id, slice, activeScope ?? {})
                       const sliceActive = activeScope?.milestoneId === milestone.id && activeScope.sliceId === slice.id
 

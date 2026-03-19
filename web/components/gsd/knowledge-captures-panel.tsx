@@ -8,7 +8,6 @@ import {
   RefreshCw,
   Zap,
   Clock,
-  CheckCircle2,
   Tag,
   FileText,
   Lightbulb,

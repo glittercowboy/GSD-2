@@ -11,7 +11,7 @@ import {
   Folder,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
-import type { ProjectDetection, ProjectDetectionKind } from "@/lib/gsd-workspace-store"
+import type { ProjectDetection } from "@/lib/gsd-workspace-store"
 
 // ─── Variant Config ─────────────────────────────────────────────────────────
 
@@ -27,14 +27,6 @@ interface WelcomeVariant {
     action: "files-view" | "command"
     command?: string
   }
-}
-
-function describeSignals(signals: ProjectDetection["signals"]): string[] {
-  const parts: string[] = []
-  if (signals.hasGitRepo) parts.push("Git repository")
-  if (signals.hasPackageJson) parts.push("Node.js project")
-  if (signals.fileCount > 0) parts.push(`${signals.fileCount} file${signals.fileCount === 1 ? "" : "s"}`)
-  return parts
 }
 
 function getVariant(detection: ProjectDetection): WelcomeVariant {
@@ -199,7 +191,11 @@ export function ProjectWelcome({
                 if (variant.secondary!.action === "files-view") {
                   onSwitchView("files")
                 } else if (variant.secondary!.command) {
-                  onOpenDialog ? onOpenDialog(variant.secondary!.command) : onCommand(variant.secondary!.command)
+                  if (onOpenDialog) {
+                    onOpenDialog(variant.secondary!.command)
+                  } else {
+                    onCommand(variant.secondary!.command)
+                  }
                 }
               }}
               disabled={disabled}

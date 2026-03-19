@@ -1,11 +1,14 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useSyncExternalStore } from "react";
 
 interface BeforeInstallPromptEvent extends Event {
   prompt(): Promise<void>;
   userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
 }
+
+const DISPLAY_MODE_QUERY = "(display-mode: standalone)";
+let installPromptInstalled = false;
 
 // Capture the event as early as possible — before React even mounts.
 // The `beforeinstallprompt` fires once, often before any component
@@ -29,44 +32,57 @@ if (typeof window !== "undefined") {
   );
 }
 
+function subscribeInstalled(onStoreChange: () => void): () => void {
+  if (typeof window === "undefined") return () => {};
+
+  const mediaQuery = window.matchMedia(DISPLAY_MODE_QUERY);
+  const handleInstalled = () => {
+    installPromptInstalled = true;
+    onStoreChange();
+  };
+  const handleChange = () => onStoreChange();
+
+  window.addEventListener("appinstalled", handleInstalled);
+  mediaQuery.addEventListener?.("change", handleChange);
+
+  return () => {
+    window.removeEventListener("appinstalled", handleInstalled);
+    mediaQuery.removeEventListener?.("change", handleChange);
+  };
+}
+
+function getInstalledSnapshot(): boolean {
+  if (typeof window === "undefined") return installPromptInstalled;
+  return installPromptInstalled || window.matchMedia(DISPLAY_MODE_QUERY).matches;
+}
+
 export function useInstallPrompt() {
   const [deferredPrompt, setDeferredPrompt] =
     useState<BeforeInstallPromptEvent | null>(null);
-  const [isInstalled, setIsInstalled] = useState(false);
+  const isInstalled = useSyncExternalStore(subscribeInstalled, getInstalledSnapshot, () => false);
 
   useEffect(() => {
-    // Already installed (standalone mode)
-    if (window.matchMedia("(display-mode: standalone)").matches) {
-      setIsInstalled(true);
-      return;
+    // Pick up an already-captured event (fired before this component mounted)
+    const syncPrompt = () => {
+      if (!window.__gsdDeferredInstallPrompt) return
+      window.setTimeout(() => {
+        setDeferredPrompt(window.__gsdDeferredInstallPrompt ?? null)
+      }, 0)
     }
 
-    // Pick up an already-captured event (fired before this component mounted)
-    if (window.__gsdDeferredInstallPrompt) {
-      setDeferredPrompt(window.__gsdDeferredInstallPrompt);
-    }
+    syncPrompt()
 
     // Also listen for the event if it fires after mount
     const promptHandler = () => {
-      if (window.__gsdDeferredInstallPrompt) {
-        setDeferredPrompt(window.__gsdDeferredInstallPrompt);
-      }
-    };
+      syncPrompt()
+    }
 
-    const installedHandler = () => {
-      setIsInstalled(true);
-      setDeferredPrompt(null);
-      delete window.__gsdDeferredInstallPrompt;
-    };
-
-    window.addEventListener("gsd:install-prompt-ready", promptHandler);
-    window.addEventListener("appinstalled", installedHandler);
+    window.addEventListener("gsd:install-prompt-ready", promptHandler)
 
     return () => {
-      window.removeEventListener("gsd:install-prompt-ready", promptHandler);
-      window.removeEventListener("appinstalled", installedHandler);
-    };
-  }, []);
+      window.removeEventListener("gsd:install-prompt-ready", promptHandler)
+    }
+  }, [])
 
   const promptInstall = useCallback(async () => {
     if (!deferredPrompt) return false;

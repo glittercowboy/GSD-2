@@ -134,22 +134,20 @@ export function Terminal({ className }: TerminalProps) {
   const inputRef = useRef<HTMLInputElement>(null)
 
   const autoMode = getInputMode(workspace)
-  const inputMode: InputMode = steerMode && workspace.boot?.bridge.sessionState?.isStreaming ? "steer" : autoMode
+  const isStreaming = Boolean(workspace.boot?.bridge.sessionState?.isStreaming)
+  const inputMode: InputMode = steerMode && isStreaming ? "steer" : autoMode
   const widgetsAboveEditor = getWidgetsForPlacement(workspace.widgetContents, "aboveEditor")
   const widgetsBelowEditor = getWidgetsForPlacement(workspace.widgetContents, "belowEditor")
 
-  // Reset steer mode when agent stops streaming
-  useEffect(() => {
-    if (!workspace.boot?.bridge.sessionState?.isStreaming) {
-      setSteerMode(false)
-    }
-  }, [workspace.boot?.bridge.sessionState?.isStreaming])
-
   useEffect(() => {
     if (workspace.editorTextBuffer === null) return
-    setInput(workspace.editorTextBuffer)
-    consumeEditorTextBuffer()
-    inputRef.current?.focus()
+    const nextInput = workspace.editorTextBuffer
+    const updateTimer = window.setTimeout(() => {
+      setInput(nextInput)
+      consumeEditorTextBuffer()
+      inputRef.current?.focus()
+    }, 0)
+    return () => window.clearTimeout(updateTimer)
   }, [consumeEditorTextBuffer, workspace.editorTextBuffer])
 
   useEffect(() => {
@@ -158,7 +156,6 @@ export function Terminal({ className }: TerminalProps) {
 
   const status = getStatusPresentation(workspace)
   const sessionLabel = getSessionLabelFromBridge(workspace.boot?.bridge)
-  const isStreaming = Boolean(workspace.boot?.bridge.sessionState?.isStreaming)
   const isInputDisabled =
     workspace.bootStatus !== "ready" ||
     workspace.commandInFlight === "refresh" ||

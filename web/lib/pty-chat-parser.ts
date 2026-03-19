@@ -80,22 +80,22 @@ type Unsubscribe = () => void
  */
 export function stripAnsi(s: string): string {
   // OSC: \x1b] ... (\x07 or \x1b\)
-  // eslint-disable-next-line no-control-regex
+   
   s = s.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
   // DCS / PM / APC: \x1bP, \x1b^, \x1b_ ... \x1b\
-  // eslint-disable-next-line no-control-regex
+   
   s = s.replace(/\x1b[P^_][^\x1b]*\x1b\\/g, "")
   // CSI: \x1b[ ... final byte (0x40–0x7e)
-  // eslint-disable-next-line no-control-regex
+   
   s = s.replace(/\x1b\[[0-9;:<=>?]*[ -/]*[@-~]/g, "")
   // SS2 / SS3: \x1b(N|O) + one char
-  // eslint-disable-next-line no-control-regex
+   
   s = s.replace(/\x1b[NO]./g, "")
   // All remaining ESC + one char (e.g. \x1bM, \x1b7, \x1b8, \x1b=, etc.)
-  // eslint-disable-next-line no-control-regex
+   
   s = s.replace(/\x1b./g, "")
   // Stray lone \x1b with no following char
-  // eslint-disable-next-line no-control-regex
+   
   s = s.replace(/\x1b/g, "")
   // \r followed by content overwrites the current line — keep the tail only
   // e.g. "old content\rnew content" → "new content"

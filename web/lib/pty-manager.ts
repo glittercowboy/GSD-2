@@ -105,7 +105,7 @@ function getProjectCwd(): string {
   return process.env.GSD_WEB_PROJECT_CWD || process.cwd();
 }
 
-function getShellArgs(_shell: string): string[] {
+function getShellArgs(): string[] {
   // Launch an interactive login shell with the user's normal config.
   // Previously we passed -f / --norc to skip rc files, but that removed the
   // user's prompt, PATH, aliases, etc. — making the terminal feel broken.
@@ -124,7 +124,7 @@ function resolveTerminalSpawnSpec(cwd: string, command?: string, commandArgs: st
     const shell = getDefaultShell();
     return {
       executable: shell,
-      args: getShellArgs(shell),
+      args: getShellArgs(),
       label: basename(shell),
     };
   }
@@ -212,7 +212,7 @@ function loadNodePty(): LoadedNodePty {
       // at runtime.  In non-webpack environments the global doesn't exist, so
       // we fall back to regular require.
       //
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
+       
       const nativeRequire: NodeRequire = typeof __non_webpack_require__ !== "undefined"
         ? __non_webpack_require__
         : require;

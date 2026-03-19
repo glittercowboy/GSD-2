@@ -40,7 +40,7 @@ function isActionPayload(value: unknown): value is OnboardingAction {
 }
 
 export async function GET(request: Request): Promise<Response> {
-  const _projectCwd = resolveProjectCwd(request);
+  resolveProjectCwd(request);
   return Response.json(
     {
       onboarding: await getOnboardingService().getState(),
@@ -52,7 +52,7 @@ export async function GET(request: Request): Promise<Response> {
 }
 
 export async function POST(request: Request): Promise<Response> {
-  const _projectCwd = resolveProjectCwd(request);
+  resolveProjectCwd(request);
   let payload: unknown;
   try {
     payload = await request.json();

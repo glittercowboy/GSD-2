@@ -16,8 +16,6 @@ export interface GuidedDialogProps {
   open: boolean
   /** Callback when open state changes (e.g. close button clicked) */
   onOpenChange: (open: boolean) => void
-  /** The command that was triggered (used for display context, not dispatch) */
-  command: string
   /** Detection kind for contextual title */
   detectionKind?: string
 }
@@ -49,7 +47,6 @@ function getDialogTitle(detectionKind?: string): string {
 export function GuidedDialog({
   open,
   onOpenChange,
-  command,
   detectionKind,
 }: GuidedDialogProps) {
   return (
