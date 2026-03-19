@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import googleSearchExtension from "../resources/extensions/google-search/index.ts";
+import googleSearchExtension, { __resetGoogleSearchStateForTests } from "../resources/extensions/google-search/index.ts";
 
 function createMockPI() {
   const handlers: any[] = [];
@@ -39,6 +39,7 @@ function mockModelRegistry(oauthJson?: string) {
 }
 
 test("fix: google-search uses OAuth if GEMINI_API_KEY is missing", async () => {
+  __resetGoogleSearchStateForTests();
   const originalKey = process.env.GEMINI_API_KEY;
   delete process.env.GEMINI_API_KEY;
 
@@ -84,6 +85,7 @@ test("fix: google-search uses OAuth if GEMINI_API_KEY is missing", async () => {
 });
 
 test("google-search warns if NO authentication is present", async () => {
+  __resetGoogleSearchStateForTests();
   const originalKey = process.env.GEMINI_API_KEY;
   delete process.env.GEMINI_API_KEY;
 
@@ -111,6 +113,7 @@ test("google-search warns if NO authentication is present", async () => {
 });
 
 test("google-search uses GEMINI_API_KEY if present (precedence)", async () => {
+  __resetGoogleSearchStateForTests();
   process.env.GEMINI_API_KEY = "mock-api-key";
 
   try {
@@ -127,5 +130,60 @@ test("google-search uses GEMINI_API_KEY if present (precedence)", async () => {
     assert.equal(notifications.length, 0, "Should NOT notify if API Key is present");
   } finally {
     delete process.env.GEMINI_API_KEY;
+  }
+});
+
+test("google-search breaks repeated identical queries instead of looping forever", async () => {
+  __resetGoogleSearchStateForTests();
+  const originalKey = process.env.GEMINI_API_KEY;
+  delete process.env.GEMINI_API_KEY;
+
+  const originalFetch = global.fetch;
+  let fetchCalls = 0;
+  (global as any).fetch = async () => {
+    fetchCalls++;
+    return {
+      ok: true,
+      json: async () => ({
+        response: {
+          candidates: [{ content: { parts: [{ text: "Mocked AI Answer" }] } }]
+        }
+      }),
+      text: async () => JSON.stringify({
+        response: {
+          candidates: [{ content: { parts: [{ text: "Mocked AI Answer" }] } }]
+        }
+      }),
+    };
+  };
+
+  try {
+    const pi = createMockPI();
+    googleSearchExtension(pi as any);
+
+    const oauthJson = JSON.stringify({ token: "mock-token", projectId: "mock-project" });
+    const mockCtx = {
+      ui: { notify() {} },
+      modelRegistry: mockModelRegistry(oauthJson),
+    };
+
+    const registeredTool = (pi as any).registeredTool;
+    const query = "latest node lts version";
+
+    const first = await registeredTool.execute("call-1", { query }, new AbortController().signal, () => {}, mockCtx);
+    const second = await registeredTool.execute("call-2", { query }, new AbortController().signal, () => {}, mockCtx);
+    const third = await registeredTool.execute("call-3", { query }, new AbortController().signal, () => {}, mockCtx);
+    const fourth = await registeredTool.execute("call-4", { query }, new AbortController().signal, () => {}, mockCtx);
+
+    assert.equal(first.isError, undefined);
+    assert.equal(second.isError, undefined);
+    assert.equal(third.isError, undefined);
+    assert.equal(fourth.isError, true);
+    assert.match(fourth.content[0].text, /Search loop detected/i);
+    assert.equal(fetchCalls, 1, "only the first identical query should hit the network");
+  } finally {
+    global.fetch = originalFetch;
+    process.env.GEMINI_API_KEY = originalKey;
+    __resetGoogleSearchStateForTests();
   }
 });

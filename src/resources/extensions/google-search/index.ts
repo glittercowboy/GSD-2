@@ -167,8 +167,21 @@ async function searchWithOAuth(
 
 const resultCache = new Map<string, SearchResult>();
 
+// Consecutive duplicate search guard
+// Breaks repeated identical google_search calls in the same session so the
+// model doesn't burn turns re-running the same query instead of using results.
+const MAX_CONSECUTIVE_DUPES = 3;
+let lastSearchKey = "";
+let consecutiveDupeCount = 0;
+
 function cacheKey(query: string): string {
 	return query.toLowerCase().trim();
+}
+
+export function __resetGoogleSearchStateForTests(): void {
+	resultCache.clear();
+	lastSearchKey = "";
+	consecutiveDupeCount = 0;
 }
 
 // ── Extension ────────────────────────────────────────────────────────────────
@@ -207,6 +220,35 @@ export default function (pi: ExtensionAPI) {
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 			const startTime = Date.now();
 			const maxSources = Math.min(Math.max(params.maxSources ?? 5, 1), 10);
+			const key = cacheKey(params.query);
+
+			// Break repeated identical google_search calls before the model gets
+			// stuck in a search-only loop. Mirrors the duplicate-query guard used
+			// by search-the-web, including cached-result replays.
+			if (key === lastSearchKey) {
+				consecutiveDupeCount++;
+				if (consecutiveDupeCount >= MAX_CONSECUTIVE_DUPES) {
+					consecutiveDupeCount = 0;
+					lastSearchKey = "";
+					return {
+						content: [{
+							type: "text",
+							text: `⚠️ Search loop detected: the query "${params.query}" has been searched ${MAX_CONSECUTIVE_DUPES + 1} times consecutively. The information you need is already in the previous search results above. Stop searching and use those results to proceed with your task.`,
+						}],
+						isError: true,
+						details: {
+							query: params.query,
+							sourceCount: 0,
+							cached: false,
+							durationMs: Date.now() - startTime,
+							error: "search_loop: Consecutive duplicate search detected",
+						} as SearchDetails,
+					};
+				}
+			} else {
+				lastSearchKey = key;
+				consecutiveDupeCount = 0;
+			}
 
 			// Check for credentials
 			let oauthToken: string | undefined;
@@ -245,7 +287,6 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			// Check cache
-			const key = cacheKey(params.query);
 			if (resultCache.has(key)) {
 				const cached = resultCache.get(key)!;
 				const output = formatOutput(cached, maxSources);
