@@ -1,5 +1,5 @@
-import { mkdtempSync, rmSync, writeFileSync, existsSync, lstatSync, readlinkSync, mkdirSync, symlinkSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { mkdtempSync, rmSync, writeFileSync, existsSync, lstatSync, realpathSync, mkdirSync, symlinkSync } from "node:fs";
+import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execSync } from "node:child_process";
 
@@ -44,7 +44,7 @@ async function main(): Promise<void> {
     assertEq(worktreeState, expectedExternalState, "worktree symlink target matches main repo external state dir");
     assertTrue(existsSync(join(worktreePath, ".gsd")), "worktree .gsd exists");
     assertTrue(lstatSync(join(worktreePath, ".gsd")).isSymbolicLink(), "worktree .gsd is a symlink");
-    assertEq(resolve(worktreePath, readlinkSync(join(worktreePath, ".gsd"))), expectedExternalState, "worktree .gsd symlink resolves to main repo external state dir");
+    assertEq(realpathSync(join(worktreePath, ".gsd")), expectedExternalState, "worktree .gsd symlink resolves to main repo external state dir");
 
     console.log("\n=== ensureGsdSymlink heals stale worktree symlinks ===");
     const staleState = join(stateDir, "projects", "stale-worktree-state");
@@ -53,16 +53,16 @@ async function main(): Promise<void> {
     symlinkSync(staleState, join(worktreePath, ".gsd"), "junction");
     const healedState = ensureGsdSymlink(worktreePath);
     assertEq(healedState, expectedExternalState, "stale worktree symlink is repaired to canonical external state dir");
-    assertEq(resolve(worktreePath, readlinkSync(join(worktreePath, ".gsd"))), expectedExternalState, "healed worktree symlink resolves to canonical external state dir");
+    assertEq(realpathSync(join(worktreePath, ".gsd")), expectedExternalState, "healed worktree symlink resolves to canonical external state dir");
 
-    console.log("\n=== ensureGsdSymlink heals stale worktree .gsd directories ===");
+    console.log("\n=== ensureGsdSymlink preserves worktree .gsd directories ===");
     rmSync(join(worktreePath, ".gsd"), { recursive: true, force: true });
     mkdirSync(join(worktreePath, ".gsd", "milestones"), { recursive: true });
     writeFileSync(join(worktreePath, ".gsd", "milestones", "stale.txt"), "stale\n", "utf-8");
-    const healedDirState = ensureGsdSymlink(worktreePath);
-    assertEq(healedDirState, expectedExternalState, "stale worktree .gsd directory is replaced with canonical symlink");
-    assertTrue(lstatSync(join(worktreePath, ".gsd")).isSymbolicLink(), "stale worktree .gsd directory replaced by symlink");
-    assertEq(resolve(worktreePath, readlinkSync(join(worktreePath, ".gsd"))), expectedExternalState, "replaced worktree .gsd directory resolves to canonical external state dir");
+    const preservedDirState = ensureGsdSymlink(worktreePath);
+    assertEq(preservedDirState, join(worktreePath, ".gsd"), "worktree .gsd directory is left in place for sync-based refresh");
+    assertTrue(lstatSync(join(worktreePath, ".gsd")).isDirectory(), "worktree .gsd directory remains a directory");
+    assertTrue(existsSync(join(worktreePath, ".gsd", "milestones", "stale.txt")), "existing worktree .gsd directory contents remain available for sync logic");
   } finally {
     delete process.env.GSD_STATE_DIR;
     rmSync(base, { recursive: true, force: true });
