@@ -58,6 +58,22 @@ export function migrateToExternalState(basePath: string): MigrationResult {
     return { migrated: false };
   }
 
+  // Skip if .gsd/worktrees/ has active worktree directories (#1337).
+  // On Windows, active git worktrees hold OS-level directory handles that
+  // prevent rename/delete. Attempting migration causes EBUSY and data loss.
+  const worktreesDir = join(localGsd, "worktrees");
+  if (existsSync(worktreesDir)) {
+    try {
+      const entries = readdirSync(worktreesDir, { withFileTypes: true });
+      if (entries.some(e => e.isDirectory())) {
+        return { migrated: false };
+      }
+    } catch {
+      // Can't read worktrees dir — skip migration to be safe
+      return { migrated: false };
+    }
+  }
+
   const externalPath = externalGsdRoot(basePath);
   const migratingPath = join(basePath, ".gsd.migrating");
 
