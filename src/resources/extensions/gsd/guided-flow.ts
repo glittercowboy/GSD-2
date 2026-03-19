@@ -23,6 +23,7 @@ import {
 } from "./paths.js";
 import { join } from "node:path";
 import { readFileSync, existsSync, mkdirSync, readdirSync, rmSync, unlinkSync } from "node:fs";
+import { readSessionLockData, isSessionLockProcessAlive } from "./session-lock.js";
 import { nativeIsRepo, nativeInit } from "./native-git-bridge.js";
 import { ensureGitignore, ensurePreferences, untrackRuntimeFiles } from "./gitignore.js";
 import { loadEffectiveGSDPreferences } from "./preferences.js";
@@ -516,8 +517,13 @@ export async function showDiscuss(
     // If all pending slices are discussed, notify and exit instead of looping
     const allDiscussed = pendingSlices.every(s => discussedMap.get(s.id));
     if (allDiscussed) {
+      const lockData = readSessionLockData(basePath);
+      const remoteAutoRunning = lockData && lockData.pid !== process.pid && isSessionLockProcessAlive(lockData);
+      const nextStep = remoteAutoRunning
+        ? "Auto-mode is already running — use /gsd status to check progress."
+        : "Run /gsd to start planning.";
       ctx.ui.notify(
-        `All ${pendingSlices.length} slices discussed. Run /gsd to start planning.`,
+        `All ${pendingSlices.length} slices discussed. ${nextStep}`,
         "info",
       );
       return;

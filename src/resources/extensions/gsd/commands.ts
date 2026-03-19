@@ -48,6 +48,7 @@ import { computeProgressScore, formatProgressLine } from "./progress-score.js";
 import { runEnvironmentChecks } from "./doctor-environment.js";
 import { handleLogs } from "./commands-logs.js";
 import { handleStart, handleTemplates, getTemplateCompletions } from "./commands-workflow-templates.js";
+import { readSessionLockData, isSessionLockProcessAlive } from "./session-lock.js";
 
 
 /** Resolve the effective project root, accounting for worktree paths. */
@@ -67,6 +68,39 @@ export function projectRoot(): string {
     assertSafeDirectory(root);
   }
   return root;
+}
+
+/**
+ * Check if another process holds the auto-mode session lock.
+ * Returns the lock data if a remote session is alive, null otherwise.
+ */
+function getRemoteAutoSession(basePath: string): { pid: number } | null {
+  const lockData = readSessionLockData(basePath);
+  if (!lockData) return null;
+  if (lockData.pid === process.pid) return null;
+  if (!isSessionLockProcessAlive(lockData)) return null;
+  return { pid: lockData.pid };
+}
+
+/**
+ * Show a steering menu when auto-mode is running in another process.
+ * Returns true if a remote session was detected (caller should return early).
+ */
+function notifyRemoteAutoActive(ctx: ExtensionCommandContext, basePath: string): boolean {
+  const remote = getRemoteAutoSession(basePath);
+  if (!remote) return false;
+  ctx.ui.notify(
+    `Auto-mode is running in another process (PID ${remote.pid}).\n` +
+    `Use these commands to interact with it:\n` +
+    `  /gsd status   — check progress\n` +
+    `  /gsd discuss  — discuss architecture decisions\n` +
+    `  /gsd queue    — queue the next milestone\n` +
+    `  /gsd steer    — apply an override to active work\n` +
+    `  /gsd capture  — fire-and-forget thought\n` +
+    `  /gsd stop     — stop auto-mode`,
+    "warning",
+  );
+  return true;
 }
 
 export function registerGSDCommand(pi: ExtensionAPI): void {
@@ -511,6 +545,7 @@ export async function handleGSDCommand(
           await handleDryRun(ctx, projectRoot());
           return;
         }
+        if (notifyRemoteAutoActive(ctx, projectRoot())) return;
         const verboseMode = trimmed.includes("--verbose");
         const debugMode = trimmed.includes("--debug");
         if (debugMode) enableDebug(projectRoot());
@@ -899,7 +934,7 @@ Examples:
       }
 
       if (trimmed === "") {
-        // Bare /gsd defaults to step mode
+        if (notifyRemoteAutoActive(ctx, projectRoot())) return;
         await startAuto(ctx, pi, projectRoot(), false, { step: true });
         return;
       }
