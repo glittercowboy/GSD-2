@@ -1182,6 +1182,14 @@ async function dispatchNextUnit(
   if (!mid) {
     if (s.currentUnit) {
       await closeoutUnit(ctx, s.basePath, s.currentUnit.type, s.currentUnit.id, s.currentUnit.startedAt, buildSnapshotOpts(s.currentUnit.type, s.currentUnit.id));
+      // Persist completed key before merge/stop (#1405).
+      // Without this, complete-milestone key is never written when all milestones
+      // are done and no next dispatch occurs — causing re-dispatch loops on restart.
+      const closeoutKey = `${s.currentUnit.type}/${s.currentUnit.id}`;
+      if (verifyExpectedArtifact(s.currentUnit.type, s.currentUnit.id, s.basePath)) {
+        persistCompletedKey(s.basePath, closeoutKey);
+        s.completedKeySet.add(closeoutKey);
+      }
     }
 
     const incomplete = (state.registry ?? []).filter(m => m.status !== "complete" && m.status !== "parked");
