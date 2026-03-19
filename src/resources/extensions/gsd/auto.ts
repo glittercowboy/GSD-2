@@ -1145,6 +1145,9 @@ export async function dispatchHookUnit(
   ctx.ui.setStatus("gsd-auto", s.stepMode ? "next" : "auto");
   ctx.ui.notify(`Running post-unit hook: ${hookName}`, "info");
 
+  // Ensure cwd matches basePath before hook dispatch (#1389)
+  try { if (process.cwd() !== s.basePath) process.chdir(s.basePath); } catch {}
+
   debugLog("dispatchHookUnit", {
     phase: "send-message",
     promptLength: hookPrompt.length,

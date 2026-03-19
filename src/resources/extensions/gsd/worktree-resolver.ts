@@ -13,6 +13,8 @@
  * `process.chdir()` internally — this class MUST NOT double-chdir.
  */
 
+import { existsSync, unlinkSync } from "node:fs";
+import { join } from "node:path";
 import type { AutoSession } from "./auto/session.js";
 import { debugLog } from "./debug-logger.js";
 
@@ -371,6 +373,15 @@ export class WorktreeResolver {
         fallback: "chdir-to-project-root",
       });
       ctx.notify(`Milestone merge failed: ${msg}`, "warning");
+
+      // Clean up stale merge state left by failed squash-merge (#1389)
+      try {
+        const gitDir = join(originalBase || this.s.basePath, ".git");
+        for (const f of ["SQUASH_MSG", "MERGE_HEAD", "MERGE_MSG"]) {
+          const p = join(gitDir, f);
+          if (existsSync(p)) unlinkSync(p);
+        }
+      } catch { /* best-effort */ }
 
       // Error recovery: always restore to project root
       if (originalBase) {

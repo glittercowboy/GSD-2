@@ -221,6 +221,15 @@ export async function runUnit(
     s.pendingResolve = resolve;
   });
 
+  // Ensure cwd matches basePath before dispatch (#1389).
+  // async_bash and background jobs can drift cwd away from the worktree.
+  // Realigning here prevents commits from landing on the wrong branch.
+  try {
+    if (process.cwd() !== s.basePath) {
+      process.chdir(s.basePath);
+    }
+  } catch { /* non-fatal — chdir may fail if dir was removed */ }
+
   // ── Send the prompt ──
   debugLog("runUnit", { phase: "send-message", unitType, unitId });
 
