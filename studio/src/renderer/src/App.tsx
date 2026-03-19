@@ -14,7 +14,7 @@ export default function App() {
         <div className="grid gap-10 lg:grid-cols-[1.2fr_0.8fr]">
           <section className="rounded-[28px] border border-border bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.01))] p-10 shadow-[0_24px_80px_rgba(0,0,0,0.35)] backdrop-blur-sm">
             <div className="mb-8 inline-flex items-center gap-3 rounded-full border border-[color:var(--color-accent-muted)] bg-[color:var(--color-accent-muted)] px-4 py-2 text-xs font-medium uppercase tracking-[0.28em] text-accent">
-              <span className="h-2 w-2 rounded-full bg-accent shadow-[0_0_18px_rgba(212,160,78,0.7)]" />
+              <span className="h-2 w-2 rounded-full bg-accent shadow-[0_0_18px_rgba(94,106,210,0.7)]" />
               Studio bootstrap
             </div>
 
@@ -23,7 +23,7 @@ export default function App() {
             </h1>
 
             <p className="mt-6 max-w-2xl text-lg leading-8 text-text-secondary">
-              Inter drives the interface, JetBrains Mono handles code surfaces, and the warm amber system accent keeps the palette restrained instead of drifting into generic app chrome.
+              Inter drives the interface, JetBrains Mono handles code surfaces, and the cool indigo system accent keeps the palette restrained instead of drifting into generic app chrome.
             </p>
 
             <div className="mt-10 grid gap-4 sm:grid-cols-3">
@@ -48,9 +48,9 @@ export default function App() {
               </p>
             </div>
 
-            <div className="rounded-2xl border border-[color:var(--color-accent-muted)] bg-[#120f09] p-5">
+            <div className="rounded-2xl border border-[color:var(--color-accent-muted)] bg-[#0d0e14] p-5">
               <p className="text-xs uppercase tracking-[0.24em] text-accent/80">Code surface</p>
-              <pre className="mt-4 overflow-x-auto rounded-xl border border-border bg-black/30 p-4 text-sm leading-7 text-[#f5deb3]">
+              <pre className="mt-4 overflow-x-auto rounded-xl border border-border bg-black/30 p-4 text-sm leading-7 text-text-primary">
                 <code>{`const studio = await window.studio.getStatus();\nif (!studio.connected) {\n  console.log('Renderer scaffold ready');\n}`}</code>
               </pre>
             </div>
