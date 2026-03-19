@@ -795,6 +795,12 @@ export default function (pi: ExtensionAPI) {
 
   // ── agent_end: auto-mode advancement or auto-start after discuss ───────────
   pi.on("agent_end", async (event, ctx: ExtensionContext) => {
+    // Clean up quick-task branch if one just completed (#1269)
+    try {
+      const { cleanupQuickBranch } = await import("./quick.js");
+      cleanupQuickBranch();
+    } catch { /* non-fatal */ }
+
     // If discuss phase just finished, start auto-mode
     if (checkAutoStartAfterDiscuss()) {
       depthVerifiedMilestones.clear();
