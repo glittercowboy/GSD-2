@@ -33,9 +33,24 @@ export function validatePreferences(preferences: GSDPreferences): {
   const validated: GSDPreferences = {};
 
   // ─── Unknown Key Detection ──────────────────────────────────────────
+  // Common key migration hints for pi-level settings that don't map to GSD prefs
+  const KEY_MIGRATION_HINTS: Record<string, string> = {
+    taskIsolation: 'use "git.isolation" instead (values: worktree, branch, none)',
+    task_isolation: 'use "git.isolation" instead (values: worktree, branch, none)',
+    isolation: 'use "git.isolation" instead (values: worktree, branch, none)',
+    manage_gitignore: 'use "git.manage_gitignore" instead',
+    auto_push: 'use "git.auto_push" instead',
+    main_branch: 'use "git.main_branch" instead',
+  };
+
   for (const key of Object.keys(preferences)) {
     if (!KNOWN_PREFERENCE_KEYS.has(key)) {
-      warnings.push(`unknown preference key "${key}" — ignored`);
+      const hint = KEY_MIGRATION_HINTS[key];
+      if (hint) {
+        warnings.push(`unknown preference key "${key}" — ${hint}`);
+      } else {
+        warnings.push(`unknown preference key "${key}" — ignored`);
+      }
     }
   }
 
