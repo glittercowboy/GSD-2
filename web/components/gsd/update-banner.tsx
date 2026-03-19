@@ -17,6 +17,7 @@ const POLL_INTERVAL = 3000
 export function UpdateBanner() {
   const [info, setInfo] = useState<UpdateInfo | null>(null)
   const [triggering, setTriggering] = useState(false)
+  const [dismissed, setDismissed] = useState(false)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const fetchStatus = useCallback(async () => {
@@ -69,6 +70,7 @@ export function UpdateBanner() {
   // Don't render until we have data, or if no update is available and status is idle
   if (!info) return null
   if (!info.updateAvailable && info.updateStatus === "idle") return null
+  if (dismissed) return null
 
   const isRunning = info.updateStatus === "running"
   const isSuccess = info.updateStatus === "success"
@@ -135,6 +137,17 @@ export function UpdateBanner() {
           )}
         </>
       )}
+      <button
+        onClick={() => setDismissed(true)}
+        aria-label="Dismiss update banner"
+        className="flex-shrink-0 rounded p-0.5 opacity-50 transition-opacity hover:opacity-100"
+        data-testid="update-banner-dismiss"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <line x1="18" y1="6" x2="6" y2="18" />
+          <line x1="6" y1="6" x2="18" y2="18" />
+        </svg>
+      </button>
     </div>
   )
 }

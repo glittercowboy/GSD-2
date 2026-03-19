@@ -453,7 +453,7 @@ export type WorkspaceEvent =
   | ToolExecutionEndEvent
   | AgentEndEvent
   | TurnEndEvent
-  | ({ type: string; [key: string]: unknown } & Record<string, unknown>)
+  | ({ type: Exclude<string, "bridge_status" | "live_state_invalidation" | "extension_ui_request" | "extension_error" | "message_update" | "tool_execution_start" | "tool_execution_end" | "agent_end" | "turn_end">; [key: string]: unknown } & Record<string, unknown>)
 
 export interface WorkspaceCommandResponse {
   type: "response"
@@ -661,7 +661,7 @@ function summarizeBridgeStatus(bridge: BridgeRuntimeSnapshot): { type: TerminalL
 function summarizeEvent(event: WorkspaceEvent): { type: TerminalLineType; message: string } | null {
   switch (event.type) {
     case "bridge_status":
-      return summarizeBridgeStatus(event.bridge)
+      return summarizeBridgeStatus((event as BridgeStatusEvent).bridge)
     case "live_state_invalidation":
       return {
         type: "system",
@@ -1121,26 +1121,25 @@ function normalizeAvailableModels(
       ? (payload as { models: Array<Record<string, unknown>> }).models
       : []
 
-  return models
-    .map((model) => {
-      const provider =
-        typeof model.provider === "string"
-          ? model.provider
-          : typeof model.providerId === "string"
-            ? model.providerId
-            : undefined
-      const modelId = typeof model.id === "string" ? model.id : undefined
-      if (!provider || !modelId) return null
-
-      return {
-        provider,
-        modelId,
-        name: typeof model.name === "string" ? model.name : undefined,
-        reasoning: Boolean(model.reasoning),
-        isCurrent: provider === currentModel?.provider && modelId === currentModel?.modelId,
-      } satisfies CommandSurfaceModelOption
+  const results: CommandSurfaceModelOption[] = []
+  for (const model of models) {
+    const provider =
+      typeof model.provider === "string"
+        ? model.provider
+        : typeof model.providerId === "string"
+          ? model.providerId
+          : undefined
+    const modelId = typeof model.id === "string" ? model.id : undefined
+    if (!provider || !modelId) continue
+    results.push({
+      provider,
+      modelId,
+      name: typeof model.name === "string" ? model.name : undefined,
+      reasoning: Boolean(model.reasoning),
+      isCurrent: provider === currentModel?.provider && modelId === currentModel?.modelId,
     })
-    .filter((model): model is CommandSurfaceModelOption => model !== null)
+  }
+  return results
     .sort((left, right) => Number(right.isCurrent) - Number(left.isCurrent) || left.provider.localeCompare(right.provider) || left.modelId.localeCompare(right.modelId))
 }
 
@@ -2996,7 +2995,7 @@ export class GSDWorkspaceStore {
       currentTarget?.kind === "model"
         ? currentTarget
         : availableModels[0]
-          ? { kind: "model", provider: availableModels[0].provider, modelId: availableModels[0].modelId }
+          ? { kind: "model" as const, provider: availableModels[0].provider, modelId: availableModels[0].modelId }
           : currentTarget
 
     this.patchState({
@@ -3554,7 +3553,7 @@ export class GSDWorkspaceStore {
       currentTarget?.kind === "fork" && currentTarget.entryId
         ? currentTarget
         : forkMessages[0]
-          ? { kind: "fork", entryId: forkMessages[0].entryId }
+          ? { kind: "fork" as const, entryId: forkMessages[0].entryId }
           : currentTarget
 
     this.patchState({
@@ -4858,12 +4857,12 @@ export class GSDWorkspaceStore {
     this.patchState({ lastEventType: event.type })
 
     if (event.type === "bridge_status") {
-      this.recordBridgeStatus(event.bridge)
+      this.recordBridgeStatus((event as BridgeStatusEvent).bridge)
       return
     }
 
     if (event.type === "live_state_invalidation") {
-      this.handleLiveStateInvalidation(event)
+      this.handleLiveStateInvalidation(event as LiveStateInvalidationEvent)
     }
 
     // Route into structured live-interaction state (additive — summary lines still produced below)
@@ -4998,8 +4997,8 @@ export class GSDWorkspaceStore {
         name: active.name,
         args: active.args ?? {},
         result: {
-          content: (event as Record<string, unknown>).result?.content as CompletedToolExecution["result"]["content"],
-          details: (event as Record<string, unknown>).result?.details as Record<string, unknown> | undefined,
+          content: ((event as Record<string, unknown>).result as NonNullable<CompletedToolExecution["result"]> | undefined)?.content,
+          details: ((event as Record<string, unknown>).result as NonNullable<CompletedToolExecution["result"]> | undefined)?.details,
           isError: event.isError,
         },
       }

@@ -570,6 +570,18 @@ export function CommandSurface() {
     )
   }, [commandSurface.availableModels, modelQuery])
 
+  // Group filtered models by provider for display
+  const groupedModels = useMemo(() => {
+    const groups = new Map<string, typeof filteredModels>()
+    for (const model of filteredModels) {
+      const key = model.provider
+      const existing = groups.get(key)
+      if (existing) existing.push(model)
+      else groups.set(key, [model])
+    }
+    return groups
+  }, [filteredModels])
+
   const authBusy = workspace.onboardingRequestState !== "idle"
   const modelBusy = commandSurface.pendingAction === "loading_models" || workspace.commandInFlight === "get_available_models"
   const gitSummaryBusy = commandSurface.pendingAction === "load_git_summary"
@@ -656,59 +668,68 @@ export function CommandSurface() {
           Loading models…
         </div>
       ) : filteredModels.length > 0 ? (
-        <div className="space-y-1">
-          {filteredModels.map((model) => {
-            const selected = selectedModelTarget?.provider === model.provider && selectedModelTarget?.modelId === model.modelId
-            return (
-              <button
-                key={`${model.provider}/${model.modelId}`}
-                type="button"
-                className={cn(
-                  "group flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors",
-                  selected
-                    ? "bg-foreground/[0.07]"
-                    : "hover:bg-foreground/[0.03]",
-                )}
-                onClick={() =>
-                  selectCommandSurfaceTarget({
-                    kind: "model",
-                    provider: model.provider,
-                    modelId: model.modelId,
-                    query: selectedModelTarget?.query,
-                  })
-                }
-              >
-                {/* Selection indicator */}
-                <div className={cn(
-                  "flex h-4 w-4 shrink-0 items-center justify-center rounded-full border transition-colors",
-                  selected ? "border-foreground bg-foreground" : "border-foreground/25",
-                )}>
-                  {selected && <Check className="h-2.5 w-2.5 text-background" />}
-                </div>
+        <div className="space-y-4">
+          {Array.from(groupedModels.entries()).map(([provider, models]) => (
+            <div key={provider}>
+              <div className="mb-1.5 px-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">
+                {provider}
+              </div>
+              <div className="space-y-0.5">
+                {models.map((model) => {
+                  const selected = selectedModelTarget?.provider === model.provider && selectedModelTarget?.modelId === model.modelId
+                  return (
+                    <button
+                      key={`${model.provider}/${model.modelId}`}
+                      type="button"
+                      className={cn(
+                        "group flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors",
+                        selected
+                          ? "bg-foreground/[0.07]"
+                          : "hover:bg-foreground/[0.03]",
+                      )}
+                      onClick={() =>
+                        selectCommandSurfaceTarget({
+                          kind: "model",
+                          provider: model.provider,
+                          modelId: model.modelId,
+                          query: selectedModelTarget?.query,
+                        })
+                      }
+                    >
+                      {/* Selection indicator */}
+                      <div className={cn(
+                        "flex h-4 w-4 shrink-0 items-center justify-center rounded-full border transition-colors",
+                        selected ? "border-foreground bg-foreground" : "border-foreground/25",
+                      )}>
+                        {selected && <Check className="h-2.5 w-2.5 text-background" />}
+                      </div>
 
-                {/* Model info */}
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-foreground">{model.name || model.modelId}</span>
-                    {model.isCurrent && <StatusDot status="ok" />}
-                  </div>
-                  <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">
-                    {model.provider}/{model.modelId}
-                  </div>
-                </div>
+                      {/* Model info */}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium text-foreground">{model.name || model.modelId}</span>
+                          {model.isCurrent && <StatusDot status="ok" />}
+                        </div>
+                        <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">
+                          {model.modelId}
+                        </div>
+                      </div>
 
-                {/* Badges */}
-                <div className="flex shrink-0 items-center gap-1.5">
-                  {model.isCurrent && (
-                    <span className="rounded bg-foreground/10 px-1.5 py-0.5 text-[10px] font-medium text-foreground/70">Active</span>
-                  )}
-                  {model.reasoning && (
-                    <span className="rounded bg-foreground/10 px-1.5 py-0.5 text-[10px] font-medium text-foreground/70">Thinking</span>
-                  )}
-                </div>
-              </button>
-            )
-          })}
+                      {/* Badges */}
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        {model.isCurrent && (
+                          <span className="rounded bg-foreground/10 px-1.5 py-0.5 text-[10px] font-medium text-foreground/70">Active</span>
+                        )}
+                        {model.reasoning && (
+                          <span className="rounded bg-foreground/10 px-1.5 py-0.5 text-[10px] font-medium text-foreground/70">Thinking</span>
+                        )}
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          ))}
         </div>
       ) : (
         <p className="py-6 text-center text-xs text-muted-foreground">No models matched.</p>
@@ -1161,7 +1182,7 @@ export function CommandSurface() {
                 {diag.actions.commands.map((command) => (
                   <div key={command.command} className="rounded-lg border border-border/50 bg-card/50 px-3 py-2 text-xs">
                     <div className="font-mono text-foreground">{command.command}</div>
-                    <p className="mt-1 text-muted-foreground">{command.reason}</p>
+                    <p className="mt-1 text-muted-foreground">{command.label}</p>
                   </div>
                 ))}
               </div>

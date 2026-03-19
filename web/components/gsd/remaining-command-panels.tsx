@@ -50,6 +50,7 @@ import { cn } from "@/lib/utils"
 import {
   formatCost,
   formatTokens,
+  getLiveWorkspaceIndex,
   useGSDWorkspaceActions,
   useGSDWorkspaceState,
   type WorkspaceMilestoneTarget,
@@ -1076,8 +1077,9 @@ function sliceProgress(slices: WorkspaceSliceTarget[]): { done: number; total: n
 
 export function QueuePanel() {
   const workspace = useGSDWorkspaceState()
-  const milestones = workspace.milestones ?? []
-  const active = workspace.active
+  const workspaceIndex = getLiveWorkspaceIndex(workspace)
+  const milestones = workspaceIndex?.milestones ?? []
+  const active = workspaceIndex?.active
 
   return (
     <div className="space-y-4" data-testid="gsd-surface-gsd-queue">
@@ -1178,14 +1180,15 @@ export function QueuePanel() {
 
 export function StatusPanel() {
   const workspace = useGSDWorkspaceState()
-  const active = workspace.active
-  const milestones = workspace.milestones ?? []
+  const workspaceIndex = getLiveWorkspaceIndex(workspace)
+  const active = workspaceIndex?.active
+  const milestones = workspaceIndex?.milestones ?? []
 
   const currentMilestone = milestones.find((m: WorkspaceMilestoneTarget) => m.id === active?.milestoneId)
   const currentSlice = currentMilestone?.slices.find((s: WorkspaceSliceTarget) => s.id === active?.sliceId)
 
-  const totalSlices = milestones.reduce((sum, m: WorkspaceMilestoneTarget) => sum + m.slices.length, 0)
-  const doneSlices = milestones.reduce((sum, m: WorkspaceMilestoneTarget) => sum + m.slices.filter((s) => s.done).length, 0)
+  const totalSlices = milestones.reduce((sum: number, m: WorkspaceMilestoneTarget) => sum + m.slices.length, 0)
+  const doneSlices = milestones.reduce((sum: number, m: WorkspaceMilestoneTarget) => sum + m.slices.filter((s) => s.done).length, 0)
 
   return (
     <div className="space-y-4" data-testid="gsd-surface-gsd-status">

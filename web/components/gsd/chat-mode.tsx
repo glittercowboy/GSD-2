@@ -2130,7 +2130,7 @@ function StructuredTerminalActionPane({
 /* ─── Chat Pane ─── */
 
 interface ChatPaneProps {
-  sessionId: string
+  sessionId?: string
   command?: string
   commandArgs?: string[]
   className?: string
@@ -2515,9 +2515,9 @@ export function ChatPane({ className, onOpenAction }: ChatPaneProps) {
                     <span className="font-mono text-xs text-muted-foreground">
                       {state.activeToolExecution.name}
                     </span>
-                    {state.activeToolExecution.args?.path && (
+                    {Boolean(state.activeToolExecution.args?.path) && (
                       <span className="font-mono text-xs text-info/80 truncate">
-                        {String(state.activeToolExecution.args.path)}
+                        {String(state.activeToolExecution.args?.path)}
                       </span>
                     )}
                   </div>

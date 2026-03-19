@@ -109,8 +109,22 @@ export function parseSkillBlock(text: string): ParsedSkillBlock | null {
 }
 
 /** Session-specific events that extend the core AgentEvent */
+export type SessionStateChangeReason =
+	| "set_model"
+	| "set_thinking_level"
+	| "set_steering_mode"
+	| "set_follow_up_mode"
+	| "set_auto_compaction"
+	| "set_auto_retry"
+	| "abort_retry"
+	| "new_session"
+	| "switch_session"
+	| "set_session_name"
+	| "fork";
+
 export type AgentSessionEvent =
 	| AgentEvent
+	| { type: "session_state_changed"; reason: SessionStateChangeReason }
 	| { type: "auto_compaction_start"; reason: "threshold" | "overflow" }
 	| {
 			type: "auto_compaction_end";
@@ -333,6 +347,10 @@ export class AgentSession {
 		for (const l of this._eventListeners) {
 			l(event);
 		}
+	}
+
+	private _emitSessionStateChanged(reason: SessionStateChangeReason): void {
+		this._emit({ type: "session_state_changed", reason });
 	}
 
 	// Track last assistant message for auto-compaction check
@@ -1433,6 +1451,7 @@ export class AgentSession {
 		}
 
 		// Emit session event to custom tools
+		this._emitSessionStateChanged("new_session");
 		return true;
 	}
 
@@ -1478,6 +1497,7 @@ export class AgentSession {
 		this.setThinkingLevel(thinkingLevel);
 
 		await this._emitModelSelect(model, previousModel, "set");
+		this._emitSessionStateChanged("set_model");
 	}
 
 	/**
@@ -1574,6 +1594,7 @@ export class AgentSession {
 		this.setThinkingLevel(thinkingLevel);
 
 		await this._emitModelSelect(nextModel, currentModel, "cycle");
+		this._emitSessionStateChanged("set_model");
 
 		return { model: nextModel, thinkingLevel: this.thinkingLevel, isScoped: false };
 	}
@@ -1601,6 +1622,7 @@ export class AgentSession {
 			if (this.supportsThinking() || effectiveLevel !== "off") {
 				this.settingsManager.setDefaultThinkingLevel(effectiveLevel);
 			}
+			this._emitSessionStateChanged("set_thinking_level");
 		}
 	}
 
@@ -1682,6 +1704,7 @@ export class AgentSession {
 	setSteeringMode(mode: "all" | "one-at-a-time"): void {
 		this.agent.setSteeringMode(mode);
 		this.settingsManager.setSteeringMode(mode);
+		this._emitSessionStateChanged("set_steering_mode");
 	}
 
 	/**
@@ -1691,6 +1714,7 @@ export class AgentSession {
 	setFollowUpMode(mode: "all" | "one-at-a-time"): void {
 		this.agent.setFollowUpMode(mode);
 		this.settingsManager.setFollowUpMode(mode);
+		this._emitSessionStateChanged("set_follow_up_mode");
 	}
 
 	// =========================================================================
@@ -2065,6 +2089,7 @@ export class AgentSession {
 	 */
 	setAutoCompactionEnabled(enabled: boolean): void {
 		this.settingsManager.setCompactionEnabled(enabled);
+		this._emitSessionStateChanged("set_auto_compaction");
 	}
 
 	/** Whether auto-compaction is enabled */
@@ -2667,9 +2692,13 @@ export class AgentSession {
 	 * Cancel in-progress retry.
 	 */
 	abortRetry(): void {
+		const hadRetry = this._retryAbortController !== undefined || this._retryPromise !== undefined;
 		this._retryAbortController?.abort();
 		// Note: _retryAttempt is reset in the catch block of _autoRetry
 		this._resolveRetry();
+		if (hadRetry) {
+			this._emitSessionStateChanged("abort_retry");
+		}
 	}
 
 	/**
@@ -2697,6 +2726,7 @@ export class AgentSession {
 	 */
 	setAutoRetryEnabled(enabled: boolean): void {
 		this.settingsManager.setRetryEnabled(enabled);
+		this._emitSessionStateChanged("set_auto_retry");
 	}
 
 	// =========================================================================
@@ -2886,6 +2916,7 @@ export class AgentSession {
 		}
 
 		this._reconnectToAgent();
+		this._emitSessionStateChanged("switch_session");
 		return true;
 	}
 
@@ -2894,6 +2925,7 @@ export class AgentSession {
 	 */
 	setSessionName(name: string): void {
 		this.sessionManager.appendSessionInfo(name);
+		this._emitSessionStateChanged("set_session_name");
 	}
 
 	/**
@@ -2957,6 +2989,7 @@ export class AgentSession {
 			this.agent.replaceMessages(sessionContext.messages);
 		}
 
+		this._emitSessionStateChanged("fork");
 		return { selectedText, cancelled: false };
 	}
 

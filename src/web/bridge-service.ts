@@ -5,7 +5,7 @@ import type { Readable } from "node:stream";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import type { AgentSessionEvent } from "../../packages/pi-coding-agent/src/core/agent-session.ts";
+import type { AgentSessionEvent, SessionStateChangeReason } from "../../packages/pi-coding-agent/src/core/agent-session.ts";
 import type {
   RpcCommand,
   RpcExtensionUIRequest,
@@ -21,6 +21,7 @@ import {
   type SessionBrowserResponse,
   type SessionBrowserSession,
   type SessionManageErrorCode,
+  type SessionManageErrorResponse,
   type SessionManageResponse,
 } from "../../web/lib/session-browser-contract.ts";
 import { authFilePath } from "../app-paths.ts";
@@ -45,6 +46,9 @@ const WORKSPACE_INDEX_CACHE_TTL_MS = 30_000;
 
 type BridgeLifecyclePhase = "idle" | "starting" | "ready" | "failed";
 type BridgeInput = RpcCommand | RpcExtensionUIResponse;
+type BridgeTerminalCommand = Extract<RpcCommand, { type: "terminal_input" | "terminal_resize" | "terminal_redraw" }>;
+type BridgeTerminalOutputEvent = { type: "terminal_output"; data: string };
+type BridgeSessionStateChangedEvent = { type: "session_state_changed"; reason: SessionStateChangeReason };
 
 type BridgeCommandFailureResponse = RpcResponse & {
   code?: "onboarding_locked";
@@ -825,6 +829,24 @@ function buildExitMessage(code: number | null, signal: NodeJS.Signals | null, st
   return stderr ? `${base}. stderr=${stderr}` : base;
 }
 
+function destroyChildStreams(child: Partial<SpawnedRpcChild> | null | undefined): void {
+  try {
+    child?.stdin?.destroy();
+  } catch {
+    // Ignore cleanup failures.
+  }
+  try {
+    child?.stdout?.destroy();
+  } catch {
+    // Ignore cleanup failures.
+  }
+  try {
+    child?.stderr?.destroy();
+  } catch {
+    // Ignore cleanup failures.
+  }
+}
+
 function getBridgeDeps(): BridgeServiceDeps {
   return { ...defaultBridgeServiceDeps, ...(bridgeServiceOverrides ?? {}) };
 }
@@ -1211,8 +1233,62 @@ function createLiveStateInvalidationFromCommand(
   }
 }
 
+function isBridgeTerminalOutputEvent(value: unknown): value is BridgeTerminalOutputEvent {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "type" in value &&
+    (value as { type?: unknown }).type === "terminal_output" &&
+    typeof (value as { data?: unknown }).data === "string"
+  );
+}
+
+function isBridgeSessionStateChangedEvent(value: unknown): value is BridgeSessionStateChangedEvent {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "type" in value &&
+    (value as { type?: unknown }).type === "session_state_changed" &&
+    typeof (value as { reason?: unknown }).reason === "string"
+  );
+}
+
+function createLiveStateInvalidationFromSessionStateChange(
+  reason: SessionStateChangeReason,
+): BridgeLiveStateInvalidationDescriptor | null {
+  switch (reason) {
+    case "new_session":
+      return {
+        reason: "new_session",
+        source: "bridge_event",
+        domains: ["resumable_sessions", "recovery"],
+      };
+    case "switch_session":
+      return {
+        reason: "switch_session",
+        source: "bridge_event",
+        domains: ["resumable_sessions", "recovery"],
+      };
+    case "fork":
+      return {
+        reason: "fork",
+        source: "bridge_event",
+        domains: ["resumable_sessions", "recovery"],
+      };
+    case "set_session_name":
+      return {
+        reason: "set_session_name",
+        source: "bridge_event",
+        domains: ["resumable_sessions"],
+      };
+    default:
+      return null;
+  }
+}
+
 export class BridgeService {
   private readonly subscribers = new Set<(event: BridgeEvent) => void>();
+  private readonly terminalSubscribers = new Set<(data: string) => void>();
   private readonly pendingRequests = new Map<string, PendingRpcRequest>();
   private readonly config: BridgeRuntimeConfig;
   private readonly deps: BridgeServiceDeps;
@@ -1292,7 +1368,7 @@ export class BridgeService {
       return response;
     }
 
-    if (input.type === "get_state") {
+    if (input.type === "get_state" && response.success && response.command === "get_state") {
       this.applySessionState(response.data);
       this.broadcastStatus();
       return response;
@@ -1349,6 +1425,7 @@ export class BridgeService {
       child.removeAllListeners("exit");
       child.removeAllListeners("error");
       child.kill("SIGTERM");
+      destroyChildStreams(child);
     }
 
     this.snapshot.phase = "idle";
@@ -1373,9 +1450,39 @@ export class BridgeService {
     };
   }
 
+  subscribeTerminal(listener: (data: string) => void): () => void {
+    this.terminalSubscribers.add(listener);
+    return () => {
+      this.terminalSubscribers.delete(listener);
+    };
+  }
+
+  async sendTerminalInput(data: string): Promise<void> {
+    await this.sendTerminalCommand({ type: "terminal_input", data });
+  }
+
+  async resizeTerminal(cols: number, rows: number): Promise<void> {
+    await this.sendTerminalCommand({ type: "terminal_resize", cols, rows });
+  }
+
+  async redrawTerminal(): Promise<void> {
+    await this.sendTerminalCommand({ type: "terminal_redraw" });
+  }
+
+  private async sendTerminalCommand(command: BridgeTerminalCommand): Promise<void> {
+    await this.ensureStarted();
+    const response = sanitizeRpcResponse(await this.requestResponse(command));
+    if (!response.success) {
+      this.recordError(response.error, this.snapshot.phase, { commandType: command.type });
+      this.broadcastStatus();
+      throw new Error(response.error);
+    }
+  }
+
   async dispose(): Promise<void> {
     this.detachStdoutReader?.();
     this.detachStdoutReader = null;
+    this.terminalSubscribers.clear();
     for (const pending of this.pendingRequests.values()) {
       clearTimeout(pending.timeout);
       pending.reject(new Error("RPC bridge disposed"));
@@ -1410,6 +1517,7 @@ export class BridgeService {
     const spawnChild = this.deps.spawn ?? ((command, args, options) => spawn(command, args, options));
     const childEnv = { ...(this.deps.env ?? process.env) };
     delete childEnv.GSD_CODING_AGENT_DIR;
+    childEnv.GSD_WEB_BRIDGE_TUI = "1";
 
     const child = spawnChild(cliEntry.command, cliEntry.args, {
       cwd: cliEntry.cwd,
@@ -1426,8 +1534,9 @@ export class BridgeService {
     child.once("exit", (code, signal) => this.handleProcessExit(code, signal));
     child.once("error", (error) => this.handleProcessExit(null, null, error));
 
+    let startupTimeout: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error(`RPC bridge startup timed out after ${START_TIMEOUT_MS}ms`)), START_TIMEOUT_MS);
+      startupTimeout = setTimeout(() => reject(new Error(`RPC bridge startup timed out after ${START_TIMEOUT_MS}ms`)), START_TIMEOUT_MS);
     });
 
     try {
@@ -1441,6 +1550,10 @@ export class BridgeService {
       this.recordError(error, "starting");
       this.broadcastStatus();
       throw error;
+    } finally {
+      if (startupTimeout) {
+        clearTimeout(startupTimeout);
+      }
     }
   }
 
@@ -1466,7 +1579,9 @@ export class BridgeService {
     if (!response.success) {
       throw new Error(response.error);
     }
-    this.applySessionState(response.data);
+    if (response.command === "get_state") {
+      this.applySessionState(response.data);
+    }
     this.snapshot.updatedAt = nowIso();
     if (!strict) {
       this.broadcastStatus();
@@ -1518,6 +1633,11 @@ export class BridgeService {
       return;
     }
 
+    if (isBridgeTerminalOutputEvent(parsed)) {
+      this.emitTerminal(parsed.data);
+      return;
+    }
+
     if (
       typeof parsed === "object" &&
       parsed !== null &&
@@ -1535,6 +1655,15 @@ export class BridgeService {
 
     const event = sanitizeEventPayload(parsed);
     this.emit(event);
+
+    if (isBridgeSessionStateChangedEvent(event)) {
+      const liveStateInvalidation = createLiveStateInvalidationFromSessionStateChange(event.reason);
+      if (liveStateInvalidation) {
+        this.publishLiveStateInvalidation(liveStateInvalidation);
+      }
+      void this.queueStateRefresh();
+      return;
+    }
 
     const liveStateInvalidation = createLiveStateInvalidationFromBridgeEvent(event);
     if (liveStateInvalidation) {
@@ -1592,6 +1721,16 @@ export class BridgeService {
     for (const subscriber of this.subscribers) {
       try {
         subscriber(event);
+      } catch {
+        // Subscriber failures should not break delivery.
+      }
+    }
+  }
+
+  private emitTerminal(data: string): void {
+    for (const subscriber of this.terminalSubscribers) {
+      try {
+        subscriber(data);
       } catch {
         // Subscriber failures should not break delivery.
       }
@@ -1760,8 +1899,8 @@ function findCurrentProjectSession(sessions: SessionInfo[], sessionPath: string)
 function buildSessionManageError(
   code: SessionManageErrorCode,
   error: string,
-  details: Partial<SessionManageResponse> = {},
-): SessionManageResponse {
+  details: Omit<Partial<SessionManageErrorResponse>, "success" | "code" | "error" | "action" | "scope"> = {},
+): SessionManageErrorResponse {
   return {
     success: false,
     action: "rename",
@@ -1852,8 +1991,9 @@ export async function renameSessionInCurrentProject(request: RenameSessionReques
     }
 
     if (!response.success) {
+      const failureCode = (response as { code?: string }).code
       return buildSessionManageError(
-        response.code === "onboarding_locked" ? "onboarding_locked" : "rename_failed",
+        failureCode === "onboarding_locked" ? "onboarding_locked" : "rename_failed",
         response.error,
         {
           sessionPath: targetSession.path,

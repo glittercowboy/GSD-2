@@ -17,11 +17,20 @@ const nextConfig = {
   serverExternalPackages: ['@gsd/native', 'node-pty'],
   // NodeNext-style .js extension imports in src/ must resolve to .ts source.
   // Turbopack doesn't support extensionAlias, so builds use --webpack flag.
-  webpack: (config) => {
+  webpack: (config, { isServer }) => {
     config.resolve.extensionAlias = {
       '.js': ['.ts', '.tsx', '.js'],
       '.mjs': ['.mts', '.mjs'],
     };
+    // Webpack swallows `node:module` imports because it treats `module` as an
+    // internal concept.  We need createRequire to survive into the server
+    // bundle so node-pty (a native addon) can be loaded at runtime.
+    if (isServer) {
+      config.externals = config.externals || [];
+      // Next.js already makes externals an array of functions/regexps — append
+      // a simple object entry so `require("node:module")` passes through.
+      config.externals.push({ 'node:module': 'commonjs node:module' });
+    }
     return config;
   },
 }

@@ -149,8 +149,9 @@ function WorkspaceChrome() {
 
   useEffect(() => {
     if (typeof document === "undefined") return
-    document.title = titleOverride ? `${titleOverride} · GSD` : "GSD"
-  }, [titleOverride])
+    const base = projectLabel ? `GSD - ${projectLabel}` : "GSD"
+    document.title = titleOverride ? `${titleOverride} · ${base}` : base
+  }, [titleOverride, projectLabel])
 
   const handleViewChange = useCallback((view: string) => {
     setActiveView(view)

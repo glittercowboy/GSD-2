@@ -730,7 +730,7 @@ function buildAuthTarget(request: CommandSurfaceOpenRequest): CommandSurfaceTarg
   }
 }
 
-function buildResumeTarget(request: CommandSurfaceOpenRequest): CommandSurfaceTarget {
+function buildResumeTarget(request: CommandSurfaceOpenRequest): Extract<CommandSurfaceTarget, { kind: "resume" }> {
   const selectedPath = matchingSessionPath(request.resumableSessions, request.args)
   return {
     kind: "resume",
@@ -876,9 +876,11 @@ export function setCommandSurfaceSection(
   }
 
   const currentSessionPath =
-    current.selectedTarget?.kind === "resume" || current.selectedTarget?.kind === "name"
+    current.selectedTarget?.kind === "resume"
       ? current.selectedTarget.sessionPath
-      : undefined
+      : current.selectedTarget?.kind === "name"
+        ? current.selectedTarget.sessionPath
+        : undefined
   const currentDraftName = current.selectedTarget?.kind === "name" ? current.selectedTarget.name : undefined
 
   let selectedTarget: CommandSurfaceTarget | null = current.selectedTarget

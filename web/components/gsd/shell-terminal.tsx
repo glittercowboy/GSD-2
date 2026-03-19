@@ -10,6 +10,11 @@ import "@xterm/xterm/css/xterm.css"
 type XTerminal = import("@xterm/xterm").Terminal
 type XFitAddon = import("@xterm/addon-fit").FitAddon
 
+const MIN_TERMINAL_ATTACH_WIDTH = 180
+const MIN_TERMINAL_ATTACH_HEIGHT = 120
+const MIN_TERMINAL_ATTACH_COLS = 20
+const MIN_TERMINAL_ATTACH_ROWS = 8
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface TerminalTab {
@@ -97,6 +102,64 @@ function getXtermOptions(isDark: boolean, fontSize?: number) {
     scrollback: 10000,
     convertEol: false,
   }
+}
+
+function getRenderableTerminalSize(container: HTMLDivElement | null, terminal: XTerminal | null): { cols: number; rows: number } | null {
+  if (!container || !terminal) return null
+
+  const rect = container.getBoundingClientRect()
+  if (rect.width < MIN_TERMINAL_ATTACH_WIDTH || rect.height < MIN_TERMINAL_ATTACH_HEIGHT) {
+    return null
+  }
+
+  if (terminal.cols < MIN_TERMINAL_ATTACH_COLS || terminal.rows < MIN_TERMINAL_ATTACH_ROWS) {
+    return null
+  }
+
+  return { cols: terminal.cols, rows: terminal.rows }
+}
+
+async function settleTerminalLayout(
+  container: HTMLDivElement | null,
+  terminal: XTerminal | null,
+  fitAddon: XFitAddon | null,
+  isDisposed: () => boolean,
+): Promise<{ cols: number; rows: number } | null> {
+  if (typeof document !== "undefined" && "fonts" in document) {
+    try {
+      await Promise.race([
+        document.fonts.ready,
+        new Promise<void>((resolve) => setTimeout(resolve, 1000)),
+      ])
+    } catch {
+      // Ignore font loading failures and fall through to repeated fit attempts.
+    }
+  }
+
+  for (let attempt = 0; attempt < 12; attempt++) {
+    if (isDisposed()) return null
+
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve())
+    })
+
+    if (isDisposed()) return null
+
+    try {
+      fitAddon?.fit()
+    } catch {
+      /* hidden or detached */
+    }
+
+    const size = getRenderableTerminalSize(container, terminal)
+    if (size) {
+      return size
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+
+  return getRenderableTerminalSize(container, terminal)
 }
 
 function deriveCommandLabel(command?: string): string {
@@ -248,11 +311,8 @@ function TerminalInstance({
       termRef.current = terminal
       fitAddonRef.current = fitAddon
 
-      try {
-        fitAddon.fit()
-      } catch {
-        /* container might not be visible yet */
-      }
+      await settleTerminalLayout(containerRef.current, terminal, fitAddon, () => disposed)
+      if (disposed) return
 
       terminal.onData((data) => sendInput(data))
       terminal.onBinary((data) => sendInput(data))
@@ -275,7 +335,10 @@ function TerminalInstance({
           }
           if (msg.type === "connected") {
             onConnectionChangeRef.current(true)
-            if (terminal) sendResize(terminal.cols, terminal.rows)
+            void settleTerminalLayout(containerRef.current, terminal, fitAddon, () => disposed).then((size) => {
+              if (!size) return
+              sendResize(size.cols, size.rows)
+            })
           } else if (msg.type === "output" && msg.data) {
             terminal?.write(msg.data)
             setHasOutput(true)

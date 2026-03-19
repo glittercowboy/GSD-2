@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from "react"
 import { cn } from "@/lib/utils"
 import { GripVertical } from "lucide-react"
-import { Terminal } from "@/components/gsd/terminal"
+import { MainSessionTerminal } from "@/components/gsd/main-session-terminal"
 import { ShellTerminal } from "@/components/gsd/shell-terminal"
 import { useTerminalFontSize } from "@/lib/use-terminal-font-size"
 
@@ -44,7 +44,7 @@ export function DualTerminal() {
       <div className="flex items-center justify-between border-b border-border bg-card px-4 py-2">
         <span className="font-medium">Power User Mode</span>
         <div className="flex items-center gap-4 text-xs text-muted-foreground">
-          <span>Left: Bridge Session</span>
+          <span>Left: Main Session TUI</span>
           <span className="text-border">|</span>
           <span>Right: Interactive GSD</span>
         </div>
@@ -52,9 +52,9 @@ export function DualTerminal() {
 
       {/* Split terminals */}
       <div ref={containerRef} className="flex flex-1 overflow-hidden">
-        {/* Left terminal - Bridge session */}
+        {/* Left terminal - Main bridge native TUI */}
         <div style={{ width: `${splitPosition}%` }} className="h-full overflow-hidden">
-          <Terminal className="h-full" />
+          <MainSessionTerminal className="h-full" fontSize={terminalFontSize} />
         </div>
 
         {/* Divider */}

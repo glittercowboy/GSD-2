@@ -187,7 +187,7 @@ export function Dashboard({ onSwitchView, onExpandTerminal }: DashboardProps = {
   }
 
   const handleOpenRecovery = () => {
-    openCommandSurface("settings", { source: "dashboard" })
+    openCommandSurface("settings", { source: "surface" })
     setCommandSurfaceSection("recovery")
   }
 

@@ -519,10 +519,11 @@ export async function collectCurrentProjectRecoveryDiagnostics(
 ): Promise<WorkspaceRecoveryDiagnostics> {
   const env = options.env ?? process.env
   const config = resolveBridgeRuntimeConfig(options.env, projectCwdOverride)
-  const [{ bridge: bridgeSnapshot, workspace, resumableSessions }, onboarding] = await Promise.all([
+  const [{ bridge: bridgeSnapshot, workspace, resumableSessions: resumableSessionsRaw }, onboarding] = await Promise.all([
     collectSelectiveLiveStatePayload(["workspace", "resumable_sessions"], projectCwdOverride),
     collectCurrentProjectOnboardingState(projectCwdOverride),
   ])
+  const resumableSessions = resumableSessionsRaw ?? []
 
   const activeScope = activeScopeFromWorkspace(workspace)
   const unit = recoveryUnitFromWorkspace(workspace)

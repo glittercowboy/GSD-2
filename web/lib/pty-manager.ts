@@ -6,10 +6,13 @@
  */
 
 import { chmodSync, existsSync, statSync } from "node:fs";
-import { createRequire } from "node:module";
 import { basename, join, dirname } from "node:path";
 import type { IPty } from "node-pty";
 import { resolveGsdCliEntry } from "../../src/web/cli-entry.ts";
+
+// Webpack escape hatch — this global exists at runtime in webpack bundles and
+// forwards to Node's native require(), bypassing webpack's module resolution.
+declare const __non_webpack_require__: NodeRequire;
 
 export interface PtySession {
   id: string;
@@ -164,23 +167,36 @@ function loadNodePty(): LoadedNodePty {
   const failures: string[] = [];
 
   for (const root of getNodePtyCandidateRoots()) {
-    const packageJsonPath = join(root, "package.json");
-    if (!existsSync(packageJsonPath)) {
-      failures.push(`${root}: missing package.json`);
+    // Probe for node-pty's package.json directly in node_modules under this root.
+    // We avoid createRequire from node:module because webpack mangles it in
+    // Next.js standalone builds — the import gets swallowed/replaced with
+    // undefined since webpack treats `module` as its own internal concept.
+    const candidate = join(root, "node_modules", "node-pty", "package.json");
+    if (!existsSync(candidate)) {
+      failures.push(`${root}: node-pty not found`);
       continue;
     }
 
     try {
-      const requireFromRoot = createRequire(packageJsonPath);
-      const resolvedPackageJson = requireFromRoot.resolve("node-pty/package.json");
-      const packageRoot = dirname(resolvedPackageJson);
+      const packageRoot = dirname(candidate);
 
       if (!hasNativeAssets(packageRoot)) {
         failures.push(`${packageRoot}: missing native assets`);
         continue;
       }
 
-      const nodePtyModule = requireFromRoot("node-pty") as typeof import("node-pty");
+      // node-pty is listed in serverExternalPackages, but webpack still
+      // processes require() calls with computed paths — it replaces them with
+      // a "module not found" stub.  We use __non_webpack_require__ (webpack's
+      // escape hatch) so the require passes through to Node's native loader
+      // at runtime.  In non-webpack environments the global doesn't exist, so
+      // we fall back to regular require.
+      //
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const nativeRequire: NodeRequire = typeof __non_webpack_require__ !== "undefined"
+        ? __non_webpack_require__
+        : require;
+      const nodePtyModule = nativeRequire(join(packageRoot, "lib", "index.js")) as typeof import("node-pty");
       return { nodePtyModule, packageRoot };
     } catch (error) {
       failures.push(
