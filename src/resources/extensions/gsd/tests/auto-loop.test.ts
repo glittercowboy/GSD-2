@@ -8,6 +8,7 @@ import {
   runUnit,
   autoLoop,
   _resetPendingResolve,
+  _setActiveSession,
   type UnitResult,
   type AgentEndEvent,
   type LoopDeps,
@@ -30,6 +31,8 @@ function makeMockSession(opts?: {
   return {
     active: true,
     verbose: false,
+    pendingResolve: null,
+    pendingAgentEndQueue: [],
     cmdCtx: {
       newSession: () => {
         if (opts?.newSessionThrows) {
@@ -78,6 +81,7 @@ test("resolveAgentEnd resolves a pending runUnit promise", async () => {
   const ctx = makeMockCtx();
   const pi = makeMockPi();
   const s = makeMockSession();
+  _setActiveSession(s);
   const event = makeEvent();
 
   // Start runUnit — it will create the promise and send a message,
@@ -95,21 +99,25 @@ test("resolveAgentEnd resolves a pending runUnit promise", async () => {
   assert.deepEqual(result.event, event);
 });
 
-test("resolveAgentEnd is safe when no promise is pending (no-op)", () => {
+test("resolveAgentEnd queues event when no promise is pending", () => {
   _resetPendingResolve();
+  const s = makeMockSession();
+  _setActiveSession(s);
 
-  // Should not throw — just logs a debug warning
+  // Should not throw — queues the event for the next runUnit
   assert.doesNotThrow(() => {
     resolveAgentEnd(makeEvent());
   });
+  assert.equal(s.pendingAgentEndQueue.length, 1, "event should be queued");
 });
 
-test("double resolveAgentEnd only resolves once", async () => {
+test("double resolveAgentEnd only resolves once (second is queued)", async () => {
   _resetPendingResolve();
 
   const ctx = makeMockCtx();
   const pi = makeMockPi();
   const s = makeMockSession();
+  _setActiveSession(s);
   const event1 = makeEvent([{ id: 1 }]);
   const event2 = makeEvent([{ id: 2 }]);
 
@@ -120,10 +128,11 @@ test("double resolveAgentEnd only resolves once", async () => {
   // First resolve — should work
   resolveAgentEnd(event1);
 
-  // Second resolve — should be a no-op (orphan)
+  // Second resolve — should be queued (no pending promise)
   assert.doesNotThrow(() => {
     resolveAgentEnd(event2);
   });
+  assert.equal(s.pendingAgentEndQueue.length, 1, "second event should be queued");
 
   const result = await resultPromise;
   assert.equal(result.status, "completed");
@@ -198,10 +207,10 @@ test("auto-loop.ts one-shot pattern: pendingResolve is nulled before calling res
     "utf-8",
   );
   // The one-shot pattern requires: save ref, null the variable, then call
-  // Look for the pattern: pendingResolve = null appearing before r(
+  // Look for the pattern: s.pendingResolve = null appearing before r(
   const resolveBlock = src.slice(
     src.indexOf("export function resolveAgentEnd"),
-    src.indexOf("export function resolveAgentEnd") + 400,
+    src.indexOf("export function resolveAgentEnd") + 600,
   );
   const nullIdx = resolveBlock.indexOf("pendingResolve = null");
   const callIdx = resolveBlock.indexOf('r({');
@@ -349,6 +358,8 @@ function makeLoopSession(overrides?: Partial<Record<string, unknown>>) {
     pendingQuickTasks: [],
     sidecarQueue: [],
     autoModeStartModel: null,
+    pendingResolve: null,
+    pendingAgentEndQueue: [],
     unitDispatchCount: new Map<string, number>(),
     unitLifetimeDispatches: new Map<string, number>(),
     unitRecoveryCount: new Map<string, number>(),

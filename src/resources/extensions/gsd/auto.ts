@@ -925,8 +925,7 @@ export async function dispatchHookUnit(
   ctx.ui.setStatus("gsd-auto", s.stepMode ? "next" : "auto");
   ctx.ui.notify(`Running post-unit hook: ${hookName}`, "info");
 
-  console.log(`[dispatchHookUnit] Sending prompt of length ${hookPrompt.length}`);
-  console.log(`[dispatchHookUnit] Prompt preview: ${hookPrompt.substring(0, 200)}...`);
+  debugLog("dispatchHookUnit", { phase: "send-message", promptLength: hookPrompt.length });
   pi.sendMessage(
     { customType: "gsd-auto", content: hookPrompt, display: true },
     { triggerTurn: true },

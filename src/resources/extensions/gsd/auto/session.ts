@@ -133,6 +133,22 @@ export class AutoSession {
   // ── Signal handler ───────────────────────────────────────────────────────
   sigtermHandler: (() => void) | null = null;
 
+  // ── Loop promise state ──────────────────────────────────────────────────
+  /**
+   * One-shot resolver for the current unit's agent_end promise.
+   * Non-null only while a unit is in-flight (between sendMessage and agent_end).
+   * Scoped to the session to prevent concurrent session corruption.
+   */
+  pendingResolve: ((result: { status: "completed" | "cancelled" | "error"; event?: { messages: unknown[] } }) => void) | null = null;
+
+  /**
+   * Queue for agent_end events that arrive when no pendingResolve exists.
+   * This happens when error-recovery sendMessage retries produce agent_end
+   * events between loop iterations. The next runUnit drains this queue
+   * instead of waiting for a new event.
+   */
+  pendingAgentEndQueue: Array<{ messages: unknown[] }> = [];
+
   // ── Methods ──────────────────────────────────────────────────────────────
 
   clearTimers(): void {
@@ -208,6 +224,10 @@ export class AutoSession {
 
     // Signal handler
     this.sigtermHandler = null;
+
+    // Loop promise state
+    this.pendingResolve = null;
+    this.pendingAgentEndQueue = [];
   }
 
   toJSON(): Record<string, unknown> {

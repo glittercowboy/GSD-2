@@ -26,6 +26,14 @@ import type { DispatchAction } from "./auto-dispatch.js";
 import type { WorktreeResolver } from "./worktree-resolver.js";
 import { debugLog } from "./debug-logger.js";
 
+/**
+ * Maximum total loop iterations before forced stop. Prevents runaway loops
+ * when units alternate IDs (bypassing the same-unit stuck detector).
+ * A milestone with 20 slices × 5 tasks × 3 phases ≈ 300 units. 500 gives
+ * generous headroom including retries and sidecar work.
+ */
+const MAX_LOOP_ITERATIONS = 500;
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 /**
@@ -44,13 +52,17 @@ export interface UnitResult {
   event?: AgentEndEvent;
 }
 
-// ─── Module-level promise state ──────────────────────────────────────────────
+// ─── Session-scoped promise state ───────────────────────────────────────────
+//
+// pendingResolve and pendingAgentEndQueue live on AutoSession (not module-level)
+// so concurrent sessions cannot corrupt each other's promises.
 
 /**
- * One-shot resolver for the current unit's agent_end promise.
- * Non-null only while a unit is in-flight (between sendMessage and agent_end).
+ * The singleton session reference used by resolveAgentEnd. Set by autoLoop
+ * on entry so that the agent_end handler in index.ts can resolve the correct
+ * session's promise without needing a direct reference to `s`.
  */
-let pendingResolve: ((result: UnitResult) => void) | null = null;
+let _activeSession: AutoSession | null = null;
 
 // ─── resolveAgentEnd ─────────────────────────────────────────────────────────
 
@@ -58,29 +70,53 @@ let pendingResolve: ((result: UnitResult) => void) | null = null;
  * Called from the agent_end event handler in index.ts to resolve the
  * in-flight unit promise. One-shot: the resolver is nulled before calling
  * to prevent double-resolution from model fallback retries.
+ *
+ * If no pendingResolve exists (event arrived between loop iterations),
+ * the event is queued on the session so the next runUnit can drain it.
  */
 export function resolveAgentEnd(event: AgentEndEvent): void {
-  if (pendingResolve) {
+  const s = _activeSession;
+  if (!s) {
+    debugLog("resolveAgentEnd", { status: "no-active-session", warning: "agent_end with no active loop session" });
+    return;
+  }
+
+  if (s.pendingResolve) {
     debugLog("resolveAgentEnd", { status: "resolving", hasEvent: true });
-    const r = pendingResolve;
-    pendingResolve = null;
+    const r = s.pendingResolve;
+    s.pendingResolve = null;
     r({ status: "completed", event });
   } else {
+    // Queue the event so the next runUnit picks it up immediately
     debugLog("resolveAgentEnd", {
-      status: "no-pending-promise",
-      warning: "orphan or double-resolution — agent_end arrived with no in-flight unit",
+      status: "queued",
+      queueLength: s.pendingAgentEndQueue.length + 1,
+      warning: "agent_end arrived between loop iterations — queued for next runUnit",
     });
+    s.pendingAgentEndQueue.push(event);
   }
 }
 
 // ─── resetPendingResolve (test helper) ───────────────────────────────────────
 
 /**
- * Reset module-level state. Only exported for test cleanup — production code
+ * Reset session promise state. Only exported for test cleanup — production code
  * should never call this.
  */
 export function _resetPendingResolve(): void {
-  pendingResolve = null;
+  if (_activeSession) {
+    _activeSession.pendingResolve = null;
+    _activeSession.pendingAgentEndQueue = [];
+  }
+  _activeSession = null;
+}
+
+/**
+ * Set the active session for resolveAgentEnd. Only exported for test setup —
+ * production code sets this via autoLoop entry.
+ */
+export function _setActiveSession(session: AutoSession | null): void {
+  _activeSession = session;
 }
 
 // ─── runUnit ─────────────────────────────────────────────────────────────────
@@ -104,9 +140,18 @@ export async function runUnit(
 ): Promise<UnitResult> {
   debugLog("runUnit", { phase: "start", unitType, unitId });
 
-  // ── Create the agent_end promise ──
+  // ── Drain queued events from error-recovery retries ──
+  // If an agent_end arrived between iterations (e.g. from a model fallback
+  // sendMessage retry), consume it immediately instead of creating a new promise.
+  if (s.pendingAgentEndQueue.length > 0) {
+    const queued = s.pendingAgentEndQueue.shift()!;
+    debugLog("runUnit", { phase: "drained-queued-event", unitType, unitId, queueRemaining: s.pendingAgentEndQueue.length });
+    return { status: "completed", event: queued };
+  }
+
+  // ── Create the agent_end promise (session-scoped) ──
   const unitPromise = new Promise<UnitResult>((resolve) => {
-    pendingResolve = resolve;
+    s.pendingResolve = resolve;
   });
 
   // ── Session creation with timeout ──
@@ -124,16 +169,14 @@ export async function runUnit(
     if (sessionTimeoutHandle) clearTimeout(sessionTimeoutHandle);
     const msg = sessionErr instanceof Error ? sessionErr.message : String(sessionErr);
     debugLog("runUnit", { phase: "session-error", unitType, unitId, error: msg });
-    // Clean up the pending promise — nobody will resolve it
-    pendingResolve = null;
+    s.pendingResolve = null;
     return { status: "cancelled" };
   }
   if (sessionTimeoutHandle) clearTimeout(sessionTimeoutHandle);
 
   if (sessionResult.cancelled) {
     debugLog("runUnit-session-timeout", { unitType, unitId });
-    // Clean up the pending promise — nobody will resolve it
-    pendingResolve = null;
+    s.pendingResolve = null;
     return { status: "cancelled" };
   }
 
@@ -141,7 +184,7 @@ export async function runUnit(
   debugLog("runUnit", { phase: "send-message", unitType, unitId });
 
   if (!s.active) {
-    pendingResolve = null;
+    s.pendingResolve = null;
     return { status: "cancelled" };
   }
 
@@ -277,6 +320,7 @@ export async function autoLoop(
   deps: LoopDeps,
 ): Promise<void> {
   debugLog("autoLoop", { phase: "enter" });
+  _activeSession = s;
   let iteration = 0;
   let lastDerivedUnit = "";
   let sameUnitCount = 0;
@@ -284,6 +328,12 @@ export async function autoLoop(
   while (s.active) {
     iteration++;
     debugLog("autoLoop", { phase: "loop-top", iteration });
+
+    if (iteration > MAX_LOOP_ITERATIONS) {
+      debugLog("autoLoop", { phase: "exit", reason: "max-iterations", iteration });
+      await deps.stopAuto(ctx, pi, `Safety: loop exceeded ${MAX_LOOP_ITERATIONS} iterations — possible runaway`);
+      break;
+    }
 
     if (!s.cmdCtx) {
       debugLog("autoLoop", { phase: "exit", reason: "no-cmdCtx" });
@@ -975,5 +1025,6 @@ export async function autoLoop(
     debugLog("autoLoop", { phase: "iteration-complete", iteration });
   }
 
+  _activeSession = null;
   debugLog("autoLoop", { phase: "exit", totalIterations: iteration });
 }
