@@ -510,11 +510,8 @@ test("dispatch returns stop when phase=executing but activeSlice is null (corrup
 
 // ─── Phase 6: Worktree & Lock Consistency ────────────────────────────────
 
-test("repoIdentity returns same hash for main repo and worktree", async () => {
-  // This test verifies the fix for #1288 — identity hash must be stable
-  // across worktree and non-worktree contexts.
+test("repoIdentity returns a 12-char hex hash", async () => {
   const { repoIdentity } = await import("../repo-identity.ts");
-  // Call from the current directory (main repo)
   const hash = repoIdentity(process.cwd());
   assert.ok(hash.length === 12, `hash should be 12 hex chars, got: ${hash}`);
   assert.match(hash, /^[a-f0-9]{12}$/, `hash should be hex, got: ${hash}`);

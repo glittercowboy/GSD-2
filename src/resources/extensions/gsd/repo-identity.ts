@@ -37,27 +37,28 @@ function getRemoteUrl(basePath: string): string {
  */
 function resolveGitRoot(basePath: string): string {
   try {
-    // In a worktree, --show-toplevel returns the worktree path, not the main
-    // repo root. Use --git-common-dir to find the shared .git directory,
-    // then derive the main repo root from it (#1288).
-    const commonDir = execFileSync("git", ["rev-parse", "--git-common-dir"], {
+    // Prefer the shared git directory because it identifies the main repo root
+    // for both normal repos and worktrees. Git may return this as a relative
+    // path (e.g. ".git" or "../../.git") or as an absolute path.
+    const commonDirRaw = execFileSync("git", ["rev-parse", "--git-common-dir"], {
       cwd: basePath,
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 5_000,
     }).trim();
+    const commonDir = resolve(basePath, commonDirRaw);
 
-    // If commonDir ends with .git/worktrees/<name>, the main repo is two
-    // levels up from the worktrees dir. If it's just .git, resolve normally.
-    if (commonDir.includes(`${sep}worktrees${sep}`) || commonDir.includes("/worktrees/")) {
-      // e.g., /path/to/project/.gsd/worktrees/M001/.git → /path/to/project
-      // or /path/to/project/.git/worktrees/M001 → /path/to/project
-      const gitDir = commonDir.replace(/[/\\]worktrees[/\\][^/\\]+$/, "");
-      const mainRoot = resolve(gitDir, "..");
-      return mainRoot;
+    // Normal repo or worktree with shared common dir pointing at <repo>/.git.
+    if (commonDir.endsWith(`${sep}.git`) || commonDir.endsWith("/.git")) {
+      return resolve(commonDir, "..");
     }
 
-    // Not in a worktree — use --show-toplevel as usual
+    // Some git setups may still expose <repo>/.git/worktrees/<name>.
+    if (commonDir.includes(`${sep}.git${sep}worktrees${sep}`) || commonDir.includes("/.git/worktrees/")) {
+      return resolve(commonDir, "..", "..");
+    }
+
+    // Fallback for unusual layouts.
     return execFileSync("git", ["rev-parse", "--show-toplevel"], {
       cwd: basePath,
       encoding: "utf-8",
