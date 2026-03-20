@@ -57,6 +57,8 @@ function withCwd(nextCwd: string, fn: () => void): void {
   }
 }
 
+const PRESENT_TEST_VALUE = "configured";
+
 // ─── formatProviderReport ─────────────────────────────────────────────────────
 
 test("formatProviderReport returns fallback for empty results", () => {
@@ -322,7 +324,7 @@ test("runProviderChecks reports ok for Anthropic when GitHub Copilot env var is 
   withEnv({
     ANTHROPIC_API_KEY: undefined,
     ANTHROPIC_OAUTH_TOKEN: undefined,
-    COPILOT_GITHUB_TOKEN: "ghu_copilot-token",
+    COPILOT_GITHUB_TOKEN: PRESENT_TEST_VALUE,
     GH_TOKEN: undefined,
     GITHUB_TOKEN: undefined,
     HOME: tmpHome,
@@ -346,7 +348,7 @@ test("runProviderChecks reports ok for Anthropic via GITHUB_TOKEN cross-provider
     ANTHROPIC_OAUTH_TOKEN: undefined,
     COPILOT_GITHUB_TOKEN: undefined,
     GH_TOKEN: undefined,
-    GITHUB_TOKEN: "ghp_github-token",
+    GITHUB_TOKEN: PRESENT_TEST_VALUE,
     HOME: tmpHome,
   }, () => {
     try {
@@ -364,7 +366,7 @@ test("runProviderChecks detects ANTHROPIC_OAUTH_TOKEN as valid Anthropic auth", 
   const tmpHome = realpathSync(mkdtempSync(join(tmpdir(), "gsd-providers-oauth-test-")));
   withEnv({
     ANTHROPIC_API_KEY: undefined,
-    ANTHROPIC_OAUTH_TOKEN: "oauth-token-test",
+    ANTHROPIC_OAUTH_TOKEN: PRESENT_TEST_VALUE,
     COPILOT_GITHUB_TOKEN: undefined,
     GH_TOKEN: undefined,
     GITHUB_TOKEN: undefined,
