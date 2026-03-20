@@ -97,6 +97,13 @@ The `VerifyPolicy` type from T01's `definition-loader.ts` is imported here. The 
 - `src/resources/extensions/gsd/definition-loader.ts` — T01 must have run first. Provides `VerifyPolicy` type export used by this module. The four policy variants: `content-heuristic` (minSize?, pattern?), `shell-command` (command), `prompt-verify` (prompt), `human-review` (no extra fields).
 - Test patterns from existing tests: use `node:test`, `node:assert/strict`, `mkdtempSync` for temp dirs, `rmSync` for cleanup in `finally` blocks.
 
+## Observability Impact
+
+- **New signals:** `runVerification()` returns structured `VerificationResult` with `result` ("continue" | "retry" | "pause") and optional `reason` string — inspectable at the policy dispatch boundary by callers.
+- **Inspection:** Read `reason` field on any non-"continue" result to see why verification failed. Content-heuristic includes the specific path and threshold details. Shell-command includes exit code or error message. Prompt-verify includes the full prompt text.
+- **Failure visibility:** Content-heuristic "retry" reasons specify which artifact failed and why (missing, too small, pattern not found). Shell-command "retry" reasons include the exit code or error message from `spawnSync`. Path traversal attempts surface as "Command rejected: contains '..'".
+- **No new runtime logs or endpoints** — this is a pure function module with no side effects beyond `spawnSync`.
+
 ## Expected Output
 
 - `src/resources/extensions/gsd/custom-verification.ts` — new module (~80-100 lines) with `VerificationResult` type, `runVerification()` dispatcher, and four handler functions
