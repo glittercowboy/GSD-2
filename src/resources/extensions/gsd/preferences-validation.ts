@@ -696,5 +696,55 @@ export function validatePreferences(preferences: GSDPreferences): {
     }
   }
 
+  // ─── GitHub Sync ────────────────────────────────────────────────────────
+  if (preferences.github !== undefined) {
+    if (typeof preferences.github === "object" && preferences.github !== null) {
+      const gh = preferences.github as unknown as Record<string, unknown>;
+      const validGh: Record<string, unknown> = {};
+
+      if (gh.enabled !== undefined) {
+        if (typeof gh.enabled === "boolean") validGh.enabled = gh.enabled;
+        else errors.push("github.enabled must be a boolean");
+      }
+      if (gh.repo !== undefined) {
+        if (typeof gh.repo === "string" && gh.repo.includes("/")) validGh.repo = gh.repo;
+        else errors.push('github.repo must be a string in "owner/repo" format');
+      }
+      if (gh.project !== undefined) {
+        const p = typeof gh.project === "number" ? gh.project : Number(gh.project);
+        if (Number.isFinite(p) && p > 0) validGh.project = Math.floor(p);
+        else errors.push("github.project must be a positive number");
+      }
+      if (gh.labels !== undefined) {
+        if (Array.isArray(gh.labels) && gh.labels.every((l: unknown) => typeof l === "string")) {
+          validGh.labels = gh.labels;
+        } else {
+          errors.push("github.labels must be an array of strings");
+        }
+      }
+      if (gh.auto_link_commits !== undefined) {
+        if (typeof gh.auto_link_commits === "boolean") validGh.auto_link_commits = gh.auto_link_commits;
+        else errors.push("github.auto_link_commits must be a boolean");
+      }
+      if (gh.slice_prs !== undefined) {
+        if (typeof gh.slice_prs === "boolean") validGh.slice_prs = gh.slice_prs;
+        else errors.push("github.slice_prs must be a boolean");
+      }
+
+      const knownGhKeys = new Set(["enabled", "repo", "project", "labels", "auto_link_commits", "slice_prs"]);
+      for (const key of Object.keys(gh)) {
+        if (!knownGhKeys.has(key)) {
+          warnings.push(`unknown github key "${key}" — ignored`);
+        }
+      }
+
+      if (Object.keys(validGh).length > 0) {
+        validated.github = validGh as unknown as import("../github-sync/types.js").GitHubSyncConfig;
+      }
+    } else {
+      errors.push("github must be an object");
+    }
+  }
+
   return { preferences: validated, errors, warnings };
 }

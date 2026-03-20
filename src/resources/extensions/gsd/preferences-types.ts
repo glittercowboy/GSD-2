@@ -20,6 +20,7 @@ import type {
   ReactiveExecutionConfig,
 } from "./types.js";
 import type { DynamicRoutingConfig } from "./model-router.js";
+import type { GitHubSyncConfig } from "../github-sync/types.js";
 
 // ─── Workflow Modes ──────────────────────────────────────────────────────────
 
@@ -86,6 +87,7 @@ export const KNOWN_PREFERENCE_KEYS = new Set<string>([
   "context_selection",
   "widget_mode",
   "reactive_execution",
+  "github",
 ]);
 
 /** Canonical list of all dispatch unit types. */
@@ -215,6 +217,8 @@ export interface GSDPreferences {
   widget_mode?: "full" | "small" | "min" | "off";
   /** Reactive (graph-derived parallel) task execution within slices. Disabled by default. */
   reactive_execution?: ReactiveExecutionConfig;
+  /** GitHub sync configuration. Opt-in: syncs GSD events to GitHub Issues, Milestones, and PRs. */
+  github?: GitHubSyncConfig;
 }
 
 export interface LoadedGSDPreferences {
