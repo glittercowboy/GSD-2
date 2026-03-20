@@ -93,13 +93,30 @@ function resolveGitRoot(basePath: string): string {
 }
 
 /**
+ * Validate a GSD_PROJECT_ID value.
+ *
+ * Must contain only alphanumeric characters, hyphens, and underscores.
+ * Call this once at startup so the user gets immediate feedback on bad values.
+ */
+export function validateProjectId(id: string): boolean {
+  return /^[a-zA-Z0-9_-]+$/.test(id);
+}
+
+/**
  * Compute a stable identity for a repository.
  *
- * SHA-256 of `${remoteUrl}\n${resolvedRoot}`, truncated to 12 hex chars.
- * Deterministic: same repo always produces the same hash regardless of
- * which worktree the caller is inside.
+ * If `GSD_PROJECT_ID` is set, returns it directly (validation is expected
+ * to have already happened at startup via `validateProjectId`).
+ *
+ * Otherwise returns SHA-256 of `${remoteUrl}\n${resolvedRoot}`, truncated
+ * to 12 hex chars. Deterministic: same repo always produces the same hash
+ * regardless of which worktree the caller is inside.
  */
 export function repoIdentity(basePath: string): string {
+  const projectId = process.env.GSD_PROJECT_ID;
+  if (projectId) {
+    return projectId;
+  }
   const remoteUrl = getRemoteUrl(basePath);
   const root = resolveGitRoot(basePath);
   const input = `${remoteUrl}\n${root}`;

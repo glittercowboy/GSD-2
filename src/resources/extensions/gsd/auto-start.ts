@@ -20,7 +20,7 @@ import {
   resolveSkillDiscoveryMode,
   getIsolationMode,
 } from "./preferences.js";
-import { ensureGsdSymlink } from "./repo-identity.js";
+import { ensureGsdSymlink, validateProjectId } from "./repo-identity.js";
 import { migrateToExternalState, recoverFailedMigration } from "./migrate-external.js";
 import { collectSecretsFromManifest } from "../get-secrets-from-user.js";
 import { gsdRoot, resolveMilestoneFile, milestonesDir } from "./paths.js";
@@ -130,6 +130,16 @@ export async function bootstrapAutoSession(
   }
 
   try {
+    // Validate GSD_PROJECT_ID early so the user gets immediate feedback
+    const customProjectId = process.env.GSD_PROJECT_ID;
+    if (customProjectId && !validateProjectId(customProjectId)) {
+      ctx.ui.notify(
+        `GSD_PROJECT_ID must contain only alphanumeric characters, hyphens, and underscores. Got: "${customProjectId}"`,
+        "error",
+      );
+      return releaseLockAndReturn();
+    }
+
     // Ensure git repo exists
     if (!nativeIsRepo(base)) {
       const mainBranch =
