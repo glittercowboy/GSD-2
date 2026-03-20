@@ -70,17 +70,6 @@ This file is the explicit capability and coverage contract for the project.
 - Validation: S03 T01: graph.ts implements GRAPH.yaml read/write with atomic writes (tmp + renameSync), step status tracking (pending→active→complete), topological dispatch order via getNextPendingStep(). S04 T01: graphFromDefinition() converts validated WorkflowDefinition into WorkflowGraph with all steps pending. S04 T02: createRun() generates initial GRAPH.yaml from definition via graphFromDefinition()+writeGraph(). S04 T03: Integration test proves full pipeline — YAML definition→createRun→3-step dispatch cycle→all steps complete with on-disk GRAPH.yaml verification. 11/11 engine tests + 4/4 integration tests pass.
 - Notes: Artifact existence is validated during `reconcile()` — GRAPH says done but artifact missing triggers a corruption warning. S03 established the core read/write/query primitives; S04 connects these to YAML definitions and run lifecycle.
 
-### R009 — Steps can declare `context_from: [step_ids]` to auto-inject summaries from prior steps' artifacts into their prompt. The engine handles this injection transparently.
-- Class: primary-user-loop
-- Status: active
-- Description: Steps can declare `context_from: [step_ids]` to auto-inject summaries from prior steps' artifacts into their prompt. The engine handles this injection transparently.
-- Why it matters: Each step runs in a fresh agent session. Without context injection, steps have no knowledge of what prior steps produced.
-- Source: user
-- Primary owning slice: M001/S05
-- Supporting slices: none
-- Validation: unmapped
-- Notes: Summaries are extracted from step artifacts, not from conversational memory.
-
 ### R010 — Custom workflow steps support four verification policies. `content-heuristic` checks artifact size and patterns. `shell-command` runs a script. `prompt-verify` has the LLM evaluate output. `human-review` pauses for user input.
 - Class: failure-visibility
 - Status: active
@@ -181,6 +170,17 @@ This file is the explicit capability and coverage contract for the project.
 - Supporting slices: M001/S03
 - Validation: S02 T01: resolveEngine() returns DevWorkflowEngine for null/"dev". S03 T01: resolveEngine() gains "custom:*" branch — extracts runDir, returns CustomWorkflowEngine + CustomExecutionPolicy. S03 T02: Integration test proves "custom:/tmp/test" returns correct engine/policy pair, bare "custom" and "bogus" still throw. 19/19 contract test assertions pass, 11/11 integration test assertions pass. Full suite 1602 pass, zero regressions.
 - Notes: `active-engine` file acts as a mutex — one active engine at a time.
+
+### R009 — Steps can declare `context_from: [step_ids]` to auto-inject summaries from prior steps' artifacts into their prompt. The engine handles this injection transparently.
+- Class: primary-user-loop
+- Status: validated
+- Description: Steps can declare `context_from: [step_ids]` to auto-inject summaries from prior steps' artifacts into their prompt. The engine handles this injection transparently.
+- Why it matters: Each step runs in a fresh agent session. Without context injection, steps have no knowledge of what prior steps produced.
+- Source: user
+- Primary owning slice: M001/S05
+- Supporting slices: none
+- Validation: S05 T01: injectContext() in context-injector.ts reads contextFrom step IDs, resolves produces paths from frozen DEFINITION.yaml, reads artifacts from runDir, assembles formatted context with per-step headers and token budget truncation. Returns empty string sentinel for no-op cases. S05 T03: resolveDispatch() in CustomWorkflowEngine parses DEFINITION.yaml and prepends injected context to step prompts. Integration test proves step-2 dispatch prompt contains "## Context from prior steps" header with step-1 artifact content. 7 unit tests + 4 integration tests pass.
+- Notes: Summaries are extracted from step artifacts, not from conversational memory.
 
 ### R016 — The existing dev workflow (milestones/slices/tasks) must be identical before and after the interface extraction. All 172 existing tests pass. No behavior change in state derivation, dispatch, post-unit processing, verification, or worktree management.
 - Class: constraint
@@ -297,7 +297,7 @@ This file is the explicit capability and coverage contract for the project.
 | R006 | core-capability | active | M001/S04 | M001/S07 | S04 T01: definition-loader.ts implements V1 YAML schema with validateDefinition() enforcing version===1, name required, steps non-empty with id/name/prompt, produces paths reject ".." traversal. Unknown fields silently accepted for forward compatibility. loadDefinition() handles snake_case→camelCase conversion (depends_on→requires, context_from→contextFrom). S04 T03: Integration test proves YAML file loads, validates, and feeds full dispatch cycle. 13 unit tests + 4 integration tests pass. Parameterization via {{variable}} deferred to S07. |
 | R007 | continuity | active | M001/S04 | none | S04 T02: createRun() in run-manager.ts uses copyFileSync for exact byte-copy of source YAML into run directory as DEFINITION.yaml. S04 T03: Integration test "DEFINITION.yaml snapshot is immune to source modification" proves source YAML modified after createRun still has original bytes in run dir. 4/4 integration tests pass. |
 | R008 | core-capability | active | M001/S04 | M001/S06 | S03 T01: graph.ts implements GRAPH.yaml read/write with atomic writes (tmp + renameSync), step status tracking (pending→active→complete), topological dispatch order via getNextPendingStep(). S04 T01: graphFromDefinition() converts validated WorkflowDefinition into WorkflowGraph with all steps pending. S04 T02: createRun() generates initial GRAPH.yaml from definition via graphFromDefinition()+writeGraph(). S04 T03: Integration test proves full pipeline — YAML definition→createRun→3-step dispatch cycle→all steps complete with on-disk GRAPH.yaml verification. 11/11 engine tests + 4/4 integration tests pass. |
-| R009 | primary-user-loop | active | M001/S05 | none | unmapped |
+| R009 | primary-user-loop | validated | M001/S05 | none | S05 T01: injectContext() in context-injector.ts reads contextFrom step IDs, resolves produces paths from frozen DEFINITION.yaml, reads artifacts from runDir, assembles formatted context with per-step headers and token budget truncation. Returns empty string sentinel for no-op cases. S05 T03: resolveDispatch() in CustomWorkflowEngine parses DEFINITION.yaml and prepends injected context to step prompts. Integration test proves step-2 dispatch prompt contains "## Context from prior steps" header with step-1 artifact content. 7 unit tests + 4 integration tests pass. |
 | R010 | failure-visibility | active | M001/S05 | none | unmapped |
 | R011 | core-capability | active | M001/S06 | none | unmapped |
 | R012 | primary-user-loop | active | M001/S07 | none | unmapped |
@@ -317,7 +317,7 @@ This file is the explicit capability and coverage contract for the project.
 
 ## Coverage Summary
 
-- Active requirements: 14
-- Mapped to slices: 14
-- Validated: 3 (R004, R005, R016)
+- Active requirements: 13
+- Mapped to slices: 13
+- Validated: 4 (R004, R005, R009, R016)
 - Unmapped active requirements: 0
