@@ -14,6 +14,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { AuthStorage } from "@gsd/pi-coding-agent";
+import { getEnvApiKey } from "@gsd/pi-ai";
 import { loadEffectiveGSDPreferences } from "./preferences.js";
 import { getAuthPath, PROVIDER_REGISTRY, type ProviderCategory } from "./key-manager.js";
 
@@ -50,12 +51,15 @@ function modelToProviderId(model: string): string | null {
     const prefix = model.split("/")[0].toLowerCase();
     // Map known prefixes to registry IDs
     const prefixMap: Record<string, string> = {
+      "anthropic-vertex": "anthropic-vertex",
       openrouter: "openrouter",
       groq: "groq",
       mistral: "mistral",
       google: "google",
+      "google-vertex": "google-vertex",
       anthropic: "anthropic",
       openai: "openai",
+      "github-copilot": "github-copilot",
     };
     if (prefixMap[prefix]) return prefixMap[prefix];
   }
@@ -86,11 +90,20 @@ function collectConfiguredModelProviders(): Set<string> {
 
     const modelEntries = typeof models === "object" ? Object.values(models) : [];
     for (const entry of modelEntries) {
-      const modelId = typeof entry === "string" ? entry
-        : typeof entry === "object" && entry !== null && "model" in entry
-          ? String((entry as { model: unknown }).model)
-          : null;
-      if (modelId) {
+      if (typeof entry === "string") {
+        const pid = modelToProviderId(entry);
+        if (pid) providers.add(pid);
+        continue;
+      }
+
+      if (typeof entry === "object" && entry !== null && "model" in entry) {
+        const configuredProvider = "provider" in entry ? (entry as { provider?: unknown }).provider : undefined;
+        if (typeof configuredProvider === "string" && configuredProvider.trim().length > 0) {
+          providers.add(configuredProvider);
+          continue;
+        }
+
+        const modelId = String((entry as { model: unknown }).model);
         const pid = modelToProviderId(modelId);
         if (pid) providers.add(pid);
       }
@@ -139,7 +152,15 @@ function resolveKey(providerId: string): KeyLookup {
     }
   }
 
-  // Check environment variable
+  // Check environment variable using the authoritative env var resolution
+  // (handles multi-var lookups like ANTHROPIC_OAUTH_TOKEN || ANTHROPIC_API_KEY,
+  //  COPILOT_GITHUB_TOKEN || GH_TOKEN || GITHUB_TOKEN, Vertex ADC, Bedrock, etc.)
+  if (getEnvApiKey(providerId)) {
+    return { found: true, source: "env", backedOff: false };
+  }
+
+  // Fall back to PROVIDER_REGISTRY env var for providers not covered by getEnvApiKey
+  // (e.g., search providers like Brave, Tavily; tool providers like Jina, Context7)
   if (info?.envVar && process.env[info.envVar]) {
     return { found: true, source: "env", backedOff: false };
   }
@@ -149,24 +170,57 @@ function resolveKey(providerId: string): KeyLookup {
 
 // ── Individual check groups ────────────────────────────────────────────────────
 
+/**
+ * Providers that can serve models normally associated with another provider.
+ * Key = the provider whose models can be served, Value = alternative providers to check.
+ * e.g. GitHub Copilot subscriptions can access Claude and GPT models.
+ */
+const PROVIDER_ROUTES: Record<string, string[]> = {
+  anthropic: ["github-copilot"],
+  openai: ["github-copilot"],
+};
+
 function checkLlmProviders(): ProviderCheckResult[] {
   const required = collectConfiguredModelProviders();
   const results: ProviderCheckResult[] = [];
 
   for (const providerId of required) {
     const info = PROVIDER_REGISTRY.find(p => p.id === providerId);
-    const label = info?.label ?? providerId;
+    const label = providerId === "anthropic-vertex"
+      ? "Anthropic Vertex"
+      : info?.label ?? providerId;
     const lookup = resolveKey(providerId);
 
     if (!lookup.found) {
-      const envVar = info?.envVar ?? `${providerId.toUpperCase()}_API_KEY`;
+      // Check if a cross-provider can serve this provider's models
+      const routes = PROVIDER_ROUTES[providerId];
+      const routeProvider = routes?.find(routeId => resolveKey(routeId).found);
+      if (routeProvider) {
+        const routeInfo = PROVIDER_REGISTRY.find(p => p.id === routeProvider);
+        const routeLabel = routeInfo?.label ?? routeProvider;
+        results.push({
+          name: providerId,
+          label,
+          category: "llm",
+          status: "ok",
+          message: `${label} — available via ${routeLabel}`,
+          required: true,
+        });
+        continue;
+      }
+
+      const envVar = providerId === "anthropic-vertex"
+        ? "ANTHROPIC_VERTEX_PROJECT_ID"
+        : info?.envVar ?? `${providerId.toUpperCase()}_API_KEY`;
       results.push({
         name: providerId,
         label,
         category: "llm",
         status: "error",
-        message: `${label} — no API key found`,
-        detail: info?.hasOAuth
+        message: `${label} — not configured`,
+        detail: providerId === "anthropic-vertex"
+          ? "Set ANTHROPIC_VERTEX_PROJECT_ID and authenticate with Google ADC"
+          : info?.hasOAuth
           ? `Run /gsd keys to authenticate`
           : `Set ${envVar} or run /gsd keys`,
         required: true,

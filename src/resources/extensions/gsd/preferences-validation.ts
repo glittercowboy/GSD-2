@@ -10,7 +10,7 @@ import type { GitPreferences } from "./git-service.js";
 import type { PostUnitHookConfig, PreDispatchHookConfig, TokenProfile, PhaseSkipPreferences } from "./types.js";
 import type { DynamicRoutingConfig } from "./model-router.js";
 import { VALID_BRANCH_NAME } from "./git-service.js";
-import { normalizeStringArray } from "../shared/mod.js";
+import { normalizeStringArray } from "../shared/format-utils.js";
 
 import {
   KNOWN_PREFERENCE_KEYS,
@@ -497,6 +497,47 @@ export function validatePreferences(preferences: GSDPreferences): {
     }
   }
 
+  // ─── Reactive Execution ─────────────────────────────────────────────────
+  if (preferences.reactive_execution !== undefined) {
+    if (typeof preferences.reactive_execution === "object" && preferences.reactive_execution !== null) {
+      const re = preferences.reactive_execution as unknown as Record<string, unknown>;
+      const validRe: Record<string, unknown> = {};
+
+      if (re.enabled !== undefined) {
+        if (typeof re.enabled === "boolean") validRe.enabled = re.enabled;
+        else errors.push("reactive_execution.enabled must be a boolean");
+      }
+      if (re.max_parallel !== undefined) {
+        const mp = typeof re.max_parallel === "number" ? re.max_parallel : Number(re.max_parallel);
+        if (Number.isFinite(mp) && mp >= 1 && mp <= 8) {
+          validRe.max_parallel = Math.floor(mp);
+        } else {
+          errors.push("reactive_execution.max_parallel must be a number between 1 and 8");
+        }
+      }
+      if (re.isolation_mode !== undefined) {
+        if (re.isolation_mode === "same-tree") {
+          validRe.isolation_mode = "same-tree";
+        } else {
+          errors.push('reactive_execution.isolation_mode must be "same-tree"');
+        }
+      }
+
+      const knownReKeys = new Set(["enabled", "max_parallel", "isolation_mode"]);
+      for (const key of Object.keys(re)) {
+        if (!knownReKeys.has(key)) {
+          warnings.push(`unknown reactive_execution key "${key}" — ignored`);
+        }
+      }
+
+      if (Object.keys(validRe).length > 0) {
+        validated.reactive_execution = validRe as unknown as import("./types.js").ReactiveExecutionConfig;
+      }
+    } else {
+      errors.push("reactive_execution must be an object");
+    }
+  }
+
   // ─── Verification Preferences ───────────────────────────────────────────
   if (preferences.verification_commands !== undefined) {
     if (Array.isArray(preferences.verification_commands)) {
@@ -646,16 +687,6 @@ export function validatePreferences(preferences: GSDPreferences): {
     }
   }
 
-  // ─── Compression Strategy ───────────────────────────────────────────
-  if (preferences.compression_strategy !== undefined) {
-    const validStrategies = new Set(["truncate", "compress"]);
-    if (typeof preferences.compression_strategy === "string" && validStrategies.has(preferences.compression_strategy)) {
-      validated.compression_strategy = preferences.compression_strategy as GSDPreferences["compression_strategy"];
-    } else {
-      errors.push(`compression_strategy must be one of: truncate, compress`);
-    }
-  }
-
   // ─── Context Selection ──────────────────────────────────────────────
   if (preferences.context_selection !== undefined) {
     const validModes = new Set(["full", "smart"]);
@@ -663,6 +694,56 @@ export function validatePreferences(preferences: GSDPreferences): {
       validated.context_selection = preferences.context_selection as GSDPreferences["context_selection"];
     } else {
       errors.push(`context_selection must be one of: full, smart`);
+    }
+  }
+
+  // ─── GitHub Sync ────────────────────────────────────────────────────────
+  if (preferences.github !== undefined) {
+    if (typeof preferences.github === "object" && preferences.github !== null) {
+      const gh = preferences.github as unknown as Record<string, unknown>;
+      const validGh: Record<string, unknown> = {};
+
+      if (gh.enabled !== undefined) {
+        if (typeof gh.enabled === "boolean") validGh.enabled = gh.enabled;
+        else errors.push("github.enabled must be a boolean");
+      }
+      if (gh.repo !== undefined) {
+        if (typeof gh.repo === "string" && gh.repo.includes("/")) validGh.repo = gh.repo;
+        else errors.push('github.repo must be a string in "owner/repo" format');
+      }
+      if (gh.project !== undefined) {
+        const p = typeof gh.project === "number" ? gh.project : Number(gh.project);
+        if (Number.isFinite(p) && p > 0) validGh.project = Math.floor(p);
+        else errors.push("github.project must be a positive number");
+      }
+      if (gh.labels !== undefined) {
+        if (Array.isArray(gh.labels) && gh.labels.every((l: unknown) => typeof l === "string")) {
+          validGh.labels = gh.labels;
+        } else {
+          errors.push("github.labels must be an array of strings");
+        }
+      }
+      if (gh.auto_link_commits !== undefined) {
+        if (typeof gh.auto_link_commits === "boolean") validGh.auto_link_commits = gh.auto_link_commits;
+        else errors.push("github.auto_link_commits must be a boolean");
+      }
+      if (gh.slice_prs !== undefined) {
+        if (typeof gh.slice_prs === "boolean") validGh.slice_prs = gh.slice_prs;
+        else errors.push("github.slice_prs must be a boolean");
+      }
+
+      const knownGhKeys = new Set(["enabled", "repo", "project", "labels", "auto_link_commits", "slice_prs"]);
+      for (const key of Object.keys(gh)) {
+        if (!knownGhKeys.has(key)) {
+          warnings.push(`unknown github key "${key}" — ignored`);
+        }
+      }
+
+      if (Object.keys(validGh).length > 0) {
+        validated.github = validGh as unknown as import("../github-sync/types.js").GitHubSyncConfig;
+      }
+    } else {
+      errors.push("github must be an object");
     }
   }
 

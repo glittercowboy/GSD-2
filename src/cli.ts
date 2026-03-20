@@ -613,6 +613,16 @@ if (!process.stdin.isTTY) {
   process.exit(1)
 }
 
+// Welcome screen — shown on every fresh interactive session before TUI takes over
+{
+  const { printWelcomeScreen } = await import('./welcome-screen.js')
+  printWelcomeScreen({
+    version: process.env.GSD_VERSION || '0.0.0',
+    modelName: settingsManager.getDefaultModel() || undefined,
+    provider: settingsManager.getDefaultProvider() || undefined,
+  })
+}
+
 const interactiveMode = new InteractiveMode(session)
 markStartup('InteractiveMode')
 printStartupTimings()

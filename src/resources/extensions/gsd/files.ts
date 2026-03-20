@@ -7,7 +7,7 @@ import { promises as fs } from 'node:fs';
 import { resolve } from 'node:path';
 import { atomicWriteAsync } from './atomic-write.js';
 import { resolveMilestoneFile, relMilestoneFile, resolveGsdRootFile } from './paths.js';
-import { milestoneIdSort, findMilestoneIds } from './guided-flow.js';
+import { milestoneIdSort, findMilestoneIds } from './milestone-ids.js';
 
 import type {
   Roadmap, BoundaryMapEntry,
@@ -15,11 +15,12 @@ import type {
   Summary, SummaryFrontmatter, SummaryRequires, FileModified,
   Continue, ContinueFrontmatter, ContinueStatus,
   RequirementCounts,
+  TaskIO,
   SecretsManifest, SecretsManifestEntry, SecretsManifestEntryStatus,
   ManifestStatus,
 } from './types.js';
 
-import { checkExistingEnvKeys } from '../get-secrets-from-user.js';
+import { checkExistingEnvKeys } from '../env-utils.js';
 import { parseRoadmapSlices } from './roadmap-slices.js';
 import { nativeParseRoadmap, nativeExtractSection, nativeParsePlanFile, nativeParseSummaryFile, NATIVE_UNAVAILABLE } from './native-parser-bridge.js';
 import { debugTime, debugCount } from './debug-logger.js';
@@ -724,13 +725,57 @@ export function countMustHavesMentionedInSummary(
   return count;
 }
 
+// ─── Task Plan IO Extractor ────────────────────────────────────────────────
+
+/**
+ * Extract input and output file paths from a task plan's `## Inputs` and
+ * `## Expected Output` sections. Looks for backtick-wrapped file paths on
+ * each line (e.g. `` `src/foo.ts` ``).
+ *
+ * Returns empty arrays for missing/empty sections — callers should treat
+ * tasks with no IO as ambiguous (sequential fallback trigger).
+ */
+export function parseTaskPlanIO(content: string): { inputFiles: string[]; outputFiles: string[] } {
+  const backtickPathRegex = /`([^`]+)`/g;
+
+  function extractPaths(sectionText: string | null): string[] {
+    if (!sectionText) return [];
+    const paths: string[] = [];
+    for (const line of sectionText.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      let match: RegExpExecArray | null;
+      backtickPathRegex.lastIndex = 0;
+      while ((match = backtickPathRegex.exec(trimmed)) !== null) {
+        const candidate = match[1];
+        // Filter out things that look like code tokens rather than file paths
+        // (e.g. `true`, `false`, `npm run test`). A file path has at least one
+        // dot or slash.
+        if (candidate.includes("/") || candidate.includes(".")) {
+          paths.push(candidate);
+        }
+      }
+    }
+    return paths;
+  }
+
+  const [, body] = splitFrontmatter(content);
+  const inputSection = extractSection(body, "Inputs");
+  const outputSection = extractSection(body, "Expected Output");
+
+  return {
+    inputFiles: extractPaths(inputSection),
+    outputFiles: extractPaths(outputSection),
+  };
+}
+
 // ─── UAT Type Extractor ────────────────────────────────────────────────────
 
 /**
  * The four UAT classification types recognised by GSD auto-mode.
  * `undefined` is returned (not this union) when no type can be determined.
  */
-export type UatType = 'artifact-driven' | 'live-runtime' | 'human-experience' | 'mixed';
+export type UatType = 'artifact-driven' | 'live-runtime' | 'human-experience' | 'mixed' | 'browser-executable' | 'runtime-executable';
 
 /**
  * Extract the UAT type from a UAT file's raw content.
@@ -754,6 +799,8 @@ export function extractUatType(content: string): UatType | undefined {
   const rawValue = modeBullet.slice('UAT mode:'.length).trim().toLowerCase();
 
   if (rawValue.startsWith('artifact-driven')) return 'artifact-driven';
+  if (rawValue.startsWith('browser-executable')) return 'browser-executable';
+  if (rawValue.startsWith('runtime-executable')) return 'runtime-executable';
   if (rawValue.startsWith('live-runtime')) return 'live-runtime';
   if (rawValue.startsWith('human-experience')) return 'human-experience';
   if (rawValue.startsWith('mixed')) return 'mixed';

@@ -1,6 +1,6 @@
 {
   "name": "gsd-pi",
-  "version": "2.37.1",
+  "version": "2.38.0",
   "description": "GSD — Get Shit Done coding agent",
   "license": "MIT",
   "repository": {
@@ -91,6 +91,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.73.0",
+    "@anthropic-ai/vertex-sdk": "^0.14.4",
     "@aws-sdk/client-bedrock-runtime": "^3.983.0",
     "@clack/prompts": "^1.1.0",
     "@google/genai": "^1.40.0",

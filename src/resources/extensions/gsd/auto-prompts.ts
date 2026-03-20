@@ -20,11 +20,17 @@ import type { GSDState, InlineLevel } from "./types.js";
 import type { GSDPreferences } from "./preferences.js";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
-import { computeBudgets, resolveExecutorContextWindow } from "./context-budget.js";
-import { compressToTarget } from "./prompt-compressor.js";
-import { distillSummaries } from "./summary-distiller.js";
+import { computeBudgets, resolveExecutorContextWindow, truncateAtSectionBoundary } from "./context-budget.js";
 import { formatDecisionsCompact, formatRequirementsCompact } from "./structured-data-formatter.js";
-import { chunkByRelevance, formatChunks } from "./semantic-chunker.js";
+
+// ─── Preamble Cap ─────────────────────────────────────────────────────────────
+
+const MAX_PREAMBLE_CHARS = 30_000;
+
+function capPreamble(preamble: string): string {
+  if (preamble.length <= MAX_PREAMBLE_CHARS) return preamble;
+  return truncateAtSectionBoundary(preamble, MAX_PREAMBLE_CHARS).content;
+}
 
 // ─── Executor Constraints ─────────────────────────────────────────────────────
 
@@ -159,16 +165,9 @@ export async function inlineFileSmart(
     return `### ${label}\nSource: \`${relPath}\`\n\n${content.trim()}`;
   }
 
-  // Use semantic chunking for large files
-  const result = chunkByRelevance(content, query, { maxChunks: 5, minScore: 0.05 });
-
-  // If chunking didn't save much (< 20%), just include full content
-  if (result.savingsPercent < 20) {
-    return `### ${label}\nSource: \`${relPath}\`\n\n${content.trim()}`;
-  }
-
-  const formatted = formatChunks(result, relPath);
-  return `### ${label} (${result.omittedChunks} sections omitted for relevance)\nSource: \`${relPath}\`\n\n${formatted}`;
+  // For large files, truncate at section boundary
+  const truncated = truncateAtSectionBoundary(content, threshold).content;
+  return `### ${label}\nSource: \`${relPath}\`\n\n${truncated}`;
 }
 
 /**
@@ -202,21 +201,6 @@ export async function inlineDependencySummaries(
 
   const result = sections.join("\n\n");
   if (budgetChars !== undefined && result.length > budgetChars) {
-    // For 3+ summaries, try distillation first (preserves more information)
-    if (sections.length >= 3) {
-      const rawSummaries = sections.map(s => {
-        // Extract content after the header line
-        const lines = s.split("\n");
-        const contentStart = lines.findIndex(l => l.startsWith("Source:"));
-        return contentStart >= 0 ? lines.slice(contentStart + 1).join("\n").trim() : s;
-      });
-      const distilled = distillSummaries(rawSummaries, budgetChars);
-      if (distilled.content.length <= budgetChars) {
-        return distilled.content;
-      }
-    }
-    // Fall back to section-boundary truncation
-    const { truncateAtSectionBoundary } = await import("./context-budget.js");
     return truncateAtSectionBoundary(result, budgetChars).content;
   }
   return result;
@@ -485,6 +469,41 @@ export async function getPriorTaskSummaryPaths(
     .map(f => `${sRel}/tasks/${f}`);
 }
 
+/**
+ * Get carry-forward summary paths scoped to a task's derived dependencies.
+ *
+ * Instead of all prior tasks (order-based), returns only summaries for task
+ * IDs in `dependsOn`. Used by reactive-execute to give each subagent only
+ * the context it actually needs — not sibling tasks from a parallel batch.
+ *
+ * Falls back to order-based when dependsOn is empty (root tasks still get
+ * any available prior summaries for continuity).
+ */
+export async function getDependencyTaskSummaryPaths(
+  mid: string, sid: string, currentTid: string,
+  dependsOn: string[], base: string,
+): Promise<string[]> {
+  // If no dependencies, fall back to order-based for root tasks
+  if (dependsOn.length === 0) {
+    return getPriorTaskSummaryPaths(mid, sid, currentTid, base);
+  }
+
+  const tDir = resolveTasksDir(base, mid, sid);
+  if (!tDir) return [];
+
+  const summaryFiles = resolveTaskFiles(tDir, "SUMMARY");
+  const sRel = relSlicePath(base, mid, sid);
+  const depSet = new Set(dependsOn.map((d) => d.toUpperCase()));
+
+  return summaryFiles
+    .filter((f) => {
+      // Extract task ID from filename: "T02-SUMMARY.md" → "T02"
+      const tid = f.replace(/-SUMMARY\.md$/i, "").toUpperCase();
+      return depSet.has(tid);
+    })
+    .map((f) => `${sRel}/tasks/${f}`);
+}
+
 // ─── Adaptive Replanning Checks ────────────────────────────────────────────
 
 /**
@@ -599,7 +618,7 @@ export async function buildResearchMilestonePrompt(mid: string, midTitle: string
   if (knowledgeInlineRM) inlined.push(knowledgeInlineRM);
   inlined.push(inlineTemplate("research", "Research"));
 
-  const inlinedContext = `## Inlined Context (preloaded — do not re-read these files)\n\n${inlined.join("\n\n---\n\n")}`;
+  const inlinedContext = capPreamble(`## Inlined Context (preloaded — do not re-read these files)\n\n${inlined.join("\n\n---\n\n")}`);
 
   const outputRelPath = relMilestoneFile(base, mid, "RESEARCH");
   return loadPrompt("research-milestone", {
@@ -649,7 +668,7 @@ export async function buildPlanMilestonePrompt(mid: string, midTitle: string, ba
     inlined.push(inlineTemplate("task-plan", "Task Plan"));
   }
 
-  const inlinedContext = `## Inlined Context (preloaded — do not re-read these files)\n\n${inlined.join("\n\n---\n\n")}`;
+  const inlinedContext = capPreamble(`## Inlined Context (preloaded — do not re-read these files)\n\n${inlined.join("\n\n---\n\n")}`);
 
   const outputRelPath = relMilestoneFile(base, mid, "ROADMAP");
   const researchOutputPath = join(base, relMilestoneFile(base, mid, "RESEARCH"));
@@ -698,7 +717,7 @@ export async function buildResearchSlicePrompt(
   const overridesInline = formatOverridesSection(activeOverrides);
   if (overridesInline) inlined.unshift(overridesInline);
 
-  const inlinedContext = `## Inlined Context (preloaded — do not re-read these files)\n\n${inlined.join("\n\n---\n\n")}`;
+  const inlinedContext = capPreamble(`## Inlined Context (preloaded — do not re-read these files)\n\n${inlined.join("\n\n---\n\n")}`);
 
   const outputRelPath = relSliceFile(base, mid, sid, "RESEARCH");
   return loadPrompt("research-slice", {
@@ -746,7 +765,7 @@ export async function buildPlanSlicePrompt(
   const planOverridesInline = formatOverridesSection(planActiveOverrides);
   if (planOverridesInline) inlined.unshift(planOverridesInline);
 
-  const inlinedContext = `## Inlined Context (preloaded — do not re-read these files)\n\n${inlined.join("\n\n---\n\n")}`;
+  const inlinedContext = capPreamble(`## Inlined Context (preloaded — do not re-read these files)\n\n${inlined.join("\n\n---\n\n")}`);
 
   // Build executor context constraints from the budget engine
   const executorContextConstraints = formatExecutorConstraints();
@@ -772,13 +791,24 @@ export async function buildPlanSlicePrompt(
   });
 }
 
+/** Options for customizing execute-task prompt construction. */
+export interface ExecuteTaskPromptOptions {
+  level?: InlineLevel;
+  /** Override carry-forward paths (dependency-based instead of order-based). */
+  carryForwardPaths?: string[];
+}
+
 export async function buildExecuteTaskPrompt(
   mid: string, sid: string, sTitle: string,
-  tid: string, tTitle: string, base: string, level?: InlineLevel,
+  tid: string, tTitle: string, base: string,
+  level?: InlineLevel | ExecuteTaskPromptOptions,
 ): Promise<string> {
-  const inlineLevel = level ?? resolveInlineLevel();
+  const opts: ExecuteTaskPromptOptions = typeof level === "object" && level !== null && !Array.isArray(level)
+    ? level
+    : { level: level as InlineLevel | undefined };
+  const inlineLevel = opts.level ?? resolveInlineLevel();
 
-  const priorSummaries = await getPriorTaskSummaryPaths(mid, sid, tid, base);
+  const priorSummaries = opts.carryForwardPaths ?? await getPriorTaskSummaryPaths(mid, sid, tid, base);
   const priorLines = priorSummaries.length > 0
     ? priorSummaries.map(p => `- \`${p}\``).join("\n")
     : "- (no prior tasks)";
@@ -854,15 +884,11 @@ export async function buildExecuteTaskPrompt(
   const budgets = computeBudgets(contextWindow);
   const verificationBudget = `~${Math.round(budgets.verificationBudgetChars / 1000)}K chars`;
 
-  // Compress carry-forward section when it exceeds 40% of inline context budget.
-  // Only compress when compression_strategy is "compress" (budget/balanced profiles).
+  // Truncate carry-forward section when it exceeds 40% of inline context budget.
   const carryForwardBudget = Math.floor(budgets.inlineContextBudgetChars * 0.4);
   let finalCarryForward = carryForwardSection;
   if (carryForwardSection.length > carryForwardBudget) {
-    const { resolveCompressionStrategy } = await import("./preferences.js");
-    if (resolveCompressionStrategy() === "compress") {
-      finalCarryForward = compressToTarget(carryForwardSection, carryForwardBudget).content;
-    }
+    finalCarryForward = truncateAtSectionBoundary(carryForwardSection, carryForwardBudget).content;
   }
 
   return loadPrompt("execute-task", {
@@ -925,7 +951,7 @@ export async function buildCompleteSlicePrompt(
   const completeOverridesInline = formatOverridesSection(completeActiveOverrides);
   if (completeOverridesInline) inlined.unshift(completeOverridesInline);
 
-  const inlinedContext = `## Inlined Context (preloaded — do not re-read these files)\n\n${inlined.join("\n\n---\n\n")}`;
+  const inlinedContext = capPreamble(`## Inlined Context (preloaded — do not re-read these files)\n\n${inlined.join("\n\n---\n\n")}`);
 
   const sliceRel = relSlicePath(base, mid, sid);
   const sliceSummaryPath = join(base, `${sliceRel}/${sid}-SUMMARY.md`);
@@ -984,7 +1010,7 @@ export async function buildCompleteMilestonePrompt(
   if (contextInline) inlined.push(contextInline);
   inlined.push(inlineTemplate("milestone-summary", "Milestone Summary"));
 
-  const inlinedContext = `## Inlined Context (preloaded — do not re-read these files)\n\n${inlined.join("\n\n---\n\n")}`;
+  const inlinedContext = capPreamble(`## Inlined Context (preloaded — do not re-read these files)\n\n${inlined.join("\n\n---\n\n")}`);
 
   const milestoneSummaryPath = join(base, `${relMilestonePath(base, mid)}/${mid}-SUMMARY.md`);
 
@@ -1055,7 +1081,7 @@ export async function buildValidateMilestonePrompt(
   const contextInline = await inlineFileOptional(contextPath, contextRel, "Milestone Context");
   if (contextInline) inlined.push(contextInline);
 
-  const inlinedContext = `## Inlined Context (preloaded — do not re-read these files)\n\n${inlined.join("\n\n---\n\n")}`;
+  const inlinedContext = capPreamble(`## Inlined Context (preloaded — do not re-read these files)\n\n${inlined.join("\n\n---\n\n")}`);
 
   const validationOutputPath = join(base, `${relMilestonePath(base, mid)}/${mid}-VALIDATION.md`);
   const roadmapOutputPath = `${relMilestonePath(base, mid)}/${mid}-ROADMAP.md`;
@@ -1109,7 +1135,7 @@ export async function buildReplanSlicePrompt(
   const replanOverridesInline = formatOverridesSection(replanActiveOverrides);
   if (replanOverridesInline) inlined.unshift(replanOverridesInline);
 
-  const inlinedContext = `## Inlined Context (preloaded — do not re-read these files)\n\n${inlined.join("\n\n---\n\n")}`;
+  const inlinedContext = capPreamble(`## Inlined Context (preloaded — do not re-read these files)\n\n${inlined.join("\n\n---\n\n")}`);
 
   const replanPath = join(base, `${relSlicePath(base, mid, sid)}/${sid}-REPLAN.md`);
 
@@ -1157,7 +1183,7 @@ export async function buildRunUatPrompt(
   const projectInline = await inlineProjectFromDb(base);
   if (projectInline) inlined.push(projectInline);
 
-  const inlinedContext = `## Inlined Context (preloaded — do not re-read these files)\n\n${inlined.join("\n\n---\n\n")}`;
+  const inlinedContext = capPreamble(`## Inlined Context (preloaded — do not re-read these files)\n\n${inlined.join("\n\n---\n\n")}`);
 
   const uatResultPath = join(base, relSliceFile(base, mid, sliceId, "UAT-RESULT"));
   const uatType = extractUatType(uatContent) ?? "human-experience";
@@ -1196,7 +1222,7 @@ export async function buildReassessRoadmapPrompt(
   const knowledgeInlineRA = await inlineGsdRootFile(base, "knowledge.md", "Project Knowledge");
   if (knowledgeInlineRA) inlined.push(knowledgeInlineRA);
 
-  const inlinedContext = `## Inlined Context (preloaded — do not re-read these files)\n\n${inlined.join("\n\n---\n\n")}`;
+  const inlinedContext = capPreamble(`## Inlined Context (preloaded — do not re-read these files)\n\n${inlined.join("\n\n---\n\n")}`);
 
   const assessmentPath = join(base, relSliceFile(base, mid, completedSliceId, "ASSESSMENT"));
 
@@ -1231,6 +1257,82 @@ export async function buildReassessRoadmapPrompt(
     inlinedContext,
     deferredCaptures,
     commitInstruction: reassessCommitInstruction,
+  });
+}
+
+// ─── Reactive Execute Prompt ──────────────────────────────────────────────
+
+export async function buildReactiveExecutePrompt(
+  mid: string, midTitle: string, sid: string, sTitle: string,
+  readyTaskIds: string[], base: string,
+): Promise<string> {
+  const { loadSliceTaskIO, deriveTaskGraph, graphMetrics } = await import("./reactive-graph.js");
+
+  // Build graph for context
+  const taskIO = await loadSliceTaskIO(base, mid, sid);
+  const graph = deriveTaskGraph(taskIO);
+  const metrics = graphMetrics(graph);
+
+  // Build graph context section
+  const graphLines: string[] = [];
+  for (const node of graph) {
+    const status = node.done ? "✅ done" : readyTaskIds.includes(node.id) ? "🟢 ready" : "⏳ waiting";
+    const deps = node.dependsOn.length > 0 ? ` (depends on: ${node.dependsOn.join(", ")})` : "";
+    graphLines.push(`- **${node.id}: ${node.title}** — ${status}${deps}`);
+    if (node.outputFiles.length > 0) {
+      graphLines.push(`  - Outputs: ${node.outputFiles.map(f => `\`${f}\``).join(", ")}`);
+    }
+  }
+  const graphContext = [
+    `Tasks: ${metrics.taskCount}, Edges: ${metrics.edgeCount}, Ready: ${metrics.readySetSize}`,
+    "",
+    ...graphLines,
+  ].join("\n");
+
+  // Build individual subagent prompts for each ready task
+  const subagentSections: string[] = [];
+  const readyTaskListLines: string[] = [];
+
+  for (const tid of readyTaskIds) {
+    const node = graph.find((n) => n.id === tid);
+    const tTitle = node?.title ?? tid;
+    readyTaskListLines.push(`- **${tid}: ${tTitle}**`);
+
+    // Build dependency-scoped carry-forward paths for this task
+    const depPaths = await getDependencyTaskSummaryPaths(
+      mid, sid, tid, node?.dependsOn ?? [], base,
+    );
+
+    // Build a full execute-task prompt with dependency-based carry-forward
+    const taskPrompt = await buildExecuteTaskPrompt(
+      mid, sid, sTitle, tid, tTitle, base,
+      { carryForwardPaths: depPaths },
+    );
+
+    subagentSections.push([
+      `### ${tid}: ${tTitle}`,
+      "",
+      "Use this as the prompt for a `subagent` call:",
+      "",
+      "```",
+      taskPrompt,
+      "```",
+    ].join("\n"));
+  }
+
+  const inlinedTemplates = inlineTemplate("task-summary", "Task Summary");
+
+  return loadPrompt("reactive-execute", {
+    workingDirectory: base,
+    milestoneId: mid,
+    milestoneTitle: midTitle,
+    sliceId: sid,
+    sliceTitle: sTitle,
+    graphContext,
+    readyTaskCount: String(readyTaskIds.length),
+    readyTaskList: readyTaskListLines.join("\n"),
+    subagentPrompts: subagentSections.join("\n\n---\n\n"),
+    inlinedTemplates,
   });
 }
 

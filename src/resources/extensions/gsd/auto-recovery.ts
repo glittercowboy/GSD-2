@@ -26,6 +26,7 @@ import {
   resolveSlicePath,
   resolveSliceFile,
   resolveTasksDir,
+  resolveTaskFiles,
   relMilestoneFile,
   relSliceFile,
   relSlicePath,
@@ -110,6 +111,9 @@ export function resolveExpectedArtifactPath(
     }
     case "rewrite-docs":
       return null;
+    case "reactive-execute":
+      // Reactive execute produces multiple task summaries — verified separately
+      return null;
     default:
       return null;
   }
@@ -146,6 +150,44 @@ export function verifyExpectedArtifact(
     if (!existsSync(overridesPath)) return true;
     const content = readFileSync(overridesPath, "utf-8");
     return !content.includes("**Scope:** active");
+  }
+
+  // Reactive-execute: verify that each dispatched task's summary exists.
+  // The unitId encodes the batch: "{mid}/{sid}/reactive+T02,T03"
+  if (unitType === "reactive-execute") {
+    const parts = unitId.split("/");
+    const mid = parts[0];
+    const sidAndBatch = parts[1];
+    const batchPart = parts[2]; // "reactive+T02,T03"
+    if (!mid || !sidAndBatch || !batchPart) return false;
+
+    const sid = sidAndBatch;
+    const plusIdx = batchPart.indexOf("+");
+    if (plusIdx === -1) {
+      // Legacy format "reactive" without batch IDs — fall back to "any summary"
+      const tDir = resolveTasksDir(base, mid, sid);
+      if (!tDir) return false;
+      const summaryFiles = resolveTaskFiles(tDir, "SUMMARY");
+      return summaryFiles.length > 0;
+    }
+
+    const batchIds = batchPart.slice(plusIdx + 1).split(",").filter(Boolean);
+    if (batchIds.length === 0) return false;
+
+    const tDir = resolveTasksDir(base, mid, sid);
+    if (!tDir) return false;
+
+    const existingSummaries = new Set(
+      resolveTaskFiles(tDir, "SUMMARY").map((f) =>
+        f.replace(/-SUMMARY\.md$/i, "").toUpperCase(),
+      ),
+    );
+
+    // Every dispatched task must have a summary file
+    for (const tid of batchIds) {
+      if (!existingSummaries.has(tid.toUpperCase())) return false;
+    }
+    return true;
   }
 
   const absPath = resolveExpectedArtifactPath(unitType, unitId, base);

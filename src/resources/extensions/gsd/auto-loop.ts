@@ -5,20 +5,20 @@
  * pattern with a while loop. The agent_end event resolves a promise instead
  * of recursing.
  *
- * MAINTENANCE RULE: The only module-level mutable state here is `_activeSession`,
- * used by the agent_end bridge. Promise state itself lives on AutoSession so
- * concurrent auto sessions cannot corrupt each other.
+ * MAINTENANCE RULE: Module-level mutable state is limited to `_currentResolve`
+ * (per-unit one-shot resolver) and `_sessionSwitchInFlight` (guard for
+ * session rotation). No queue — stale agent_end events are dropped.
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@gsd/pi-coding-agent";
+import { importExtensionModule, type ExtensionAPI, type ExtensionContext } from "@gsd/pi-coding-agent";
 
-import type { AutoSession } from "./auto/session.js";
+import type { AutoSession, SidecarItem } from "./auto/session.js";
 import { NEW_SESSION_TIMEOUT_MS } from "./auto/session.js";
 import type { GSDPreferences } from "./preferences.js";
 import type { SessionLockStatus } from "./session-lock.js";
 import type { GSDState } from "./types.js";
 import type { CloseoutOptions } from "./auto-unit-closeout.js";
-import type { PostUnitContext } from "./auto-post-unit.js";
+import type { PostUnitContext, PreVerificationOpts } from "./auto-post-unit.js";
 import type {
   VerificationContext,
   VerificationResult,
@@ -26,6 +26,9 @@ import type {
 import type { DispatchAction } from "./auto-dispatch.js";
 import type { WorktreeResolver } from "./worktree-resolver.js";
 import { debugLog } from "./debug-logger.js";
+import { gsdRoot } from "./paths.js";
+import { atomicWriteSync } from "./atomic-write.js";
+import { join } from "node:path";
 import type { CmuxLogLevel } from "../cmux/index.js";
 
 /**
@@ -35,6 +38,23 @@ import type { CmuxLogLevel } from "../cmux/index.js";
  * generous headroom including retries and sidecar work.
  */
 const MAX_LOOP_ITERATIONS = 500;
+/** Maximum characters of failure/crash context included in recovery prompts. */
+const MAX_RECOVERY_CHARS = 50_000;
+
+/** Data-driven budget threshold notifications (descending). The 100% entry
+ *  triggers special enforcement logic (halt/pause/warn); sub-100 entries fire
+ *  a simple notification. */
+const BUDGET_THRESHOLDS: Array<{
+  pct: number;
+  label: string;
+  notifyLevel: "info" | "warning" | "error";
+  cmuxLevel: "progress" | "warning" | "error";
+}> = [
+  { pct: 100, label: "Budget ceiling reached", notifyLevel: "error", cmuxLevel: "error" },
+  { pct: 90, label: "Budget 90%", notifyLevel: "warning", cmuxLevel: "warning" },
+  { pct: 80, label: "Approaching budget ceiling — 80%", notifyLevel: "warning", cmuxLevel: "warning" },
+  { pct: 75, label: "Budget 75%", notifyLevel: "info", cmuxLevel: "progress" },
+];
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -54,17 +74,15 @@ export interface UnitResult {
   event?: AgentEndEvent;
 }
 
-// ─── Session-scoped promise state ───────────────────────────────────────────
+// ─── Per-unit one-shot promise state ────────────────────────────────────────
 //
-// pendingResolve and pendingAgentEndQueue live on AutoSession (not module-level)
-// so concurrent sessions cannot corrupt each other's promises.
+// A single module-level resolve function scoped to the current unit execution.
+// No queue — if an agent_end arrives with no pending resolver, it is dropped
+// (logged as warning). This is simpler and safer than the previous session-
+// scoped pendingResolve + pendingAgentEndQueue pattern.
 
-/**
- * The singleton session reference used by resolveAgentEnd. Set by autoLoop
- * on entry so that the agent_end handler in index.ts can resolve the correct
- * session's promise without needing a direct reference to `s`.
- */
-let _activeSession: AutoSession | null = null;
+let _currentResolve: ((result: UnitResult) => void) | null = null;
+let _sessionSwitchInFlight = false;
 
 // ─── resolveAgentEnd ─────────────────────────────────────────────────────────
 
@@ -73,60 +91,105 @@ let _activeSession: AutoSession | null = null;
  * in-flight unit promise. One-shot: the resolver is nulled before calling
  * to prevent double-resolution from model fallback retries.
  *
- * If no pendingResolve exists (event arrived between loop iterations),
- * the event is queued on the session so the next runUnit can drain it.
+ * If no resolver exists (event arrived between loop iterations or during
+ * session switch), the event is dropped with a debug warning.
  */
 export function resolveAgentEnd(event: AgentEndEvent): void {
-  const s = _activeSession;
-  if (!s) {
-    debugLog("resolveAgentEnd", {
-      status: "no-active-session",
-      warning: "agent_end with no active loop session",
-    });
+  if (_sessionSwitchInFlight) {
+    debugLog("resolveAgentEnd", { status: "ignored-during-switch" });
     return;
   }
-
-  if (s.pendingResolve) {
+  if (_currentResolve) {
     debugLog("resolveAgentEnd", { status: "resolving", hasEvent: true });
-    const r = s.pendingResolve;
-    s.pendingResolve = null;
+    const r = _currentResolve;
+    _currentResolve = null;
     r({ status: "completed", event });
   } else {
-    // Queue the event so the next runUnit picks it up immediately
     debugLog("resolveAgentEnd", {
-      status: "queued",
-      queueLength: s.pendingAgentEndQueue.length + 1,
-      warning:
-        "agent_end arrived between loop iterations — queued for next runUnit",
+      status: "no-pending-resolve",
+      warning: "agent_end with no pending unit",
     });
-    s.pendingAgentEndQueue.push(event);
   }
 }
 
 export function isSessionSwitchInFlight(): boolean {
-  return _activeSession?.sessionSwitchInFlight ?? false;
+  return _sessionSwitchInFlight;
 }
 
 // ─── resetPendingResolve (test helper) ───────────────────────────────────────
 
 /**
- * Reset session promise state. Only exported for test cleanup — production code
- * should never call this.
+ * Reset module-level promise state. Only exported for test cleanup —
+ * production code should never call this.
  */
 export function _resetPendingResolve(): void {
-  if (_activeSession) {
-    _activeSession.pendingResolve = null;
-    _activeSession.pendingAgentEndQueue = [];
-  }
-  _activeSession = null;
+  _currentResolve = null;
+  _sessionSwitchInFlight = false;
 }
 
 /**
- * Set the active session for resolveAgentEnd. Only exported for test setup —
- * production code sets this via autoLoop entry.
+ * No-op for backward compatibility with tests that previously set the
+ * active session. The module no longer holds a session reference.
  */
-export function _setActiveSession(session: AutoSession | null): void {
-  _activeSession = session;
+export function _setActiveSession(_session: AutoSession | null): void {
+  // No-op — kept for test backward compatibility
+}
+
+// ─── detectStuck ─────────────────────────────────────────────────────────────
+
+type WindowEntry = { key: string; error?: string };
+
+/**
+ * Analyze a sliding window of recent unit dispatches for stuck patterns.
+ * Returns a signal with reason if stuck, null otherwise.
+ *
+ * Rule 1: Same error string twice in a row → stuck immediately.
+ * Rule 2: Same unit key 3+ consecutive times → stuck (preserves prior behavior).
+ * Rule 3: Oscillation A→B→A→B in last 4 entries → stuck.
+ */
+export function detectStuck(
+  window: readonly WindowEntry[],
+): { stuck: true; reason: string } | null {
+  if (window.length < 2) return null;
+
+  const last = window[window.length - 1];
+  const prev = window[window.length - 2];
+
+  // Rule 1: Same error repeated consecutively
+  if (last.error && prev.error && last.error === prev.error) {
+    return {
+      stuck: true,
+      reason: `Same error repeated: ${last.error.slice(0, 200)}`,
+    };
+  }
+
+  // Rule 2: Same unit 3+ consecutive times
+  if (window.length >= 3) {
+    const lastThree = window.slice(-3);
+    if (lastThree.every((u) => u.key === last.key)) {
+      return {
+        stuck: true,
+        reason: `${last.key} derived 3 consecutive times without progress`,
+      };
+    }
+  }
+
+  // Rule 3: Oscillation (A→B→A→B in last 4)
+  if (window.length >= 4) {
+    const w = window.slice(-4);
+    if (
+      w[0].key === w[2].key &&
+      w[1].key === w[3].key &&
+      w[0].key !== w[1].key
+    ) {
+      return {
+        stuck: true,
+        reason: `Oscillation detected: ${w[0].key} ↔ ${w[1].key}`,
+      };
+    }
+  }
+
+  return null;
 }
 
 // ─── runUnit ─────────────────────────────────────────────────────────────────
@@ -146,45 +209,18 @@ export async function runUnit(
   unitType: string,
   unitId: string,
   prompt: string,
-  _prefs: GSDPreferences | undefined,
 ): Promise<UnitResult> {
   debugLog("runUnit", { phase: "start", unitType, unitId });
-
-  // ── Drain queued events from error-recovery retries ──
-  // If an agent_end arrived between iterations (e.g. from a model fallback
-  // sendMessage retry), consume it immediately instead of creating a new promise.
-  // Cap queue to 3 entries to prevent unbounded growth from stale events.
-  if (s.pendingAgentEndQueue.length > 3) {
-    debugLog("runUnit", {
-      phase: "queue-overflow",
-      dropped: s.pendingAgentEndQueue.length - 1,
-      unitType,
-      unitId,
-    });
-    s.pendingAgentEndQueue = [
-      s.pendingAgentEndQueue[s.pendingAgentEndQueue.length - 1]!,
-    ];
-  }
-  if (s.pendingAgentEndQueue.length > 0) {
-    const queued = s.pendingAgentEndQueue.shift()!;
-    debugLog("runUnit", {
-      phase: "drained-queued-event",
-      unitType,
-      unitId,
-      queueRemaining: s.pendingAgentEndQueue.length,
-    });
-    return { status: "completed", event: queued };
-  }
 
   // ── Session creation with timeout ──
   debugLog("runUnit", { phase: "session-create", unitType, unitId });
 
   let sessionResult: { cancelled: boolean };
   let sessionTimeoutHandle: ReturnType<typeof setTimeout> | undefined;
-  s.sessionSwitchInFlight = true;
+  _sessionSwitchInFlight = true;
   try {
     const sessionPromise = s.cmdCtx!.newSession().finally(() => {
-      s.sessionSwitchInFlight = false;
+      _sessionSwitchInFlight = false;
     });
     const timeoutPromise = new Promise<{ cancelled: true }>((resolve) => {
       sessionTimeoutHandle = setTimeout(
@@ -216,11 +252,12 @@ export async function runUnit(
     return { status: "cancelled" };
   }
 
-  // ── Create the agent_end promise (session-scoped) ──
+  // ── Create the agent_end promise (per-unit one-shot) ──
   // This happens after newSession completes so session-switch agent_end events
   // from the previous session cannot resolve the new unit.
+  _sessionSwitchInFlight = false;
   const unitPromise = new Promise<UnitResult>((resolve) => {
-    s.pendingResolve = resolve;
+    _currentResolve = resolve;
   });
 
   // Ensure cwd matches basePath before dispatch (#1389).
@@ -383,6 +420,7 @@ export interface LoopDeps {
     midTitle: string;
     state: GSDState;
     prefs: GSDPreferences | undefined;
+    session?: AutoSession;
   }) => Promise<DispatchAction>;
   runPreDispatchHooks: (
     unitType: string,
@@ -500,6 +538,7 @@ export interface LoopDeps {
   // Post-unit processing
   postUnitPreVerification: (
     pctx: PostUnitContext,
+    opts?: PreVerificationOpts,
   ) => Promise<"dispatched" | "continue">;
   runPostUnitVerification: (
     vctx: VerificationContext,
@@ -511,6 +550,96 @@ export interface LoopDeps {
 
   // Session manager
   getSessionFile: (ctx: ExtensionContext) => string;
+}
+
+// ─── generateMilestoneReport ──────────────────────────────────────────────────
+
+/**
+ * Generate and write an HTML milestone report snapshot.
+ * Extracted from the milestone-transition block in autoLoop.
+ */
+async function generateMilestoneReport(
+  s: AutoSession,
+  ctx: ExtensionContext,
+  milestoneId: string,
+): Promise<void> {
+  const { loadVisualizerData } = await importExtensionModule<typeof import("./visualizer-data.js")>(import.meta.url, "./visualizer-data.js");
+  const { generateHtmlReport } = await importExtensionModule<typeof import("./export-html.js")>(import.meta.url, "./export-html.js");
+  const { writeReportSnapshot } = await importExtensionModule<typeof import("./reports.js")>(import.meta.url, "./reports.js");
+  const { basename } = await import("node:path");
+
+  const snapData = await loadVisualizerData(s.basePath);
+  const completedMs = snapData.milestones.find(
+    (m: { id: string }) => m.id === milestoneId,
+  );
+  const msTitle = completedMs?.title ?? milestoneId;
+  const gsdVersion = process.env.GSD_VERSION ?? "0.0.0";
+  const projName = basename(s.basePath);
+  const doneSlices = snapData.milestones.reduce(
+    (acc: number, m: { slices: { done: boolean }[] }) =>
+      acc + m.slices.filter((sl: { done: boolean }) => sl.done).length,
+    0,
+  );
+  const totalSlices = snapData.milestones.reduce(
+    (acc: number, m: { slices: unknown[] }) => acc + m.slices.length,
+    0,
+  );
+  const outPath = writeReportSnapshot({
+    basePath: s.basePath,
+    html: generateHtmlReport(snapData, {
+      projectName: projName,
+      projectPath: s.basePath,
+      gsdVersion,
+      milestoneId,
+      indexRelPath: "index.html",
+    }),
+    milestoneId,
+    milestoneTitle: msTitle,
+    kind: "milestone",
+    projectName: projName,
+    projectPath: s.basePath,
+    gsdVersion,
+    totalCost: snapData.totals?.cost ?? 0,
+    totalTokens: snapData.totals?.tokens.total ?? 0,
+    totalDuration: snapData.totals?.duration ?? 0,
+    doneSlices,
+    totalSlices,
+    doneMilestones: snapData.milestones.filter(
+      (m: { status: string }) => m.status === "complete",
+    ).length,
+    totalMilestones: snapData.milestones.length,
+    phase: snapData.phase,
+  });
+  ctx.ui.notify(
+    `Report saved: .gsd/reports/${basename(outPath)} — open index.html to browse progression.`,
+    "info",
+  );
+}
+
+// ─── closeoutAndStop ──────────────────────────────────────────────────────────
+
+/**
+ * If a unit is in-flight, close it out, then stop auto-mode.
+ * Extracted from ~4 identical if-closeout-then-stop sequences in autoLoop.
+ */
+async function closeoutAndStop(
+  ctx: ExtensionContext,
+  pi: ExtensionAPI,
+  s: AutoSession,
+  deps: LoopDeps,
+  reason: string,
+): Promise<void> {
+  if (s.currentUnit) {
+    await deps.closeoutUnit(
+      ctx,
+      s.basePath,
+      s.currentUnit.type,
+      s.currentUnit.id,
+      s.currentUnit.startedAt,
+      deps.buildSnapshotOpts(s.currentUnit.type, s.currentUnit.id),
+    );
+  }
+  await deps.stopAuto(ctx, pi, reason);
 }
 
 // ─── autoLoop ────────────────────────────────────────────────────────────────
@@ -530,10 +659,11 @@ export async function autoLoop(
   deps: LoopDeps,
 ): Promise<void> {
   debugLog("autoLoop", { phase: "enter" });
-  _activeSession = s;
   let iteration = 0;
-  let lastDerivedUnit = "";
-  let sameUnitCount = 0;
+  // ── Sliding-window stuck detection ──
+  const recentUnits: Array<{ key: string; error?: string }> = [];
+  const STUCK_WINDOW_SIZE = 6;
+  let stuckRecoveryAttempts = 0;
 
   let consecutiveErrors = 0;
 
@@ -562,6 +692,19 @@ export async function autoLoop(
 
     try {
       // ── Blanket try/catch: one bad iteration must not kill the session
+      const prefs = deps.loadEffectiveGSDPreferences()?.preferences;
+
+      // ── Check sidecar queue before deriveState ──
+      let sidecarItem: SidecarItem | undefined;
+      if (s.sidecarQueue.length > 0) {
+        sidecarItem = s.sidecarQueue.shift()!;
+        debugLog("autoLoop", {
+          phase: "sidecar-dequeue",
+          kind: sidecarItem.kind,
+          unitType: sidecarItem.unitType,
+          unitId: sidecarItem.unitId,
+        });
+      }
 
       const sessionLockBase = deps.lockBase();
       if (sessionLockBase) {
@@ -583,6 +726,17 @@ export async function autoLoop(
         }
       }
 
+      // Variables shared between the sidecar and normal paths
+      let unitType: string;
+      let unitId: string;
+      let prompt: string;
+      let pauseAfterUatDispatch = false;
+      let state: GSDState;
+      let mid: string | undefined;
+      let midTitle: string | undefined;
+      let observabilityIssues: unknown[] = [];
+
+      if (!sidecarItem) {
       // ── Phase 1: Pre-dispatch ───────────────────────────────────────────
 
       // Resource version guard
@@ -633,10 +787,10 @@ export async function autoLoop(
       }
 
       // Derive state
-      let state = await deps.deriveState(s.basePath);
-      deps.syncCmuxSidebar(deps.loadEffectiveGSDPreferences()?.preferences, state);
-      let mid = state.activeMilestone?.id;
-      let midTitle = state.activeMilestone?.title;
+      state = await deps.deriveState(s.basePath);
+      deps.syncCmuxSidebar(prefs, state);
+      mid = state.activeMilestone?.id;
+      midTitle = state.activeMilestone?.title;
       debugLog("autoLoop", {
         phase: "state-derived",
         iteration,
@@ -657,68 +811,18 @@ export async function autoLoop(
           "milestone",
         );
         deps.logCmuxEvent(
-          deps.loadEffectiveGSDPreferences()?.preferences,
+          prefs,
           `Milestone ${s.currentMilestoneId} complete. Advancing to ${mid}.`,
           "success",
         );
 
-        const vizPrefs = deps.loadEffectiveGSDPreferences()?.preferences;
+        const vizPrefs = prefs;
         if (vizPrefs?.auto_visualize) {
           ctx.ui.notify("Run /gsd visualize to see progress overview.", "info");
         }
         if (vizPrefs?.auto_report !== false) {
           try {
-            const { loadVisualizerData } = await import("./visualizer-data.js");
-            const { generateHtmlReport } = await import("./export-html.js");
-            const { writeReportSnapshot } = await import("./reports.js");
-            const { basename } = await import("node:path");
-            const snapData = await loadVisualizerData(s.basePath);
-            const completedMs = snapData.milestones.find(
-              (m: { id: string }) => m.id === s.currentMilestoneId,
-            );
-            const msTitle = completedMs?.title ?? s.currentMilestoneId;
-            const gsdVersion = process.env.GSD_VERSION ?? "0.0.0";
-            const projName = basename(s.basePath);
-            const doneSlices = snapData.milestones.reduce(
-              (acc: number, m: { slices: { done: boolean }[] }) =>
-                acc +
-                m.slices.filter((sl: { done: boolean }) => sl.done).length,
-              0,
-            );
-            const totalSlices = snapData.milestones.reduce(
-              (acc: number, m: { slices: unknown[] }) => acc + m.slices.length,
-              0,
-            );
-            const outPath = writeReportSnapshot({
-              basePath: s.basePath,
-              html: generateHtmlReport(snapData, {
-                projectName: projName,
-                projectPath: s.basePath,
-                gsdVersion,
-                milestoneId: s.currentMilestoneId,
-                indexRelPath: "index.html",
-              }),
-              milestoneId: s.currentMilestoneId!,
-              milestoneTitle: msTitle,
-              kind: "milestone",
-              projectName: projName,
-              projectPath: s.basePath,
-              gsdVersion,
-              totalCost: snapData.totals?.cost ?? 0,
-              totalTokens: snapData.totals?.tokens.total ?? 0,
-              totalDuration: snapData.totals?.duration ?? 0,
-              doneSlices,
-              totalSlices,
-              doneMilestones: snapData.milestones.filter(
-                (m: { status: string }) => m.status === "complete",
-              ).length,
-              totalMilestones: snapData.milestones.length,
-              phase: snapData.phase,
-            });
-            ctx.ui.notify(
-              `Report saved: .gsd/reports/${(await import("node:path")).basename(outPath)} — open index.html to browse progression.`,
-              "info",
-            );
+            await generateMilestoneReport(s, ctx, s.currentMilestoneId!);
           } catch (err) {
             ctx.ui.notify(
               `Report generation failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -731,11 +835,30 @@ export async function autoLoop(
         s.unitDispatchCount.clear();
         s.unitRecoveryCount.clear();
         s.unitLifetimeDispatches.clear();
-        lastDerivedUnit = "";
-        sameUnitCount = 0;
+        recentUnits.length = 0;
+        stuckRecoveryAttempts = 0;
 
         // Worktree lifecycle on milestone transition — merge current, enter next
         deps.resolver.mergeAndExit(s.currentMilestoneId!, ctx.ui);
+
+        // Opt-in: create draft PR on milestone completion
+        if (prefs?.git?.auto_pr) {
+          try {
+            const { createDraftPR } = await import("./git-service.js");
+            const prUrl = createDraftPR(
+              s.basePath,
+              s.currentMilestoneId!,
+              `[GSD] ${s.currentMilestoneId} complete`,
+              `Milestone ${s.currentMilestoneId} completed by GSD auto-mode.\n\nSee .gsd/${s.currentMilestoneId}/ for details.`,
+            );
+            if (prUrl) {
+              ctx.ui.notify(`Draft PR created: ${prUrl}`, "info");
+            }
+          } catch {
+            // Non-fatal — PR creation is best-effort
+          }
+        }
+
         deps.invalidateAllCaches();
 
         state = await deps.deriveState(s.basePath);
@@ -745,9 +868,7 @@ export async function autoLoop(
         if (mid) {
           if (deps.getIsolationMode() !== "none") {
             deps.captureIntegrationBranch(s.basePath, mid, {
-              commitDocs:
-                deps.loadEffectiveGSDPreferences()?.preferences?.git
-                  ?.commit_docs,
+              commitDocs: prefs?.git?.commit_docs,
             });
           }
           deps.resolver.enterMilestone(mid, ctx.ui);
@@ -787,10 +908,28 @@ export async function autoLoop(
           (m: { status: string }) =>
             m.status !== "complete" && m.status !== "parked",
         );
-        if (incomplete.length === 0) {
+        if (incomplete.length === 0 && state.registry.length > 0) {
           // All milestones complete — merge milestone branch before stopping
           if (s.currentMilestoneId) {
             deps.resolver.mergeAndExit(s.currentMilestoneId, ctx.ui);
+
+            // Opt-in: create draft PR on milestone completion
+            if (prefs?.git?.auto_pr) {
+              try {
+                const { createDraftPR } = await import("./git-service.js");
+                const prUrl = createDraftPR(
+                  s.basePath,
+                  s.currentMilestoneId,
+                  `[GSD] ${s.currentMilestoneId} complete`,
+                  `Milestone ${s.currentMilestoneId} completed by GSD auto-mode.\n\nSee .gsd/${s.currentMilestoneId}/ for details.`,
+                );
+                if (prUrl) {
+                  ctx.ui.notify(`Draft PR created: ${prUrl}`, "info");
+                }
+              } catch {
+                // Non-fatal — PR creation is best-effort
+              }
+            }
           }
           deps.sendDesktopNotification(
             "GSD",
@@ -799,17 +938,29 @@ export async function autoLoop(
             "milestone",
           );
           deps.logCmuxEvent(
-            deps.loadEffectiveGSDPreferences()?.preferences,
+            prefs,
             "All milestones complete.",
             "success",
           );
           await deps.stopAuto(ctx, pi, "All milestones complete");
+        } else if (incomplete.length === 0 && state.registry.length === 0) {
+          // Empty registry — no milestones visible, likely a path resolution bug
+          const diag = `basePath=${s.basePath}, phase=${state.phase}`;
+          ctx.ui.notify(
+            `No milestones visible in current scope. Possible path resolution issue.\n   Diagnostic: ${diag}`,
+            "error",
+          );
+          await deps.stopAuto(
+            ctx,
+            pi,
+            `No milestones found — check basePath resolution`,
+          );
         } else if (state.phase === "blocked") {
           const blockerMsg = `Blocked: ${state.blockers.join(", ")}`;
           await deps.stopAuto(ctx, pi, blockerMsg);
           ctx.ui.notify(`${blockerMsg}. Fix and run /gsd auto.`, "warning");
           deps.sendDesktopNotification("GSD", blockerMsg, "error", "attention");
-          deps.logCmuxEvent(deps.loadEffectiveGSDPreferences()?.preferences, blockerMsg, "error");
+          deps.logCmuxEvent(prefs, blockerMsg, "error");
         } else {
           const ids = incomplete.map((m: { id: string }) => m.id).join(", ");
           const diag = `basePath=${s.basePath}, milestones=[${state.registry.map((m: { id: string; status: string }) => `${m.id}:${m.status}`).join(", ")}], phase=${state.phase}`;
@@ -844,20 +995,10 @@ export async function autoLoop(
       }
 
       if (!mid || !midTitle) {
-        if (s.currentUnit) {
-          await deps.closeoutUnit(
-            ctx,
-            s.basePath,
-            s.currentUnit.type,
-            s.currentUnit.id,
-            s.currentUnit.startedAt,
-            deps.buildSnapshotOpts(s.currentUnit.type, s.currentUnit.id),
-          );
-        }
         const noMilestoneReason = !mid
           ? "No active milestone after merge reconciliation"
           : `Milestone ${mid} has no title after reconciliation`;
-        await deps.stopAuto(ctx, pi, noMilestoneReason);
+        await closeoutAndStop(ctx, pi, s, deps, noMilestoneReason);
         debugLog("autoLoop", {
           phase: "exit",
           reason: "no-milestone-after-reconciliation",
@@ -867,19 +1008,27 @@ export async function autoLoop(
 
       // Terminal: complete
       if (state.phase === "complete") {
-        if (s.currentUnit) {
-          await deps.closeoutUnit(
-            ctx,
-            s.basePath,
-            s.currentUnit.type,
-            s.currentUnit.id,
-            s.currentUnit.startedAt,
-            deps.buildSnapshotOpts(s.currentUnit.type, s.currentUnit.id),
-          );
-        }
-        // Milestone merge on complete
+        // Milestone merge on complete (before closeout so branch state is clean)
         if (s.currentMilestoneId) {
           deps.resolver.mergeAndExit(s.currentMilestoneId, ctx.ui);
+
+          // Opt-in: create draft PR on milestone completion
+          if (prefs?.git?.auto_pr) {
+            try {
+              const { createDraftPR } = await import("./git-service.js");
+              const prUrl = createDraftPR(
+                s.basePath,
+                s.currentMilestoneId,
+                `[GSD] ${s.currentMilestoneId} complete`,
+                `Milestone ${s.currentMilestoneId} completed by GSD auto-mode.\n\nSee .gsd/${s.currentMilestoneId}/ for details.`,
+              );
+              if (prUrl) {
+                ctx.ui.notify(`Draft PR created: ${prUrl}`, "info");
+              }
+            } catch {
+              // Non-fatal — PR creation is best-effort
+            }
+          }
         }
         deps.sendDesktopNotification(
           "GSD",
@@ -888,39 +1037,27 @@ export async function autoLoop(
           "milestone",
         );
         deps.logCmuxEvent(
-          deps.loadEffectiveGSDPreferences()?.preferences,
+          prefs,
           `Milestone ${mid} complete.`,
           "success",
         );
-        await deps.stopAuto(ctx, pi, `Milestone ${mid} complete`);
+        await closeoutAndStop(ctx, pi, s, deps, `Milestone ${mid} complete`);
         debugLog("autoLoop", { phase: "exit", reason: "milestone-complete" });
         break;
       }
 
       // Terminal: blocked
       if (state.phase === "blocked") {
-        if (s.currentUnit) {
-          await deps.closeoutUnit(
-            ctx,
-            s.basePath,
-            s.currentUnit.type,
-            s.currentUnit.id,
-            s.currentUnit.startedAt,
-            deps.buildSnapshotOpts(s.currentUnit.type, s.currentUnit.id),
-          );
-        }
         const blockerMsg = `Blocked: ${state.blockers.join(", ")}`;
-        await deps.stopAuto(ctx, pi, blockerMsg);
+        await closeoutAndStop(ctx, pi, s, deps, blockerMsg);
         ctx.ui.notify(`${blockerMsg}. Fix and run /gsd auto.`, "warning");
         deps.sendDesktopNotification("GSD", blockerMsg, "error", "attention");
-        deps.logCmuxEvent(deps.loadEffectiveGSDPreferences()?.preferences, blockerMsg, "error");
+        deps.logCmuxEvent(prefs, blockerMsg, "error");
         debugLog("autoLoop", { phase: "exit", reason: "blocked" });
         break;
       }
 
       // ── Phase 2: Guards ─────────────────────────────────────────────────
-
-      const prefs = deps.loadEffectiveGSDPreferences()?.preferences;
 
       // Budget ceiling guard
       const budgetCeiling = prefs?.budget_ceiling;
@@ -941,84 +1078,49 @@ export async function autoLoop(
           budgetPct,
         );
 
-        if (newBudgetAlertLevel === 100 && budgetEnforcementAction !== "none") {
-          const msg = `Budget ceiling ${deps.formatCost(budgetCeiling)} reached (spent ${deps.formatCost(totalCost)}).`;
+        // Data-driven threshold check — loop descending, fire first match
+        const threshold = BUDGET_THRESHOLDS.find(
+          (t) => newBudgetAlertLevel >= t.pct,
+        );
+        if (threshold) {
           s.lastBudgetAlertLevel =
             newBudgetAlertLevel as AutoSession["lastBudgetAlertLevel"];
-          if (budgetEnforcementAction === "halt") {
-            deps.sendDesktopNotification("GSD", msg, "error", "budget");
-            await deps.stopAuto(ctx, pi, "Budget ceiling reached");
-            debugLog("autoLoop", { phase: "exit", reason: "budget-halt" });
-            break;
-          }
-          if (budgetEnforcementAction === "pause") {
-            ctx.ui.notify(
-              `${msg} Pausing auto-mode — /gsd auto to override and continue.`,
-              "warning",
-            );
+
+          if (threshold.pct === 100 && budgetEnforcementAction !== "none") {
+            // 100% — special enforcement logic (halt/pause/warn)
+            const msg = `Budget ceiling ${deps.formatCost(budgetCeiling)} reached (spent ${deps.formatCost(totalCost)}).`;
+            if (budgetEnforcementAction === "halt") {
+              deps.sendDesktopNotification("GSD", msg, "error", "budget");
+              await deps.stopAuto(ctx, pi, "Budget ceiling reached");
+              debugLog("autoLoop", { phase: "exit", reason: "budget-halt" });
+              break;
+            }
+            if (budgetEnforcementAction === "pause") {
+              ctx.ui.notify(
+                `${msg} Pausing auto-mode — /gsd auto to override and continue.`,
+                "warning",
+              );
+              deps.sendDesktopNotification("GSD", msg, "warning", "budget");
+              deps.logCmuxEvent(prefs, msg, "warning");
+              await deps.pauseAuto(ctx, pi);
+              debugLog("autoLoop", { phase: "exit", reason: "budget-pause" });
+              break;
+            }
+            ctx.ui.notify(`${msg} Continuing (enforcement: warn).`, "warning");
             deps.sendDesktopNotification("GSD", msg, "warning", "budget");
             deps.logCmuxEvent(prefs, msg, "warning");
-            await deps.pauseAuto(ctx, pi);
-            debugLog("autoLoop", { phase: "exit", reason: "budget-pause" });
-            break;
+          } else if (threshold.pct < 100) {
+            // Sub-100% — simple notification
+            const msg = `${threshold.label}: ${deps.formatCost(totalCost)} / ${deps.formatCost(budgetCeiling)}`;
+            ctx.ui.notify(msg, threshold.notifyLevel);
+            deps.sendDesktopNotification(
+              "GSD",
+              msg,
+              threshold.notifyLevel,
+              "budget",
+            );
+            deps.logCmuxEvent(prefs, msg, threshold.cmuxLevel);
           }
-          ctx.ui.notify(`${msg} Continuing (enforcement: warn).`, "warning");
-          deps.sendDesktopNotification("GSD", msg, "warning", "budget");
-          deps.logCmuxEvent(prefs, msg, "warning");
-        } else if (newBudgetAlertLevel === 90) {
-          s.lastBudgetAlertLevel =
-            newBudgetAlertLevel as AutoSession["lastBudgetAlertLevel"];
-          ctx.ui.notify(
-            `Budget 90%: ${deps.formatCost(totalCost)} / ${deps.formatCost(budgetCeiling)}`,
-            "warning",
-          );
-          deps.sendDesktopNotification(
-            "GSD",
-            `Budget 90%: ${deps.formatCost(totalCost)} / ${deps.formatCost(budgetCeiling)}`,
-            "warning",
-            "budget",
-          );
-          deps.logCmuxEvent(
-            prefs,
-            `Budget 90%: ${deps.formatCost(totalCost)} / ${deps.formatCost(budgetCeiling)}`,
-            "warning",
-          );
-        } else if (newBudgetAlertLevel === 80) {
-          s.lastBudgetAlertLevel =
-            newBudgetAlertLevel as AutoSession["lastBudgetAlertLevel"];
-          ctx.ui.notify(
-            `Approaching budget ceiling — 80%: ${deps.formatCost(totalCost)} / ${deps.formatCost(budgetCeiling)}`,
-            "warning",
-          );
-          deps.sendDesktopNotification(
-            "GSD",
-            `Approaching budget ceiling — 80%: ${deps.formatCost(totalCost)} / ${deps.formatCost(budgetCeiling)}`,
-            "warning",
-            "budget",
-          );
-          deps.logCmuxEvent(
-            prefs,
-            `Budget 80%: ${deps.formatCost(totalCost)} / ${deps.formatCost(budgetCeiling)}`,
-            "warning",
-          );
-        } else if (newBudgetAlertLevel === 75) {
-          s.lastBudgetAlertLevel =
-            newBudgetAlertLevel as AutoSession["lastBudgetAlertLevel"];
-          ctx.ui.notify(
-            `Budget 75%: ${deps.formatCost(totalCost)} / ${deps.formatCost(budgetCeiling)}`,
-            "info",
-          );
-          deps.sendDesktopNotification(
-            "GSD",
-            `Budget 75%: ${deps.formatCost(totalCost)} / ${deps.formatCost(budgetCeiling)}`,
-            "info",
-            "budget",
-          );
-          deps.logCmuxEvent(
-            prefs,
-            `Budget 75%: ${deps.formatCost(totalCost)} / ${deps.formatCost(budgetCeiling)}`,
-            "progress",
-          );
         } else if (budgetAlertLevel === 0) {
           s.lastBudgetAlertLevel = 0;
         }
@@ -1091,20 +1193,11 @@ export async function autoLoop(
         midTitle: midTitle!,
         state,
         prefs,
+        session: s,
       });
 
       if (dispatchResult.action === "stop") {
-        if (s.currentUnit) {
-          await deps.closeoutUnit(
-            ctx,
-            s.basePath,
-            s.currentUnit.type,
-            s.currentUnit.id,
-            s.currentUnit.startedAt,
-            deps.buildSnapshotOpts(s.currentUnit.type, s.currentUnit.id),
-          );
-        }
-        await deps.stopAuto(ctx, pi, dispatchResult.reason);
+        await closeoutAndStop(ctx, pi, s, deps, dispatchResult.reason);
         debugLog("autoLoop", { phase: "exit", reason: "dispatch-stop" });
         break;
       }
@@ -1115,76 +1208,84 @@ export async function autoLoop(
         continue;
       }
 
-      let unitType = dispatchResult.unitType;
-      let unitId = dispatchResult.unitId;
-      let prompt = dispatchResult.prompt;
-      const pauseAfterUatDispatch = dispatchResult.pauseAfterDispatch ?? false;
+      unitType = dispatchResult.unitType;
+      unitId = dispatchResult.unitId;
+      prompt = dispatchResult.prompt;
+      pauseAfterUatDispatch = dispatchResult.pauseAfterDispatch ?? false;
 
-      // ── Same-unit stuck counter with graduated recovery ──
+      // ── Sliding-window stuck detection with graduated recovery ──
       const derivedKey = `${unitType}/${unitId}`;
-      if (derivedKey === lastDerivedUnit && !s.pendingVerificationRetry) {
-        sameUnitCount++;
-        debugLog("autoLoop", {
-          phase: "stuck-check",
-          unitType,
-          unitId,
-          sameUnitCount,
-        });
 
-        if (sameUnitCount === 3) {
-          // Level 1: try verifying the artifact — maybe it was written but not detected
-          const artifactExists = deps.verifyExpectedArtifact(
+      if (!s.pendingVerificationRetry) {
+        recentUnits.push({ key: derivedKey });
+        if (recentUnits.length > STUCK_WINDOW_SIZE) recentUnits.shift();
+
+        const stuckSignal = detectStuck(recentUnits);
+        if (stuckSignal) {
+          debugLog("autoLoop", {
+            phase: "stuck-check",
             unitType,
             unitId,
-            s.basePath,
-          );
-          if (artifactExists) {
-            debugLog("autoLoop", {
-              phase: "stuck-recovery",
-              level: 1,
-              action: "artifact-found",
-            });
+            reason: stuckSignal.reason,
+            recoveryAttempts: stuckRecoveryAttempts,
+          });
+
+          if (stuckRecoveryAttempts === 0) {
+            // Level 1: try verifying the artifact, then cache invalidation + retry
+            stuckRecoveryAttempts++;
+            const artifactExists = deps.verifyExpectedArtifact(
+              unitType,
+              unitId,
+              s.basePath,
+            );
+            if (artifactExists) {
+              debugLog("autoLoop", {
+                phase: "stuck-recovery",
+                level: 1,
+                action: "artifact-found",
+              });
+              ctx.ui.notify(
+                `Stuck recovery: artifact for ${unitType} ${unitId} found on disk. Invalidating caches.`,
+                "info",
+              );
+              deps.invalidateAllCaches();
+              continue;
+            }
             ctx.ui.notify(
-              `Stuck recovery: artifact for ${unitType} ${unitId} found on disk. Invalidating caches.`,
-              "info",
+              `Stuck on ${unitType} ${unitId} (${stuckSignal.reason}). Invalidating caches and retrying.`,
+              "warning",
             );
             deps.invalidateAllCaches();
-            continue;
+          } else {
+            // Level 2: hard stop — genuinely stuck
+            debugLog("autoLoop", {
+              phase: "stuck-detected",
+              unitType,
+              unitId,
+              reason: stuckSignal.reason,
+            });
+            await deps.stopAuto(
+              ctx,
+              pi,
+              `Stuck: ${stuckSignal.reason}`,
+            );
+            ctx.ui.notify(
+              `Stuck on ${unitType} ${unitId} — ${stuckSignal.reason}. The expected artifact was not written.`,
+              "error",
+            );
+            break;
           }
-          ctx.ui.notify(
-            `Stuck on ${unitType} ${unitId} (attempt ${sameUnitCount}). Invalidating caches and retrying.`,
-            "warning",
-          );
-          deps.invalidateAllCaches();
-        } else if (sameUnitCount === 5) {
-          // Level 2: hard stop — genuinely stuck
-          debugLog("autoLoop", {
-            phase: "stuck-detected",
-            unitType,
-            unitId,
-            sameUnitCount,
-          });
-          await deps.stopAuto(
-            ctx,
-            pi,
-            `Stuck: ${unitType} ${unitId} derived ${sameUnitCount} consecutive times without progress`,
-          );
-          ctx.ui.notify(
-            `Stuck on ${unitType} ${unitId} — deriveState returns the same unit after ${sameUnitCount} attempts. The expected artifact was not written.`,
-            "error",
-          );
-          break;
+        } else {
+          // Progress detected — reset recovery counter
+          if (stuckRecoveryAttempts > 0) {
+            debugLog("autoLoop", {
+              phase: "stuck-counter-reset",
+              from: recentUnits[recentUnits.length - 2]?.key ?? "",
+              to: derivedKey,
+            });
+            stuckRecoveryAttempts = 0;
+          }
         }
-      } else {
-        if (derivedKey !== lastDerivedUnit) {
-          debugLog("autoLoop", {
-            phase: "stuck-counter-reset",
-            from: lastDerivedUnit,
-            to: derivedKey,
-          });
-        }
-        lastDerivedUnit = derivedKey;
-        sameUnitCount = 0;
       }
 
       // Pre-dispatch hooks
@@ -1227,12 +1328,26 @@ export async function autoLoop(
         break;
       }
 
-      const observabilityIssues = await deps.collectObservabilityWarnings(
+      observabilityIssues = await deps.collectObservabilityWarnings(
         ctx,
         s.basePath,
         unitType,
         unitId,
       );
+
+      // Derive state for shared use in execution phase
+      // (state, mid, midTitle already set above)
+
+      } else {
+        // ── Sidecar path: use values from the sidecar item directly ──
+        unitType = sidecarItem.unitType;
+        unitId = sidecarItem.unitId;
+        prompt = sidecarItem.prompt;
+        // Derive minimal state for progress widget / execution context
+        state = await deps.deriveState(s.basePath);
+        mid = state.activeMilestone?.id;
+        midTitle = state.activeMilestone?.title;
+      }
 
       // ── Phase 4: Unit execution ─────────────────────────────────────────
 
@@ -1250,61 +1365,6 @@ export async function autoLoop(
         s.currentUnit.id === unitId
       );
       const previousTier = s.currentUnitRouting?.tier;
-
-      // Closeout previous unit
-      if (s.currentUnit) {
-        await deps.closeoutUnit(
-          ctx,
-          s.basePath,
-          s.currentUnit.type,
-          s.currentUnit.id,
-          s.currentUnit.startedAt,
-          deps.buildSnapshotOpts(s.currentUnit.type, s.currentUnit.id),
-        );
-
-        if (s.currentUnitRouting) {
-          const isRetry =
-            s.currentUnit.type === unitType && s.currentUnit.id === unitId;
-          deps.recordOutcome(
-            s.currentUnit.type,
-            s.currentUnitRouting.tier as "light" | "standard" | "heavy",
-            !isRetry,
-          );
-        }
-
-        const closeoutKey = `${s.currentUnit.type}/${s.currentUnit.id}`;
-        const incomingKey = `${unitType}/${unitId}`;
-        const isHookUnit = s.currentUnit.type.startsWith("hook/");
-        const artifactVerified =
-          isHookUnit ||
-          deps.verifyExpectedArtifact(
-            s.currentUnit.type,
-            s.currentUnit.id,
-            s.basePath,
-          );
-        if (closeoutKey !== incomingKey && artifactVerified) {
-          s.completedUnits.push({
-            type: s.currentUnit.type,
-            id: s.currentUnit.id,
-            startedAt: s.currentUnit.startedAt,
-            finishedAt: Date.now(),
-          });
-          if (s.completedUnits.length > 200) {
-            s.completedUnits = s.completedUnits.slice(-200);
-          }
-          deps.clearUnitRuntimeRecord(
-            s.basePath,
-            s.currentUnit.type,
-            s.currentUnit.id,
-          );
-          s.unitDispatchCount.delete(
-            `${s.currentUnit.type}/${s.currentUnit.id}`,
-          );
-          s.unitRecoveryCount.delete(
-            `${s.currentUnit.type}/${s.currentUnit.id}`,
-          );
-        }
-      }
 
       s.currentUnit = { type: unitType, id: unitId, startedAt: Date.now() };
       deps.captureAvailableSkills();
@@ -1332,7 +1392,6 @@ export async function autoLoop(
       deps.ensurePreconditions(unitType, unitId, s.basePath, state);
 
       // Prompt injection
-      const MAX_RECOVERY_CHARS = 50_000;
       let finalPrompt = prompt;
 
       if (s.pendingVerificationRetry) {
@@ -1377,7 +1436,7 @@ export async function autoLoop(
       s.lastBaselineCharCount = undefined;
       if (deps.isDbAvailable()) {
         try {
-          const { inlineGsdRootFile } = await import("./auto-prompts.js");
+          const { inlineGsdRootFile } = await importExtensionModule<typeof import("./auto-prompts.js")>(import.meta.url, "./auto-prompts.js");
           const [decisionsContent, requirementsContent, projectContent] =
             await Promise.all([
               inlineGsdRootFile(s.basePath, "decisions.md", "Decisions"),
@@ -1404,7 +1463,7 @@ export async function autoLoop(
         );
       }
 
-      // Select and apply model (with tier escalation on retry)
+      // Select and apply model (with tier escalation on retry — normal units only)
       const modelResult = await deps.selectAndApplyModel(
         ctx,
         pi,
@@ -1414,7 +1473,7 @@ export async function autoLoop(
         prefs,
         s.verbose,
         s.autoModeStartModel,
-        { isRetry, previousTier },
+        sidecarItem ? undefined : { isRetry, previousTier },
       );
       s.currentUnitRouting =
         modelResult.routing as AutoSession["currentUnitRouting"];
@@ -1463,7 +1522,6 @@ export async function autoLoop(
         unitType,
         unitId,
         finalPrompt,
-        prefs,
       );
       debugLog("autoLoop", {
         phase: "runUnit-end",
@@ -1473,6 +1531,23 @@ export async function autoLoop(
         status: unitResult.status,
       });
 
+      // Tag the most recent window entry with error info for stuck detection
+      if (unitResult.status === "error" || unitResult.status === "cancelled") {
+        const lastEntry = recentUnits[recentUnits.length - 1];
+        if (lastEntry) {
+          lastEntry.error = `${unitResult.status}:${unitType}/${unitId}`;
+        }
+      } else if (unitResult.event?.messages?.length) {
+        const lastMsg = unitResult.event.messages[unitResult.event.messages.length - 1];
+        const msgStr = typeof lastMsg === "string" ? lastMsg : JSON.stringify(lastMsg);
+        if (/error|fail|exception/i.test(msgStr)) {
+          const lastEntry = recentUnits[recentUnits.length - 1];
+          if (lastEntry) {
+            lastEntry.error = msgStr.slice(0, 200);
+          }
+        }
+      }
+
       if (unitResult.status === "cancelled") {
         ctx.ui.notify(
           `Session creation timed out or was cancelled for ${unitType} ${unitId}. Will retry.`,
@@ -1481,6 +1556,52 @@ export async function autoLoop(
         await deps.stopAuto(ctx, pi, "Session creation failed");
         debugLog("autoLoop", { phase: "exit", reason: "session-failed" });
         break;
+      }
+
+      // ── Immediate unit closeout (metrics, activity log, memory) ────────
+      // Run right after runUnit() returns so telemetry is never lost to a
+      // crash between iterations.
+      await deps.closeoutUnit(
+        ctx,
+        s.basePath,
+        unitType,
+        unitId,
+        s.currentUnit.startedAt,
+        deps.buildSnapshotOpts(unitType, unitId),
+      );
+
+      if (s.currentUnitRouting) {
+        deps.recordOutcome(
+          unitType,
+          s.currentUnitRouting.tier as "light" | "standard" | "heavy",
+          true, // success assumed; dispatch will re-dispatch if artifact missing
+        );
+      }
+
+      const isHookUnit = unitType.startsWith("hook/");
+      const artifactVerified =
+        isHookUnit ||
+        deps.verifyExpectedArtifact(unitType, unitId, s.basePath);
+      if (artifactVerified) {
+        s.completedUnits.push({
+          type: unitType,
+          id: unitId,
+          startedAt: s.currentUnit.startedAt,
+          finishedAt: Date.now(),
+        });
+        if (s.completedUnits.length > 200) {
+          s.completedUnits = s.completedUnits.slice(-200);
+        }
+        // Flush completed-units to disk so the record survives crashes
+        try {
+          const completedKeysPath = join(gsdRoot(s.basePath), "completed-units.json");
+          const keys = s.completedUnits.map((u) => `${u.type}/${u.id}`);
+          atomicWriteSync(completedKeysPath, JSON.stringify(keys, null, 2));
+        } catch { /* non-fatal: disk flush failure */ }
+
+        deps.clearUnitRuntimeRecord(s.basePath, unitType, unitId);
+        s.unitDispatchCount.delete(`${unitType}/${unitId}`);
+        s.unitRecoveryCount.delete(`${unitType}/${unitId}`);
       }
 
       // ── Phase 5: Finalize ───────────────────────────────────────────────
@@ -1503,7 +1624,13 @@ export async function autoLoop(
       };
 
       // Pre-verification processing (commit, doctor, state rebuild, etc.)
-      const preResult = await deps.postUnitPreVerification(postUnitCtx);
+      // Sidecar items use lightweight pre-verification opts
+      const preVerificationOpts: PreVerificationOpts | undefined = sidecarItem
+        ? sidecarItem.kind === "hook"
+          ? { skipSettleDelay: true, skipDoctor: true, skipStateRebuild: true, skipWorktreeSync: true }
+          : { skipSettleDelay: true, skipStateRebuild: true }
+        : undefined;
+      const preResult = await deps.postUnitPreVerification(postUnitCtx, preVerificationOpts);
       if (preResult === "dispatched") {
         debugLog("autoLoop", {
           phase: "exit",
@@ -1522,22 +1649,32 @@ export async function autoLoop(
         break;
       }
 
-      // Verification gate — the loop handles retries via s.pendingVerificationRetry
-      const verificationResult = await deps.runPostUnitVerification(
-        { s, ctx, pi },
-        deps.pauseAuto,
-      );
+      // Verification gate
+      // Hook sidecar items skip verification entirely.
+      // Non-hook sidecar items run verification but skip retries (just continue).
+      const skipVerification = sidecarItem?.kind === "hook";
+      if (!skipVerification) {
+        const verificationResult = await deps.runPostUnitVerification(
+          { s, ctx, pi },
+          deps.pauseAuto,
+        );
 
-      if (verificationResult === "pause") {
-        debugLog("autoLoop", { phase: "exit", reason: "verification-pause" });
-        break;
-      }
+        if (verificationResult === "pause") {
+          debugLog("autoLoop", { phase: "exit", reason: "verification-pause" });
+          break;
+        }
 
-      if (verificationResult === "retry") {
-        // s.pendingVerificationRetry was set by runPostUnitVerification.
-        // Continue the loop — next iteration will inject the retry context into the prompt.
-        debugLog("autoLoop", { phase: "verification-retry", iteration });
-        continue;
+        if (verificationResult === "retry") {
+          if (sidecarItem) {
+            // Sidecar verification retries are skipped — just continue
+            debugLog("autoLoop", { phase: "sidecar-verification-retry-skipped", iteration });
+          } else {
+            // s.pendingVerificationRetry was set by runPostUnitVerification.
+            // Continue the loop — next iteration will inject the retry context into the prompt.
+            debugLog("autoLoop", { phase: "verification-retry", iteration });
+            continue;
+          }
+        }
       }
 
       // Post-verification processing (DB dual-write, hooks, triage, quick-tasks)
@@ -1556,150 +1693,6 @@ export async function autoLoop(
         debugLog("autoLoop", { phase: "exit", reason: "step-wizard" });
         break;
       }
-
-      // ── Sidecar drain: dispatch enqueued hooks/triage/quick-tasks ──
-      let sidecarBroke = false;
-      while (s.sidecarQueue.length > 0 && s.active) {
-        const item = s.sidecarQueue.shift()!;
-        debugLog("autoLoop", {
-          phase: "sidecar-dequeue",
-          kind: item.kind,
-          unitType: item.unitType,
-          unitId: item.unitId,
-        });
-
-        // Set up as current unit
-        const sidecarStartedAt = Date.now();
-        s.currentUnit = {
-          type: item.unitType,
-          id: item.unitId,
-          startedAt: sidecarStartedAt,
-        };
-        deps.writeUnitRuntimeRecord(
-          s.basePath,
-          item.unitType,
-          item.unitId,
-          sidecarStartedAt,
-          {
-            phase: "dispatched",
-            wrapupWarningSent: false,
-            timeoutAt: null,
-            lastProgressAt: sidecarStartedAt,
-            progressCount: 0,
-            lastProgressKind: "dispatch",
-          },
-        );
-
-        // Model selection (handles hook model override)
-        await deps.selectAndApplyModel(
-          ctx,
-          pi,
-          item.unitType,
-          item.unitId,
-          s.basePath,
-          prefs,
-          s.verbose,
-          s.autoModeStartModel,
-        );
-
-        // Supervision
-        deps.clearUnitTimeout();
-        deps.startUnitSupervision({
-          s,
-          ctx,
-          pi,
-          unitType: item.unitType,
-          unitId: item.unitId,
-          prefs,
-          buildSnapshotOpts: () =>
-            deps.buildSnapshotOpts(item.unitType, item.unitId),
-          buildRecoveryContext: () => ({}),
-          pauseAuto: deps.pauseAuto,
-        });
-
-        // Write lock
-        const sidecarSessionFile = deps.getSessionFile(ctx);
-        deps.writeLock(
-          deps.lockBase(),
-          item.unitType,
-          item.unitId,
-          s.completedUnits.length,
-          sidecarSessionFile,
-        );
-
-        // Execute via standard runUnit
-        const sidecarResult = await runUnit(
-          ctx,
-          pi,
-          s,
-          item.unitType,
-          item.unitId,
-          item.prompt,
-          prefs,
-        );
-        deps.clearUnitTimeout();
-
-        if (sidecarResult.status === "cancelled") {
-          ctx.ui.notify(
-            `Sidecar unit ${item.unitType} ${item.unitId} session cancelled. Stopping.`,
-            "warning",
-          );
-          await deps.stopAuto(ctx, pi, "Sidecar session creation failed");
-          sidecarBroke = true;
-          break;
-        }
-
-        // Run pre-verification for the sidecar unit
-        const sidecarPreResult =
-          await deps.postUnitPreVerification(postUnitCtx);
-        if (sidecarPreResult === "dispatched") {
-          // Pre-verification caused stop/pause
-          debugLog("autoLoop", {
-            phase: "exit",
-            reason: "sidecar-pre-verification-stop",
-          });
-          sidecarBroke = true;
-          break;
-        }
-
-        // Verification gate for non-hook sidecar units (triage, quick-tasks)
-        // Hook units are lightweight and don't need verification.
-        if (item.kind !== "hook") {
-          const sidecarVerification = await deps.runPostUnitVerification(
-            { s, ctx, pi },
-            deps.pauseAuto,
-          );
-          if (sidecarVerification === "pause") {
-            debugLog("autoLoop", {
-              phase: "exit",
-              reason: "sidecar-verification-pause",
-            });
-            sidecarBroke = true;
-            break;
-          }
-          // "retry" for sidecars — skip retry, just continue (sidecar retries are not worth the complexity)
-        }
-
-        // Post-verification (may enqueue more sidecar items)
-        const sidecarPostResult =
-          await deps.postUnitPostVerification(postUnitCtx);
-        if (sidecarPostResult === "stopped") {
-          debugLog("autoLoop", { phase: "exit", reason: "sidecar-stopped" });
-          sidecarBroke = true;
-          break;
-        }
-        if (sidecarPostResult === "step-wizard") {
-          debugLog("autoLoop", {
-            phase: "exit",
-            reason: "sidecar-step-wizard",
-          });
-          sidecarBroke = true;
-          break;
-        }
-        // "continue" — loop checks sidecarQueue again
-      }
-
-      if (sidecarBroke) break;
 
       consecutiveErrors = 0; // Iteration completed successfully
       debugLog("autoLoop", { phase: "iteration-complete", iteration });
@@ -1740,6 +1733,6 @@ export async function autoLoop(
     }
   }
 
-  _activeSession = null;
+  _currentResolve = null;
   debugLog("autoLoop", { phase: "exit", totalIterations: iteration });
 }

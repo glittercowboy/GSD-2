@@ -47,6 +47,18 @@ function withEnv(vars: Record<string, string | undefined>, fn: () => void): void
   }
 }
 
+function withCwd(nextCwd: string, fn: () => void): void {
+  const saved = process.cwd();
+  process.chdir(nextCwd);
+  try {
+    fn();
+  } finally {
+    process.chdir(saved);
+  }
+}
+
+const PRESENT_TEST_VALUE = "configured";
+
 // ─── formatProviderReport ─────────────────────────────────────────────────────
 
 test("formatProviderReport returns fallback for empty results", () => {
@@ -184,7 +196,7 @@ test("runProviderChecks detects Anthropic key from ANTHROPIC_API_KEY env var", (
   // Isolate from real HOME so loadEffectiveGSDPreferences returns null (default → anthropic)
   // and auth.json lookups hit an empty directory.
   const tmpHome = realpathSync(mkdtempSync(join(tmpdir(), "gsd-providers-env-test-")));
-  withEnv({ ANTHROPIC_API_KEY: "sk-ant-test-key", HOME: tmpHome }, () => {
+  withEnv({ ANTHROPIC_API_KEY: "sk-ant-test-key", ANTHROPIC_OAUTH_TOKEN: undefined, HOME: tmpHome }, () => {
     try {
       const results = runProviderChecks();
       const anthropic = results.find(r => r.name === "anthropic");
@@ -199,7 +211,15 @@ test("runProviderChecks detects Anthropic key from ANTHROPIC_API_KEY env var", (
 
 test("runProviderChecks returns error for Anthropic when no key present", () => {
   const tmpHome = realpathSync(mkdtempSync(join(tmpdir(), "gsd-providers-test-")));
-  withEnv({ ANTHROPIC_API_KEY: undefined, HOME: tmpHome }, () => {
+  withEnv({
+    ANTHROPIC_API_KEY: undefined,
+    ANTHROPIC_OAUTH_TOKEN: undefined,
+    // Clear cross-provider routing env vars (GitHub Copilot can serve Claude models)
+    COPILOT_GITHUB_TOKEN: undefined,
+    GH_TOKEN: undefined,
+    GITHUB_TOKEN: undefined,
+    HOME: tmpHome,
+  }, () => {
     try {
       const results = runProviderChecks();
       const anthropic = results.find(r => r.name === "anthropic");
@@ -275,7 +295,7 @@ test("runProviderChecks detects key from auth.json", () => {
 });
 
 test("runProviderChecks ignores empty placeholder keys in auth.json", () => {
-  withEnv({ ANTHROPIC_API_KEY: undefined }, () => {
+  withEnv({ ANTHROPIC_API_KEY: undefined, ANTHROPIC_OAUTH_TOKEN: undefined, COPILOT_GITHUB_TOKEN: undefined, GH_TOKEN: undefined, GITHUB_TOKEN: undefined }, () => {
     const tmpHome = realpathSync(mkdtempSync(join(tmpdir(), "gsd-providers-test-")));
     const agentDir = join(tmpHome, ".gsd", "agent");
     mkdirSync(agentDir, { recursive: true });
@@ -295,4 +315,172 @@ test("runProviderChecks ignores empty placeholder keys in auth.json", () => {
 
     rmSync(tmpHome, { recursive: true, force: true });
   });
+});
+
+// ─── runProviderChecks — cross-provider routing ──────────────────────────────
+
+test("runProviderChecks reports ok for Anthropic when GitHub Copilot env var is set", () => {
+  const tmpHome = realpathSync(mkdtempSync(join(tmpdir(), "gsd-providers-copilot-test-")));
+  withEnv({
+    ANTHROPIC_API_KEY: undefined,
+    ANTHROPIC_OAUTH_TOKEN: undefined,
+    COPILOT_GITHUB_TOKEN: PRESENT_TEST_VALUE,
+    GH_TOKEN: undefined,
+    GITHUB_TOKEN: undefined,
+    HOME: tmpHome,
+  }, () => {
+    try {
+      const results = runProviderChecks();
+      const anthropic = results.find(r => r.name === "anthropic");
+      assert.ok(anthropic, "anthropic result should exist");
+      assert.equal(anthropic!.status, "ok", "should be ok when Copilot auth is available");
+      assert.ok(anthropic!.message.includes("GitHub Copilot"), "should mention cross-provider source");
+    } finally {
+      rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+});
+
+test("runProviderChecks reports ok for Anthropic via GITHUB_TOKEN cross-provider routing", () => {
+  const tmpHome = realpathSync(mkdtempSync(join(tmpdir(), "gsd-providers-ghtoken-test-")));
+  withEnv({
+    ANTHROPIC_API_KEY: undefined,
+    ANTHROPIC_OAUTH_TOKEN: undefined,
+    COPILOT_GITHUB_TOKEN: undefined,
+    GH_TOKEN: undefined,
+    GITHUB_TOKEN: PRESENT_TEST_VALUE,
+    HOME: tmpHome,
+  }, () => {
+    try {
+      const results = runProviderChecks();
+      const anthropic = results.find(r => r.name === "anthropic");
+      assert.ok(anthropic, "anthropic result should exist");
+      assert.equal(anthropic!.status, "ok", "should be ok when GITHUB_TOKEN provides Copilot access");
+    } finally {
+      rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+});
+
+test("runProviderChecks detects ANTHROPIC_OAUTH_TOKEN as valid Anthropic auth", () => {
+  const tmpHome = realpathSync(mkdtempSync(join(tmpdir(), "gsd-providers-oauth-test-")));
+  withEnv({
+    ANTHROPIC_API_KEY: undefined,
+    ANTHROPIC_OAUTH_TOKEN: PRESENT_TEST_VALUE,
+    COPILOT_GITHUB_TOKEN: undefined,
+    GH_TOKEN: undefined,
+    GITHUB_TOKEN: undefined,
+    HOME: tmpHome,
+  }, () => {
+    try {
+      const results = runProviderChecks();
+      const anthropic = results.find(r => r.name === "anthropic");
+      assert.ok(anthropic, "anthropic result should exist");
+      assert.equal(anthropic!.status, "ok", "should be ok when ANTHROPIC_OAUTH_TOKEN is set");
+      assert.ok(anthropic!.message.includes("env"), "should report env source");
+    } finally {
+      rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+});
+
+test("runProviderChecks reports ok via Copilot auth.json for Anthropic", () => {
+  withEnv({
+    ANTHROPIC_API_KEY: undefined,
+    ANTHROPIC_OAUTH_TOKEN: undefined,
+    COPILOT_GITHUB_TOKEN: undefined,
+    GH_TOKEN: undefined,
+    GITHUB_TOKEN: undefined,
+  }, () => {
+    const tmpHome = realpathSync(mkdtempSync(join(tmpdir(), "gsd-providers-copilot-auth-test-")));
+    const agentDir = join(tmpHome, ".gsd", "agent");
+    mkdirSync(agentDir, { recursive: true });
+
+    // GitHub Copilot OAuth in auth.json
+    const authData = {
+      "github-copilot": { type: "oauth", apiKey: "ghu_copilot-key", expires: Date.now() + 3_600_000 },
+    };
+    writeFileSync(join(agentDir, "auth.json"), JSON.stringify(authData));
+
+    withEnv({ HOME: tmpHome }, () => {
+      const results = runProviderChecks();
+      const anthropic = results.find(r => r.name === "anthropic");
+      assert.ok(anthropic, "anthropic result should exist");
+      assert.equal(anthropic!.status, "ok", "should be ok when Copilot is authenticated in auth.json");
+      assert.ok(anthropic!.message.includes("GitHub Copilot"), "should mention Copilot as source");
+    });
+
+    rmSync(tmpHome, { recursive: true, force: true });
+  });
+});
+
+test("runProviderChecks uses provider-qualified anthropic-vertex model IDs", () => {
+  const tmpHome = realpathSync(mkdtempSync(join(tmpdir(), "gsd-providers-vertex-prefix-home-")));
+  const repo = realpathSync(mkdtempSync(join(tmpdir(), "gsd-providers-vertex-prefix-repo-")));
+  mkdirSync(join(repo, ".gsd"), { recursive: true });
+  writeFileSync(
+    join(repo, ".gsd", "preferences.md"),
+    [
+      "---",
+      "models:",
+      "  execution: anthropic-vertex/claude-sonnet-4-6",
+      "---",
+      "",
+    ].join("\n"),
+  );
+
+  withEnv({
+    HOME: tmpHome,
+    ANTHROPIC_API_KEY: undefined,
+    ANTHROPIC_OAUTH_TOKEN: undefined,
+    ANTHROPIC_VERTEX_PROJECT_ID: "vertex-project",
+  }, () => {
+    withCwd(repo, () => {
+      const results = runProviderChecks();
+      const vertex = results.find(r => r.name === "anthropic-vertex");
+      const anthropic = results.find(r => r.name === "anthropic");
+      assert.ok(vertex, "anthropic-vertex result should exist");
+      assert.equal(vertex!.status, "ok", "should accept ANTHROPIC_VERTEX_PROJECT_ID as configured");
+      assert.ok(!anthropic || !anthropic.required, "plain anthropic should not be required for anthropic-vertex config");
+    });
+  });
+
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(tmpHome, { recursive: true, force: true });
+});
+
+test("runProviderChecks uses object provider field for anthropic-vertex models", () => {
+  const tmpHome = realpathSync(mkdtempSync(join(tmpdir(), "gsd-providers-vertex-provider-home-")));
+  const repo = realpathSync(mkdtempSync(join(tmpdir(), "gsd-providers-vertex-provider-repo-")));
+  mkdirSync(join(repo, ".gsd"), { recursive: true });
+  writeFileSync(
+    join(repo, ".gsd", "preferences.md"),
+    [
+      "---",
+      "models:",
+      "  execution:",
+      "    model: claude-sonnet-4-6",
+      "    provider: anthropic-vertex",
+      "---",
+      "",
+    ].join("\n"),
+  );
+
+  withEnv({
+    HOME: tmpHome,
+    ANTHROPIC_API_KEY: undefined,
+    ANTHROPIC_OAUTH_TOKEN: undefined,
+    ANTHROPIC_VERTEX_PROJECT_ID: undefined,
+  }, () => {
+    withCwd(repo, () => {
+      const results = runProviderChecks();
+      const vertex = results.find(r => r.name === "anthropic-vertex");
+      assert.ok(vertex, "anthropic-vertex result should exist");
+      assert.equal(vertex!.status, "error", "missing vertex config should be reported against anthropic-vertex");
+      assert.ok(vertex!.detail?.includes("ANTHROPIC_VERTEX_PROJECT_ID"), "should point to vertex setup");
+    });
+  });
+
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(tmpHome, { recursive: true, force: true });
 });

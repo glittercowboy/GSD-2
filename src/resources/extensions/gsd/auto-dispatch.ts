@@ -38,6 +38,7 @@ import {
   buildRunUatPrompt,
   buildReassessRoadmapPrompt,
   buildRewriteDocsPrompt,
+  buildReactiveExecutePrompt,
   checkNeedsReassessment,
   checkNeedsRunUat,
 } from "./auto-prompts.js";
@@ -61,6 +62,7 @@ export interface DispatchContext {
   midTitle: string;
   state: GSDState;
   prefs: GSDPreferences | undefined;
+  session?: import("./auto/session.js").AutoSession;
 }
 
 interface DispatchRule {
@@ -81,26 +83,23 @@ function missingSliceStop(mid: string, phase: string): DispatchAction {
 // ─── Rewrite Circuit Breaker ──────────────────────────────────────────────
 
 const MAX_REWRITE_ATTEMPTS = 3;
-let rewriteAttemptCount = 0;
-export function resetRewriteCircuitBreaker(): void {
-  rewriteAttemptCount = 0;
-}
 
 // ─── Rules ────────────────────────────────────────────────────────────────
 
 const DISPATCH_RULES: DispatchRule[] = [
   {
     name: "rewrite-docs (override gate)",
-    match: async ({ mid, midTitle, state, basePath }) => {
+    match: async ({ mid, midTitle, state, basePath, session }) => {
       const pendingOverrides = await loadActiveOverrides(basePath);
       if (pendingOverrides.length === 0) return null;
-      if (rewriteAttemptCount >= MAX_REWRITE_ATTEMPTS) {
+      const count = session?.rewriteAttemptCount ?? 0;
+      if (count >= MAX_REWRITE_ATTEMPTS) {
         const { resolveAllOverrides } = await import("./files.js");
         await resolveAllOverrides(basePath);
-        rewriteAttemptCount = 0;
+        if (session) session.rewriteAttemptCount = 0;
         return null;
       }
-      rewriteAttemptCount++;
+      if (session) session.rewriteAttemptCount++;
       const unitId = state.activeSlice ? `${mid}/${state.activeSlice.id}` : mid;
       return {
         action: "dispatch",
@@ -156,7 +155,7 @@ const DISPATCH_RULES: DispatchRule[] = [
           uatContent ?? "",
           basePath,
         ),
-        pauseAfterDispatch: uatType !== "artifact-driven",
+        pauseAfterDispatch: uatType !== "artifact-driven" && uatType !== "browser-executable" && uatType !== "runtime-executable",
       };
     },
   },
@@ -336,6 +335,98 @@ const DISPATCH_RULES: DispatchRule[] = [
           basePath,
         ),
       };
+    },
+  },
+  {
+    name: "executing → reactive-execute (parallel dispatch)",
+    match: async ({ state, mid, midTitle, basePath, prefs }) => {
+      if (state.phase !== "executing" || !state.activeTask) return null;
+      if (!state.activeSlice) return null; // fall through
+
+      // Only activate when reactive_execution is explicitly enabled
+      const reactiveConfig = prefs?.reactive_execution;
+      if (!reactiveConfig?.enabled) return null;
+
+      const sid = state.activeSlice.id;
+      const sTitle = state.activeSlice.title;
+      const maxParallel = reactiveConfig.max_parallel ?? 2;
+
+      // Dry-run mode: max_parallel=1 means graph is derived and logged but
+      // execution remains sequential
+      if (maxParallel <= 1) return null;
+
+      try {
+        const {
+          loadSliceTaskIO,
+          deriveTaskGraph,
+          isGraphAmbiguous,
+          getReadyTasks,
+          chooseNonConflictingSubset,
+          graphMetrics,
+        } = await import("./reactive-graph.js");
+
+        const taskIO = await loadSliceTaskIO(basePath, mid, sid);
+        if (taskIO.length < 2) return null; // single task, no point
+
+        const graph = deriveTaskGraph(taskIO);
+
+        // Ambiguous graph → fall through to sequential
+        if (isGraphAmbiguous(graph)) return null;
+
+        const completed = new Set(graph.filter((n) => n.done).map((n) => n.id));
+        const readyIds = getReadyTasks(graph, completed, new Set());
+
+        // Only activate reactive dispatch when >1 task is ready
+        if (readyIds.length <= 1) return null;
+
+        const selected = chooseNonConflictingSubset(
+          readyIds,
+          graph,
+          maxParallel,
+          new Set(),
+        );
+        if (selected.length <= 1) return null;
+
+        // Log graph metrics for observability
+        const metrics = graphMetrics(graph);
+        process.stderr.write(
+          `gsd-reactive: ${mid}/${sid} graph — tasks:${metrics.taskCount} edges:${metrics.edgeCount} ` +
+          `ready:${metrics.readySetSize} dispatching:${selected.length} ambiguous:${metrics.ambiguous}\n`,
+        );
+
+        // Persist dispatched batch so verification and recovery can check
+        // exactly which tasks were sent.
+        const { saveReactiveState } = await import("./reactive-graph.js");
+        saveReactiveState(basePath, mid, sid, {
+          sliceId: sid,
+          completed: [...completed],
+          dispatched: selected,
+          graphSnapshot: metrics,
+          updatedAt: new Date().toISOString(),
+        });
+
+        // Encode selected task IDs in unitId for artifact verification.
+        // Format: M001/S01/reactive+T02,T03
+        const batchSuffix = selected.join(",");
+
+        return {
+          action: "dispatch",
+          unitType: "reactive-execute",
+          unitId: `${mid}/${sid}/reactive+${batchSuffix}`,
+          prompt: await buildReactiveExecutePrompt(
+            mid,
+            midTitle,
+            sid,
+            sTitle,
+            selected,
+            basePath,
+          ),
+        };
+      } catch (err) {
+        // Non-fatal — fall through to sequential execution
+        process.stderr.write(`gsd-reactive: graph derivation failed: ${(err as Error).message}\n`);
+        return null;
+      }
     },
   },
   {
