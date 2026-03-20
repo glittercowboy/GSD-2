@@ -1740,10 +1740,7 @@ export async function autoLoop(
 ): Promise<void> {
   debugLog("autoLoop", { phase: "enter" });
   let iteration = 0;
-  // ── Sliding-window stuck detection ──
-  const recentUnits: Array<{ key: string; error?: string }> = [];
-  let stuckRecoveryAttempts = 0;
-
+  const loopState: LoopState = { recentUnits: [], stuckRecoveryAttempts: 0 };
   let consecutiveErrors = 0;
 
   while (s.active) {
@@ -1806,13 +1803,11 @@ export async function autoLoop(
       }
 
       const ic: IterationContext = { ctx, pi, s, deps, prefs, iteration };
-      const loopState: LoopState = { recentUnits, stuckRecoveryAttempts };
       let iterData: IterationData;
 
       if (!sidecarItem) {
         // ── Phase 1: Pre-dispatch ─────────────────────────────────────────
         const preDispatchResult = await runPreDispatch(ic, loopState);
-        stuckRecoveryAttempts = loopState.stuckRecoveryAttempts;
         if (preDispatchResult.action === "break") break;
         if (preDispatchResult.action === "continue") continue;
 
@@ -1824,8 +1819,6 @@ export async function autoLoop(
 
         // ── Phase 3: Dispatch ─────────────────────────────────────────────
         const dispatchResult = await runDispatch(ic, preData, loopState);
-        // Sync stuckRecoveryAttempts back from loopState (number is copied by value)
-        stuckRecoveryAttempts = loopState.stuckRecoveryAttempts;
         if (dispatchResult.action === "break") break;
         if (dispatchResult.action === "continue") continue;
         iterData = dispatchResult.data;
@@ -1847,7 +1840,6 @@ export async function autoLoop(
       }
 
       const unitPhaseResult = await runUnitPhase(ic, iterData, loopState, sidecarItem);
-      stuckRecoveryAttempts = loopState.stuckRecoveryAttempts;
       if (unitPhaseResult.action === "break") break;
 
       // ── Phase 5: Finalize ───────────────────────────────────────────────
