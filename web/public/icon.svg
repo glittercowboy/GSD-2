@@ -1,25 +1,15 @@
 <svg width="180" height="180" viewBox="0 0 180 180" fill="none" xmlns="http://www.w3.org/2000/svg">
-<g clip-path="url(#clip0_1288_85)">
-<mask id="mask0_1288_85" style="mask-type:luminance" maskUnits="userSpaceOnUse" x="0" y="0" width="180" height="180">
-<path d="M180 0H0V180H180V0Z" fill="white"/>
-</mask>
-<g mask="url(#mask0_1288_85)">
-<path d="M143 0H37C16.5655 0 0 16.5655 0 37V143C0 163.435 16.5655 180 37 180H143C163.435 180 180 163.435 180 143V37C180 16.5655 163.435 0 143 0Z" fill="white"/>
-</g>
-<rect x="49.3584" y="55.8633" width="23.5063" height="75.6289" fill="black" fill-opacity="0.4"/>
-<rect x="61.2139" y="154.998" width="23.5063" height="66.2264" transform="rotate(-90 61.2139 154.998)" fill="black" fill-opacity="0.4"/>
-<rect x="61.2139" y="55.8633" width="23.5063" height="66.2264" transform="rotate(-90 61.2139 55.8633)" fill="black" fill-opacity="0.4"/>
-<rect x="112.723" y="131.492" width="23.5063" height="25.1415" transform="rotate(-90 112.723 131.492)" fill="black" fill-opacity="0.4"/>
-<rect x="93.5093" y="107.986" width="23.5063" height="44.3553" transform="rotate(-90 93.5093 107.986)" fill="black" fill-opacity="0.4"/>
-<rect x="42" y="48.5059" width="23.5063" height="75.6289" fill="black"/>
-<rect x="53.8555" y="147.643" width="23.5063" height="66.2264" transform="rotate(-90 53.8555 147.643)" fill="black"/>
-<rect x="53.8555" y="48.5059" width="23.5063" height="66.2264" transform="rotate(-90 53.8555 48.5059)" fill="black"/>
-<rect x="105.365" y="124.135" width="23.5063" height="25.1415" transform="rotate(-90 105.365 124.135)" fill="black"/>
-<rect x="86.1509" y="100.629" width="23.5063" height="44.3553" transform="rotate(-90 86.1509 100.629)" fill="black"/>
-</g>
-<defs>
-<clipPath id="clip0_1288_85">
-<rect width="180" height="180" fill="white"/>
-</clipPath>
-</defs>
+  <rect width="180" height="180" rx="37" fill="white"/>
+  <g transform="translate(-19.717 -19.799) scale(1.22)" shape-rendering="crispEdges">
+    <rect x="49.3584" y="55.8633" width="23.5063" height="75.6289" fill="black" fill-opacity="0.4"/>
+    <rect x="61.2139" y="154.998" width="23.5063" height="66.2264" transform="rotate(-90 61.2139 154.998)" fill="black" fill-opacity="0.4"/>
+    <rect x="61.2139" y="55.8633" width="23.5063" height="66.2264" transform="rotate(-90 61.2139 55.8633)" fill="black" fill-opacity="0.4"/>
+    <rect x="112.723" y="131.492" width="23.5063" height="25.1415" transform="rotate(-90 112.723 131.492)" fill="black" fill-opacity="0.4"/>
+    <rect x="93.5093" y="107.986" width="23.5063" height="44.3553" transform="rotate(-90 93.5093 107.986)" fill="black" fill-opacity="0.4"/>
+    <rect x="42" y="48.5059" width="23.5063" height="75.6289" fill="black"/>
+    <rect x="53.8555" y="147.643" width="23.5063" height="66.2264" transform="rotate(-90 53.8555 147.643)" fill="black"/>
+    <rect x="53.8555" y="48.5059" width="23.5063" height="66.2264" transform="rotate(-90 53.8555 48.5059)" fill="black"/>
+    <rect x="105.365" y="124.135" width="23.5063" height="25.1415" transform="rotate(-90 105.365 124.135)" fill="black"/>
+    <rect x="86.1509" y="100.629" width="23.5063" height="44.3553" transform="rotate(-90 86.1509 100.629)" fill="black"/>
+  </g>
 </svg>

@@ -16,7 +16,7 @@ const geistMono = Geist_Mono({
 })
 
 export const metadata: Metadata = {
-  title: 'Autonomous Coding Agent',
+  title: 'GSD',
   description: 'The evolution of Get Shit Done — now a real coding agent. One command. Walk away. Come back to a built project.',
   applicationName: 'GSD',
   manifest: '/manifest.json',
