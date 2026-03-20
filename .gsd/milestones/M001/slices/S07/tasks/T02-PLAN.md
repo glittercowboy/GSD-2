@@ -118,3 +118,10 @@ The `new` subcommand loads the `workflow-builder` prompt template (created in T0
 - `src/resources/extensions/gsd/commands-workflow.ts` — new: full command handler (~250-300 lines)
 - `src/resources/extensions/gsd/commands.ts` — modified: routing, completions, help text (~25 lines added)
 - `src/resources/extensions/gsd/tests/commands-workflow.test.ts` — new: integration tests (~200 lines)
+
+## Observability Impact
+
+- **New signals:** `ctx.ui.notify()` messages for: run creation success (includes run directory name and param count), validation results (pass/fail with structured errors), list output (definitions + runs with step completion counts), auto-mode conflict guard warnings, and resume engine-ID re-derivation notifications.
+- **Inspection:** `/gsd workflow list` shows definitions from `workflow-defs/` and runs from `workflow-runs/` with `done/total` step counts. `/gsd workflow validate <name>` surfaces structured `validateDefinition()` errors. `PARAMS.json` in run directories shows CLI overrides. `cat <runDir>/GRAPH.yaml` shows step state.
+- **Failure visibility:** Missing definition file → error with path. Invalid YAML → parse error message. Auto-mode conflict → clear warning message. Resume with no incomplete runs → info message. `loadPrompt()` failure for `new` → error with full error message.
+- **Engine ID tracing:** `setActiveEngineId("custom:" + runDir)` is set before `startAuto()`, enabling `resolveEngine()` to pick up `CustomWorkflowEngine`. `getActiveEngineId()` enables resume logic to verify custom workflow context.

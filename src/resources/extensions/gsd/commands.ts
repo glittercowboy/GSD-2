@@ -48,6 +48,7 @@ import { computeProgressScore, formatProgressLine } from "./progress-score.js";
 import { runEnvironmentChecks } from "./doctor-environment.js";
 import { handleLogs } from "./commands-logs.js";
 import { handleStart, handleTemplates, getTemplateCompletions } from "./commands-workflow-templates.js";
+import { handleWorkflow, getWorkflowCompletions } from "./commands-workflow.js";
 
 
 /** Resolve the effective project root, accounting for worktree paths. */
@@ -71,7 +72,7 @@ export function projectRoot(): string {
 
 export function registerGSDCommand(pi: ExtensionAPI): void {
   pi.registerCommand("gsd", {
-    description: "GSD — Get Shit Done: /gsd help|start|templates|next|auto|stop|pause|status|visualize|queue|quick|capture|triage|dispatch|history|undo|skip|export|cleanup|mode|prefs|config|keys|hooks|run-hook|skill-health|doctor|forensics|migrate|remote|steer|knowledge|new-milestone|parallel|update",
+    description: "GSD — Get Shit Done: /gsd help|start|templates|workflow|next|auto|stop|pause|status|visualize|queue|quick|capture|triage|dispatch|history|undo|skip|export|cleanup|mode|prefs|config|keys|hooks|run-hook|skill-health|doctor|forensics|migrate|remote|steer|knowledge|new-milestone|parallel|update",
     getArgumentCompletions: (prefix: string) => {
       const subcommands = [
         { cmd: "help", desc: "Categorized command reference with descriptions" },
@@ -116,6 +117,7 @@ export function registerGSDCommand(pi: ExtensionAPI): void {
         { cmd: "update", desc: "Update GSD to the latest version" },
         { cmd: "start", desc: "Start a workflow template (bugfix, spike, feature, etc.)" },
         { cmd: "templates", desc: "List available workflow templates" },
+        { cmd: "workflow", desc: "Custom workflow lifecycle (new, run, list, pause, resume, validate)" },
         { cmd: "extensions", desc: "Manage extensions (list, enable, disable, info)" },
       ];
       const parts = prefix.trim().split(/\s+/);
@@ -336,6 +338,11 @@ export function registerGSDCommand(pi: ExtensionAPI): void {
         const namePrefix = parts[2] ?? "";
         return getTemplateCompletions(namePrefix)
           .map((c) => ({ value: `templates ${c.value}`, label: c.label, description: c.description }));
+      }
+
+      if (parts[0] === "workflow") {
+        const subPrefix = parts.slice(1).join(" ");
+        return getWorkflowCompletions(subPrefix);
       }
 
       if (parts[0] === "extensions") {
@@ -891,6 +898,12 @@ Examples:
         return;
       }
 
+      // ─── Custom Workflows ──────────────────────────────────────────
+      if (trimmed === "workflow" || trimmed.startsWith("workflow ")) {
+        await handleWorkflow(trimmed.replace(/^workflow\s*/, "").trim(), ctx, pi);
+        return;
+      }
+
       if (trimmed === "") {
         // Bare /gsd defaults to step mode
         await startAuto(ctx, pi, projectRoot(), false, { step: true });
@@ -950,6 +963,14 @@ function showHelp(ctx: ExtensionCommandContext): void {
     "  /gsd keys           API key manager  [list|add|remove|test|rotate|doctor]",
     "  /gsd hooks          Show post-unit hook configuration",
     "  /gsd extensions     Manage extensions  [list|enable|disable|info]",
+    "",
+    "CUSTOM WORKFLOWS",
+    "  /gsd workflow new        Build a workflow definition via LLM conversation",
+    "  /gsd workflow run <name> Start a workflow run  [--param key=value]",
+    "  /gsd workflow list       Show definitions and active runs",
+    "  /gsd workflow validate   Check a YAML definition against the schema",
+    "  /gsd workflow pause      Pause the active workflow run",
+    "  /gsd workflow resume     Resume a paused workflow run",
     "",
     "MAINTENANCE",
     "  /gsd doctor         Diagnose and repair .gsd/ state  [audit|fix|heal] [scope]",

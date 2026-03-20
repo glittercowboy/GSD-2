@@ -1744,6 +1744,12 @@ export function _resetUnitConsecutiveSkips(): void { s.unitConsecutiveSkips.clea
  */
 export function _getDispatching(): boolean { return s.dispatching; }
 export function _setDispatching(v: boolean): void { s.dispatching = v; }
+
+/** Set the active engine ID (e.g. "custom:<runDir>") for custom workflow runs. */
+export function setActiveEngineId(id: string | null): void { s.activeEngineId = id; }
+
+/** Get the active engine ID. Used by resume logic to re-derive custom workflow runs. */
+export function getActiveEngineId(): string | null { return s.activeEngineId; }
 export function _getSkipDepth(): number { return s.skipDepth; }
 export function _setSkipDepth(v: number): void { s.skipDepth = v; }
 

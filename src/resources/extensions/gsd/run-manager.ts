@@ -19,6 +19,7 @@ import {
   existsSync,
   readdirSync,
   readFileSync,
+  writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import { parse } from "yaml";
@@ -76,6 +77,7 @@ export function createRun(
   basePath: string,
   definitionName: string,
   defsDir?: string,
+  params?: Record<string, string>,
 ): { runId: string; runDir: string } {
   const resolvedDefsDir = defsDir ?? join(basePath, "workflow-defs");
 
@@ -97,6 +99,11 @@ export function createRun(
   // Generate initial GRAPH.yaml with all steps pending
   const graph = graphFromDefinition(definition);
   writeGraph(runDir, graph);
+
+  // Persist CLI param overrides for dispatch-time substitution (R007: DEFINITION.yaml stays byte-exact)
+  if (params && Object.keys(params).length > 0) {
+    writeFileSync(join(runDir, "PARAMS.json"), JSON.stringify(params, null, 2) + "\n");
+  }
 
   return { runId, runDir };
 }
