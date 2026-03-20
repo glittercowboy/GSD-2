@@ -43,7 +43,7 @@
 
 ## Tasks
 
-- [ ] **T01: Build context injector and type the VerifyPolicy field** `est:25m`
+- [x] **T01: Build context injector and type the VerifyPolicy field** `est:25m`
   - Why: Establishes the two data-layer foundations S05 needs — the `VerifyPolicy` discriminated union (replacing `unknown` on `StepDefinition.verify`) with validation, and the pure `injectContext()` function that reads artifacts from prior steps. Both are leaf modules with no engine dependencies.
   - Files: `src/resources/extensions/gsd/context-injector.ts`, `src/resources/extensions/gsd/definition-loader.ts`, `src/resources/extensions/gsd/tests/context-injector.test.ts`, `src/resources/extensions/gsd/tests/definition-loader.test.ts`
   - Do: (1) Add `VerifyPolicy` discriminated union type to `definition-loader.ts` and change `StepDefinition.verify` from `unknown` to `VerifyPolicy | undefined`. (2) Add verify field validation to `validateDefinition()` — accept all four valid shapes, reject invalid policy names and missing required fields, continue accepting missing verify (optional). (3) Create `context-injector.ts` with `injectContext(stepId, definition, runDir, opts?)` — looks up `contextFrom`, reads each referenced step's `produces` files from runDir, assembles with headers, truncates to token budget (default 50000 chars). (4) Add unit tests for both.

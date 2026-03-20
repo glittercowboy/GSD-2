@@ -84,6 +84,12 @@ Both are leaf modules — no engine or policy class dependencies. They consume `
 - [ ] New tests for verify validation and context injection all pass
 - [ ] `npx tsc --noEmit --project tsconfig.extensions.json` clean
 
+## Observability Impact
+
+- **`VerifyPolicy` type narrowing**: `StepDefinition.verify` changes from `unknown` to a discriminated union — downstream consumers get compile-time exhaustiveness checks. Inspect via `npx tsc --noEmit --project tsconfig.extensions.json` (type errors surface invalid verify usage).
+- **`validateDefinition()` verify errors**: Invalid verify shapes now produce descriptive error strings in the `errors` array — inspectable by calling `validateDefinition(parsed)` and checking the returned errors.
+- **`injectContext()` return value**: Returns empty string (`""`) with no side effects when context is absent — the empty-string sentinel is the diagnostic signal (no silent data corruption). Non-empty returns contain `## Context from prior steps` header, making the injected content grep-able in dispatched prompts. Truncation appends `[Context truncated — exceeded budget]` marker.
+
 ## Verification
 
 - `node --experimental-strip-types --import ./src/resources/extensions/gsd/tests/resolve-ts.mjs --test src/resources/extensions/gsd/tests/context-injector.test.ts` — all pass

@@ -16,7 +16,7 @@ import {
   loadDefinition,
   validateDefinition,
 } from "../definition-loader.ts";
-import type { WorkflowDefinition, StepDefinition } from "../definition-loader.ts";
+import type { WorkflowDefinition, StepDefinition, VerifyPolicy } from "../definition-loader.ts";
 import { graphFromDefinition } from "../graph.ts";
 import type { WorkflowGraph } from "../graph.ts";
 
@@ -295,4 +295,111 @@ test("graphFromDefinition: 3-step definition → 3 pending steps with correct de
 
   assert.equal(graph.steps[2].id, "step-3");
   assert.deepEqual(graph.steps[2].dependsOn, ["step-2"]);
+});
+
+// ─── validateDefinition: verify field validation ─────────────────────────
+
+test("validateDefinition: valid content-heuristic verify → accepted", () => {
+  const result = validateDefinition({
+    version: 1,
+    name: "test",
+    steps: [{
+      id: "a",
+      name: "A",
+      prompt: "do A",
+      verify: { policy: "content-heuristic", minSize: 100, pattern: "^## " },
+    }],
+  });
+  assert.equal(result.valid, true);
+  assert.equal(result.errors.length, 0);
+});
+
+test("validateDefinition: valid shell-command verify → accepted", () => {
+  const result = validateDefinition({
+    version: 1,
+    name: "test",
+    steps: [{
+      id: "a",
+      name: "A",
+      prompt: "do A",
+      verify: { policy: "shell-command", command: "cat output.md | grep '^## '" },
+    }],
+  });
+  assert.equal(result.valid, true);
+  assert.equal(result.errors.length, 0);
+});
+
+test("validateDefinition: valid prompt-verify → accepted", () => {
+  const result = validateDefinition({
+    version: 1,
+    name: "test",
+    steps: [{
+      id: "a",
+      name: "A",
+      prompt: "do A",
+      verify: { policy: "prompt-verify", prompt: "Does the output contain at least 3 sections?" },
+    }],
+  });
+  assert.equal(result.valid, true);
+  assert.equal(result.errors.length, 0);
+});
+
+test("validateDefinition: valid human-review verify → accepted", () => {
+  const result = validateDefinition({
+    version: 1,
+    name: "test",
+    steps: [{
+      id: "a",
+      name: "A",
+      prompt: "do A",
+      verify: { policy: "human-review" },
+    }],
+  });
+  assert.equal(result.valid, true);
+  assert.equal(result.errors.length, 0);
+});
+
+test("validateDefinition: invalid verify policy name → rejected", () => {
+  const result = validateDefinition({
+    version: 1,
+    name: "test",
+    steps: [{
+      id: "a",
+      name: "A",
+      prompt: "do A",
+      verify: { policy: "magic-check" },
+    }],
+  });
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.some((e) => e.includes("verify.policy must be one of")));
+});
+
+test("validateDefinition: shell-command missing command → rejected", () => {
+  const result = validateDefinition({
+    version: 1,
+    name: "test",
+    steps: [{
+      id: "a",
+      name: "A",
+      prompt: "do A",
+      verify: { policy: "shell-command" },
+    }],
+  });
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.some((e) => e.includes('requires a non-empty "command"')));
+});
+
+test("validateDefinition: prompt-verify missing prompt → rejected", () => {
+  const result = validateDefinition({
+    version: 1,
+    name: "test",
+    steps: [{
+      id: "a",
+      name: "A",
+      prompt: "do A",
+      verify: { policy: "prompt-verify" },
+    }],
+  });
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.some((e) => e.includes('requires a non-empty "prompt"')));
 });

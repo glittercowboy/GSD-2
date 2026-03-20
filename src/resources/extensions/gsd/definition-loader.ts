@@ -15,6 +15,12 @@ import { join } from "node:path";
 
 // ─── Public TypeScript Types (camelCase) ─────────────────────────────────
 
+export type VerifyPolicy =
+  | { policy: "content-heuristic"; minSize?: number; pattern?: string }
+  | { policy: "shell-command"; command: string }
+  | { policy: "prompt-verify"; prompt: string }
+  | { policy: "human-review" };
+
 export interface StepDefinition {
   /** Unique step identifier within the workflow. */
   id: string;
@@ -28,8 +34,8 @@ export interface StepDefinition {
   produces: string[];
   /** Step IDs whose artifacts to include as context (S05 — accepted, not processed). */
   contextFrom?: string[];
-  /** Verification policy for this step (S05 — accepted, not processed). */
-  verify?: unknown;
+  /** Verification policy for this step (S05 — typed + validated). */
+  verify?: VerifyPolicy;
   /** Iteration config for this step (S06 — accepted, not processed). */
   iterate?: unknown;
 }
@@ -135,6 +141,33 @@ export function validateDefinition(parsed: unknown): { valid: boolean; errors: s
           }
         }
       }
+
+      // verify: optional, but if present must conform to VerifyPolicy shape
+      if (step.verify !== undefined) {
+        const v = step.verify;
+        const sid = typeof step.id === "string" ? step.id : `index ${i}`;
+        if (v == null || typeof v !== "object" || Array.isArray(v)) {
+          errors.push(`Step "${sid}" verify must be an object with a "policy" field`);
+        } else {
+          const vObj = v as Record<string, unknown>;
+          const VALID_POLICIES = ["content-heuristic", "shell-command", "prompt-verify", "human-review"];
+          if (typeof vObj.policy !== "string" || !VALID_POLICIES.includes(vObj.policy)) {
+            errors.push(`Step "${sid}" verify.policy must be one of: ${VALID_POLICIES.join(", ")}`);
+          } else {
+            // Policy-specific required field checks
+            if (vObj.policy === "shell-command") {
+              if (typeof vObj.command !== "string" || (vObj.command as string).trim() === "") {
+                errors.push(`Step "${sid}" verify policy "shell-command" requires a non-empty "command" field`);
+              }
+            }
+            if (vObj.policy === "prompt-verify") {
+              if (typeof vObj.prompt !== "string" || (vObj.prompt as string).trim() === "") {
+                errors.push(`Step "${sid}" verify policy "prompt-verify" requires a non-empty "prompt" field`);
+              }
+            }
+          }
+        }
+      }
     }
   }
 
@@ -197,7 +230,7 @@ export function loadDefinition(defsDir: string, name: string): WorkflowDefinitio
           : [],
       produces: Array.isArray(s.produces) ? (s.produces as string[]) : [],
       contextFrom: Array.isArray(s.context_from) ? (s.context_from as string[]) : undefined,
-      verify: s.verify,
+      verify: s.verify as VerifyPolicy | undefined,
       iterate: s.iterate,
     })),
   };
