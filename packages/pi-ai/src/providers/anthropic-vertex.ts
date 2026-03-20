@@ -78,7 +78,6 @@ export const streamAnthropicVertex: StreamFunction<"anthropic-vertex", Anthropic
 		const AnthropicSdk = await getAnthropicSdkClass();
 
 		processAnthropicStream(stream, {
-			// AnthropicVertex extends Anthropic, so this cast is safe
 			client: client as unknown as Anthropic,
 			model,
 			context,

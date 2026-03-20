@@ -1,9 +1,5 @@
 /**
  * Shared utilities for Anthropic providers (direct API and Vertex AI).
- *
- * Follows the same pattern as google-shared.ts — common message conversion,
- * tool conversion, parameter building, and stream processing shared between
- * anthropic.ts and anthropic-vertex.ts.
  */
 import type Anthropic from "@anthropic-ai/sdk";
 import type {
@@ -38,8 +34,6 @@ import { parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { transformMessages } from "./transform-messages.js";
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-
 export type AnthropicEffort = "low" | "medium" | "high" | "max";
 
 export interface AnthropicOptions extends StreamOptions {
@@ -50,9 +44,6 @@ export interface AnthropicOptions extends StreamOptions {
 	toolChoice?: "auto" | "any" | "none" | { type: "tool"; name: string };
 }
 
-// ─── Claude Code Tool Name Mapping ────────────────────────────────────────────
-
-// Stealth mode: Mimic Claude Code's tool naming exactly
 const claudeCodeTools = [
 	"Read",
 	"Write",
@@ -85,8 +76,6 @@ export const fromClaudeCodeName = (name: string, tools?: Tool[]) => {
 	return name;
 };
 
-// ─── Cache Control ────────────────────────────────────────────────────────────
-
 function resolveCacheRetention(cacheRetention?: CacheRetention): CacheRetention {
 	if (cacheRetention) {
 		return cacheRetention;
@@ -111,8 +100,6 @@ export function getCacheControl(
 		cacheControl: { type: "ephemeral", ...(ttl && { ttl }) },
 	};
 }
-
-// ─── Content Block Conversion ─────────────────────────────────────────────────
 
 export function convertContentBlocks(content: (TextContent | ImageContent)[]):
 	| string
@@ -160,8 +147,6 @@ export function convertContentBlocks(content: (TextContent | ImageContent)[]):
 	return blocks;
 }
 
-// ─── Thinking Helpers ─────────────────────────────────────────────────────────
-
 export function supportsAdaptiveThinking(modelId: string): boolean {
 	return (
 		modelId.includes("opus-4-6") ||
@@ -187,8 +172,6 @@ export function mapThinkingLevelToEffort(level: string | undefined, modelId: str
 			return "high";
 	}
 }
-
-// ─── Error Handling ───────────────────────────────────────────────────────────
 
 export function isTransientNetworkError(error: unknown): boolean {
 	if (!(error instanceof Error)) return false;
@@ -239,13 +222,9 @@ export function extractRetryAfterMs(headers: Headers | { get(name: string): stri
 	return undefined;
 }
 
-// ─── Tool Call ID Normalization ────────────────────────────────────────────────
-
 export function normalizeToolCallId(id: string): string {
 	return id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
 }
-
-// ─── Message Conversion ──────────────────────────────────────────────────────
 
 export function convertMessages(
 	messages: Message[],
@@ -414,8 +393,6 @@ export function convertMessages(
 	return params;
 }
 
-// ─── Tool Conversion ─────────────────────────────────────────────────────────
-
 export function convertTools(tools: Tool[], isOAuthToken: boolean): Anthropic.Messages.Tool[] {
 	if (!tools) return [];
 
@@ -433,8 +410,6 @@ export function convertTools(tools: Tool[], isOAuthToken: boolean): Anthropic.Me
 		};
 	});
 }
-
-// ─── Parameter Building ──────────────────────────────────────────────────────
 
 export function buildParams(
 	model: Model<AnthropicApi>,
@@ -516,8 +491,6 @@ export function buildParams(
 	return params;
 }
 
-// ─── Stop Reason Mapping ─────────────────────────────────────────────────────
-
 export function mapStopReason(reason: string): StopReason {
 	switch (reason) {
 		case "end_turn":
@@ -539,22 +512,15 @@ export function mapStopReason(reason: string): StopReason {
 	}
 }
 
-// ─── Shared Stream Processing ────────────────────────────────────────────────
-
 export interface StreamAnthropicArgs {
 	client: Anthropic;
 	model: Model<AnthropicApi>;
 	context: Context;
 	isOAuthToken: boolean;
 	options?: AnthropicOptions;
-	/** Reference to the lazily-loaded Anthropic SDK class for error type checking */
 	AnthropicSdkClass?: typeof Anthropic;
 }
 
-/**
- * Shared streaming implementation used by both anthropic and anthropic-vertex providers.
- * Creates the message stream, processes events, and emits to the AssistantMessageEventStream.
- */
 export function processAnthropicStream(
 	stream: AssistantMessageEventStream,
 	args: StreamAnthropicArgs,
