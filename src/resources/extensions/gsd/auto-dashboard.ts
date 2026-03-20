@@ -21,6 +21,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { truncateToWidth, visibleWidth } from "@gsd/pi-tui";
 import { makeUI, GLYPH, INDENT } from "../shared/mod.js";
 import { parseUnitId } from "./unit-id.js";
+import type { DisplayMetadata } from "./engine-types.js";
 
 // ─── Dashboard Data ───────────────────────────────────────────────────────────
 
@@ -61,6 +62,7 @@ const UNIT_TYPE_INFO: Record<string, { verb: string; phaseLabel: string }> = {
   "rewrite-docs":       { verb: "rewriting",    phaseLabel: "REWRITE" },
   "reassess-roadmap":   { verb: "reassessing",  phaseLabel: "REASSESS" },
   "run-uat":            { verb: "running UAT",  phaseLabel: "UAT" },
+  "custom-step":        { verb: "running",      phaseLabel: "WORKFLOW" },
 };
 
 export function unitVerb(unitType: string): string {
@@ -283,6 +285,7 @@ export function updateProgressWidget(
   state: GSDState,
   accessors: WidgetStateAccessors,
   tierBadge?: string,
+  displayMeta?: DisplayMetadata,
 ): void {
   if (!ctx.hasUI) return;
 
@@ -307,10 +310,12 @@ export function updateProgressWidget(
 
   // Set a string-array fallback first — this is the only version RPC mode will
   // see, since the factory widget set below is not supported in RPC mode.
-  const progressText = buildProgressTextLines(
-    verb, phaseLabel, unitId, mid, slice, task, next,
-    accessors, tierBadge, widgetPwd,
-  );
+  const progressText = displayMeta
+    ? buildCustomProgressTextLines(verb, phaseLabel, unitId, displayMeta, accessors, tierBadge, widgetPwd)
+    : buildProgressTextLines(
+        verb, phaseLabel, unitId, mid, slice, task, next,
+        accessors, tierBadge, widgetPwd,
+      );
   ctx.ui.setWidget("gsd-progress", progressText);
 
   // Set the factory-based widget — in TUI mode this replaces the string-array
@@ -358,6 +363,34 @@ export function updateProgressWidget(
         lines.push(rightAlign(headerLeft, headerRight, width));
 
         lines.push("");
+
+        // Custom workflow: render from DisplayMetadata instead of milestone/slice/task
+        if (displayMeta) {
+          lines.push(truncateToWidth(`${pad}${theme.fg("dim", displayMeta.engineLabel)}`, width));
+          lines.push(truncateToWidth(
+            `${pad}${theme.fg("text", theme.bold(displayMeta.progressSummary))}`,
+            width,
+          ));
+          lines.push("");
+
+          const target = unitId;
+          const actionLeft = `${pad}${theme.fg("accent", "▸")} ${theme.fg("accent", verb)}  ${theme.fg("text", target)}`;
+          const tierTag = tierBadge ? theme.fg("dim", `[${tierBadge}] `) : "";
+          const phaseBadge = `${tierTag}${theme.fg("dim", phaseLabel)}`;
+          lines.push(rightAlign(actionLeft, phaseBadge, width));
+          lines.push("");
+
+          if (displayMeta.stepCount) {
+            const { completed, total } = displayMeta.stepCount;
+            const barWidth = Math.max(8, Math.min(24, Math.floor(width * 0.3)));
+            const pct = total > 0 ? completed / total : 0;
+            const filled = Math.round(pct * barWidth);
+            const bar = theme.fg("success", "█".repeat(filled))
+              + theme.fg("dim", "░".repeat(barWidth - filled));
+            const meta = theme.fg("dim", `${completed}/${total} steps`);
+            lines.push(truncateToWidth(`${pad}${bar}  ${meta}`, width));
+          }
+        } else {
 
         if (mid) {
           lines.push(truncateToWidth(`${pad}${theme.fg("dim", mid.title)}`, width));
@@ -421,6 +454,8 @@ export function updateProgressWidget(
             width,
           ));
         }
+
+        } // end else (dev workflow rendering)
 
         // ── Footer info (pwd, tokens, cost, context, model) ──────────────
         lines.push("");
@@ -610,6 +645,39 @@ function buildProgressTextLines(
   const health = getModelHealthIndicator();
   lines.push(`  Health: ${health.emoji} ${health.label}`);
 
+  lines.push(`  ${widgetPwd}`);
+
+  return lines;
+}
+
+/** String-array fallback for custom workflow progress (RPC mode). */
+function buildCustomProgressTextLines(
+  verb: string,
+  phaseLabel: string,
+  unitId: string,
+  displayMeta: DisplayMetadata,
+  accessors: WidgetStateAccessors,
+  tierBadge: string | undefined,
+  widgetPwd: string,
+): string[] {
+  const mode = accessors.isStepMode() ? "step" : "auto";
+  const elapsed = formatAutoElapsed(accessors.getAutoStartTime());
+  const tierStr = tierBadge ? ` [${tierBadge}]` : "";
+
+  const lines: string[] = [];
+  lines.push(`[GSD ${mode}] ${verb} ${unitId}${tierStr}${elapsed ? ` — ${elapsed}` : ""}`);
+  lines.push(`  Workflow: ${displayMeta.engineLabel}`);
+  lines.push(`  Phase: ${displayMeta.currentPhase}`);
+  lines.push(`  ${displayMeta.progressSummary}`);
+
+  if (displayMeta.stepCount) {
+    const { completed, total } = displayMeta.stepCount;
+    const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+    lines.push(`  Progress: ${completed}/${total} steps (${pct}%)`);
+  }
+
+  const health = getModelHealthIndicator();
+  lines.push(`  Health: ${health.emoji} ${health.label}`);
   lines.push(`  ${widgetPwd}`);
 
   return lines;

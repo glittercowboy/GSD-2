@@ -59,3 +59,9 @@ The TUI progress widget and dashboard overlay are entirely dev-workflow-specific
 - `src/resources/extensions/gsd/auto-dashboard.ts` — modified: `"custom-step"` in UNIT_TYPE_INFO, `displayMeta?` parameter on `updateProgressWidget`, conditional rendering branch in widget factory
 - `src/resources/extensions/gsd/dashboard-overlay.ts` — modified: custom engine detection in `loadData()`, DisplayMetadata-based `MilestoneView` construction
 - `src/resources/extensions/gsd/auto.ts` — modified: `displayMeta` parameter threaded through wrapper, DisplayMetadata passed at dispatch site for custom workflows
+
+## Observability Impact
+
+- **Signals changed:** `updateProgressWidget` now renders `DisplayMetadata.stepCount` (completed/total) and `engineLabel` in the TUI widget for custom workflows. Dashboard overlay shows step progress as a `SliceView` entry when a custom engine is active.
+- **Inspection:** During a custom workflow run, the progress widget shows "N/M steps" instead of "N/M slices". Dashboard overlay (⌃⌥G) shows the workflow label as the milestone title and step progress as a progress bar.
+- **Failure visibility:** If engine resolution fails in the overlay's `loadData()`, it falls through to the dev path silently (non-fatal). The widget always renders — `displayMeta` is optional, so missing metadata falls back to dev rendering.

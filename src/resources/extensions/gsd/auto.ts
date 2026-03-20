@@ -1012,11 +1012,12 @@ function updateProgressWidget(
   unitType: string,
   unitId: string,
   state: GSDState,
+  displayMeta?: import("./engine-types.js").DisplayMetadata,
 ): void {
   const badge = s.currentUnitRouting?.tier
     ? ({ light: "L", standard: "S", heavy: "H" }[s.currentUnitRouting.tier] ?? undefined)
     : undefined;
-  _updateProgressWidget(ctx, unitType, unitId, state, widgetStateAccessors, badge);
+  _updateProgressWidget(ctx, unitType, unitId, state, widgetStateAccessors, badge, displayMeta);
 }
 
 /** State accessors for the widget — closures over module globals. */
@@ -1598,7 +1599,10 @@ async function dispatchNextUnit(
   // Status bar + progress widget
   ctx.ui.setStatus("gsd-auto", "auto");
   if (mid) updateSliceProgressCache(s.basePath, mid, state.activeSlice?.id);
-  updateProgressWidget(ctx, unitType, unitId, state);
+  const dispatchDisplayMeta = s.activeEngineId?.startsWith("custom:")
+    ? engine.getDisplayMetadata(engineState)
+    : undefined;
+  updateProgressWidget(ctx, unitType, unitId, state, dispatchDisplayMeta);
 
   ensurePreconditions(unitType, unitId, s.basePath, state);
 

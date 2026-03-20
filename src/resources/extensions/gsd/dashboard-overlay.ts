@@ -11,7 +11,8 @@ import { truncateToWidth, visibleWidth, matchesKey, Key } from "@gsd/pi-tui";
 import { deriveState } from "./state.js";
 import { loadFile, parseRoadmap, parsePlan } from "./files.js";
 import { resolveMilestoneFile, resolveSliceFile } from "./paths.js";
-import { getAutoDashboardData } from "./auto.js";
+import { getAutoDashboardData, getActiveEngineId } from "./auto.js";
+import { resolveEngine } from "./engine-resolver.js";
 import type { AutoDashboardData } from "./auto-dashboard.js";
 import {
   getLedger, getProjectTotals, aggregateByPhase, aggregateBySlice,
@@ -136,6 +137,47 @@ export class GSDDashboardOverlay {
   private async loadData(): Promise<boolean> {
     const base = this.dashData.basePath || process.cwd();
     try {
+      // Custom workflow: build view from engine DisplayMetadata instead of disk state
+      const activeEngineId = getActiveEngineId();
+      if (activeEngineId?.startsWith("custom:")) {
+        try {
+          const { engine } = resolveEngine({ activeEngineId });
+          const engineState = await engine.deriveState(base);
+          const displayMeta = engine.getDisplayMetadata(engineState);
+
+          const view: MilestoneView = {
+            id: "custom-workflow",
+            title: displayMeta.engineLabel,
+            slices: [],
+            phase: displayMeta.currentPhase,
+            progress: {
+              milestones: { total: 1, done: engineState.isComplete ? 1 : 0 },
+            },
+          };
+
+          // Build a single slice view showing step progress
+          if (displayMeta.stepCount) {
+            view.slices.push({
+              id: "steps",
+              title: displayMeta.progressSummary,
+              done: displayMeta.stepCount.completed >= displayMeta.stepCount.total,
+              risk: `${displayMeta.stepCount.completed}/${displayMeta.stepCount.total}`,
+              active: true,
+              tasks: [],
+              taskProgress: {
+                done: displayMeta.stepCount.completed,
+                total: displayMeta.stepCount.total,
+              },
+            });
+          }
+
+          this.milestoneData = view;
+          return true;
+        } catch {
+          // Fall through to dev path if engine resolution fails
+        }
+      }
+
       const state = await deriveState(base);
       if (!state.activeMilestone) {
         this.milestoneData = null;
