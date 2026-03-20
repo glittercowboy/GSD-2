@@ -20,6 +20,20 @@ Key files for understanding failures:
 
 You may read these files to identify the specific code path that caused the failure.
 
+## Key Runtime Paths
+
+All paths are relative to the project root. `.gsd/` is the GSD state directory.
+
+- Activity logs (raw JSONL): `.gsd/activity/`
+- Worktree activity logs: `.gsd/worktrees/<MID>/.gsd/activity/`
+- Debug logs: `.gsd/debug/`
+- Runtime state: `.gsd/runtime/`
+- Crash lock: `.gsd/auto.lock`
+- Completed units: `.gsd/completed-units.json`
+- Forensics reports: `.gsd/forensics/`
+
+Use these exact paths when inspecting raw log files. The `{{forensicData}}` above contains pre-parsed data from these locations, but you can read the files directly for additional detail.
+
 ## Your Task
 
 1. **Analyze** the forensic report. Identify the root cause of the user's problem.
