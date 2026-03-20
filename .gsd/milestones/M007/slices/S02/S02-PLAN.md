@@ -18,7 +18,7 @@
 
 ## Tasks
 
-- [ ] **T01: Implement JSONL reader and CLI report entry point** `est:30m`
+- [x] **T01: Implement JSONL reader and CLI report entry point** `est:30m`
   - Why: No code currently reads dispatch-metrics.jsonl from disk. The summarize-metrics module operates on in-memory MetricsLedger objects. This task bridges the gap — reading JSONL, skipping bad lines, and wiring to the existing formatter.
   - Files: `src/resources/extensions/gsd/metrics-reader.ts`, `src/resources/extensions/gsd/report-metrics.ts`
   - Do: Create `readMetricsJsonl(filePath)` that reads file line-by-line, JSON.parse each, collects valid UnitMetrics, skips malformed. Create `report-metrics.ts` CLI script that takes file path arg, calls reader → `summarizeMetrics` → `formatComparisonTable`, prints to stdout. Handle missing file gracefully.
@@ -37,3 +37,22 @@
 - `src/resources/extensions/gsd/metrics-reader.ts` (new)
 - `src/resources/extensions/gsd/report-metrics.ts` (new)
 - `src/resources/extensions/gsd/tests/metrics-reader.test.ts` (new)
+
+## Observability / Diagnostics
+
+**Runtime signals:**
+- CLI script emits structured stderr messages for diagnostics: `[report-metrics] reading <path>`, `[report-metrics] parsed N valid units from <path>`, `[report-metrics] skipped M malformed lines in <path>`
+- Exit code 0 for all non-crash scenarios (missing files, empty files, malformed content all handled gracefully)
+- Exit code 1 only for programming errors (e.g., missing required arguments)
+
+**Inspection surfaces:**
+- `readMetricsJsonl` returns `{ units: UnitMetrics[], skippedLines: number }` to expose how many lines were malformed
+- This enables downstream tooling to alert on high skip rates (potential format drift or corruption)
+
+**Failure visibility:**
+- File not found: prints `_File not found: <path>_` to stdout, continues processing other files
+- Empty file: prints `_No metrics found in <path>_` to stdout
+- Malformed lines: silent per-line skip, but total skip count surfaced in diagnostic output
+
+**Redaction constraints:**
+- Metrics data contains no secrets (token counts, costs, timestamps, unit IDs) — no redaction needed

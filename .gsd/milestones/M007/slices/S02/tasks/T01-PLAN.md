@@ -45,3 +45,19 @@ The existing `summarize-metrics.ts` already has all aggregation and formatting l
 
 - `src/resources/extensions/gsd/metrics-reader.ts` — new module with `readMetricsJsonl` export
 - `src/resources/extensions/gsd/report-metrics.ts` — new CLI script
+
+## Observability Impact
+
+**What signals change:**
+- New CLI tool produces diagnostic output to stderr: line counts (parsed/skipped) per file
+- Exit codes: 0 for graceful handling (missing/empty/malformed), 1 only for usage errors
+
+**How a future agent inspects this task:**
+- Run `npx tsx src/resources/extensions/gsd/report-metrics.ts <path>` to see metrics report
+- Stderr shows: `[report-metrics] reading <path>`, `[report-metrics] parsed N valid units, skipped M malformed lines`
+- If output is empty or wrong, check stderr for diagnostic messages
+
+**What failure state becomes visible:**
+- File not found: stdout shows `_File not found: <path>_`, continues to next file
+- Malformed JSON: skipped silently per-line, but aggregate skip count in stderr reveals corruption rate
+- Empty file: stdout shows `_No metrics found in <path>_`
