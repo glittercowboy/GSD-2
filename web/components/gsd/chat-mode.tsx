@@ -18,7 +18,6 @@ import {
 } from "@/lib/gsd-workspace-store"
 import { buildProjectAbsoluteUrl, buildProjectPath } from "@/lib/project-url"
 import { deriveWorkflowAction } from "@/lib/workflow-actions"
-import { NewMilestoneDialog } from "@/components/gsd/new-milestone-dialog"
 import { useTerminalFontSize } from "@/lib/use-terminal-font-size"
 
 type HeadlessTerminal = import("@xterm/xterm").Terminal
@@ -142,7 +141,6 @@ function toActionPanelConfig(action: GSDActionDef): Omit<ActionPanelConfig, "ses
  *   - Action panel close: data-testid="action-panel-close".
  */
 export function ChatMode({ className }: { className?: string }) {
-  const [milestoneDialogOpen, setMilestoneDialogOpen] = useState(false)
   const [actionPanelState, setActionPanelState] = useState<ActionPanelConfig | null>(null)
   const state = useGSDWorkspaceState()
   const { sendCommand } = useGSDWorkspaceActions()
@@ -200,7 +198,6 @@ export function ChatMode({ className }: { className?: string }) {
       <ChatModeHeader
         onPrimaryAction={handlePrimaryAction}
         onSecondaryAction={handleSecondaryAction}
-        onNewMilestone={() => setMilestoneDialogOpen(true)}
       />
 
       {/* ── Main pane + optional right panel ── */}
@@ -253,8 +250,6 @@ export function ChatMode({ className }: { className?: string }) {
           )}
         </AnimatePresence>
       </div>
-
-      <NewMilestoneDialog open={milestoneDialogOpen} onOpenChange={setMilestoneDialogOpen} />
     </div>
   )
 }
@@ -264,7 +259,6 @@ export function ChatMode({ className }: { className?: string }) {
 interface ChatModeHeaderProps {
   onPrimaryAction: (command: string) => void
   onSecondaryAction: (command: string) => void
-  onNewMilestone: () => void
 }
 
 /**
@@ -278,7 +272,7 @@ interface ChatModeHeaderProps {
  *   - data-testid="chat-primary-action" on the primary button
  *   - data-testid="chat-secondary-action-{command}" on each secondary button
  */
-function ChatModeHeader({ onPrimaryAction, onSecondaryAction, onNewMilestone }: ChatModeHeaderProps) {
+function ChatModeHeader({ onPrimaryAction, onSecondaryAction }: ChatModeHeaderProps) {
   const state = useGSDWorkspaceState()
 
   const boot = state.boot
@@ -298,11 +292,7 @@ function ChatModeHeader({ onPrimaryAction, onSecondaryAction, onNewMilestone }: 
 
   const handlePrimary = () => {
     if (!workflowAction.primary) return
-    if (workflowAction.isNewMilestone) {
-      onNewMilestone()
-    } else {
-      onPrimaryAction(workflowAction.primary.command)
-    }
+    onPrimaryAction(workflowAction.primary.command)
   }
 
   // Derive a short GSD state badge label
@@ -2402,12 +2392,7 @@ export function ChatPane({ className, onOpenAction }: ChatPaneProps) {
 
   const handlePlaceholderCTA = useCallback(() => {
     if (!workflowAction.primary) return
-    if (workflowAction.isNewMilestone) {
-      // "New Milestone" triggers /gsd auto behind the scenes to start the guided flow
-      void sendCommand(buildPromptCommand("/gsd auto", bridge))
-    } else {
-      void sendCommand(buildPromptCommand(workflowAction.primary.command, bridge))
-    }
+    void sendCommand(buildPromptCommand(workflowAction.primary.command, bridge))
   }, [workflowAction, sendCommand, bridge])
 
   /** Send user text — adds a user bubble and dispatches via the store */

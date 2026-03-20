@@ -86,6 +86,15 @@ test("verifying phase without auto → primary is Continue /gsd", () => {
   assert.equal(result.primary.label, "Continue");
 });
 
+test("complete phase without auto → primary is New Milestone /gsd with no step secondary", () => {
+  const result = deriveWorkflowAction(baseInput({ phase: "complete" }));
+  assert.ok(result.primary);
+  assert.equal(result.primary.command, "/gsd");
+  assert.equal(result.primary.label, "New Milestone");
+  assert.equal(result.isNewMilestone, true);
+  assert.deepEqual(result.secondaries, []);
+});
+
 // ─── Group 2: Secondary actions ───────────────────────────────────────
 test("secondaries include Step when auto is not active", () => {
   const result = deriveWorkflowAction(baseInput({ phase: "executing" }));

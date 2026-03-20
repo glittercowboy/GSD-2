@@ -46,13 +46,13 @@ import {
   getLiveAutoDashboard,
   useGSDWorkspaceState,
   useGSDWorkspaceActions,
+  buildPromptCommand,
 } from "@/lib/gsd-workspace-store"
 import { getMilestoneStatus, getSliceStatus, getTaskStatus, type ItemStatus } from "@/lib/workspace-status"
 import { deriveWorkflowAction } from "@/lib/workflow-actions"
 import { executeWorkflowActionInPowerMode } from "@/lib/workflow-action-execution"
 import { useProjectStoreManager } from "@/lib/project-store-manager"
 import { Skeleton } from "@/components/ui/skeleton"
-import { NewMilestoneDialog } from "@/components/gsd/new-milestone-dialog"
 
 const StatusIcon = ({ status }: { status: ItemStatus }) => {
   if (status === "done") {
@@ -316,20 +316,19 @@ function ExitDialog({
 
 export function MilestoneExplorer({ isConnecting = false, width, onCollapse }: { isConnecting?: boolean; width?: number; onCollapse?: () => void }) {
   const workspace = useGSDWorkspaceState()
-  const { sendCommand, openCommandSurface, setCommandSurfaceSection } = useGSDWorkspaceActions()
+  const { openCommandSurface, setCommandSurfaceSection, sendCommand } = useGSDWorkspaceActions()
   const [expandedMilestones, setExpandedMilestones] = useState<string[]>([])
   const [expandedSlices, setExpandedSlices] = useState<string[]>([])
-  const [milestoneDialogOpen, setMilestoneDialogOpen] = useState(false)
 
   const liveWorkspace = getLiveWorkspaceIndex(workspace)
   const milestones = useMemo(() => liveWorkspace?.milestones ?? [], [liveWorkspace?.milestones])
   const activeScope = liveWorkspace?.active
   const auto = getLiveAutoDashboard(workspace)
-  const bridge = workspace.boot?.bridge ?? null
   const recoverySummary = workspace.live.recoverySummary
   const validationCount = liveWorkspace?.validationIssues.length ?? 0
   const currentScopeLabel = getCurrentScopeLabel(liveWorkspace)
   const projectCwd = workspace.boot?.project.cwd ?? null
+  const bridge = workspace.boot?.bridge ?? null
 
   const openTaskFile = (absolutePath: string | undefined) => {
     if (!absolutePath || !projectCwd) return
@@ -351,16 +350,14 @@ export function MilestoneExplorer({ isConnecting = false, width, onCollapse }: {
   })
 
   const handleCommand = (command: string) => {
-    void executeWorkflowActionInPowerMode({ command, bridge, sendCommand })
+    executeWorkflowActionInPowerMode({
+      dispatch: () => sendCommand(buildPromptCommand(command, bridge)),
+    })
   }
 
   const handlePrimaryAction = () => {
     if (!workflowAction.primary) return
-    if (workflowAction.isNewMilestone) {
-      setMilestoneDialogOpen(true)
-    } else {
-      handleCommand(workflowAction.primary.command)
-    }
+    handleCommand(workflowAction.primary.command)
   }
 
   const handleOpenRecovery = () => {
@@ -621,8 +618,6 @@ export function MilestoneExplorer({ isConnecting = false, width, onCollapse }: {
           </div>
         </div>
       )}
-
-      <NewMilestoneDialog open={milestoneDialogOpen} onOpenChange={setMilestoneDialogOpen} />
     </div>
   )
 }
@@ -632,7 +627,6 @@ export function MilestoneExplorer({ isConnecting = false, width, onCollapse }: {
 export function CollapsedMilestoneSidebar({ onExpand }: { onExpand: () => void }) {
   const workspace = useGSDWorkspaceState()
   const { sendCommand } = useGSDWorkspaceActions()
-  const [milestoneDialogOpen, setMilestoneDialogOpen] = useState(false)
 
   const liveWorkspace = getLiveWorkspaceIndex(workspace)
   const milestones = liveWorkspace?.milestones ?? []
@@ -651,16 +645,14 @@ export function CollapsedMilestoneSidebar({ onExpand }: { onExpand: () => void }
   })
 
   const handleCommand = (command: string) => {
-    void executeWorkflowActionInPowerMode({ command, bridge, sendCommand })
+    executeWorkflowActionInPowerMode({
+      dispatch: () => sendCommand(buildPromptCommand(command, bridge)),
+    })
   }
 
   const handlePrimaryAction = () => {
     if (!workflowAction.primary) return
-    if (workflowAction.isNewMilestone) {
-      setMilestoneDialogOpen(true)
-    } else {
-      handleCommand(workflowAction.primary.command)
-    }
+    handleCommand(workflowAction.primary.command)
   }
 
   return (
@@ -697,8 +689,6 @@ export function CollapsedMilestoneSidebar({ onExpand }: { onExpand: () => void }
           </button>
         </div>
       )}
-
-      <NewMilestoneDialog open={milestoneDialogOpen} onOpenChange={setMilestoneDialogOpen} />
     </div>
   )
 }

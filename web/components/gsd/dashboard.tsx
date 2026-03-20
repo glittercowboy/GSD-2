@@ -32,7 +32,6 @@ import {
 import { getTaskStatus, type ItemStatus } from "@/lib/workspace-status"
 import { deriveWorkflowAction } from "@/lib/workflow-actions"
 import { executeWorkflowActionInPowerMode } from "@/lib/workflow-action-execution"
-import { NewMilestoneDialog } from "@/components/gsd/new-milestone-dialog"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   CurrentSliceCardSkeleton,
@@ -113,13 +112,13 @@ interface DashboardProps {
 export function Dashboard({ onSwitchView, onExpandTerminal }: DashboardProps = {}) {
   const state = useGSDWorkspaceState()
   const { sendCommand } = useGSDWorkspaceActions()
-  const [milestoneDialogOpen, setMilestoneDialogOpen] = useState(false)
   const [guidedDialog, setGuidedDialog] = useState<{ open: boolean; command: string } | null>(null)
   const lastSentCommandRef = useRef<string | null>(null)
   const boot = state.boot
   const workspace = getLiveWorkspaceIndex(state)
   const auto = getLiveAutoDashboard(state)
   const bridge = boot?.bridge ?? null
+  const projectCwd = boot?.project.cwd ?? null
   const freshness = state.live.freshness
 
   const elapsed = auto?.elapsed ?? 0
@@ -149,16 +148,14 @@ export function Dashboard({ onSwitchView, onExpandTerminal }: DashboardProps = {
   })
 
   const handleWorkflowAction = (command: string) => {
-    void executeWorkflowActionInPowerMode({ command, bridge, sendCommand })
+    executeWorkflowActionInPowerMode({
+      dispatch: () => sendCommand(buildPromptCommand(command, bridge)),
+    })
   }
 
   const handlePrimaryAction = () => {
     if (!workflowAction.primary) return
-    if (workflowAction.isNewMilestone) {
-      setMilestoneDialogOpen(true)
-    } else {
-      handleWorkflowAction(workflowAction.primary.command)
-    }
+    handleWorkflowAction(workflowAction.primary.command)
   }
 
   const recentLines: WorkspaceTerminalLine[] = (state.terminalLines ?? []).slice(-6)
@@ -475,8 +472,6 @@ export function Dashboard({ onSwitchView, onExpandTerminal }: DashboardProps = {
           </div>
         )}
       </div>
-
-      <NewMilestoneDialog open={milestoneDialogOpen} onOpenChange={setMilestoneDialogOpen} />
     </div>
   )
 }

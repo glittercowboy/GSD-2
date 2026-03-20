@@ -26,7 +26,7 @@ export interface WorkflowActionResult {
   secondaries: { label: string; command: string }[]
   disabled: boolean
   disabledReason?: string
-  /** When true, the primary action should open the New Milestone dialog instead of sending a command directly. */
+  /** When true, the action represents the all-milestones-complete "New Milestone" state. */
   isNewMilestone: boolean
 }
 

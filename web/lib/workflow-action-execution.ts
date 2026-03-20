@@ -1,9 +1,4 @@
-import {
-  buildPromptCommand,
-  type BridgeRuntimeSnapshot,
-  type WorkspaceBridgeCommand,
-  type WorkspaceTerminalLine,
-} from "./gsd-workspace-store"
+import type { WorkspaceTerminalLine } from "./gsd-workspace-store"
 
 export type GSDViewName = "dashboard" | "power" | "chat" | "roadmap" | "files" | "activity" | "visualize" | "projects"
 
@@ -12,19 +7,24 @@ export function navigateToGSDView(view: GSDViewName): void {
   window.dispatchEvent(new CustomEvent("gsd:navigate-view", { detail: { view } }))
 }
 
+/**
+ * Dispatch a workflow action command through the session command pipeline
+ * and navigate to the Power User Mode view.
+ *
+ * `dispatch` should be a function that sends the command through the workspace
+ * store (e.g. `sendCommand(buildPromptCommand(command, bridge))`), so the
+ * command is processed by the agent session — not just injected as raw PTY
+ * keystrokes.
+ */
 export function executeWorkflowActionInPowerMode({
-  command,
-  bridge,
-  sendCommand,
+  dispatch,
 }: {
-  command: string
-  bridge: BridgeRuntimeSnapshot | null | undefined
-  sendCommand: (command: WorkspaceBridgeCommand) => Promise<unknown>
-}): Promise<unknown> {
-  const payload = buildPromptCommand(command, bridge)
-  const request = sendCommand(payload)
+  dispatch: () => Promise<unknown>
+}): void {
+  dispatch().catch((error) => {
+    console.error("[workflow-action] dispatch failed:", error)
+  })
   navigateToGSDView("power")
-  return request
 }
 
 export function derivePendingWorkflowCommandLabel({

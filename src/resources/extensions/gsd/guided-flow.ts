@@ -901,39 +901,15 @@ export async function showSmartEntry(
 
   // ── All milestones complete → New milestone ──────────────────────────
   if (state.phase === "complete") {
-    const choice = await showNextAction(ctx, {
-      title: `GSD — ${milestoneId}: ${milestoneTitle}`,
-      summary: ["All milestones complete."],
-      actions: [
-        {
-          id: "new_milestone",
-          label: "Start new milestone",
-          description: "Define and plan the next milestone.",
-          recommended: true,
-        },
-        {
-          id: "status",
-          label: "View status",
-          description: "Review what was built.",
-        },
-      ],
-      notYetMessage: "Run /gsd when ready.",
-    });
+    const milestoneIds = findMilestoneIds(basePath);
+    const uniqueMilestoneIds = !!loadEffectiveGSDPreferences()?.preferences?.unique_milestone_ids;
+    const nextId = nextMilestoneId(milestoneIds, uniqueMilestoneIds);
 
-    if (choice === "new_milestone") {
-      const milestoneIds = findMilestoneIds(basePath);
-      const uniqueMilestoneIds = !!loadEffectiveGSDPreferences()?.preferences?.unique_milestone_ids;
-      const nextId = nextMilestoneId(milestoneIds, uniqueMilestoneIds);
-
-      pendingAutoStart = { ctx, pi, basePath, milestoneId: nextId, step: stepMode };
-      dispatchWorkflow(pi, buildDiscussPrompt(nextId,
-        `New milestone ${nextId}.`,
-        basePath
-      ));
-    } else if (choice === "status") {
-      const { fireStatusViaCommand } = await import("./commands.js");
-      await fireStatusViaCommand(ctx);
-    }
+    pendingAutoStart = { ctx, pi, basePath, milestoneId: nextId, step: stepMode };
+    dispatchWorkflow(pi, buildDiscussPrompt(nextId,
+      `New milestone ${nextId}.`,
+      basePath
+    ));
     return;
   }
 

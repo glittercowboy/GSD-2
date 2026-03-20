@@ -531,6 +531,27 @@ test("live browser panels consume live selectors and expose inspectable freshnes
   assert.match(statusBarSource, /data-testid="status-bar-retry-compaction"/, "status-bar.tsx must expose retry\/compaction freshness state")
 })
 
+test("workflow action surfaces route new-milestone CTAs through the shared command path", () => {
+  const dashboardPath = resolve(import.meta.dirname, "../../web/components/gsd/dashboard.tsx")
+  const sidebarPath = resolve(import.meta.dirname, "../../web/components/gsd/sidebar.tsx")
+  const chatPath = resolve(import.meta.dirname, "../../web/components/gsd/chat-mode.tsx")
+
+  const dashboardSource = readFileSync(dashboardPath, "utf-8")
+  const sidebarSource = readFileSync(sidebarPath, "utf-8")
+  const chatSource = readFileSync(chatPath, "utf-8")
+
+  assert.match(dashboardSource, /executeWorkflowActionInPowerMode/, "dashboard.tsx must use the shared power-mode workflow executor")
+  assert.match(sidebarSource, /executeWorkflowActionInPowerMode/, "sidebar.tsx must use the shared power-mode workflow executor")
+  assert.match(dashboardSource, /handleWorkflowAction\(workflowAction\.primary\.command\)/, "dashboard.tsx must route the primary CTA through the shared workflow executor")
+  assert.match(sidebarSource, /handleCommand\(workflowAction\.primary\.command\)/, "sidebar.tsx must route the primary CTA through the shared workflow executor")
+  assert.match(chatSource, /buildPromptCommand\(workflowAction\.primary\.command, bridge\)/, "chat-mode.tsx must send the new-milestone CTA through the same command path as other chat CTAs")
+
+  assert.doesNotMatch(dashboardSource, /NewMilestoneDialog/, "dashboard.tsx must not import or render the deprecated new-milestone dialog")
+  assert.doesNotMatch(sidebarSource, /NewMilestoneDialog/, "sidebar.tsx must not import or render the deprecated new-milestone dialog")
+  assert.doesNotMatch(chatSource, /NewMilestoneDialog/, "chat-mode.tsx must not import or render the deprecated new-milestone dialog")
+  assert.doesNotMatch(chatSource, /buildPromptCommand\("\/gsd auto", bridge\)/, "chat-mode.tsx must not hardcode a special /gsd auto path for new-milestone CTA dispatch")
+})
+
 test("sidebar Git affordance opens a real git-summary surface with visible repo/not-repo/error states", () => {
   const contractPath = resolve(import.meta.dirname, "../../web/lib/command-surface-contract.ts");
   const storePath = resolve(import.meta.dirname, "../../web/lib/gsd-workspace-store.tsx");
