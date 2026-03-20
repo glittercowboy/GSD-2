@@ -204,11 +204,13 @@ async function main(): Promise<void> {
       const dir = createRepoWithCompletedMilestone();
       cleanups.push(dir);
 
-      // Force-add a runtime file
+      // Force-add runtime files, including SQLite WAL/SHM sidecars
       const activityDir = join(dir, ".gsd", "activity");
       mkdirSync(activityDir, { recursive: true });
       writeFileSync(join(activityDir, "test.log"), "log data\n");
-      run("git add -f .gsd/activity/test.log", dir);
+      writeFileSync(join(dir, ".gsd", "gsd.db-wal"), "wal\n");
+      writeFileSync(join(dir, ".gsd", "gsd.db-shm"), "shm\n");
+      run("git add -f .gsd/activity/test.log .gsd/gsd.db-wal .gsd/gsd.db-shm", dir);
       run("git commit -m \"track runtime file\"", dir);
 
       const detect = await runGSDDoctor(dir);
@@ -218,9 +220,13 @@ async function main(): Promise<void> {
       const fixed = await runGSDDoctor(dir, { fix: true });
       assertTrue(fixed.fixesApplied.some(f => f.includes("untracked")), "fix untracks runtime files");
 
-      // Verify file is no longer tracked
-      const tracked = run("git ls-files .gsd/activity/", dir);
-      assertEq(tracked, "", "runtime file untracked after fix");
+      // Verify files are no longer tracked
+      const trackedActivity = run("git ls-files .gsd/activity/", dir);
+      assertEq(trackedActivity, "", "activity runtime file untracked after fix");
+      const trackedWal = run("git ls-files .gsd/gsd.db-wal", dir);
+      assertEq(trackedWal, "", "gsd.db-wal untracked after fix");
+      const trackedShm = run("git ls-files .gsd/gsd.db-shm", dir);
+      assertEq(trackedShm, "", "gsd.db-shm untracked after fix");
     }
 
     // ─── Test 5: Non-git directory — graceful degradation ──────────────

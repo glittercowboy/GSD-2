@@ -13,6 +13,11 @@ import type { RoadmapSliceEntry } from "./types.js";
 import { checkGitHealth, checkRuntimeHealth, checkGlobalHealth } from "./doctor-checks.js";
 import { checkEnvironmentHealth } from "./doctor-environment.js";
 import { runProviderChecks } from "./doctor-providers.js";
+import type { DoctorIssue, DoctorIssueCode, DoctorReport } from "./doctor-types.js";
+import { COMPLETION_TRANSITION_CODES } from "./doctor-types.js";
+import { summarizeDoctorIssues } from "./doctor-format.js";
+import { isSubstantiveMilestone, MILESTONE_ID_RE } from "./milestone-ids.js";
+
 
 // ── Re-exports ─────────────────────────────────────────────────────────────
 // All public types and functions from extracted modules are re-exported here
@@ -379,6 +384,36 @@ export async function runGSDDoctor(basePath: string, options?: { fix?: boolean; 
     const report: DoctorReport = { ok: issues.every(i => i.severity !== "error"), basePath, issues, fixesApplied, timing: { git: gitMs, runtime: runtimeMs, environment: envMs, gsdState: 0 } };
     await appendDoctorHistory(basePath, report);
     return report;
+  }
+
+  // ── Ghost milestone directory detection ───────────────────────────────────
+  // Scan raw milestone directories and emit warnings for non-substantive (ghost)
+  // directories. These are excluded from state derivation but should be surfaced
+  // to users so they can clean up or investigate.
+  try {
+    const entries = readdirSync(milestonesPath, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      // Extract milestone ID from directory name (e.g., "M001" or "M001-abc123")
+      const match = entry.name.match(MILESTONE_ID_RE);
+      if (!match) continue; // Not a milestone directory pattern
+      const milestoneId = match[1];
+
+      // Check if this milestone has substantive content
+      if (!isSubstantiveMilestone(basePath, milestoneId)) {
+        issues.push({
+          severity: "warning",
+          code: "orphaned_milestone_directory",
+          scope: "milestone",
+          unitId: milestoneId,
+          message: `Milestone directory ${milestoneId} has no substantive content (no ROADMAP, CONTEXT, SUMMARY, or slices). It will be excluded from state derivation.`,
+          file: `.gsd/milestones/${milestoneId}`,
+          fixable: false,
+        });
+      }
+    }
+  } catch {
+    // Non-fatal — ghost directory scan failed
   }
 
   const requirementsPath = resolveGsdRootFile(basePath, "REQUIREMENTS");

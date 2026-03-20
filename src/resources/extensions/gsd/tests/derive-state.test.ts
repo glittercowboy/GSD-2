@@ -53,6 +53,12 @@ function writeMilestoneValidation(base: string, mid: string, verdict: string = '
   writeFileSync(join(dir, `${mid}-VALIDATION.md`), `---\nverdict: ${verdict}\nremediation_round: 0\n---\n\n# Validation\nValidated.`);
 }
 
+function writeContext(base: string, mid: string, content: string): void {
+  const dir = join(base, '.gsd', 'milestones', mid);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${mid}-CONTEXT.md`), content);
+}
+
 function writeRequirements(base: string, content: string): void {
   writeFileSync(join(base, '.gsd', 'REQUIREMENTS.md'), content);
 }
