@@ -15,6 +15,8 @@ import assert from "node:assert/strict";
 import { DevWorkflowEngine, bridgeDispatchAction } from "../dev-workflow-engine.ts";
 import { DevExecutionPolicy } from "../dev-execution-policy.ts";
 import { resolveEngine } from "../engine-resolver.ts";
+import { CustomWorkflowEngine } from "../custom-workflow-engine.ts";
+import { CustomExecutionPolicy } from "../custom-execution-policy.ts";
 
 // ─── DevWorkflowEngine shape ─────────────────────────────────────────────
 
@@ -96,6 +98,17 @@ test("resolveEngine with unknown activeEngineId throws", () => {
     () => resolveEngine({ activeEngineId: "custom" }),
     { message: "Unknown engine: custom" },
   );
+  assert.throws(
+    () => resolveEngine({ activeEngineId: "bogus" }),
+    { message: "Unknown engine: bogus" },
+  );
+});
+
+test("resolveEngine with custom:* activeEngineId returns CustomWorkflowEngine", () => {
+  const { engine, policy } = resolveEngine({ activeEngineId: "custom:/tmp/test" });
+  assert.equal(engine.engineId, "custom");
+  assert.ok(engine instanceof CustomWorkflowEngine);
+  assert.ok(policy instanceof CustomExecutionPolicy);
 });
 
 // ─── DispatchAction → EngineDispatchAction bridge ────────────────────────

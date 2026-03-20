@@ -5,6 +5,13 @@ estimated_files: 2
 
 # T02: Write integration test and update existing contract test for custom engine
 
+## Observability Impact
+
+- **Test failure diagnostics**: Integration test names are descriptive and map 1:1 to the dispatch cycle phases — a failing test name tells you exactly which phase broke (deriveState, resolveDispatch, reconcile, or display metadata).
+- **Resolver coverage**: Contract test now covers all three resolver branches (dev, custom:*, unknown-throw) — a regression in routing shows up as a named test failure.
+- **GSDState stub validation**: The integration test explicitly asserts stub shape (activeMilestone non-null, phase "executing", empty arrays) — if the auto-loop's early-exit guards change, these tests will catch the mismatch.
+- **GRAPH.yaml disk state**: The 3-step cycle test verifies on-disk state after each reconcile, so a broken atomic write or serialization bug surfaces as a specific step-status assertion failure.
+
 **Slice:** S03 — CustomWorkflowEngine — Linear Step Execution
 **Milestone:** M001
 
