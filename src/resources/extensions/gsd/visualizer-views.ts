@@ -1168,12 +1168,13 @@ export function renderHealthView(
   }
 
   // Doctor history section — persisted across sessions
-  if (health.doctorHistory.length > 0) {
+  const doctorHistory = health.doctorHistory ?? [];
+  if (doctorHistory.length > 0) {
     lines.push("");
     lines.push(th.fg("accent", th.bold("Doctor History")));
     lines.push("");
 
-    for (const entry of health.doctorHistory.slice(0, 10)) {
+    for (const entry of doctorHistory.slice(0, 10)) {
       const icon = entry.ok ? th.fg("success", "✓") : th.fg("error", "✗");
       const ts = entry.ts.replace("T", " ").slice(0, 19);
       const scopeTag = entry.scope ? th.fg("accent", ` [${entry.scope}]`) : "";
@@ -1202,8 +1203,8 @@ export function renderHealthView(
       }
     }
 
-    if (health.doctorHistory.length > 10) {
-      lines.push(`  ${th.fg("dim", `...${health.doctorHistory.length - 10} older entries`)}`);
+    if (doctorHistory.length > 10) {
+      lines.push(`  ${th.fg("dim", `...${doctorHistory.length - 10} older entries`)}`);
     }
   }
 

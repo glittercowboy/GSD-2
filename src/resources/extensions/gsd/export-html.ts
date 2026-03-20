@@ -314,8 +314,9 @@ function buildHealthSection(data: VisualizerData): string {
 
   // Doctor history section
   let historyHtml = '';
-  if (h.doctorHistory.length > 0) {
-    const historyRows = h.doctorHistory.slice(0, 20).map(entry => {
+  const doctorHistory = h.doctorHistory ?? [];
+  if (doctorHistory.length > 0) {
+    const historyRows = doctorHistory.slice(0, 20).map(entry => {
       const statusIcon = entry.ok ? '✓' : '✗';
       const statusColor = entry.ok ? '#22c55e' : '#ef4444';
       const ts = entry.ts.replace('T', ' ').slice(0, 19);

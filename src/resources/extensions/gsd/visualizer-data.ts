@@ -199,9 +199,9 @@ export interface HealthInfo {
   skillSummary: SkillSummaryInfo;
   environmentIssues: import("./doctor-environment.js").EnvironmentCheckResult[];
   /** Persisted doctor run history (most recent first, up to 20 entries). */
-  doctorHistory: VisualizerDoctorEntry[];
+  doctorHistory?: VisualizerDoctorEntry[];
   /** Current in-memory progress score (null if auto-mode not active). */
-  progressScore: VisualizerProgressScore | null;
+  progressScore?: VisualizerProgressScore | null;
 }
 
 export interface VisualizerData {
