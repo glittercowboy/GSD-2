@@ -1,6 +1,6 @@
 {
   "id": "concept-mixed-confidence-v1",
-  "scenarioDescription": "A balanced domain with mixed verification outcomes. Simulates a moderately understood codebase where some claims are verified, some are refuted, and others remain inconclusive — representing realistic fact-check scenarios where certainty varies.",
+  "scenarioDescription": "A moderately understood domain with a balanced mix of verification outcomes. Simulates a project with some established patterns and some areas requiring investigation, yielding both confirmations and corrections.",
   "milestoneId": "M003-CONCEPT",
   "sliceId": "S01",
   "createdAt": "2026-03-19T00:00:00Z",
@@ -26,7 +26,7 @@
   },
   "successCriteria": {
     "maxInterventions": 0,
-    "minVerifiedRatio": 0.5
+    "minVerifiedRatio": 0.4
   },
   "claims": [
     {
@@ -34,26 +34,26 @@
       "text": "The authentication middleware validates JWT tokens with RS256",
       "source": "src/auth/middleware.ts",
       "verdict": "confirmed",
-      "confidence": 0.88
-    },
-    {
-      "claimId": "C002",
-      "text": "The message queue uses RabbitMQ with persistent queues",
-      "source": "src/queue/config.ts",
-      "verdict": "confirmed",
-      "confidence": 0.75
-    },
-    {
-      "claimId": "C003",
-      "text": "The caching layer supports Redis Cluster with automatic failover",
-      "source": "src/cache/cluster.ts",
-      "verdict": "refuted",
       "confidence": 0.92
     },
     {
+      "claimId": "C002",
+      "text": "Rate limiting is implemented using a sliding window algorithm",
+      "source": "src/rate-limiter/window.ts",
+      "verdict": "confirmed",
+      "confidence": 0.88
+    },
+    {
+      "claimId": "C003",
+      "text": "The WebSocket connection pool maintains up to 50 concurrent connections",
+      "source": "src/ws/pool.ts",
+      "verdict": "refuted",
+      "confidence": 0.95
+    },
+    {
       "claimId": "C004",
-      "text": "The webhook system implements exponential backoff retries",
-      "source": "src/webhooks/retry.ts",
+      "text": "The event system supports transactional outbox pattern",
+      "source": "src/events/outbox.ts",
       "verdict": "inconclusive",
       "confidence": 0.55
     }

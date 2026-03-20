@@ -1,17 +1,17 @@
 {
   "claimId": "C003",
-  "text": "The caching layer supports Redis Cluster with automatic failover",
-  "source": "src/cache/cluster.ts",
+  "text": "The WebSocket connection pool maintains up to 50 concurrent connections",
+  "source": "src/ws/pool.ts",
   "verdict": "refuted",
   "citations": [
-    "src/cache/cluster.ts:1-50",
-    "docs/architecture.md#caching"
+    "src/ws/pool.ts:10-35",
+    "docs/architecture/websocket.md"
   ],
-  "correctedValue": "Single Redis instance with Sentinel for HA - Cluster mode not implemented",
+  "correctedValue": "Maximum 20 concurrent connections - pool was reduced after load testing revealed memory pressure at scale",
   "impact": "slice",
   "checkedBy": "scout-concept",
-  "timestamp": "2026-03-19T13:50:00Z",
-  "confidence": 0.92,
-  "notes": "Code uses standalone Redis client. Sentinel configuration exists for high availability, but Redis Cluster mode is not implemented. Claim contradicted by architecture documentation.",
-  "scoutTokens": 1100
+  "timestamp": "2026-03-19T12:10:00Z",
+  "confidence": 0.95,
+  "notes": "Found MAX_CONNECTIONS constant set to 20. Documentation at docs/architecture/websocket.md confirms this was reduced from original 50 after performance testing. Claim is outdated.",
+  "scoutTokens": 1350
 }

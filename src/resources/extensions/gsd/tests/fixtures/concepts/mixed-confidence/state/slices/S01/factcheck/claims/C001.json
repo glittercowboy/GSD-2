@@ -4,13 +4,12 @@
   "source": "src/auth/middleware.ts",
   "verdict": "confirmed",
   "citations": [
-    "src/auth/middleware.ts:45-80",
-    "docs/security.md#jwt-validation"
+    "src/auth/middleware.ts:45-68"
   ],
   "impact": "none",
   "checkedBy": "scout-concept",
-  "timestamp": "2026-03-19T13:30:00Z",
-  "confidence": 0.88,
-  "notes": "JWT validation explicitly uses RS256 algorithm. Public key is loaded from JWKS endpoint. Token expiration and issuer claims are validated.",
+  "timestamp": "2026-03-19T11:30:00Z",
+  "confidence": 0.92,
+  "notes": "Code confirms RS256 algorithm with public key verification. Token validation includes standard claims (iss, sub, exp, iat) and custom role-based permissions.",
   "scoutTokens": 980
 }

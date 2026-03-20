@@ -44,3 +44,10 @@ Create the third concept fixture ("mixed-confidence") representing a balanced sc
 - `src/resources/extensions/gsd/tests/fixtures/concepts/mixed-confidence/state/slices/S01/factcheck/FACTCHECK-STATUS.json` — status file
 - `src/resources/extensions/gsd/tests/fixtures/concepts/mixed-confidence/state/slices/S01/factcheck/claims/C001.json` through `C004.json` — claim files
 - `src/resources/extensions/gsd/tests/fixture-harness.ts` — modified with `validateFixtureState` export
+
+## Observability Impact
+
+- **New signal:** `validateFixtureState()` returns `{ valid: boolean; missingFiles: string[] }` — agents can call this after `loadFixture()` to verify state integrity before proceeding with test logic.
+- **Inspection surface:** The returned `missingFiles` array lists each file path from `manifest.requiredFiles` that doesn't exist in the target state tree, enabling precise diagnosis of incomplete fixture loads.
+- **Failure visibility:** When a fixture fails to load or state is incomplete, the error message includes the fixture ID and the specific missing file paths, not just "fixture load failed".
+- **How a future agent inspects this task:** Call `validateFixtureState(readFixtureManifest('mixed-confidence'), tempDir)` after loading — a non-empty `missingFiles` array indicates incomplete state copy.

@@ -1,16 +1,15 @@
 {
   "claimId": "C002",
-  "text": "The message queue uses RabbitMQ with persistent queues",
-  "source": "src/queue/config.ts",
+  "text": "Rate limiting is implemented using a sliding window algorithm",
+  "source": "src/rate-limiter/window.ts",
   "verdict": "confirmed",
   "citations": [
-    "src/queue/config.ts:10-35",
-    "config/rabbitmq.yaml"
+    "src/rate-limiter/window.ts:20-55"
   ],
   "impact": "none",
   "checkedBy": "scout-concept",
-  "timestamp": "2026-03-19T13:40:00Z",
-  "confidence": 0.75,
-  "notes": "Queue configuration sets durable: true and delivery-mode: persistent. RabbitMQ connection uses AMQPS with connection pooling.",
-  "scoutTokens": 850
+  "timestamp": "2026-03-19T11:45:00Z",
+  "confidence": 0.88,
+  "notes": "Sliding window implementation confirmed with configurable window size (default 60s) and max requests. Uses Redis for distributed rate limit tracking across instances.",
+  "scoutTokens": 1120
 }

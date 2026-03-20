@@ -14,6 +14,7 @@
 
 - `npx tsx --test src/resources/extensions/gsd/tests/fixture-e2e.test.ts` — all assertions pass
 - Third fixture exists: `test -f src/resources/extensions/gsd/tests/fixtures/concepts/mixed-confidence/FIXTURE-MANIFEST.json`
+- Failure path check: `npx tsx -e "import { validateFixtureState, loadFixture } from './src/resources/extensions/gsd/tests/fixture-harness.ts'; import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'; import { join } from 'node:path'; import { tmpdir } from 'node:os'; const d = mkdtempSync(join(tmpdir(), 'missing-test-')); const m = loadFixture('mixed-confidence', d); rmSync(join(d, 'state/slices/S01/factcheck/claims/C001.json')); const r = validateFixtureState(m, d); console.log('missing:', r.missingFiles.length > 0, 'files:', r.missingFiles.join(',')); rmSync(d, { recursive: true });"` — prints `missing: true` with the deleted file path
 
 ## Observability / Diagnostics
 
@@ -29,7 +30,7 @@
 
 ## Tasks
 
-- [ ] **T01: Create mixed-confidence fixture and state integrity validator** `est:30m`
+- [x] **T01: Create mixed-confidence fixture and state integrity validator** `est:30m`
   - Why: Need 3rd concept fixture + a function to verify loaded state matches manifest's `requiredFiles`
   - Files: `src/resources/extensions/gsd/tests/fixtures/concepts/mixed-confidence/FIXTURE-MANIFEST.json`, `src/resources/extensions/gsd/tests/fixtures/concepts/mixed-confidence/state/slices/S01/factcheck/`, `src/resources/extensions/gsd/tests/fixture-harness.ts`
   - Do: Create mixed-confidence fixture with ~4 claims (2 confirmed, 1 refuted, 1 inconclusive). Add `validateFixtureState(manifest, targetBase): { valid, missingFiles }` to fixture-harness.ts that checks all `requiredFiles` exist under targetBase.
