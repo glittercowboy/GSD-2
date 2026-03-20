@@ -100,27 +100,33 @@ test("buildResourceLoader excludes duplicate top-level pi extensions when bundle
   }
 });
 
-test("initResources prunes stale top-level .ts siblings next to bundled compiled extensions", async () => {
+test("initResources prunes stale top-level extension siblings next to bundled compiled extensions", async () => {
   const { initResources } = await import("../resource-loader.ts");
   const tmp = mkdtempSync(join(tmpdir(), "gsd-resource-loader-sync-"));
   const fakeAgentDir = join(tmp, "agent");
-  const staleTsPath = join(fakeAgentDir, "extensions", "ask-user-questions.ts");
   const bundledTsPath = join(fakeAgentDir, "extensions", "ask-user-questions.ts");
+  const bundledJsPath = join(fakeAgentDir, "extensions", "ask-user-questions.js");
 
   try {
     initResources(fakeAgentDir);
-    assert.equal(existsSync(bundledTsPath), true, "bundled top-level extension should exist");
 
-    // Simulate a stale compiled sibling left from a previous sync/build mismatch.
-    const compiledSiblingPath = join(fakeAgentDir, "extensions", "ask-user-questions.js");
-    writeFileSync(compiledSiblingPath, "export {};\n");
-    assert.equal(existsSync(compiledSiblingPath), true);
+    const bundledPath = existsSync(bundledJsPath)
+      ? bundledJsPath
+      : bundledTsPath;
+    const staleSiblingPath = bundledPath.endsWith(".js")
+      ? bundledTsPath
+      : bundledJsPath;
+
+    assert.equal(existsSync(bundledPath), true, "bundled top-level extension should exist");
+
+    // Simulate a stale opposite-format sibling left from a previous sync/build mismatch.
+    writeFileSync(staleSiblingPath, "export {};\n");
+    assert.equal(existsSync(staleSiblingPath), true);
 
     initResources(fakeAgentDir);
 
-    assert.equal(existsSync(compiledSiblingPath), false, "stale compiled sibling should be removed during sync");
-    assert.equal(existsSync(bundledTsPath), true, "bundled extension should remain after cleanup");
-    assert.equal(existsSync(staleTsPath), true, "source-backed top-level extension remains present");
+    assert.equal(existsSync(staleSiblingPath), false, "stale top-level sibling should be removed during sync");
+    assert.equal(existsSync(bundledPath), true, "bundled extension should remain after cleanup");
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
