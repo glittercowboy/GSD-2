@@ -697,6 +697,111 @@ async function closeoutAndStop(
   await deps.stopAuto(ctx, pi, reason);
 }
 
+// ─── runFinalize ──────────────────────────────────────────────────────────────
+
+/**
+ * Phase 5: Post-unit finalize — pre/post verification, UAT pause, step-wizard.
+ * Returns break/continue/next to control the outer loop.
+ */
+async function runFinalize(
+  ic: IterationContext,
+  iterData: IterationData,
+  sidecarItem?: SidecarItem,
+): Promise<PhaseResult> {
+  const { ctx, pi, s, deps } = ic;
+  const { pauseAfterUatDispatch } = iterData;
+
+  debugLog("autoLoop", { phase: "finalize", iteration: ic.iteration });
+
+  // Clear unit timeout (unit completed)
+  deps.clearUnitTimeout();
+
+  // Post-unit context for pre/post verification
+  const postUnitCtx: PostUnitContext = {
+    s,
+    ctx,
+    pi,
+    buildSnapshotOpts: deps.buildSnapshotOpts,
+    lockBase: deps.lockBase,
+    stopAuto: deps.stopAuto,
+    pauseAuto: deps.pauseAuto,
+    updateProgressWidget: deps.updateProgressWidget,
+  };
+
+  // Pre-verification processing (commit, doctor, state rebuild, etc.)
+  // Sidecar items use lightweight pre-verification opts
+  const preVerificationOpts: PreVerificationOpts | undefined = sidecarItem
+    ? sidecarItem.kind === "hook"
+      ? { skipSettleDelay: true, skipDoctor: true, skipStateRebuild: true, skipWorktreeSync: true }
+      : { skipSettleDelay: true, skipStateRebuild: true }
+    : undefined;
+  const preResult = await deps.postUnitPreVerification(postUnitCtx, preVerificationOpts);
+  if (preResult === "dispatched") {
+    debugLog("autoLoop", {
+      phase: "exit",
+      reason: "pre-verification-dispatched",
+    });
+    return { action: "break", reason: "pre-verification-dispatched" };
+  }
+
+  if (pauseAfterUatDispatch) {
+    ctx.ui.notify(
+      "UAT requires human execution. Auto-mode will pause after this unit writes the result file.",
+      "info",
+    );
+    await deps.pauseAuto(ctx, pi);
+    debugLog("autoLoop", { phase: "exit", reason: "uat-pause" });
+    return { action: "break", reason: "uat-pause" };
+  }
+
+  // Verification gate
+  // Hook sidecar items skip verification entirely.
+  // Non-hook sidecar items run verification but skip retries (just continue).
+  const skipVerification = sidecarItem?.kind === "hook";
+  if (!skipVerification) {
+    const verificationResult = await deps.runPostUnitVerification(
+      { s, ctx, pi },
+      deps.pauseAuto,
+    );
+
+    if (verificationResult === "pause") {
+      debugLog("autoLoop", { phase: "exit", reason: "verification-pause" });
+      return { action: "break", reason: "verification-pause" };
+    }
+
+    if (verificationResult === "retry") {
+      if (sidecarItem) {
+        // Sidecar verification retries are skipped — just continue
+        debugLog("autoLoop", { phase: "sidecar-verification-retry-skipped", iteration: ic.iteration });
+      } else {
+        // s.pendingVerificationRetry was set by runPostUnitVerification.
+        // Continue the loop — next iteration will inject the retry context into the prompt.
+        debugLog("autoLoop", { phase: "verification-retry", iteration: ic.iteration });
+        return { action: "continue" };
+      }
+    }
+  }
+
+  // Post-verification processing (DB dual-write, hooks, triage, quick-tasks)
+  const postResult = await deps.postUnitPostVerification(postUnitCtx);
+
+  if (postResult === "stopped") {
+    debugLog("autoLoop", {
+      phase: "exit",
+      reason: "post-verification-stopped",
+    });
+    return { action: "break", reason: "post-verification-stopped" };
+  }
+
+  if (postResult === "step-wizard") {
+    // Step mode — exit the loop (caller handles wizard)
+    debugLog("autoLoop", { phase: "exit", reason: "step-wizard" });
+    return { action: "break", reason: "step-wizard" };
+  }
+
+  return { action: "next", data: undefined as void };
+}
+
 // ─── autoLoop ────────────────────────────────────────────────────────────────
 
 /**
@@ -1661,93 +1766,17 @@ export async function autoLoop(
 
       // ── Phase 5: Finalize ───────────────────────────────────────────────
 
-      debugLog("autoLoop", { phase: "finalize", iteration });
-
-      // Clear unit timeout (unit completed)
-      deps.clearUnitTimeout();
-
-      // Post-unit context for pre/post verification
-      const postUnitCtx: PostUnitContext = {
-        s,
-        ctx,
-        pi,
-        buildSnapshotOpts: deps.buildSnapshotOpts,
-        lockBase: deps.lockBase,
-        stopAuto: deps.stopAuto,
-        pauseAuto: deps.pauseAuto,
-        updateProgressWidget: deps.updateProgressWidget,
+      const ic: IterationContext = { ctx, pi, s, deps, prefs, iteration };
+      const iterData: IterationData = {
+        unitType, unitId, prompt, finalPrompt,
+        pauseAfterUatDispatch, observabilityIssues,
+        state, mid, midTitle,
+        isRetry: !!(s.currentUnit && s.currentUnit.type === unitType && s.currentUnit.id === unitId),
+        previousTier: s.currentUnitRouting?.tier,
       };
-
-      // Pre-verification processing (commit, doctor, state rebuild, etc.)
-      // Sidecar items use lightweight pre-verification opts
-      const preVerificationOpts: PreVerificationOpts | undefined = sidecarItem
-        ? sidecarItem.kind === "hook"
-          ? { skipSettleDelay: true, skipDoctor: true, skipStateRebuild: true, skipWorktreeSync: true }
-          : { skipSettleDelay: true, skipStateRebuild: true }
-        : undefined;
-      const preResult = await deps.postUnitPreVerification(postUnitCtx, preVerificationOpts);
-      if (preResult === "dispatched") {
-        debugLog("autoLoop", {
-          phase: "exit",
-          reason: "pre-verification-dispatched",
-        });
-        break;
-      }
-
-      if (pauseAfterUatDispatch) {
-        ctx.ui.notify(
-          "UAT requires human execution. Auto-mode will pause after this unit writes the result file.",
-          "info",
-        );
-        await deps.pauseAuto(ctx, pi);
-        debugLog("autoLoop", { phase: "exit", reason: "uat-pause" });
-        break;
-      }
-
-      // Verification gate
-      // Hook sidecar items skip verification entirely.
-      // Non-hook sidecar items run verification but skip retries (just continue).
-      const skipVerification = sidecarItem?.kind === "hook";
-      if (!skipVerification) {
-        const verificationResult = await deps.runPostUnitVerification(
-          { s, ctx, pi },
-          deps.pauseAuto,
-        );
-
-        if (verificationResult === "pause") {
-          debugLog("autoLoop", { phase: "exit", reason: "verification-pause" });
-          break;
-        }
-
-        if (verificationResult === "retry") {
-          if (sidecarItem) {
-            // Sidecar verification retries are skipped — just continue
-            debugLog("autoLoop", { phase: "sidecar-verification-retry-skipped", iteration });
-          } else {
-            // s.pendingVerificationRetry was set by runPostUnitVerification.
-            // Continue the loop — next iteration will inject the retry context into the prompt.
-            debugLog("autoLoop", { phase: "verification-retry", iteration });
-            continue;
-          }
-        }
-      }
-
-      // Post-verification processing (DB dual-write, hooks, triage, quick-tasks)
-      const postResult = await deps.postUnitPostVerification(postUnitCtx);
-
-      if (postResult === "stopped") {
-        debugLog("autoLoop", {
-          phase: "exit",
-          reason: "post-verification-stopped",
-        });
-        break;
-      }
-
-      if (postResult === "step-wizard") {
-        // Step mode — exit the loop (caller handles wizard)
-        debugLog("autoLoop", { phase: "exit", reason: "step-wizard" });
-        break;
-      }
+      const finalizeResult = await runFinalize(ic, iterData, sidecarItem);
+      if (finalizeResult.action === "break") break;
+      if (finalizeResult.action === "continue") continue;
 
       consecutiveErrors = 0; // Iteration completed successfully
       debugLog("autoLoop", { phase: "iteration-complete", iteration });
