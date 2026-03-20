@@ -47,6 +47,11 @@ export {
 } from "./guided-flow-queue.js";
 import { getErrorMessage } from "./error-utils.js";
 
+// ─── Shared Constants ─────────────────────────────────────────────────────────
+
+/** Matches a milestone directory name prefix, e.g. "M001" or "M001-ab12cd". */
+export const MILESTONE_ID_REGEX = /^(M\d+(?:-[a-z0-9]{6})?)/;
+
 // ─── Commit Instruction Helpers ──────────────────────────────────────────────
 
 /** Build commit instruction for planning prompts. .gsd/ is managed externally and always gitignored. */
@@ -304,7 +309,6 @@ export async function showHeadlessMilestoneCreation(
   // Dispatch
   dispatchWorkflow(pi, prompt);
 }
-
 
 
 // ─── Discuss Flow ─────────────────────────────────────────────────────────────

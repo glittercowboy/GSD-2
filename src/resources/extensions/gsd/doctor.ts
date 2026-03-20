@@ -6,6 +6,14 @@ import { resolveMilestoneFile, resolveMilestonePath, resolveSliceFile, resolveSl
 import { deriveState, isMilestoneComplete } from "./state.js";
 import { invalidateAllCaches } from "./cache.js";
 import { loadEffectiveGSDPreferences, type GSDPreferences } from "./preferences.js";
+import { listWorktrees, resolveGitDir } from "./worktree-manager.js";
+import { abortAndReset } from "./git-self-heal.js";
+import { RUNTIME_EXCLUSION_PATHS } from "./git-service.js";
+import { nativeIsRepo, nativeWorktreeRemove, nativeBranchList, nativeBranchDelete, nativeLsFiles, nativeRmCached } from "./native-git-bridge.js";
+import { readCrashLock, isLockProcessAlive, clearLock } from "./crash-recovery.js";
+import { ensureGitignore } from "./gitignore.js";
+import { readAllSessionStatuses, isSessionStale, removeSessionStatus } from "./session-status-io.js";
+import { isSubstantiveMilestone, MILESTONE_ID_REGEX } from "./guided-flow.js";
 
 
 // ── Re-exports ─────────────────────────────────────────────────────────────
@@ -961,7 +969,7 @@ export async function runGSDDoctor(basePath: string, options?: { fix?: boolean; 
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
       // Extract milestone ID from directory name (e.g., "M001" or "M001-abc123")
-      const match = entry.name.match(/^(M\d+(?:-[a-z0-9]{6})?)/);
+      const match = entry.name.match(MILESTONE_ID_REGEX);
       if (!match) continue; // Not a milestone directory pattern
       const milestoneId = match[1];
 

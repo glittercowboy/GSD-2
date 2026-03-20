@@ -3,8 +3,9 @@
 // Used by state derivation and the status widget.
 // Pure functions, zero Pi dependencies - uses only Node built-ins.
 
-import { promises as fs } from 'node:fs';
-import { resolve } from 'node:path';
+import { promises as fs, writeFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { atomicWriteAsync } from './atomic-write.js';
 import { resolveMilestoneFile, relMilestoneFile, resolveGsdRootFile } from './paths.js';
 import { milestoneIdSort, findMilestoneIds } from './guided-flow.js';
@@ -580,6 +581,16 @@ export function formatContinue(cont: Continue): string {
   lines.push(cont.nextAction);
 
   return lines.join('\n');
+}
+
+// ─── JSON I/O ──────────────────────────────────────────────────────────────
+
+/**
+ * Write an object to disk as pretty-printed JSON with a trailing newline.
+ * Synchronous — suitable for CLI/script contexts where async is not in use.
+ */
+export function writeJsonFile(filePath: string, data: unknown): void {
+  writeFileSync(filePath, JSON.stringify(data, null, 2) + "\n", "utf-8");
 }
 
 // ─── File I/O ──────────────────────────────────────────────────────────────

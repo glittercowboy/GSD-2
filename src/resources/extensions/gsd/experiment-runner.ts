@@ -10,10 +10,17 @@
  * @module experiment-runner
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { CompareReport, SummarizedMetrics } from "./compare-runner.js";
 import { runComparison, writeComparisonReport } from "./compare-runner.js";
+import { writeJsonFile } from "./files.js";
+
+// ─── Local JSON helpers ────────────────────────────────────────────────────────
+
+function readJsonFile<T>(filePath: string): T {
+  return JSON.parse(readFileSync(filePath, "utf-8")) as T;
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -140,8 +147,7 @@ export function captureScoring(
   // Read and parse report
   let report: CompareReport;
   try {
-    const raw = readFileSync(reportPath, "utf-8");
-    report = JSON.parse(raw) as CompareReport;
+    report = readJsonFile<CompareReport>(reportPath);
   } catch (e) {
     throw new Error(`Failed to parse report at ${reportPath}: ${e}`);
   }
@@ -157,7 +163,7 @@ export function captureScoring(
   report.scoring = scoring;
 
   // Write back
-  writeFileSync(reportPath, JSON.stringify(report, null, 2) + "\n", "utf-8");
+  writeJsonFile(reportPath, report);
 
   // Log capture for observability
   console.log(`[EXPERIMENT] scoring captured for ${path} in ${reportPath}`);
@@ -173,8 +179,7 @@ export function readScoring(reportPath: string): ScoringSlot | null {
   }
 
   try {
-    const raw = readFileSync(reportPath, "utf-8");
-    const report = JSON.parse(raw) as CompareReport;
+    const report = readJsonFile<CompareReport>(reportPath);
 
     if (!report.scoring || typeof report.scoring !== "object") {
       return null;
@@ -374,7 +379,7 @@ export function runExperimentLoop(
 
     const conclusionPath = join(outputDir, "EXPERIMENT-CONCLUSION.json");
     mkdirSync(outputDir, { recursive: true });
-    writeFileSync(conclusionPath, JSON.stringify(conclusion, null, 2) + "\n", "utf-8");
+    writeJsonFile(conclusionPath, conclusion);
 
     return conclusion;
   }
@@ -425,7 +430,7 @@ export function runExperimentLoop(
       };
 
       const conclusionPath = join(outputDir, "EXPERIMENT-CONCLUSION.json");
-      writeFileSync(conclusionPath, JSON.stringify(conclusion, null, 2) + "\n", "utf-8");
+      writeJsonFile(conclusionPath, conclusion);
 
       return conclusion;
     }
@@ -447,7 +452,7 @@ export function runExperimentLoop(
   };
 
   const conclusionPath = join(outputDir, "EXPERIMENT-CONCLUSION.json");
-  writeFileSync(conclusionPath, JSON.stringify(conclusion, null, 2) + "\n", "utf-8");
+  writeJsonFile(conclusionPath, conclusion);
 
   return conclusion;
 }
@@ -463,8 +468,7 @@ export function readConclusion(outputDir: string): ExperimentConclusion | null {
   }
 
   try {
-    const raw = readFileSync(conclusionPath, "utf-8");
-    return JSON.parse(raw) as ExperimentConclusion;
+    return readJsonFile<ExperimentConclusion>(conclusionPath);
   } catch {
     return null;
   }

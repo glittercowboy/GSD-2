@@ -11,13 +11,14 @@
  * @module compare-runner
  */
 
-import { mkdirSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { FixtureManifest } from "./tests/fixture-harness.js";
 import { loadFixture, getFixturePath } from "./tests/fixture-harness.js";
 import type { FactCheckMetrics, UnitMetrics, TokenCounts, MetricsLedger } from "./metrics.js";
 import { extractFactCheckMetrics } from "./metrics.js";
 import { summarizeMetrics, formatComparisonTable, type LedgerInput } from "./summarize-metrics.js";
+import { writeJsonFile } from "./files.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -275,7 +276,7 @@ export function runComparison(
  */
 export function writeComparisonReport(report: CompareReport, outputDir: string): string {
   const reportPath = join(outputDir, "COMPARE-REPORT.json");
-  writeFileSync(reportPath, JSON.stringify(report, null, 2) + "\n", "utf-8");
+  writeJsonFile(reportPath, report);
   return reportPath;
 }
 

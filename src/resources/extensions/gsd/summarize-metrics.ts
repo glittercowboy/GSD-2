@@ -19,6 +19,7 @@ import {
   aggregateByPhase,
   getProjectTotals,
   formatCost,
+  formatTokenCount,
   classifyUnitPhase,
 } from "./metrics.js";
 
@@ -171,13 +172,6 @@ function formatDuration(ms: number): string {
   return `${(ms / 3600000).toFixed(1)}h`;
 }
 
-/** Format a token count with k/M suffix. */
-function formatTokens(n: number): string {
-  if (n < 1000) return `${n}`;
-  if (n < 1000000) return `${(n / 1000).toFixed(1)}k`;
-  return `${(n / 1000000).toFixed(2)}M`;
-}
-
 /**
  * Render a Markdown comparison table from metrics comparison data.
  *
@@ -205,7 +199,7 @@ export function formatComparisonTable(comparison: MetricsComparison): string {
     // Phase name row (tokens)
     const tokenCells = [
       `${row.phase} (tokens)`,
-      ...row.entries.map(e => formatTokens(e.tokens)),
+      ...row.entries.map(e => formatTokenCount(e.tokens)),
     ];
 
     // Cost row
@@ -246,7 +240,7 @@ export function formatComparisonTable(comparison: MetricsComparison): string {
 
     dataRows.push(
       [`**${label} total**`, `Units: ${t.units}`],
-      ["", `Tokens: ${formatTokens(t.tokens.total)}`],
+      ["", `Tokens: ${formatTokenCount(t.tokens.total)}`],
       ["", `Cost: ${formatCost(t.cost)}`],
       ["", `Interventions: ${totalInterventions}`],
       ["", `Fact-checks: ${t.totalFactChecks.claimsChecked}`],
