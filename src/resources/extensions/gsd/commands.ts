@@ -159,7 +159,7 @@ async function guardRemoteSession(
 
 export function registerGSDCommand(pi: ExtensionAPI): void {
   pi.registerCommand("gsd", {
-    description: "GSD — Get Shit Done: /gsd help|start|templates|next|auto|stop|pause|status|visualize|queue|quick|capture|triage|dispatch|history|undo|skip|export|cleanup|mode|prefs|config|keys|hooks|run-hook|skill-health|doctor|forensics|changelog|migrate|remote|steer|knowledge|new-milestone|parallel|cmux|update",
+    description: "GSD — Get Shit Done: /gsd help|start|templates|next|auto|stop|pause|status|visualize|queue|quick|capture|triage|dispatch|history|undo|skip|export|cleanup|mode|prefs|config|keys|hooks|run-hook|skill-health|doctor|forensics|changelog|mcp|migrate|remote|steer|knowledge|new-milestone|parallel|cmux|update",
     getArgumentCompletions: (prefix: string) => {
       const subcommands = [
         { cmd: "help", desc: "Categorized command reference with descriptions" },
@@ -176,6 +176,7 @@ export function registerGSDCommand(pi: ExtensionAPI): void {
         { cmd: "capture", desc: "Fire-and-forget thought capture" },
         { cmd: "changelog", desc: "Show categorized release notes" },
         { cmd: "triage", desc: "Manually trigger triage of pending captures" },
+        { cmd: "mcp", desc: "Diagnose configured MCP servers" },
         { cmd: "dispatch", desc: "Dispatch a specific phase directly" },
         { cmd: "history", desc: "View execution history" },
         { cmd: "rate", desc: "Rate last unit's model tier (over/ok/under) — improves adaptive routing" },
@@ -231,6 +232,29 @@ export function registerGSDCommand(pi: ExtensionAPI): void {
         return flags
           .filter((f) => f.flag.startsWith(flagPrefix))
           .map((f) => ({ value: `auto ${f.flag}`, label: f.flag, description: f.desc }));
+      }
+
+      if (parts[0] === "mcp") {
+        const flags = [
+          { flag: "--verbose", desc: "Show detailed MCP diagnostics" },
+          { flag: "--refresh", desc: "Reload MCP config from disk" },
+        ];
+
+        if (parts.length <= 2) {
+          const flagPrefix = parts[1] ?? "";
+          return flags
+            .filter((f) => f.flag.startsWith(flagPrefix))
+            .map((f) => ({ value: `mcp ${f.flag}`, label: f.flag, description: f.desc }));
+        }
+
+        if (parts.length <= 3) {
+          const flagPrefix = parts[2] ?? "";
+          return flags
+            .filter((f) => f.flag.startsWith(flagPrefix))
+            .map((f) => ({ value: `mcp ${parts[1]} ${f.flag}`, label: f.flag, description: f.desc }));
+        }
+
+        return [];
       }
 
       if (parts[0] === "mode" && parts.length <= 2) {
@@ -345,6 +369,22 @@ export function registerGSDCommand(pi: ExtensionAPI): void {
         return subs
           .filter((s) => s.cmd.startsWith(subPrefix))
           .map((s) => ({ value: `prefs ${s.cmd}`, label: s.cmd, description: s.desc }));
+      }
+
+      if (parts[0] === "mcp") {
+        const flagPrefix = parts[parts.length - 1] ?? "";
+        const serverName = parts.length >= 2 && !parts[1].startsWith("-") ? parts[1] : undefined;
+        const flags = [
+          { flag: "--verbose", desc: "Show per-server details and tool listings" },
+          { flag: "--refresh", desc: "Clear caches and reconnect before diagnosing" },
+        ];
+        return flags
+          .filter((f) => f.flag.startsWith(flagPrefix))
+          .map((f) => ({
+            value: serverName ? `mcp ${serverName} ${f.flag}` : `mcp ${f.flag}`,
+            label: f.flag,
+            description: f.desc,
+          }));
       }
 
       if (parts[0] === "remote" && parts.length <= 2) {
@@ -631,6 +671,12 @@ export async function handleGSDCommand(
 
       if (trimmed === "logs" || trimmed.startsWith("logs ")) {
         await handleLogs(trimmed.replace(/^logs\s*/, "").trim(), ctx);
+        return;
+      }
+
+      if (trimmed === "mcp" || trimmed.startsWith("mcp ")) {
+        const { handleMcp } = await import("./commands-mcp.js");
+        await handleMcp(trimmed.replace(/^mcp\s*/, "").trim(), ctx);
         return;
       }
 
@@ -1107,6 +1153,7 @@ function showHelp(ctx: ExtensionCommandContext): void {
     "  /gsd keys           API key manager  [list|add|remove|test|rotate|doctor]",
     "  /gsd hooks          Show post-unit hook configuration",
     "  /gsd extensions     Manage extensions  [list|enable|disable|info]",
+    "  /gsd mcp            Diagnose configured MCP servers  [server] [--verbose] [--refresh]",
     "",
     "MAINTENANCE",
     "  /gsd doctor         Diagnose and repair .gsd/ state  [audit|fix|heal] [scope]",
