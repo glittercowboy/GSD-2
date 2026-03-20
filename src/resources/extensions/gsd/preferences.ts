@@ -271,6 +271,9 @@ function mergePreferences(base: GSDPreferences, override: GSDPreferences): GSDPr
     context_selection: override.context_selection ?? base.context_selection,
     auto_visualize: override.auto_visualize ?? base.auto_visualize,
     auto_report: override.auto_report ?? base.auto_report,
+    github: (base.github || override.github)
+      ? { ...(base.github ?? {}), ...(override.github ?? {}) } as import("../github-sync/types.js").GitHubSyncConfig
+      : undefined,
   };
 }
 

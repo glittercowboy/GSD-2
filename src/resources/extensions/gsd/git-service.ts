@@ -95,6 +95,8 @@ export interface TaskCommitContext {
   oneLiner?: string;
   /** Files modified by this task (from task summary frontmatter) */
   keyFiles?: string[];
+  /** GitHub issue number — appends "Resolves #N" trailer when set. */
+  issueNumber?: number;
 }
 
 /**
@@ -118,12 +120,22 @@ export function buildTaskCommitMessage(ctx: TaskCommitContext): string {
   const subject = `${type}(${scope}): ${truncated}`;
 
   // Build body with key files if available
+  const bodyParts: string[] = [];
+
   if (ctx.keyFiles && ctx.keyFiles.length > 0) {
     const fileLines = ctx.keyFiles
       .slice(0, 8) // cap at 8 files to keep commit concise
       .map(f => `- ${f}`)
       .join("\n");
-    return `${subject}\n\n${fileLines}`;
+    bodyParts.push(fileLines);
+  }
+
+  if (ctx.issueNumber) {
+    bodyParts.push(`Resolves #${ctx.issueNumber}`);
+  }
+
+  if (bodyParts.length > 0) {
+    return `${subject}\n\n${bodyParts.join("\n\n")}`;
   }
 
   return subject;

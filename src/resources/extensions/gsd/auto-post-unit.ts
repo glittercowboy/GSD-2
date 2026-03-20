@@ -113,11 +113,21 @@ export async function postUnitPreVerification(pctx: PostUnitContext): Promise<"d
               const summaryContent = await loadFile(summaryPath);
               if (summaryContent) {
                 const summary = parseSummary(summaryContent);
+                // Look up GitHub issue number for commit linking
+                let ghIssueNumber: number | undefined;
+                try {
+                  const { getTaskIssueNumberForCommit } = await import("../github-sync/sync.js");
+                  ghIssueNumber = getTaskIssueNumberForCommit(s.basePath, mid, sid, tid) ?? undefined;
+                } catch {
+                  // GitHub sync not available — skip
+                }
+
                 taskContext = {
                   taskId: `${sid}/${tid}`,
                   taskTitle: summary.title?.replace(/^T\d+:\s*/, "") || tid,
                   oneLiner: summary.oneLiner || undefined,
                   keyFiles: summary.frontmatter.key_files?.filter(f => !f.includes("{{")) || undefined,
+                  issueNumber: ghIssueNumber,
                 };
               }
             } catch {
@@ -133,6 +143,14 @@ export async function postUnitPreVerification(pctx: PostUnitContext): Promise<"d
       }
     } catch {
       // Non-fatal
+    }
+
+    // GitHub sync (non-blocking, opt-in)
+    try {
+      const { runGitHubSync } = await import("../github-sync/sync.js");
+      await runGitHubSync(s.basePath, s.currentUnit.type, s.currentUnit.id);
+    } catch (e) {
+      debugLog("postUnit", { phase: "github-sync", error: String(e) });
     }
 
     // Doctor: fix mechanical bookkeeping
