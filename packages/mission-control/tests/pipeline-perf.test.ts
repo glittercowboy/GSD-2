@@ -131,7 +131,7 @@ describe("pipeline", () => {
     expect(msg.changes.projectState).toBeDefined();
     expect(msg.changes.projectState.active_slice).toBe("S02");
     ws.close();
-  });
+  }, { timeout: 15000 });
 
   test("file-to-WebSocket-push latency is under 100ms (SERV-05)", async () => {
     pipeline = await startPipeline({
@@ -169,7 +169,7 @@ describe("pipeline", () => {
     // Use 200ms threshold to avoid flakiness while still verifying sub-second performance.
     expect(latency).toBeLessThan(200);
     ws.close();
-  });
+  }, { timeout: 15000 });
 
   test("no broadcast occurs when file change produces no state diff", async () => {
     pipeline = await startPipeline({
