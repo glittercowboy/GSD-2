@@ -68,6 +68,7 @@ export const KNOWN_PREFERENCE_KEYS = new Set<string>([
   "budget_enforcement",
   "context_pause_threshold",
   "notifications",
+  "cmux",
   "remote_questions",
   "git",
   "post_unit_hooks",
@@ -84,6 +85,7 @@ export const KNOWN_PREFERENCE_KEYS = new Set<string>([
   "search_provider",
   "compression_strategy",
   "context_selection",
+  "widget_mode",
 ]);
 
 /** Canonical list of all dispatch unit types. */
@@ -165,6 +167,14 @@ export interface RemoteQuestionsConfig {
   poll_interval_seconds?: number;  // clamped to 2-30
 }
 
+export interface CmuxPreferences {
+  enabled?: boolean;
+  notifications?: boolean;
+  sidebar?: boolean;
+  splits?: boolean;
+  browser?: boolean;
+}
+
 export interface GSDPreferences {
   version?: number;
   mode?: WorkflowMode;
@@ -183,6 +193,7 @@ export interface GSDPreferences {
   budget_enforcement?: BudgetEnforcementMode;
   context_pause_threshold?: number;
   notifications?: NotificationPreferences;
+  cmux?: CmuxPreferences;
   remote_questions?: RemoteQuestionsConfig;
   git?: GitPreferences;
   post_unit_hooks?: PostUnitHookConfig[];
@@ -203,6 +214,8 @@ export interface GSDPreferences {
   compression_strategy?: CompressionStrategy;
   /** Context selection mode for file inlining. "full" inlines entire files, "smart" uses semantic chunking. Default derived from token profile. */
   context_selection?: ContextSelectionMode;
+  /** Default widget display mode for auto-mode dashboard. "full" | "small" | "min" | "off". Default: "full". */
+  widget_mode?: "full" | "small" | "min" | "off";
 }
 
 export interface LoadedGSDPreferences {

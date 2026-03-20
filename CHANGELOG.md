@@ -6,6 +6,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.37.0] - 2026-03-20
+
+### Added
+- **dashboard**: two-column layout with redesigned widget (#1530)
+- integrate cmux with gsd runtime (#1532)
+
+### Fixed
+- add session-level search budget to prevent unbounded native web search (#1309) (#1529)
+
 ## [2.36.0] - 2026-03-20
 
 ### Added
@@ -1401,7 +1410,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 - License updated to MIT
 
-[Unreleased]: https://github.com/gsd-build/gsd-2/compare/v2.36.0...HEAD
+[Unreleased]: https://github.com/gsd-build/gsd-2/compare/v2.37.0...HEAD
+[2.37.0]: https://github.com/gsd-build/gsd-2/compare/v2.36.0...v2.37.0
 [2.36.0]: https://github.com/gsd-build/gsd-2/compare/v2.35.0...v2.36.0
 [2.35.0]: https://github.com/gsd-build/gsd-2/compare/v2.34.0...v2.35.0
 [2.34.0]: https://github.com/gsd-build/gsd-2/compare/v2.33.1...v2.34.0
