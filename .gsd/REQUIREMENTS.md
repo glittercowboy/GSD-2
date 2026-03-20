@@ -89,7 +89,7 @@ This file is the explicit capability and coverage contract for the project.
 - Source: user
 - Primary owning slice: M001/S06
 - Supporting slices: none
-- Validation: unmapped
+- Validation: S06 T01: IterateConfig typed with source+pattern, validateDefinition() enforces valid regex with capture group and no path traversal. S06 T02: expandIteration() materializes instances in WorkflowGraph with deterministic zero-padded IDs, "expanded" status, parentStepId lineage, and downstream dep rewriting. S06 T03: resolveDispatch() triggers lazy expansion, integration test proves 5-dispatch fan-out (outline + 3 chapter instances + review), determinism proof shows byte-identical GRAPH.yaml from identical input.
 - Notes: Once expanded, iteration is frozen for that run. Source changes after expansion do not retroactively add/remove instances.
 
 ### R012 — `/gsd workflow new` starts a conversation where the user describes their workflow. The agent asks clarifying questions, then generates a valid YAML definition following the schema and saves it to `workflow-defs/`.
@@ -299,7 +299,7 @@ This file is the explicit capability and coverage contract for the project.
 | R008 | core-capability | active | M001/S04 | M001/S06 | S03 T01: graph.ts implements GRAPH.yaml read/write with atomic writes (tmp + renameSync), step status tracking (pending→active→complete), topological dispatch order via getNextPendingStep(). S04 T01: graphFromDefinition() converts validated WorkflowDefinition into WorkflowGraph with all steps pending. S04 T02: createRun() generates initial GRAPH.yaml from definition via graphFromDefinition()+writeGraph(). S04 T03: Integration test proves full pipeline — YAML definition→createRun→3-step dispatch cycle→all steps complete with on-disk GRAPH.yaml verification. 11/11 engine tests + 4/4 integration tests pass. |
 | R009 | primary-user-loop | validated | M001/S05 | none | S05 T01: injectContext() in context-injector.ts reads contextFrom step IDs, resolves produces paths from frozen DEFINITION.yaml, reads artifacts from runDir, assembles formatted context with per-step headers and token budget truncation. Returns empty string sentinel for no-op cases. S05 T03: resolveDispatch() in CustomWorkflowEngine parses DEFINITION.yaml and prepends injected context to step prompts. Integration test proves step-2 dispatch prompt contains "## Context from prior steps" header with step-1 artifact content. 7 unit tests + 4 integration tests pass. |
 | R010 | failure-visibility | active | M001/S05 | none | unmapped |
-| R011 | core-capability | active | M001/S06 | none | unmapped |
+| R011 | core-capability | active | M001/S06 | none | S06 T01: IterateConfig typed with source+pattern, validateDefinition() enforces valid regex with capture group and no path traversal. S06 T02: expandIteration() materializes instances in WorkflowGraph with deterministic zero-padded IDs, "expanded" status, parentStepId lineage, and downstream dep rewriting. S06 T03: resolveDispatch() triggers lazy expansion, integration test proves 5-dispatch fan-out (outline + 3 chapter instances + review), determinism proof shows byte-identical GRAPH.yaml from identical input. |
 | R012 | primary-user-loop | active | M001/S07 | none | unmapped |
 | R013 | launchability | active | M001/S07 | M001/S08 | unmapped |
 | R014 | primary-user-loop | active | M001/S08 | none | unmapped |
