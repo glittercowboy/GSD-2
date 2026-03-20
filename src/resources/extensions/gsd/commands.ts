@@ -49,6 +49,7 @@ import { runEnvironmentChecks } from "./doctor-environment.js";
 import { handleLogs } from "./commands-logs.js";
 import { handleStart, handleTemplates, getTemplateCompletions } from "./commands-workflow-templates.js";
 import { showNextAction } from "../shared/mod.js";
+import { readSessionLockData, isSessionLockProcessAlive } from "./session-lock.js";
 
 
 /** Resolve the effective project root, accounting for worktree paths. */
@@ -175,6 +176,7 @@ export function registerGSDCommand(pi: ExtensionAPI): void {
         { cmd: "triage", desc: "Manually trigger triage of pending captures" },
         { cmd: "dispatch", desc: "Dispatch a specific phase directly" },
         { cmd: "history", desc: "View execution history" },
+        { cmd: "rate", desc: "Rate last unit's model tier (over/ok/under) — improves adaptive routing" },
         { cmd: "undo", desc: "Revert last completed unit" },
         { cmd: "skip", desc: "Prevent a unit from auto-mode dispatch" },
         { cmd: "export", desc: "Export milestone/slice results" },
@@ -597,6 +599,7 @@ export async function handleGSDCommand(
           await handleDryRun(ctx, projectRoot());
           return;
         }
+        if (notifyRemoteAutoActive(ctx, projectRoot())) return;
         const verboseMode = trimmed.includes("--verbose");
         const debugMode = trimmed.includes("--debug");
         if (debugMode) enableDebug(projectRoot());
@@ -651,6 +654,12 @@ export async function handleGSDCommand(
 
       if (trimmed === "undo" || trimmed.startsWith("undo ")) {
         await handleUndo(trimmed.replace(/^undo\s*/, "").trim(), ctx, pi, projectRoot());
+        return;
+      }
+
+      if (trimmed === "rate" || trimmed.startsWith("rate ")) {
+        const { handleRate } = await import("./commands-rate.js");
+        await handleRate(trimmed.replace(/^rate\s*/, "").trim(), ctx, projectRoot());
         return;
       }
 
@@ -987,7 +996,6 @@ Examples:
       }
 
       if (trimmed === "") {
-        // Bare /gsd defaults to step mode
         if (!(await guardRemoteSession(ctx, pi))) return;
         await startAuto(ctx, pi, projectRoot(), false, { step: true });
         return;
