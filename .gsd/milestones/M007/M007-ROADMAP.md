@@ -8,7 +8,7 @@
   - Implement durable activity log writer in `.gsd/activity/`.
   - Ensure metric writing is non-blocking (write-behind).
 
-- [ ] **S02: Metrics Aggregation & Reporting** `risk:low` `depends:[S01]`
+- [x] **S02: Metrics Aggregation & Reporting** `risk:low` `depends:[S01]`
   - Implement metrics summary utility script to read activity logs.
   - Produce comparison tables (token count, intervention, time).
   - Verify metrics durability across unit crashes/restarts.
