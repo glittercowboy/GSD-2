@@ -46,3 +46,10 @@ Important: Use `npx tsx --test` as the test runner (K007). Use `os.tmpdir() + cr
 ## Expected Output
 
 - `src/resources/extensions/gsd/tests/fixture-e2e.test.ts` — new test file, all assertions passing
+
+## Observability Impact
+
+- **Signals exposed:** Test runner TAP output shows pass/fail per fixture (17 subtests total), making it easy to identify which fixture or assertion category failed.
+- **Failure visibility:** Assertion messages include fixture ID, so a failing test clearly indicates which fixture has the issue (e.g., `${fixtureId}: claimsChecked should match expected`).
+- **Inspection surfaces:** `FIXTURE-MANIFEST.json` per fixture documents expected telemetry shape; `validateFixtureState` returns `missingFiles` array with specific paths.
+- **Diagnostic commands:** `npx tsx --test src/resources/extensions/gsd/tests/fixture-e2e.test.ts` runs the full harness; individual describe blocks can be targeted with `--test-name-pattern`.
