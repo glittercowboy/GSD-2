@@ -159,7 +159,7 @@ async function guardRemoteSession(
 
 export function registerGSDCommand(pi: ExtensionAPI): void {
   pi.registerCommand("gsd", {
-    description: "GSD — Get Shit Done: /gsd help|start|templates|next|auto|stop|pause|status|visualize|queue|quick|capture|triage|dispatch|history|undo|skip|export|cleanup|mode|prefs|config|keys|hooks|run-hook|skill-health|doctor|forensics|changelog|migrate|remote|steer|knowledge|new-milestone|parallel|cmux|update",
+    description: "GSD — Get Shit Done: /gsd help|start|templates|next|auto|stop|pause|status|widget|visualize|queue|quick|capture|triage|dispatch|history|undo|rate|skip|export|cleanup|mode|prefs|config|keys|hooks|run-hook|skill-health|doctor|logs|forensics|changelog|migrate|remote|steer|knowledge|new-milestone|parallel|cmux|park|unpark|init|setup|inspect|extensions|update",
     getArgumentCompletions: (prefix: string) => {
       const subcommands = [
         { cmd: "help", desc: "Categorized command reference with descriptions" },
@@ -534,6 +534,18 @@ export function registerGSDCommand(pi: ExtensionAPI): void {
         return phases
           .filter((p) => p.cmd.startsWith(phasePrefix))
           .map((p) => ({ value: `dispatch ${p.cmd}`, label: p.cmd, description: p.desc }));
+      }
+
+      if (parts[0] === "rate" && parts.length <= 2) {
+        const tierPrefix = parts[1] ?? "";
+        const tiers = [
+          { cmd: "over", desc: "Model was overqualified for this task" },
+          { cmd: "ok", desc: "Model was appropriate for this task" },
+          { cmd: "under", desc: "Model was underqualified for this task" },
+        ];
+        return tiers
+          .filter((t) => t.cmd.startsWith(tierPrefix))
+          .map((t) => ({ value: `rate ${t.cmd}`, label: t.cmd, description: t.desc }));
       }
 
       return [];
