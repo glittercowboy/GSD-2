@@ -14,6 +14,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { AuthStorage } from "@gsd/pi-coding-agent";
+import { getEnvApiKey } from "@gsd/pi-ai";
 import { loadEffectiveGSDPreferences } from "./preferences.js";
 import { getAuthPath, PROVIDER_REGISTRY, type ProviderCategory } from "./key-manager.js";
 
@@ -56,6 +57,7 @@ function modelToProviderId(model: string): string | null {
       google: "google",
       anthropic: "anthropic",
       openai: "openai",
+      "github-copilot": "github-copilot",
     };
     if (prefixMap[prefix]) return prefixMap[prefix];
   }
@@ -139,7 +141,15 @@ function resolveKey(providerId: string): KeyLookup {
     }
   }
 
-  // Check environment variable
+  // Check environment variable using the authoritative env var resolution
+  // (handles multi-var lookups like ANTHROPIC_OAUTH_TOKEN || ANTHROPIC_API_KEY,
+  //  COPILOT_GITHUB_TOKEN || GH_TOKEN || GITHUB_TOKEN, Vertex ADC, Bedrock, etc.)
+  if (getEnvApiKey(providerId)) {
+    return { found: true, source: "env", backedOff: false };
+  }
+
+  // Fall back to PROVIDER_REGISTRY env var for providers not covered by getEnvApiKey
+  // (e.g., search providers like Brave, Tavily; tool providers like Jina, Context7)
   if (info?.envVar && process.env[info.envVar]) {
     return { found: true, source: "env", backedOff: false };
   }
@@ -148,6 +158,16 @@ function resolveKey(providerId: string): KeyLookup {
 }
 
 // ── Individual check groups ────────────────────────────────────────────────────
+
+/**
+ * Providers that can serve models normally associated with another provider.
+ * Key = the provider whose models can be served, Value = alternative providers to check.
+ * e.g. GitHub Copilot subscriptions can access Claude and GPT models.
+ */
+const PROVIDER_ROUTES: Record<string, string[]> = {
+  anthropic: ["github-copilot"],
+  openai: ["github-copilot"],
+};
 
 function checkLlmProviders(): ProviderCheckResult[] {
   const required = collectConfiguredModelProviders();
@@ -159,6 +179,23 @@ function checkLlmProviders(): ProviderCheckResult[] {
     const lookup = resolveKey(providerId);
 
     if (!lookup.found) {
+      // Check if a cross-provider can serve this provider's models
+      const routes = PROVIDER_ROUTES[providerId];
+      const routeProvider = routes?.find(routeId => resolveKey(routeId).found);
+      if (routeProvider) {
+        const routeInfo = PROVIDER_REGISTRY.find(p => p.id === routeProvider);
+        const routeLabel = routeInfo?.label ?? routeProvider;
+        results.push({
+          name: providerId,
+          label,
+          category: "llm",
+          status: "ok",
+          message: `${label} — available via ${routeLabel}`,
+          required: true,
+        });
+        continue;
+      }
+
       const envVar = info?.envVar ?? `${providerId.toUpperCase()}_API_KEY`;
       results.push({
         name: providerId,
