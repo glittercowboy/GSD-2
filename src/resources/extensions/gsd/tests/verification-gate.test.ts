@@ -269,7 +269,7 @@ test("verification-gate: no DEP0190 deprecation warning when running commands", 
       [
         "--throw-deprecation",
         "--experimental-strip-types",
-        "--import", resolverPath,
+        "--import", pathToFileURL(resolverPath).href,
         "--input-type=module",
         "-e", script,
       ],
