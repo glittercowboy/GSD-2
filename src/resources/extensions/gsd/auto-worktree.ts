@@ -56,6 +56,7 @@ import {
   nativeRmForce,
   nativeBranchDelete,
   nativeBranchExists,
+  nativeDiffNumstat,
 } from "./native-git-bridge.js";
 
 // ─── Module State ──────────────────────────────────────────────────────────
@@ -926,7 +927,8 @@ function autoCommitDirtyState(cwd: string): boolean {
  *  9. Clear originalBase
  *
  * On merge conflict: throws MergeConflictError.
- * On "nothing to commit" after squash: handles gracefully (no error).
+ * On "nothing to commit" after squash: safe only if milestone work is already
+ * on the integration branch.  Throws if unanchored code changes would be lost.
  */
 export function mergeMilestoneToMain(
   originalBasePath_: string,
@@ -1057,6 +1059,31 @@ export function mergeMilestoneToMain(
   // 8. Commit (handle nothing-to-commit gracefully)
   const commitResult = nativeCommit(originalBasePath_, commitMessage);
   const nothingToCommit = commitResult === null;
+
+  // 8b. Safety check (#1792): if nothing was committed, verify the milestone
+  // work is already on the integration branch before allowing teardown.
+  // Compare only non-.gsd/ paths — .gsd/ state files diverge normally and
+  // are auto-resolved during the squash merge.
+  if (nothingToCommit) {
+    const numstat = nativeDiffNumstat(
+      originalBasePath_,
+      mainBranch,
+      milestoneBranch,
+    );
+    const codeChanges = numstat.filter(
+      (entry) => !entry.path.startsWith(".gsd/"),
+    );
+    if (codeChanges.length > 0) {
+      // Milestone has unanchored code changes — abort teardown.
+      process.chdir(previousCwd);
+      throw new GSDError(
+        GSD_GIT_ERROR,
+        `Squash merge produced nothing to commit but milestone branch "${milestoneBranch}" ` +
+          `has ${codeChanges.length} code file(s) not on "${mainBranch}". ` +
+          `Aborting worktree teardown to prevent data loss.`,
+      );
+    }
+  }
 
   // 9. Auto-push if enabled
   let pushed = false;

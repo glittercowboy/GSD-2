@@ -509,6 +509,75 @@ async function main(): Promise<void> {
       );
     }
 
+    // ─── Test 12: Throw on unanchored code changes after empty commit (#1792) ─
+    console.log("\n=== throw on unanchored code changes after empty commit (#1792) ===");
+    {
+      const repo = freshRepo();
+      const wtPath = createAutoWorktree(repo, "M120");
+
+      addSliceToMilestone(repo, wtPath, "M120", "S01", "Critical feature", [
+        { file: "critical.ts", content: "export const critical = true;\n", message: "add critical feature" },
+      ]);
+
+      // Simulate: merge then revert — git considers branch "already merged"
+      // but code is NOT on main (reverted).
+      run(`git merge milestone/M120 --no-ff -m "merge M120"`, repo);
+      run("git revert HEAD --no-edit -m 1", repo);
+
+      const roadmap = makeRoadmap("M120", "Critical milestone", [
+        { id: "S01", title: "Critical feature" },
+      ]);
+
+      let threw = false;
+      let errMsg = "";
+      try {
+        mergeMilestoneToMain(repo, "M120", roadmap);
+      } catch (err) {
+        threw = true;
+        errMsg = err instanceof Error ? err.message : String(err);
+      }
+      assertTrue(threw, "throws when milestone has unanchored code changes (#1792)");
+      assertTrue(
+        errMsg.includes("code file(s) not on"),
+        "error message mentions unanchored code files (#1792)",
+      );
+
+      const branches = run("git branch", repo);
+      assertTrue(
+        branches.includes("milestone/M120"),
+        "milestone branch preserved when code is unanchored (#1792)",
+      );
+    }
+
+    // ─── Test 13: Safe teardown when nothing-to-commit and work already on main (#1792) ─
+    console.log("\n=== safe teardown — nothing to commit, work already on main (#1792) ===");
+    {
+      const repo = freshRepo();
+      const wtPath = createAutoWorktree(repo, "M130");
+
+      addSliceToMilestone(repo, wtPath, "M130", "S01", "Already landed", [
+        { file: "landed.ts", content: "export const landed = true;\n", message: "add landed feature" },
+      ]);
+
+      run("git merge --squash milestone/M130", repo);
+      run('git commit -m "pre-land milestone work"', repo);
+
+      const roadmap = makeRoadmap("M130", "Pre-landed milestone", [
+        { id: "S01", title: "Already landed" },
+      ]);
+
+      let threw = false;
+      let errMsg = "";
+      try {
+        mergeMilestoneToMain(repo, "M130", roadmap);
+      } catch (err) {
+        threw = true;
+        errMsg = err instanceof Error ? err.message : String(err);
+      }
+      assertTrue(!threw, `safe nothing-to-commit should not throw (got: ${errMsg})`);
+      assertTrue(existsSync(join(repo, "landed.ts")), "landed.ts present on main");
+    }
+
   } finally {
     process.chdir(savedCwd);
     for (const d of tempDirs) {
