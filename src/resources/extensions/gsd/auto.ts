@@ -196,7 +196,7 @@ import {
   postUnitPostVerification,
 } from "./auto-post-unit.js";
 import { bootstrapAutoSession, type BootstrapDeps } from "./auto-start.js";
-import { autoLoop, resolveAgentEnd, isSessionSwitchInFlight, type LoopDeps } from "./auto-loop.js";
+import { autoLoop, resolveAgentEnd, resolveAgentEndCancelled, isSessionSwitchInFlight, type LoopDeps } from "./auto-loop.js";
 import {
   WorktreeResolver,
   type WorktreeResolverDeps,
@@ -717,6 +717,8 @@ export async function pauseAuto(
 ): Promise<void> {
   if (!s.active) return;
   clearUnitTimeout();
+  // Unblock any pending unit promise so the auto-loop is not orphaned.
+  resolveAgentEndCancelled();
 
   s.pausedSessionFile = ctx?.sessionManager?.getSessionFile() ?? null;
 
@@ -1101,7 +1103,11 @@ export async function handleAgentEnd(
   ctx: ExtensionContext,
   pi: ExtensionAPI,
 ): Promise<void> {
-  if (!s.active || !s.cmdCtx) return;
+  if (!s.active || !s.cmdCtx) {
+    // Even when inactive, resolve any pending promise so the loop is unblocked.
+    resolveAgentEndCancelled();
+    return;
+  }
   clearUnitTimeout();
   resolveAgentEnd({ messages: [] });
 }
