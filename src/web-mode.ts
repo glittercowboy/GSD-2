@@ -36,6 +36,8 @@ export interface WebModeLaunchOptions {
   packageRoot?: string
   host?: string
   port?: number
+  /** Additional allowed origins for CORS (forwarded as GSD_WEB_ALLOWED_ORIGINS). */
+  allowedOrigins?: string[]
 }
 
 export interface ResolvedWebHostBootstrap {
@@ -539,6 +541,7 @@ export async function launchWebMode(
     GSD_WEB_PACKAGE_ROOT: resolution.packageRoot,
     GSD_WEB_HOST_KIND: resolution.kind,
     ...(resolution.kind === 'source-dev' ? { NEXT_PUBLIC_GSD_DEV: '1' } : {}),
+    ...(options.allowedOrigins?.length ? { GSD_WEB_ALLOWED_ORIGINS: options.allowedOrigins.join(',') } : {}),
   }
 
   try {

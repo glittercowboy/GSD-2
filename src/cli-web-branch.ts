@@ -18,6 +18,12 @@ export interface CliFlags {
   web?: boolean
   /** Optional project path for web mode: `gsd --web <path>` or `gsd web start <path>` */
   webPath?: string
+  /** Custom host to bind web server to: `--host 0.0.0.0` */
+  webHost?: string
+  /** Custom port for web server: `--port 8080` */
+  webPort?: number
+  /** Additional allowed origins for CORS: `--allowed-origins http://192.168.1.10:8080` */
+  webAllowedOrigins?: string[]
   help?: boolean
   version?: boolean
 }
@@ -54,6 +60,17 @@ export function parseCliArgs(argv: string[]): CliFlags {
       if (i + 1 < args.length && !args[i + 1].startsWith('-')) {
         flags.webPath = args[++i]
       }
+    } else if (arg === '--host' && i + 1 < args.length) {
+      flags.webHost = args[++i]
+    } else if (arg === '--port' && i + 1 < args.length) {
+      const portStr = args[++i]
+      const port = parseInt(portStr, 10)
+      if (Number.isFinite(port) && port > 0 && port < 65536) {
+        flags.webPort = port
+      }
+    } else if (arg === '--allowed-origins' && i + 1 < args.length) {
+      const origins = args[++i].split(',').map(o => o.trim()).filter(Boolean)
+      flags.webAllowedOrigins = (flags.webAllowedOrigins ?? []).concat(origins)
     } else if (arg === '--model' && i + 1 < args.length) {
       flags.model = args[++i]
     } else if (arg === '--extension' && i + 1 < args.length) {
@@ -266,6 +283,9 @@ export async function runWebCliBranch(
     cwd: currentCwd,
     projectSessionsDir,
     agentDir,
+    host: flags.webHost,
+    port: flags.webPort,
+    allowedOrigins: flags.webAllowedOrigins,
   })
 
   if (!status.ok) {
