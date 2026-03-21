@@ -57,22 +57,12 @@ function writeCompleteArtifacts(base: string): void {
   writeFileSync(join(milestoneDir, "M001-SUMMARY.md"), "# Milestone Summary\nDone.\n", "utf-8");
 }
 
-function writePausedSession(base: string, stepMode = false): void {
+function writePausedSession(base: string, milestoneId = "M001", stepMode = false): void {
   const runtimeDir = join(base, ".gsd", "runtime");
   mkdirSync(runtimeDir, { recursive: true });
   writeFileSync(
     join(runtimeDir, "paused-session.json"),
-    JSON.stringify({ milestoneId: "M001", originalBasePath: base, stepMode }, null, 2),
-    "utf-8",
-  );
-}
-
-function writeStalePausedSession(base: string, stepMode = false): void {
-  const runtimeDir = join(base, ".gsd", "runtime");
-  mkdirSync(runtimeDir, { recursive: true });
-  writeFileSync(
-    join(runtimeDir, "paused-session.json"),
-    JSON.stringify({ milestoneId: "M999", originalBasePath: base, stepMode }, null, 2),
+    JSON.stringify({ milestoneId, originalBasePath: base, stepMode }, null, 2),
     "utf-8",
   );
 }
@@ -127,7 +117,7 @@ test("guided-flow stale paused-session scenario is suppressed when no resumable 
   try {
     writeRoadmap(base, true);
     writeCompleteArtifacts(base);
-    writeStalePausedSession(base, true);
+    writePausedSession(base, "M999", true);
 
     const assessment = await assessInterruptedSession(base);
     assert.equal(assessment.classification, "stale");
@@ -137,13 +127,12 @@ test("guided-flow stale paused-session scenario is suppressed when no resumable 
   }
 });
 
-test("guided-flow source uses step-aware resume label and passes step mode into startAuto", () => {
+test("guided-flow source uses step-aware resume label, step-aware discuss handoff, and stale paused cleanup", () => {
   const source = readFileSync(join(import.meta.dirname, "..", "guided-flow.ts"), "utf-8");
   assert.ok(source.includes('const interrupted = await assessInterruptedSession(basePath);'));
-  assert.ok(source.includes('if (interrupted.classification === "running")'));
-  assert.ok(source.includes('if (interrupted.classification === "stale")'));
   assert.ok(source.includes('resumeLabel = interrupted.pausedSession?.stepMode'));
-  assert.ok(source.includes('"Resume with /gsd next"'));
   assert.ok(source.includes('step: interrupted.pausedSession?.stepMode ?? false'));
-  assert.ok(!source.includes('await startAuto(ctx, pi, basePath, false, { interrupted });'));
+  assert.ok(source.includes('unlinkSync(join(gsdRoot(basePath), "runtime", "paused-session.json"))'));
+  assert.ok(source.includes('pendingAutoStart = { ctx, pi, basePath, milestoneId: mid, step: true };'));
+  assert.ok(source.includes('pendingAutoStart = { ctx, pi, basePath, milestoneId: nextId, step: true };'));
 });

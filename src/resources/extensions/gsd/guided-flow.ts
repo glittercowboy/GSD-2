@@ -15,6 +15,7 @@ import { deriveState } from "./state.js";
 import { invalidateAllCaches } from "./cache.js";
 import { startAuto } from "./auto.js";
 import { clearLock } from "./crash-recovery.js";
+import { gsdRoot } from "./paths.js";
 import {
   assessInterruptedSession,
   formatInterruptedSessionRunningMessage,
@@ -544,12 +545,12 @@ export async function showDiscuss(
       const seed = draftContent
         ? `${basePrompt}\n\n## Prior Discussion (Draft Seed)\n\n${draftContent}`
         : basePrompt;
-      pendingAutoStart = { ctx, pi, basePath, milestoneId: mid, step: false };
+      pendingAutoStart = { ctx, pi, basePath, milestoneId: mid, step: true };
       await dispatchWorkflow(pi, seed, "gsd-discuss", ctx, "plan-milestone");
     } else if (choice === "discuss_fresh") {
       const discussMilestoneTemplates = inlineTemplate("context", "Context");
       const structuredQuestionsAvailable = pi.getActiveTools().includes("ask_user_questions") ? "true" : "false";
-      pendingAutoStart = { ctx, pi, basePath, milestoneId: mid, step: false };
+      pendingAutoStart = { ctx, pi, basePath, milestoneId: mid, step: true };
       await dispatchWorkflow(pi, loadPrompt("guided-discuss-milestone", {
         milestoneId: mid, milestoneTitle, inlinedTemplates: discussMilestoneTemplates, structuredQuestionsAvailable,
         commitInstruction: buildDocsCommitInstruction(`docs(${mid}): milestone context from discuss`),
@@ -558,7 +559,7 @@ export async function showDiscuss(
       const milestoneIds = findMilestoneIds(basePath);
       const uniqueMilestoneIds = !!loadEffectiveGSDPreferences()?.preferences?.unique_milestone_ids;
       const nextId = nextMilestoneId(milestoneIds, uniqueMilestoneIds);
-      pendingAutoStart = { ctx, pi, basePath, milestoneId: nextId, step: false };
+      pendingAutoStart = { ctx, pi, basePath, milestoneId: nextId, step: true };
       await dispatchWorkflow(pi, buildDiscussPrompt(nextId, `New milestone ${nextId}.`, basePath), "gsd-run", ctx, "plan-milestone");
     }
     return;
@@ -880,6 +881,13 @@ export async function showSmartEntry(
 
   if (interrupted.classification === "stale") {
     clearLock(basePath);
+    if (interrupted.pausedSession) {
+      try {
+        unlinkSync(join(gsdRoot(basePath), "runtime", "paused-session.json"));
+      } catch {
+        // Non-fatal stale metadata cleanup.
+      }
+    }
   } else if (interrupted.classification === "recoverable") {
     if (interrupted.lock) clearLock(basePath);
     const resumeLabel = interrupted.pausedSession?.stepMode
