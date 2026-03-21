@@ -15,6 +15,7 @@ import {
 import { getEnvApiKey } from "@gsd/pi-ai";
 import { existsSync, statSync, chmodSync } from "node:fs";
 import { join, dirname } from "node:path";
+import { authFilePath } from "../../../app-paths.js";
 import { mkdirSync } from "node:fs";
 import { getErrorMessage } from "./error-utils.js";
 
@@ -112,7 +113,7 @@ export function describeCredential(cred: AuthCredential): string {
  * Get the auth.json path.
  */
 export function getAuthPath(): string {
-  return join(process.env.HOME ?? "~", ".gsd", "agent", "auth.json");
+  return authFilePath;
 }
 
 /**
