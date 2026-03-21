@@ -9,7 +9,7 @@ import { deriveState } from "./state.js";
 
 /**
  * Cleanup branches — delegates to doctor fix for branch-related issue codes.
- * Handles both legacy slice branches (gsd/*/*) and stale milestone branches.
+ * Handles both legacy slice branches (gsd/MILESTONE/SLICE) and stale milestone branches.
  */
 export async function handleCleanupBranches(ctx: ExtensionCommandContext, basePath: string): Promise<void> {
   const { runGSDDoctor } = await import("./doctor.js");
