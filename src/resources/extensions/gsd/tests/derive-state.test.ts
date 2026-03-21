@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { deriveState, isSliceComplete, isMilestoneComplete } from '../state.ts';
+import { deriveState, isSliceComplete, isMilestoneComplete, isGhostMilestone } from '../state.ts';
 import { createTestContext } from './test-helpers.ts';
 
 const { assertEq, assertTrue, report } = createTestContext();
@@ -91,8 +91,9 @@ async function main(): Promise<void> {
   {
     const base = createFixtureBase();
     try {
-      // Create M001 directory but no roadmap file
+      // Create M001 directory with CONTEXT but no roadmap file
       mkdirSync(join(base, '.gsd', 'milestones', 'M001'), { recursive: true });
+      writeFileSync(join(base, '.gsd', 'milestones', 'M001', 'M001-CONTEXT.md'), '# First Milestone\n\nContext for M001.');
 
       const state = await deriveState(base);
 
@@ -494,8 +495,9 @@ Continue from step 2.
   > After this: Done.
 `);
 
-      // M003: just a dir (no roadmap → pending since M002 is already active)
+      // M003: dir with CONTEXT but no roadmap → pending since M002 is already active
       mkdirSync(join(base, '.gsd', 'milestones', 'M003'), { recursive: true });
+      writeFileSync(join(base, '.gsd', 'milestones', 'M003', 'M003-CONTEXT.md'), '# Third Milestone\n\nContext for M003.');
 
       const state = await deriveState(base);
 
@@ -900,6 +902,56 @@ slice: S01
       assertEq(state.activeMilestone?.id, 'M002', 'M002 is active — M001 dependency satisfied via summary');
       const m002Entry = state.registry.find(e => e.id === 'M002');
       assertEq(m002Entry?.status, 'active', 'M002 status is active, not pending');
+    } finally {
+      cleanup(base);
+    }
+  }
+
+  // ─── Test: ghost milestone (only META.json) is skipped ───────────────
+  console.log('\n=== ghost milestone (only META.json) is skipped ===');
+  {
+    const base = createFixtureBase();
+    try {
+      // Create a ghost milestone directory with only META.json
+      const ghostDir = join(base, '.gsd', 'milestones', 'M001');
+      mkdirSync(ghostDir, { recursive: true });
+      writeFileSync(join(ghostDir, 'META.json'), JSON.stringify({ id: 'M001' }));
+
+      // isGhostMilestone should detect it
+      assertTrue(isGhostMilestone(base, 'M001'), 'M001 is a ghost milestone');
+
+      // deriveState should treat this as pre-planning (no real milestones)
+      const state = await deriveState(base);
+      assertEq(state.phase, 'pre-planning', 'ghost-only: phase is pre-planning');
+      assertEq(state.activeMilestone, null, 'ghost-only: no active milestone');
+      assertEq(state.registry.length, 0, 'ghost-only: registry is empty');
+    } finally {
+      cleanup(base);
+    }
+  }
+
+  // ─── Test: ghost milestone skipped when real milestones exist ──────────
+  console.log('\n=== ghost milestone skipped alongside real milestones ===');
+  {
+    const base = createFixtureBase();
+    try {
+      // M001: ghost (only META.json)
+      const ghostDir = join(base, '.gsd', 'milestones', 'M001');
+      mkdirSync(ghostDir, { recursive: true });
+      writeFileSync(join(ghostDir, 'META.json'), JSON.stringify({ id: 'M001' }));
+
+      // M002: real milestone with a CONTEXT file
+      const realDir = join(base, '.gsd', 'milestones', 'M002');
+      mkdirSync(realDir, { recursive: true });
+      writeFileSync(join(realDir, 'M002-CONTEXT.md'), '# Real Milestone\n\nThis has content.');
+
+      const state = await deriveState(base);
+      assertEq(state.activeMilestone?.id, 'M002', 'ghost+real: active milestone is M002');
+      // Ghost M001 should not appear in the registry
+      const m001Entry = state.registry.find(e => e.id === 'M001');
+      assertEq(m001Entry, undefined, 'ghost+real: M001 not in registry');
+      assertEq(state.registry.length, 1, 'ghost+real: registry has 1 entry');
+      assertEq(state.registry[0]?.status, 'active', 'ghost+real: M002 is active');
     } finally {
       cleanup(base);
     }

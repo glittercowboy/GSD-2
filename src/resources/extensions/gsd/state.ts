@@ -38,6 +38,20 @@ import { join, resolve } from 'path';
 import { existsSync, readdirSync } from 'node:fs';
 import { debugCount, debugTime } from './debug-logger.js';
 
+/**
+ * A "ghost" milestone directory contains only META.json (and no substantive
+ * files like CONTEXT, CONTEXT-DRAFT, ROADMAP, or SUMMARY).  These appear when
+ * a milestone is created but never initialised.  Treating them as active causes
+ * auto-mode to stall or falsely declare completion.
+ */
+export function isGhostMilestone(basePath: string, mid: string): boolean {
+  const context   = resolveMilestoneFile(basePath, mid, "CONTEXT");
+  const draft     = resolveMilestoneFile(basePath, mid, "CONTEXT-DRAFT");
+  const roadmap   = resolveMilestoneFile(basePath, mid, "ROADMAP");
+  const summary   = resolveMilestoneFile(basePath, mid, "SUMMARY");
+  return !context && !draft && !roadmap && !summary;
+}
+
 // ─── Query Functions ───────────────────────────────────────────────────────
 
 /**
@@ -121,6 +135,7 @@ export async function getActiveMilestoneId(basePath: string): Promise<string | n
       // No roadmap — but if a summary exists, the milestone is already complete
       const summaryFile = resolveMilestoneFile(basePath, mid, "SUMMARY");
       if (summaryFile) continue; // completed milestone, skip
+      if (isGhostMilestone(basePath, mid)) continue; // ghost dir — skip
       return mid; // No roadmap and no summary — milestone is incomplete
       // Note: draft-awareness (CONTEXT-DRAFT.md) is handled in deriveState(), not here.
       // A draft milestone is still "active" — this function only determines which milestone is current.
@@ -318,6 +333,9 @@ async function _deriveStateImpl(basePath: string): Promise<GSDState> {
         completeMilestoneIds.add(mid);
         continue;
       }
+      // Ghost milestone (only META.json, no CONTEXT/ROADMAP/SUMMARY) — skip entirely
+      if (isGhostMilestone(basePath, mid)) continue;
+
       // No roadmap and no summary — treat as incomplete/active
       if (!activeMilestoneFound) {
         // Check for CONTEXT-DRAFT.md to distinguish draft-seeded from blank milestones.
@@ -466,6 +484,23 @@ async function _deriveStateImpl(basePath: string): Promise<GSDState> {
         requirements,
         progress: {
           milestones: milestoneProgress,
+        },
+      };
+    }
+    // All real milestones were ghosts (empty registry) → treat as pre-planning
+    if (registry.length === 0) {
+      return {
+        activeMilestone: null,
+        activeSlice: null,
+        activeTask: null,
+        phase: 'pre-planning',
+        recentDecisions: [],
+        blockers: [],
+        nextAction: 'No milestones found. Run /gsd to create one.',
+        registry: [],
+        requirements,
+        progress: {
+          milestones: { done: 0, total: 0 },
         },
       };
     }
