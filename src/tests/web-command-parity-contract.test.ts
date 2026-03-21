@@ -45,10 +45,10 @@ const EXPECTED_BUILTIN_OUTCOMES = new Map<string, "rpc" | "surface" | "reject">(
 const BUILTIN_DESCRIPTIONS = new Map(BUILTIN_SLASH_COMMANDS.map((command) => [command.name, command.description]))
 const DEFERRED_BROWSER_REJECTS = ["share", "copy", "changelog", "hotkeys", "tree", "provider", "reload", "edit-mode", "quit"] as const
 
-function collectRegisteredGsdCommandRoots(): string[] {
+async function collectRegisteredGsdCommandRoots(): Promise<string[]> {
   const commands = new Map<string, unknown>()
 
-  gsdExtension.default({
+  await gsdExtension.default({
     registerCommand(name: string, options: unknown) {
       commands.set(name, options)
     },
@@ -135,8 +135,8 @@ test("browser-local aliases and legacy helpers stay explicit", async (t) => {
   }
 })
 
-test("registered GSD command roots stay on the prompt/extension path", () => {
-  const registeredRoots = collectRegisteredGsdCommandRoots()
+test("registered GSD command roots stay on the prompt/extension path", async () => {
+  const registeredRoots = await collectRegisteredGsdCommandRoots()
   assert.deepEqual(
     registeredRoots,
     ["exit", "gsd", "kill", "worktree", "wt"],

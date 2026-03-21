@@ -37,7 +37,7 @@ test("deriveState reports complete when all milestone slices are done", async ()
   }
 });
 
-test("guided-flow complete branch dispatches the next milestone directly instead of opening a chooser", () => {
+test("guided-flow complete branch offers a chooser for next milestone or status", () => {
   const guidedFlowSource = readFileSync(join(import.meta.dirname, "..", "guided-flow.ts"), "utf-8");
   const branchIdx = guidedFlowSource.indexOf('state.phase === "complete"');
 
@@ -46,10 +46,8 @@ test("guided-flow complete branch dispatches the next milestone directly instead
   const nextBranchIdx = guidedFlowSource.indexOf('state.phase === "needs-discussion"', branchIdx);
   const branchChunk = guidedFlowSource.slice(branchIdx, nextBranchIdx === -1 ? branchIdx + 1600 : nextBranchIdx);
 
+  assert.match(branchChunk, /showNextAction\(/, "complete branch should present a chooser");
   assert.match(branchChunk, /findMilestoneIds\(basePath\)/, "complete branch should compute the next milestone id");
   assert.match(branchChunk, /nextMilestoneId\(milestoneIds, uniqueMilestoneIds\)/, "complete branch should derive the next milestone id");
-  assert.match(branchChunk, /dispatchWorkflow\(pi, buildDiscussPrompt\(/, "complete branch should dispatch the discuss prompt directly");
-  assert.doesNotMatch(branchChunk, /showNextAction\(/, "complete branch must not open the chooser panel anymore");
-  assert.doesNotMatch(branchChunk, /label: "Start new milestone"/, "complete branch must not define the old chooser actions anymore");
-  assert.doesNotMatch(branchChunk, /label: "View status"/, "complete branch must not keep the status chooser action");
+  assert.match(branchChunk, /dispatchWorkflow\(pi, buildDiscussPrompt\(/, "complete branch should dispatch the discuss prompt");
 });

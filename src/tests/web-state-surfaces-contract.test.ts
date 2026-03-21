@@ -478,7 +478,7 @@ test("browser shell renders title overrides, widgets, and editor prefills from s
 
   assert.match(storeSource, /consumeEditorTextBuffer = \(\): string \| null =>/, "gsd-workspace-store.tsx must expose a consume-once editor prefill action");
   assert.match(terminalSource, /consumeEditorTextBuffer/, "terminal.tsx must consume editor prefill state instead of replaying it forever");
-  assert.match(terminalSource, /setInput\(workspace\.editorTextBuffer\)/, "terminal.tsx must visibly prefill the command input from editorTextBuffer");
+  assert.match(terminalSource, /setInput\(buffer\)/, "terminal.tsx must visibly prefill the command input from editorTextBuffer");
 });
 
 test("terminal consumes activeToolExecution from store", () => {

@@ -401,7 +401,7 @@ test("/api/boot uses the authoritative auto helper by default and stays snapshot
 
     assert.deepEqual(
       Object.keys(payload).sort(),
-      ["auto", "bridge", "onboarding", "onboardingNeeded", "project", "resumableSessions", "workspace"],
+      ["auto", "bridge", "onboarding", "onboardingNeeded", "project", "projectDetection", "resumableSessions", "workspace"],
       "/api/boot must remain snapshot-shaped while auto truth becomes authoritative",
     );
     assert.deepEqual(payload.auto, authoritativeAuto, "default boot path should read authoritative auto dashboard data");

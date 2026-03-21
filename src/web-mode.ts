@@ -526,6 +526,7 @@ export async function launchWebMode(
     PORT: String(port),
     GSD_WEB_HOST: host,
     GSD_WEB_PORT: String(port),
+    GSD_WEB_PROJECT_CWD: options.cwd,
     GSD_WEB_PROJECT_SESSIONS_DIR: options.projectSessionsDir,
     GSD_WEB_PACKAGE_ROOT: resolution.packageRoot,
     GSD_WEB_HOST_KIND: resolution.kind,

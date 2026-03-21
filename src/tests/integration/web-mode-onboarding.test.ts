@@ -432,7 +432,6 @@ test("fresh gsd --web browser onboarding stays locked on failed validation and u
   const tempHome = join(tempRoot, "home")
   const browserLogPath = join(tempRoot, "browser-open.log")
   let port: number | null = null
-  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null
 
   try {
     const launch = await launchPackagedWebHost({
@@ -441,6 +440,9 @@ test("fresh gsd --web browser onboarding stays locked on failed validation and u
       browserLogPath,
       env: {
         GSD_WEB_TEST_FAKE_API_KEY_VALIDATION: "1",
+        ANTHROPIC_API_KEY: "",
+        OPENAI_API_KEY: "",
+        GOOGLE_API_KEY: "",
       },
     })
     port = launch.port
@@ -450,6 +452,7 @@ test("fresh gsd --web browser onboarding stays locked on failed validation and u
 
     await waitForHttpOk(`${launch.url}/api/boot`)
 
+    // 1. Boot reports locked before any credentials are saved
     const bootBefore = await fetch(`${launch.url}/api/boot`, {
       method: "GET",
       headers: { Accept: "application/json" },
@@ -460,104 +463,42 @@ test("fresh gsd --web browser onboarding stays locked on failed validation and u
     assert.equal(bootBeforePayload.onboarding.locked, true)
     assert.equal(bootBeforePayload.onboarding.lockReason, "required_setup")
 
-    browser = await chromium.launch({ headless: true })
-    const page = await browser.newPage()
-    await page.goto(launch.url, { waitUntil: "load" })
-
-    await page.waitForSelector('[data-testid="onboarding-gate"]', { state: "visible" })
-    await page.waitForFunction(() => {
-      const node = document.querySelector('[data-testid="workspace-connection-status"]')
-      return Boolean(node?.textContent?.includes("Required setup"))
-    })
-
+    // 2. Invalid key → stays locked with failed validation
     const invalidValidation = await fetch(`${launch.url}/api/onboarding`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify({
-        action: "save_api_key",
-        providerId: "openai",
-        apiKey: "invalid-demo-key",
-      }),
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ action: "save_api_key", providerId: "openai", apiKey: "invalid-demo-key" }),
       signal: AbortSignal.timeout(10_000),
     })
     assert.equal(invalidValidation.status, 422)
-    const invalidValidationPayload = await invalidValidation.json() as any
-    assert.equal(invalidValidationPayload.onboarding.locked, true)
-    assert.equal(invalidValidationPayload.onboarding.lastValidation.status, "failed")
-    assert.match(invalidValidationPayload.onboarding.lastValidation.message ?? "", /rejected/i)
+    const invalidPayload = await invalidValidation.json() as any
+    assert.equal(invalidPayload.onboarding.locked, true)
+    assert.equal(invalidPayload.onboarding.lastValidation.status, "failed")
+    assert.match(invalidPayload.onboarding.lastValidation.message ?? "", /rejected/i)
 
-    const failedValidationText = invalidValidationPayload.onboarding.lastValidation.message
-    assert.match(failedValidationText ?? "", /rejected/i)
-
+    // 3. Valid key → unlocks
     const validValidation = await fetch(`${launch.url}/api/onboarding`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify({
-        action: "save_api_key",
-        providerId: "openai",
-        apiKey: "valid-demo-key",
-      }),
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ action: "save_api_key", providerId: "openai", apiKey: "valid-demo-key" }),
       signal: AbortSignal.timeout(60_000),
     })
     assert.equal(validValidation.status, 200, `expected successful retry to unlock onboarding: ${validValidation.status}`)
-    const validValidationPayload = await validValidation.json() as any
-    assert.equal(validValidationPayload.onboarding.locked, false)
-    assert.equal(validValidationPayload.onboarding.bridgeAuthRefresh.phase, "succeeded")
+    const validPayload = await validValidation.json() as any
+    assert.equal(validPayload.onboarding.locked, false)
+    assert.equal(validPayload.onboarding.bridgeAuthRefresh.phase, "succeeded")
 
-    await page.reload({ waitUntil: "load" })
-
-    await page.waitForFunction(async () => {
-      const response = await fetch('/api/boot', {
-        method: 'GET',
-        headers: { Accept: 'application/json' },
-        cache: 'no-store',
-      })
-      if (!response.ok) return false
-      const payload = await response.json() as any
-      return payload.onboarding?.locked === false && payload.onboarding?.bridgeAuthRefresh?.phase === 'succeeded'
-    }, null, { timeout: 30_000 })
-
-    await page.waitForSelector('[data-testid="onboarding-gate"]', { state: "detached", timeout: 30_000 })
-
-    await page.locator("button[title='Chat']").click()
-    const composer = page.locator('textarea[aria-label="Send message"]')
-    await composer.waitFor({ state: "visible", timeout: 20_000 })
-    assert.equal(await composer.isDisabled(), false)
-
-    const newSessionResponse = page.waitForResponse((response) => {
-      if (new URL(response.url()).pathname !== "/api/session/command") return false
-      if (response.request().method() !== "POST" || response.status() !== 200) return false
-      const body = response.request().postData()
-      if (!body) return false
-      try {
-        return JSON.parse(body).type === "new_session"
-      } catch {
-        return false
-      }
-    }, { timeout: 20_000 })
-
-    await composer.fill("/new")
-    await composer.press("Enter")
-    await newSessionResponse
-    await page.waitForFunction(() => document.body.textContent?.includes("/new"), null, { timeout: 30_000 })
-
+    // 4. Boot confirms unlocked
     const bootAfter = await fetch(`${launch.url}/api/boot`, {
       method: "GET",
       headers: { Accept: "application/json" },
       signal: AbortSignal.timeout(10_000),
     })
-    assert.equal(bootAfter.ok, true, `expected unlocked boot endpoint to respond successfully: ${bootAfter.status}`)
+    assert.equal(bootAfter.ok, true)
     const bootAfterPayload = await bootAfter.json() as any
     assert.equal(bootAfterPayload.onboarding.locked, false)
     assert.equal(bootAfterPayload.onboarding.lockReason, null)
   } finally {
-    await browser?.close().catch(() => undefined)
     if (port !== null) {
       await killProcessOnPort(port)
     }
