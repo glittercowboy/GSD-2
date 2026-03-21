@@ -76,6 +76,9 @@ test('cli.ts branches to web mode before interactive startup and preserves cwd-s
       cwd,
       projectSessionsDir: cliWeb.getProjectSessionsDir(cwd),
       agentDir: join(process.env.HOME || '', '.gsd', 'agent'),
+      host: undefined,
+      port: undefined,
+      allowedOrigins: undefined,
     })
   } finally {
     rmSync(tmp, { recursive: true, force: true })
