@@ -46,7 +46,7 @@
 
 ## Tasks
 
-- [ ] **T01: Define unified rule types and build RuleRegistry class** `est:45m`
+- [x] **T01: Define unified rule types and build RuleRegistry class** `est:45m`
   - Why: The unified type system and registry class are the foundation for everything else. Pure new code with no integration risk — can be written and tested in isolation before touching existing modules.
   - Files: `src/resources/extensions/gsd/rule-types.ts`, `src/resources/extensions/gsd/rule-registry.ts`, `src/resources/extensions/gsd/tests/rule-registry.test.ts`
   - Do: (1) Create `rule-types.ts` with `UnifiedRule`, `RuleWhen` (`"dispatch"` | `"post-unit"` | `"pre-dispatch"`), `RuleWhere` (async/sync predicate), `RuleThen` (action builder), `RuleEvaluation` (`"first-match"` | `"all-matching"`), and optional lifecycle fields (`artifact`, `retry_on`, `max_cycles`, `idempotency_key`). (2) Create `rule-registry.ts` with `RuleRegistry` class: constructor takes `UnifiedRule[]`, methods `listRules()`, `evaluateDispatch(ctx)`, `evaluatePostUnit(type, id, basePath)`, `evaluatePreDispatch(type, id, prompt, basePath)`. Dispatch evaluation is async first-match-wins; hook evaluation is sync all-matching. The registry encapsulates mutable state (activeHook, hookQueue, cycleCounts, retryPending, retryTrigger) as instance fields. Include singleton accessor `getRegistry()` / `setRegistry()`. (3) Write `tests/rule-registry.test.ts` with tests: construct a registry from mock rules, `listRules()` returns them all, dispatch evaluation returns first match, hook evaluation returns all matches, async where predicates work, lifecycle fields are preserved. Tests use `node:test`.

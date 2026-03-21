@@ -88,3 +88,10 @@ The registry must support three distinct evaluation strategies: async first-matc
 - `src/resources/extensions/gsd/rule-types.ts` — new file with unified rule type definitions
 - `src/resources/extensions/gsd/rule-registry.ts` — new file with RuleRegistry class and singleton accessors
 - `src/resources/extensions/gsd/tests/rule-registry.test.ts` — new test file for registry
+
+## Observability Impact
+
+- **New signal:** `registry.listRules()` returns a structured array of all registered `UnifiedRule` objects — an LLM agent can inspect the full dispatch/hook configuration, rule names, phases, and evaluation strategies at any time.
+- **Inspection surface:** The `RuleRegistry` singleton is accessible via `getRegistry()`. Calling `listRules()` on it shows dispatch rules (static) plus dynamically-loaded hook rules from preferences.
+- **Failure visibility:** If a dispatch rule or hook fails to register, `listRules().length` will be lower than expected. The test suite asserts rule counts and field presence. `getRegistry()` throws if called before initialization — making uninitialized state immediately visible rather than silently returning null.
+- **State inspection:** `getActiveHook()`, `isRetryPending()`, `getHookStatus()` expose hook engine state as instance methods on the registry, readable by any caller with access to the singleton.
