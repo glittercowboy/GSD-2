@@ -920,11 +920,15 @@ export async function showSmartEntry(
   const state = await deriveState(basePath);
 
   if (!state.activeMilestone) {
-    // Guard: if a discuss session is already in flight, don't re-inject the prompt.
-    // Both /gsd and /gsd auto reach this branch when no milestone exists yet.
-    // Without this guard, every subsequent /gsd call overwrites pendingAutoStart
-    // and fires another dispatchWorkflow, resetting the conversation mid-interview.
-    if (pendingAutoStart) {
+    // Guard: if a discuss session is already in flight for THIS project, don't
+    // re-inject the prompt. Both /gsd and /gsd auto reach this branch when no
+    // milestone exists yet. Without this guard, every subsequent /gsd call
+    // overwrites pendingAutoStart and fires another dispatchWorkflow, resetting
+    // the conversation mid-interview.
+    // NOTE: We also check basePath to avoid cross-project contamination — if the
+    // user ran /gsd in a different project in the same session, pendingAutoStart
+    // would be set for that project's basePath, not this one.
+    if (pendingAutoStart && pendingAutoStart.basePath === basePath) {
       ctx.ui.notify("Discussion already in progress — answer the question above to continue.", "info");
       return;
     }
