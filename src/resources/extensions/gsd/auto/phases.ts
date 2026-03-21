@@ -809,6 +809,31 @@ export async function runUnitPhase(
     unitId,
   });
 
+  // ── Worktree health check (#1833) ───────────────────────────────────
+  // Verify the working directory is a valid git checkout with project
+  // files before dispatching work. A broken worktree causes agents to
+  // hallucinate summaries since they cannot read or write any files.
+  if (s.basePath && unitType === "execute-task") {
+    const gitMarker = join(s.basePath, ".git");
+    const hasGit = deps.existsSync(gitMarker);
+    const hasPackageJson = deps.existsSync(join(s.basePath, "package.json"));
+    const hasSrcDir = deps.existsSync(join(s.basePath, "src"));
+    if (!hasGit) {
+      const msg = `Worktree health check failed: ${s.basePath} has no .git — refusing to dispatch ${unitType} ${unitId}`;
+      debugLog("runUnitPhase", { phase: "worktree-health-fail", basePath: s.basePath, hasGit, hasPackageJson, hasSrcDir });
+      ctx.ui.notify(msg, "error");
+      await deps.stopAuto(ctx, pi, msg);
+      return { action: "break", reason: "worktree-invalid" };
+    }
+    if (!hasPackageJson && !hasSrcDir) {
+      const msg = `Worktree health check failed: ${s.basePath} has no package.json or src/ — refusing to dispatch ${unitType} ${unitId}`;
+      debugLog("runUnitPhase", { phase: "worktree-health-fail", basePath: s.basePath, hasGit, hasPackageJson, hasSrcDir });
+      ctx.ui.notify(msg, "error");
+      await deps.stopAuto(ctx, pi, msg);
+      return { action: "break", reason: "worktree-invalid" };
+    }
+  }
+
   // Detect retry and capture previous tier for escalation
   const isRetry = !!(
     s.currentUnit &&
@@ -1053,6 +1078,34 @@ export async function runUnitPhase(
     s.currentUnit.startedAt,
     deps.buildSnapshotOpts(unitType, unitId),
   );
+
+  // ── Zero tool-call guard (#1833) ──────────────────────────────────
+  // An execute-task agent that completes with 0 tool calls made no
+  // real changes — its summary is hallucinated. Treat as failed so
+  // the task is retried instead of silently marked complete.
+  if (unitType === "execute-task") {
+    const currentLedger = deps.getLedger() as { units: Array<{ type: string; id: string; startedAt: number; toolCalls: number }> } | null;
+    if (currentLedger?.units) {
+      const lastUnit = [...currentLedger.units].reverse().find(
+        (u: { type: string; id: string; startedAt: number; toolCalls: number }) => u.type === unitType && u.id === unitId && u.startedAt === s.currentUnit!.startedAt,
+      );
+      if (lastUnit && lastUnit.toolCalls === 0) {
+        debugLog("runUnitPhase", {
+          phase: "zero-tool-calls",
+          unitType,
+          unitId,
+          warning: "Task completed with 0 tool calls — likely hallucinated, marking as failed",
+        });
+        ctx.ui.notify(
+          `${unitType} ${unitId} completed with 0 tool calls — hallucinated summary, will retry`,
+          "warning",
+        );
+        // Do NOT add to completedUnits — fall through to next iteration
+        // where dispatch will re-derive and re-dispatch this task.
+        return { action: "next", data: { unitStartedAt: s.currentUnit.startedAt } };
+      }
+    }
+  }
 
   if (s.currentUnitRouting) {
     deps.recordOutcome(
