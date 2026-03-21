@@ -694,6 +694,42 @@ export async function checkRuntimeHealth(
     // Non-fatal — metrics check failed
   }
 
+  // ── Metrics ledger bloat ──────────────────────────────────────────────
+  // The metrics ledger has no TTL and grows by one entry per completed unit.
+  // At 50 units/day a project can accumulate tens of thousands of entries over
+  // months of use. Prune to the newest 1500 when the threshold is exceeded.
+  try {
+    const metricsFilePath = join(root, "metrics.json");
+    if (existsSync(metricsFilePath)) {
+      try {
+        const raw = readFileSync(metricsFilePath, "utf-8");
+        const parsed = JSON.parse(raw);
+        const BLOAT_UNITS_THRESHOLD = 2000;
+        if (parsed.version === 1 && Array.isArray(parsed.units) && parsed.units.length > BLOAT_UNITS_THRESHOLD) {
+          const fileSizeMB = (statSync(metricsFilePath).size / (1024 * 1024)).toFixed(1);
+          issues.push({
+            severity: "warning",
+            code: "metrics_ledger_bloat",
+            scope: "project",
+            unitId: "project",
+            message: `metrics.json has ${parsed.units.length} unit entries (${fileSizeMB}MB) — threshold is ${BLOAT_UNITS_THRESHOLD}. Run /gsd doctor --fix to prune to the newest 1500 entries.`,
+            file: ".gsd/metrics.json",
+            fixable: true,
+          });
+          if (shouldFix("metrics_ledger_bloat")) {
+            const { pruneMetricsLedger } = await import("./metrics.js");
+            const removed = pruneMetricsLedger(basePath, 1500);
+            fixesApplied.push(`pruned metrics ledger: removed ${removed} oldest entries (${parsed.units.length - removed} remain)`);
+          }
+        }
+      } catch {
+        // JSON parse failed — already handled by the integrity check above
+      }
+    }
+  } catch {
+    // Non-fatal — metrics bloat check failed
+  }
+
   // ── Large planning file detection ──────────────────────────────────────
   // Files over 100KB can cause LLM context pressure. Report the worst offenders.
   try {

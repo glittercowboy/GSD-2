@@ -63,6 +63,7 @@ export type DoctorIssueCode =
   | "future_timestamp"
   // Runtime data integrity
   | "orphaned_project_state"
+  | "metrics_ledger_bloat"
   | "metrics_ledger_corrupt"
   | "large_planning_file"
   // Slow environment checks (opt-in via --build / --test flags)
