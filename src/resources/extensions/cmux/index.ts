@@ -62,7 +62,7 @@ export function resolveCmuxConfig(
 ): ResolvedCmuxConfig {
   const detected = detectCmuxEnvironment(env, socketExists, cliAvailable);
   const cmux = preferences?.cmux ?? {};
-  const enabled = detected.available && cmux.enabled === true;
+  const enabled = detected.available && cmux.enabled !== false;
   return {
     ...detected,
     enabled,
@@ -82,7 +82,9 @@ export function shouldPromptToEnableCmux(
   if (cmuxPromptedThisSession) return false;
   const detected = detectCmuxEnvironment(env, socketExists, cliAvailable);
   if (!detected.available) return false;
-  return preferences?.cmux?.enabled === undefined;
+  // Prompt when cmux is available and the user hasn't explicitly configured it yet.
+  // Once they've set any cmux preference (on or off), we stop prompting.
+  return preferences?.cmux === undefined;
 }
 
 export function markCmuxPromptShown(): void {

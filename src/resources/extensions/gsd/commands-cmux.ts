@@ -63,7 +63,7 @@ function formatCmuxStatus(): string {
     `Socket: ${detected.socketPath}`,
     `Workspace: ${detected.workspaceId ?? "(none)"}`,
     `Surface: ${detected.surfaceId ?? "(none)"}`,
-    `Features: notifications=${resolved.notifications ? "on" : "off"}, sidebar=${resolved.sidebar ? "on" : "off"}, splits=${resolved.splits ? "on" : "off"}, browser=${resolved.browser ? "on" : "off"}`,
+    `Features: notifications=${resolved.notifications ? "on" : "off"}, sidebar=${resolved.sidebar ? "on" : "off"}, splits=${resolved.splits ? "on" : "off"}, browser=${resolved.browser ? "on" : "off"} (not yet implemented)`,
     `Capabilities: access=${accessMode}, methods=${methods}`,
   ].join("\n");
 }
@@ -88,15 +88,8 @@ export async function handleCmux(args: string, ctx: ExtensionCommandContext): Pr
   if (trimmed === "on") {
     if (!ensureCmuxAvailableForEnable(ctx)) return;
     await writeProjectCmuxPreferences(ctx, (prefs) => {
-      prefs.cmux = {
-        enabled: true,
-        notifications: true,
-        sidebar: true,
-        splits: false,
-        browser: false,
-        ...((prefs.cmux as Record<string, unknown> | undefined) ?? {}),
-      };
-      (prefs.cmux as Record<string, unknown>).enabled = true;
+      const existing = (prefs.cmux as Record<string, unknown> | undefined) ?? {};
+      prefs.cmux = { ...existing, enabled: true };
     });
     ctx.ui.notify("cmux integration enabled in project preferences.", "info");
     return;
@@ -121,7 +114,6 @@ export async function handleCmux(args: string, ctx: ExtensionCommandContext): Pr
     await writeProjectCmuxPreferences(ctx, (prefs) => {
       const next = { ...((prefs.cmux as Record<string, unknown> | undefined) ?? {}) };
       next[feature] = enabled;
-      if (enabled) next.enabled = true;
       prefs.cmux = next;
     });
 

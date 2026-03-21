@@ -28,6 +28,40 @@ test("detectCmuxEnvironment requires workspace, surface, and socket", () => {
   assert.equal(detected.cliAvailable, true);
 });
 
+test("resolveCmuxConfig auto-enables when environment is available and no preference is set", () => {
+  const config = resolveCmuxConfig(
+    undefined,
+    {
+      CMUX_WORKSPACE_ID: "workspace:1",
+      CMUX_SURFACE_ID: "surface:2",
+      CMUX_SOCKET_PATH: "/tmp/cmux.sock",
+    },
+    () => true,
+    () => true,
+  );
+  assert.equal(config.enabled, true);
+  assert.equal(config.notifications, true);
+  assert.equal(config.sidebar, true);
+  assert.equal(config.splits, false); // splits stay opt-in
+  assert.equal(config.browser, false); // browser stays opt-in
+});
+
+test("resolveCmuxConfig respects explicit enabled: false to disable", () => {
+  const config = resolveCmuxConfig(
+    { cmux: { enabled: false } },
+    {
+      CMUX_WORKSPACE_ID: "workspace:1",
+      CMUX_SURFACE_ID: "surface:2",
+      CMUX_SOCKET_PATH: "/tmp/cmux.sock",
+    },
+    () => true,
+    () => true,
+  );
+  assert.equal(config.enabled, false);
+  assert.equal(config.notifications, false);
+  assert.equal(config.sidebar, false);
+});
+
 test("resolveCmuxConfig enables only when preference and environment are both active", () => {
   const config = resolveCmuxConfig(
     { cmux: { enabled: true, notifications: true, sidebar: true, splits: true } },
@@ -76,6 +110,22 @@ test("shouldPromptToEnableCmux only prompts once per session", () => {
     ),
     false,
   );
+  resetCmuxPromptState();
+});
+
+test("shouldPromptToEnableCmux does not prompt when cmux config block is present", () => {
+  resetCmuxPromptState();
+  const env = {
+    CMUX_WORKSPACE_ID: "workspace:1",
+    CMUX_SURFACE_ID: "surface:2",
+    CMUX_SOCKET_PATH: "/tmp/cmux.sock",
+  };
+  const socketExists = () => true;
+  const cliAvail = () => true;
+  // Any cmux config block suppresses the prompt — user has already seen/configured it
+  assert.equal(shouldPromptToEnableCmux({ cmux: { enabled: true } }, env, socketExists, cliAvail), false);
+  assert.equal(shouldPromptToEnableCmux({ cmux: { enabled: false } }, env, socketExists, cliAvail), false);
+  assert.equal(shouldPromptToEnableCmux({ cmux: { splits: true } }, env, socketExists, cliAvail), false);
   resetCmuxPromptState();
 });
 
