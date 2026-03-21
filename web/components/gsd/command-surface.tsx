@@ -82,7 +82,7 @@ import {
 
 // ─── Section metadata ────────────────────────────────────────────────
 
-const SETTINGS_SURFACE_SECTIONS = ["general", "model", "session-behavior", "recovery", "auth", "workspace"] as const
+const SETTINGS_SURFACE_SECTIONS = ["general", "model", "session-behavior", "recovery", "auth", "integrations", "workspace"] as const
 const ADMIN_SECTION: CommandSurfaceSection = "admin"
 const GIT_SURFACE_SECTIONS = ["git"] as const
 const SESSION_SURFACE_SECTIONS = ["resume", "name", "fork", "session", "compact"] as const
@@ -124,6 +124,7 @@ function sectionLabel(section: CommandSurfaceSection): string {
     session: "Session",
     compact: "Compact",
     workspace: "Workspace",
+    integrations: "Integrations",
   }
   return labels[section] ?? section
 }
@@ -147,6 +148,7 @@ function sectionIcon(section: CommandSurfaceSection) {
     session: <FileText className="h-4 w-4" />,
     compact: <Archive className="h-4 w-4" />,
     workspace: <FolderRoot className="h-4 w-4" />,
+    integrations: <Radio className="h-4 w-4" />,
   }
   return icons[section] ?? null
 }
@@ -2122,6 +2124,7 @@ export function CommandSurface() {
       case "session": return renderSessionSection()
       case "compact": return renderCompactSection()
       case "workspace": return <DevRootSettingsSection />
+      case "integrations": return <RemoteQuestionsPanel />
       case "gsd-forensics": return <ForensicsPanel />
       case "gsd-doctor": return <DoctorPanel />
       case "gsd-skill-health": return <SkillHealthPanel />

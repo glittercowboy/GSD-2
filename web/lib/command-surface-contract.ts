@@ -39,6 +39,7 @@ export type CommandSurfaceSection =
   | "session"
   | "compact"
   | "workspace"
+  | "integrations"
   // GSD subcommand surfaces (S02)
   | "gsd-status"
   | "gsd-visualize"
