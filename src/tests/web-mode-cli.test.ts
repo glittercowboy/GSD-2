@@ -150,7 +150,11 @@ test('launchWebMode prefers the packaged standalone host and opens the resolved 
     assert.equal(status.url, 'http://127.0.0.1:45123')
     assert.equal(initResourcesCalled, true)
     assert.equal(unrefCalled, true)
-    assert.equal(openedUrl, 'http://127.0.0.1:45123')
+    // The browser URL now includes a random auth token as a fragment
+    assert.match(openedUrl, /^http:\/\/127\.0\.0\.1:45123\/#token=[a-f0-9]{64}$/)
+    // Extract the auth token the launcher generated so we can verify it was
+    // passed consistently to both the env and the browser URL.
+    const authToken = openedUrl.replace('http://127.0.0.1:45123/#token=', '')
     assert.deepEqual(spawnInvocation, {
       command: '/custom/node',
       args: [serverPath],
@@ -164,6 +168,7 @@ test('launchWebMode prefers the packaged standalone host and opens the resolved 
           PORT: '45123',
           GSD_WEB_HOST: '127.0.0.1',
           GSD_WEB_PORT: '45123',
+          GSD_WEB_AUTH_TOKEN: authToken,
           GSD_WEB_PROJECT_CWD: '/tmp/current-project',
           GSD_WEB_PROJECT_SESSIONS_DIR: '/tmp/.gsd/sessions/--tmp-current-project--',
           GSD_WEB_PACKAGE_ROOT: tmp,
