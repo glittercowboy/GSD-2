@@ -28,7 +28,7 @@ const { assertEq, assertTrue, report } = createTestContext();
  * Apply `realpathSync` and lowercase on Windows to eliminate both discrepancies.
  */
 function normalizePath(p: string): string {
-  const resolved = realpathSync(p);
+  const resolved = process.platform === "win32" ? realpathSync.native(p) : realpathSync(p);
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
