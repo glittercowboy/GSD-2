@@ -26,15 +26,29 @@ export function proxy(request: NextRequest): NextResponse | undefined {
 
   // ── Origin / CORS check ────────────────────────────────────────────
   const origin = request.headers.get("origin")
-  const host = process.env.GSD_WEB_HOST || "127.0.0.1"
-  const port = process.env.GSD_WEB_PORT || "3000"
-  const expectedOrigin = `http://${host}:${port}`
+  if (origin) {
+    const host = process.env.GSD_WEB_HOST || "127.0.0.1"
+    const port = process.env.GSD_WEB_PORT || "3000"
 
-  if (origin && origin !== expectedOrigin) {
-    return NextResponse.json(
-      { error: "Forbidden: origin mismatch" },
-      { status: 403 },
-    )
+    // Default: localhost origin for the launched host:port
+    const allowed = new Set([`http://${host}:${port}`])
+
+    // GSD_WEB_ALLOWED_ORIGINS lets users whitelist additional origins for
+    // secure tunnel setups (Tailscale Serve, Cloudflare Tunnel, ngrok, etc.)
+    const extra = process.env.GSD_WEB_ALLOWED_ORIGINS
+    if (extra) {
+      for (const entry of extra.split(",")) {
+        const trimmed = entry.trim()
+        if (trimmed) allowed.add(trimmed)
+      }
+    }
+
+    if (!allowed.has(origin)) {
+      return NextResponse.json(
+        { error: "Forbidden: origin mismatch" },
+        { status: 403 },
+      )
+    }
   }
 
   // ── Bearer token check ─────────────────────────────────────────────
