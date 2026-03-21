@@ -7,8 +7,8 @@ import assert from "node:assert/strict";
 import { AsyncJobManager } from "./job-manager.ts";
 import { createAwaitTool } from "./await-tool.ts";
 
-function getTextFromResult(result: { content: Array<{ type: string; text: string }> }): string {
-	return result.content.map((c) => c.text).join("\n");
+function getTextFromResult(result: { content: Array<{ type: string; text?: string }> }): string {
+	return result.content.map((c) => c.text ?? "").join("\n");
 }
 
 const noopSignal = new AbortController().signal;
