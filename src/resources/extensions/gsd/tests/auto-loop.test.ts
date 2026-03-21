@@ -382,7 +382,7 @@ function makeMockDeps(
     getDeepDiagnostic: () => null,
     isDbAvailable: () => false,
     reorderForCaching: (p: string) => p,
-    existsSync: () => false,
+    existsSync: (p: string) => p.endsWith(".git") || p.endsWith("package.json"),
     readFileSync: () => "",
     atomicWriteSync: () => {},
     GitServiceImpl: class {} as any,
@@ -1845,4 +1845,287 @@ test("resolveAgentEnd unblocks pending runUnit when called before session reset 
 
   const result = await resultPromise;
   assert.equal(result.status, "completed", "runUnit should resolve, not hang");
+});
+
+// ─── Zero tool-call hallucination guard (#1833) ───────────────────────────
+
+test("autoLoop rejects execute-task with 0 tool calls as hallucinated (#1833)", async () => {
+  _resetPendingResolve();
+
+  const ctx = makeMockCtx();
+  ctx.ui.setStatus = () => {};
+  ctx.sessionManager = { getSessionFile: () => "/tmp/session.json" };
+  const pi = makeMockPi();
+
+  let iterationCount = 0;
+  const notifications: string[] = [];
+  ctx.ui.notify = (msg: string) => { notifications.push(msg); };
+
+  const s = makeLoopSession();
+
+  // Mock ledger: execute-task completed with 0 tool calls
+  const mockLedger = {
+    version: 1,
+    projectStartedAt: Date.now(),
+    units: [] as any[],
+  };
+
+  const deps = makeMockDeps({
+    deriveState: async () => {
+      deps.callLog.push("deriveState");
+      return {
+        phase: "executing",
+        activeMilestone: { id: "M001", title: "Test", status: "active" },
+        activeSlice: { id: "S01", title: "Slice 1" },
+        activeTask: { id: "T01" },
+        registry: [{ id: "M001", status: "active" }],
+        blockers: [],
+      } as any;
+    },
+    resolveDispatch: async () => {
+      deps.callLog.push("resolveDispatch");
+      return {
+        action: "dispatch" as const,
+        unitType: "execute-task",
+        unitId: "M001/S01/T01",
+        prompt: "implement the feature",
+      };
+    },
+    closeoutUnit: async () => {
+      // Simulate snapshotUnitMetrics adding a 0-toolCalls entry to ledger
+      mockLedger.units.push({
+        type: "execute-task",
+        id: "M001/S01/T01",
+        startedAt: s.currentUnit?.startedAt ?? Date.now(),
+        toolCalls: 0,
+        assistantMessages: 1,
+        tokens: { input: 100, output: 200, total: 300, cacheRead: 0, cacheWrite: 0 },
+        cost: 0.50,
+      });
+    },
+    getLedger: () => mockLedger,
+    postUnitPostVerification: async () => {
+      deps.callLog.push("postUnitPostVerification");
+      iterationCount++;
+      if (iterationCount >= 2) {
+        s.active = false;
+      }
+      return "continue" as const;
+    },
+  });
+
+  const loopPromise = autoLoop(ctx, pi, s, deps);
+
+  // First iteration: execute-task with 0 tool calls → rejected
+  await new Promise((r) => setTimeout(r, 50));
+  resolveAgentEnd(makeEvent());
+
+  // Second iteration: same task re-dispatched, this time with tool calls
+  await new Promise((r) => setTimeout(r, 50));
+  mockLedger.units.length = 0; // clear previous entry
+  (deps as any).closeoutUnit = async () => {
+    mockLedger.units.push({
+      type: "execute-task",
+      id: "M001/S01/T01",
+      startedAt: s.currentUnit?.startedAt ?? Date.now(),
+      toolCalls: 5,
+      assistantMessages: 3,
+      tokens: { input: 500, output: 800, total: 1300, cacheRead: 0, cacheWrite: 0 },
+      cost: 1.00,
+    });
+  };
+  resolveAgentEnd(makeEvent());
+
+  await loopPromise;
+
+  // The task should NOT have been added to completedUnits on the first iteration
+  // (0 tool calls), but SHOULD be added on the second iteration (5 tool calls)
+  const warningNotification = notifications.find(
+    (n) => n.includes("0 tool calls") && n.includes("hallucinated"),
+  );
+  assert.ok(
+    warningNotification,
+    "should notify about 0 tool calls hallucination",
+  );
+
+  // Verify deriveState was called at least twice (two iterations)
+  const deriveCount = deps.callLog.filter((c) => c === "deriveState").length;
+  assert.ok(
+    deriveCount >= 2,
+    `deriveState should be called at least 2 times for retry (got ${deriveCount})`,
+  );
+});
+
+test("autoLoop does NOT reject non-execute-task units with 0 tool calls (#1833)", async () => {
+  _resetPendingResolve();
+
+  const ctx = makeMockCtx();
+  ctx.ui.setStatus = () => {};
+  ctx.sessionManager = { getSessionFile: () => "/tmp/session.json" };
+  const pi = makeMockPi();
+
+  const notifications: string[] = [];
+  ctx.ui.notify = (msg: string) => { notifications.push(msg); };
+
+  const s = makeLoopSession();
+
+  const mockLedger = {
+    version: 1,
+    projectStartedAt: Date.now(),
+    units: [] as any[],
+  };
+
+  const deps = makeMockDeps({
+    deriveState: async () => {
+      deps.callLog.push("deriveState");
+      return {
+        phase: "executing",
+        activeMilestone: { id: "M001", title: "Test", status: "active" },
+        activeSlice: { id: "S01", title: "Slice 1" },
+        activeTask: { id: "T01" },
+        registry: [{ id: "M001", status: "active" }],
+        blockers: [],
+      } as any;
+    },
+    resolveDispatch: async () => {
+      deps.callLog.push("resolveDispatch");
+      return {
+        action: "dispatch" as const,
+        unitType: "complete-slice",
+        unitId: "M001/S01",
+        prompt: "complete the slice",
+      };
+    },
+    closeoutUnit: async () => {
+      // complete-slice with 0 tool calls is fine (e.g. it may just update status)
+      mockLedger.units.push({
+        type: "complete-slice",
+        id: "M001/S01",
+        startedAt: s.currentUnit?.startedAt ?? Date.now(),
+        toolCalls: 0,
+        assistantMessages: 1,
+        tokens: { input: 50, output: 100, total: 150, cacheRead: 0, cacheWrite: 0 },
+        cost: 0.10,
+      });
+    },
+    getLedger: () => mockLedger,
+    verifyExpectedArtifact: () => true,
+    postUnitPostVerification: async () => {
+      deps.callLog.push("postUnitPostVerification");
+      s.active = false;
+      return "continue" as const;
+    },
+  });
+
+  const loopPromise = autoLoop(ctx, pi, s, deps);
+
+  await new Promise((r) => setTimeout(r, 50));
+  resolveAgentEnd(makeEvent());
+
+  await loopPromise;
+
+  // Should NOT have a hallucination warning for non-execute-task units
+  const warningNotification = notifications.find(
+    (n) => n.includes("0 tool calls") && n.includes("hallucinated"),
+  );
+  assert.ok(
+    !warningNotification,
+    "should NOT flag non-execute-task units with 0 tool calls",
+  );
+
+  // The unit should have been added to completedUnits normally
+  assert.ok(
+    s.completedUnits.length >= 1,
+    "complete-slice with 0 tool calls should still be marked as completed",
+  );
+});
+
+// ─── Worktree health check (#1833) ────────────────────────────────────────
+
+test("autoLoop stops when worktree has no .git for execute-task (#1833)", async () => {
+  _resetPendingResolve();
+
+  const ctx = makeMockCtx();
+  ctx.ui.setStatus = () => {};
+  ctx.sessionManager = { getSessionFile: () => "/tmp/session.json" };
+  const pi = makeMockPi();
+
+  const notifications: string[] = [];
+  ctx.ui.notify = (msg: string) => { notifications.push(msg); };
+
+  const s = makeLoopSession({ basePath: "/tmp/broken-worktree" });
+
+  const deps = makeMockDeps({
+    deriveState: async () => {
+      deps.callLog.push("deriveState");
+      return {
+        phase: "executing",
+        activeMilestone: { id: "M001", title: "Test", status: "active" },
+        activeSlice: { id: "S01", title: "Slice 1" },
+        activeTask: { id: "T01" },
+        registry: [{ id: "M001", status: "active" }],
+        blockers: [],
+      } as any;
+    },
+    // .git does not exist in the broken worktree
+    existsSync: (p: string) => !p.endsWith(".git"),
+  });
+
+  await autoLoop(ctx, pi, s, deps);
+
+  assert.ok(
+    deps.callLog.includes("stopAuto"),
+    "should stop auto-mode when worktree is invalid",
+  );
+  const healthNotification = notifications.find(
+    (n) => n.includes("Worktree health check failed") && n.includes("no .git"),
+  );
+  assert.ok(
+    healthNotification,
+    "should notify about missing .git in worktree",
+  );
+});
+
+test("autoLoop stops when worktree has no project files for execute-task (#1833)", async () => {
+  _resetPendingResolve();
+
+  const ctx = makeMockCtx();
+  ctx.ui.setStatus = () => {};
+  ctx.sessionManager = { getSessionFile: () => "/tmp/session.json" };
+  const pi = makeMockPi();
+
+  const notifications: string[] = [];
+  ctx.ui.notify = (msg: string) => { notifications.push(msg); };
+
+  const s = makeLoopSession({ basePath: "/tmp/empty-worktree" });
+
+  const deps = makeMockDeps({
+    deriveState: async () => {
+      deps.callLog.push("deriveState");
+      return {
+        phase: "executing",
+        activeMilestone: { id: "M001", title: "Test", status: "active" },
+        activeSlice: { id: "S01", title: "Slice 1" },
+        activeTask: { id: "T01" },
+        registry: [{ id: "M001", status: "active" }],
+        blockers: [],
+      } as any;
+    },
+    // Has .git but no package.json or src/
+    existsSync: (p: string) => p.endsWith(".git"),
+  });
+
+  await autoLoop(ctx, pi, s, deps);
+
+  assert.ok(
+    deps.callLog.includes("stopAuto"),
+    "should stop auto-mode when worktree has no project files",
+  );
+  const healthNotification = notifications.find(
+    (n) => n.includes("Worktree health check failed") && n.includes("no package.json or src/"),
+  );
+  assert.ok(
+    healthNotification,
+    "should notify about missing project files in worktree",
+  );
 });
