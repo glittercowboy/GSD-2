@@ -136,17 +136,6 @@ This file is the explicit capability and coverage contract for the project.
 - Validation: unmapped
 - Notes: No auto-pruning in v1 — just daily rotation
 
-### R013 — All GSD tools follow gsd_concept_action pattern (e.g., gsd_decision_save, gsd_requirement_update, gsd_journal_query)
-- Class: quality-attribute
-- Status: active
-- Description: All GSD tools follow gsd_concept_action pattern (e.g., gsd_decision_save, gsd_requirement_update, gsd_journal_query)
-- Why it matters: Predictable naming helps LLMs select the right tool — concept groups related operations, action describes the operation
-- Source: user (#1766)
-- Primary owning slice: M001-xij4rf/S04
-- Supporting slices: none
-- Validation: unmapped
-- Notes: Constrained by Anthropic API: ^[a-zA-Z0-9_-]{1,128}$
-
 ### R014 — Old tool names (gsd_save_decision, gsd_update_requirement, etc.) remain registered as aliases pointing to the same implementation
 - Class: continuity
 - Status: active
@@ -179,6 +168,19 @@ This file is the explicit capability and coverage contract for the project.
 - Supporting slices: none
 - Validation: unmapped
 - Notes: Hook API surface (checkPostUnitHooks, runPreDispatchHooks, etc.) may change but behavior must match
+
+## Validated
+
+### R013 — All GSD tools follow gsd_concept_action pattern (e.g., gsd_decision_save, gsd_requirement_update, gsd_journal_query)
+- Class: quality-attribute
+- Status: validated
+- Description: All GSD tools follow gsd_concept_action pattern (e.g., gsd_decision_save, gsd_requirement_update, gsd_journal_query)
+- Why it matters: Predictable naming helps LLMs select the right tool — concept groups related operations, action describes the operation
+- Source: user (#1766)
+- Primary owning slice: M001-xij4rf/S04
+- Supporting slices: none
+- Validation: tool-naming.test.ts confirms all 4 canonical gsd_concept_action names register; extension-manifest.json lists them; prompts reference them exclusively
+- Notes: Constrained by Anthropic API: ^[a-zA-Z0-9_-]{1,128}$
 
 ## Deferred
 
@@ -233,7 +235,7 @@ This file is the explicit capability and coverage contract for the project.
 | R010 | integration | active | M001-xij4rf/S02 | M001-xij4rf/S01 | unmapped |
 | R011 | core-capability | active | M001-xij4rf/S03 | M001-xij4rf/S02 | unmapped |
 | R012 | operability | active | M001-xij4rf/S02 | none | unmapped |
-| R013 | quality-attribute | active | M001-xij4rf/S04 | none | unmapped |
+| R013 | quality-attribute | validated | M001-xij4rf/S04 | none | tool-naming.test.ts confirms all 4 canonical gsd_concept_action names register; extension-manifest.json lists them; prompts reference them exclusively |
 | R014 | continuity | active | M001-xij4rf/S04 | none | unmapped |
 | R015 | quality-attribute | active | M001-xij4rf/S01 | none | unmapped |
 | R016 | quality-attribute | active | M001-xij4rf/S01 | none | unmapped |
@@ -243,7 +245,7 @@ This file is the explicit capability and coverage contract for the project.
 
 ## Coverage Summary
 
-- Active requirements: 16
-- Mapped to slices: 16
-- Validated: 0
+- Active requirements: 15
+- Mapped to slices: 15
+- Validated: 1 (R013)
 - Unmapped active requirements: 0
