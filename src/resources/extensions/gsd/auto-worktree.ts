@@ -1128,17 +1128,9 @@ export function mergeMilestoneToMain(
     }
   }
 
-  // 10. Guard: if squash produced nothing to commit, the milestone branch has
-  //     changes that were not merged.  Preserve the branch and worktree so
-  //     commits are not silently lost (#1672, #1738).
-  if (nothingToCommit) {
-    process.chdir(previousCwd);
-    throw new GSDError(
-      GSD_GIT_ERROR,
-      `Squash merge of ${milestoneBranch} produced an empty commit — milestone branch preserved to prevent data loss. ` +
-        `Inspect the branch manually and retry.`,
-    );
-  }
+  // 10. Guard removed — step 8b (#1792) now handles this with a smarter check:
+  //     throws only when the milestone has unanchored code changes, passes
+  //     through when the code is genuinely already on the integration branch.
 
   // 11. Remove worktree directory first (must happen before branch deletion)
   try {
