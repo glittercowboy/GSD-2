@@ -45,7 +45,7 @@ function writeContext(base: string, mid: string, frontmatter: string): void {
 function writeContextDraft(base: string, mid: string, frontmatter: string): void {
   const dir = join(base, '.gsd', 'milestones', mid);
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, `${mid}-CONTEXT-DRAFT.md`), `---\n${frontmatter}\n---\n`);
+  writeFileSync(join(dir, `${mid}-CONTEXT-DRAFT.md`), `---\n${frontmatter}\n---\n\n# Draft Context\nThis is a draft.`);
 }
 
 function writeSlicePlan(base: string, mid: string, sid: string, content: string): void {
@@ -488,6 +488,171 @@ async function main(): Promise<void> {
 
     const deps4 = parseContextDependsOn(null);
     assertEq(deps4.length, 0, 'null content returns empty array');
+  }
+
+  // ─── Test Group 10: draft-only-deps-blocked (#1724) ────────────────────
+  // M002 has only CONTEXT-DRAFT.md (no CONTEXT.md) with depends_on: [M001].
+  // M001 is incomplete → M002 must remain pending, not get promoted to active.
+  // Regression: before #1724, parseContextDependsOn received null for draft-only
+  // milestones, returning [], which caused dep-blocked milestones to be promoted.
+  console.log('\n=== draft-only-deps-blocked: CONTEXT-DRAFT.md depends_on blocks promotion ===');
+  {
+    const base = createFixtureBase();
+    try {
+      // M001: incomplete (one slice, no SUMMARY)
+      writeRoadmap(base, 'M001', `# M001: First Milestone
+
+**Vision:** First milestone still in progress.
+
+## Slices
+
+- [ ] **S01: Incomplete Slice** \`risk:low\` \`depends:[]\`
+  > After this: Done.
+`);
+      writeSlicePlan(base, 'M001', 'S01', `# S01: Incomplete Slice
+
+**Goal:** Test draft dep blocking.
+**Demo:** Tests pass.
+
+## Tasks
+
+- [ ] **T01: Do work** \`est:15m\`
+  First task still in progress.
+`);
+
+      // M002: only CONTEXT-DRAFT.md (no CONTEXT.md), depends on M001
+      writeContextDraft(base, 'M002', 'depends_on: [M001]');
+
+      const state = await deriveState(base);
+
+      assertEq(state.activeMilestone?.id, 'M001',
+        'draft-only-deps-blocked: activeMilestone is M001');
+      assertEq(state.registry.find(e => e.id === 'M002')?.status, 'pending',
+        'draft-only-deps-blocked: M002 is pending (dep on M001 not met, read from CONTEXT-DRAFT)');
+      assertTrue(state.phase !== 'blocked',
+        'draft-only-deps-blocked: phase is not blocked (M001 is active)');
+    } finally {
+      cleanup(base);
+    }
+  }
+
+  // ─── Test Group 11: draft-only-deps-unblocked (#1724) ─────────────────
+  // M001 is complete, M002 has only CONTEXT-DRAFT.md with depends_on: [M001].
+  // M002 should become active because its dep is satisfied.
+  console.log('\n=== draft-only-deps-unblocked: CONTEXT-DRAFT.md dep met → milestone activates ===');
+  {
+    const base = createFixtureBase();
+    try {
+      // M001: complete
+      writeRoadmap(base, 'M001', `# M001: First Milestone
+
+**Vision:** Complete milestone.
+
+## Slices
+
+- [x] **S01: Done** \`risk:low\` \`depends:[]\`
+  > After this: Done.
+`);
+      writeMilestoneValidation(base, 'M001');
+      writeMilestoneSummary(base, 'M001', '# M001 Summary\n\nComplete.');
+
+      // M002: only CONTEXT-DRAFT.md, depends on M001 (now complete)
+      writeContextDraft(base, 'M002', 'depends_on: [M001]');
+
+      const state = await deriveState(base);
+
+      assertEq(state.registry.find(e => e.id === 'M001')?.status, 'complete',
+        'draft-only-deps-unblocked: M001 is complete');
+      assertEq(state.registry.find(e => e.id === 'M002')?.status, 'active',
+        'draft-only-deps-unblocked: M002 is active (dep on M001 met via CONTEXT-DRAFT)');
+      assertEq(state.activeMilestone?.id, 'M002',
+        'draft-only-deps-unblocked: activeMilestone is M002');
+    } finally {
+      cleanup(base);
+    }
+  }
+
+  // ─── Test Group 12: draft-only-deps-with-roadmap (#1724) ──────────────
+  // M002 has a roadmap + only CONTEXT-DRAFT.md with depends_on: [M001].
+  // Tests the has-roadmap code path (second occurrence of the fix).
+  console.log('\n=== draft-only-deps-with-roadmap: has-roadmap path reads CONTEXT-DRAFT deps ===');
+  {
+    const base = createFixtureBase();
+    try {
+      // M001: incomplete
+      writeRoadmap(base, 'M001', `# M001: First Milestone
+
+**Vision:** Still in progress.
+
+## Slices
+
+- [ ] **S01: Working** \`risk:low\` \`depends:[]\`
+  > After this: Done.
+`);
+      writeSlicePlan(base, 'M001', 'S01', `# S01: Working
+
+**Goal:** Test.
+**Demo:** Tests pass.
+
+## Tasks
+
+- [ ] **T01: Work** \`est:15m\`
+  Doing work.
+`);
+
+      // M002: has a roadmap AND only CONTEXT-DRAFT.md with depends_on: [M001]
+      writeRoadmap(base, 'M002', `# M002: Second Milestone
+
+**Vision:** Has roadmap but only draft context with deps.
+
+## Slices
+
+- [ ] **S01: Blocked** \`risk:low\` \`depends:[]\`
+  > After this: Done.
+`);
+      writeContextDraft(base, 'M002', 'depends_on: [M001]');
+
+      const state = await deriveState(base);
+
+      assertEq(state.activeMilestone?.id, 'M001',
+        'draft-only-deps-with-roadmap: activeMilestone is M001');
+      assertEq(state.registry.find(e => e.id === 'M002')?.status, 'pending',
+        'draft-only-deps-with-roadmap: M002 is pending (dep read from CONTEXT-DRAFT in has-roadmap path)');
+    } finally {
+      cleanup(base);
+    }
+  }
+
+  // ─── Test Group 13: draft-only-no-deps (#1724) ────────────────────────
+  // M002 has only CONTEXT-DRAFT.md with NO depends_on field.
+  // Should behave same as no context file — normal sequential behavior.
+  console.log('\n=== draft-only-no-deps: CONTEXT-DRAFT without depends_on → no constraint ===');
+  {
+    const base = createFixtureBase();
+    try {
+      // M001: complete
+      writeRoadmap(base, 'M001', `# M001: First Milestone
+
+**Vision:** Complete.
+
+## Slices
+
+- [x] **S01: Done** \`risk:low\` \`depends:[]\`
+  > After this: Done.
+`);
+      writeMilestoneValidation(base, 'M001');
+      writeMilestoneSummary(base, 'M001', '# M001 Summary\n\nComplete.');
+
+      // M002: only CONTEXT-DRAFT.md but no depends_on — should become active normally
+      writeContextDraft(base, 'M002', 'title: Some Draft');
+
+      const state = await deriveState(base);
+
+      assertEq(state.registry.find(e => e.id === 'M002')?.status, 'active',
+        'draft-only-no-deps: M002 is active (no deps constraint in draft)');
+    } finally {
+      cleanup(base);
+    }
   }
 
   report();

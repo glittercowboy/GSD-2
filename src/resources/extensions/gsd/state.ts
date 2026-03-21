@@ -352,7 +352,7 @@ async function _deriveStateImpl(basePath: string): Promise<GSDState> {
         // Check milestone-level dependencies before promoting to active.
         // Without this, a queued milestone with depends_on in its CONTEXT
         // or CONTEXT-DRAFT frontmatter would be promoted to active even when
-        // its deps are unmet.
+        // its deps are unmet. Fall back to CONTEXT-DRAFT.md when absent (#1724).
         const deps = parseContextDependsOn(contextContent ?? draftContent);
         const depsUnmet = deps.some(dep => !completeMilestoneIds.has(dep));
         if (depsUnmet) {
@@ -413,7 +413,8 @@ async function _deriveStateImpl(basePath: string): Promise<GSDState> {
       if (summaryFile) {
         registry.push({ id: mid, title, status: 'complete' });
       } else if (!activeMilestoneFound) {
-        // Check milestone-level dependencies before promoting to active
+        // Check milestone-level dependencies before promoting to active.
+        // Fall back to CONTEXT-DRAFT.md when CONTEXT.md is absent (#1724).
         const contextFile = resolveMilestoneFile(basePath, mid, "CONTEXT");
         const draftFile = resolveMilestoneFile(basePath, mid, "CONTEXT-DRAFT");
         const contextContent = contextFile ? await cachedLoadFile(contextFile) : null;
@@ -431,8 +432,11 @@ async function _deriveStateImpl(basePath: string): Promise<GSDState> {
         }
       } else {
         const contextFile2 = resolveMilestoneFile(basePath, mid, "CONTEXT");
-        const contextContent2 = contextFile2 ? await cachedLoadFile(contextFile2) : null;
-        const deps2 = parseContextDependsOn(contextContent2);
+        const draftFileForDeps3 = resolveMilestoneFile(basePath, mid, "CONTEXT-DRAFT");
+        const contextOrDraftContent3 = contextFile2
+            ? await cachedLoadFile(contextFile2)
+            : (draftFileForDeps3 ? await cachedLoadFile(draftFileForDeps3) : null);
+        const deps2 = parseContextDependsOn(contextOrDraftContent3);
         registry.push({ id: mid, title, status: 'pending', ...(deps2.length > 0 ? { dependsOn: deps2 } : {}) });
       }
     }
