@@ -6,81 +6,48 @@
 
 import type { ExtensionCommandContext } from "@gsd/pi-coding-agent";
 import { deriveState } from "./state.js";
-import { nativeBranchList, nativeDetectMainBranch, nativeBranchListMerged, nativeBranchDelete, nativeForEachRef, nativeUpdateRef } from "./native-git-bridge.js";
 
+/**
+ * Cleanup branches — delegates to doctor fix for branch-related issue codes.
+ * Handles both legacy slice branches (gsd/*/*) and stale milestone branches.
+ */
 export async function handleCleanupBranches(ctx: ExtensionCommandContext, basePath: string): Promise<void> {
-  let branches: string[];
-  try {
-    branches = nativeBranchList(basePath, "gsd/*");
-  } catch {
-    ctx.ui.notify("No GSD branches found.", "info");
-    return;
-  }
+  const { runGSDDoctor } = await import("./doctor.js");
+  const report = await runGSDDoctor(basePath, { fix: true });
 
-  if (branches.length === 0) {
+  const branchFixes = report.fixesApplied.filter(f =>
+    f.includes("legacy slice branch") || f.includes("stale branch"),
+  );
+  const branchIssues = report.issues.filter(i =>
+    i.code === "legacy_slice_branches" || i.code === "stale_milestone_branch",
+  );
+
+  if (branchFixes.length > 0) {
+    ctx.ui.notify(branchFixes.join("\n"), "success");
+  } else if (branchIssues.length > 0) {
+    ctx.ui.notify(branchIssues.map(i => i.message).join("\n"), "info");
+  } else {
     ctx.ui.notify("No GSD branches to clean up.", "info");
-    return;
   }
-
-  const mainBranch = nativeDetectMainBranch(basePath);
-
-  let merged: string[];
-  try {
-    merged = nativeBranchListMerged(basePath, mainBranch, "gsd/*");
-  } catch {
-    merged = [];
-  }
-
-  if (merged.length === 0) {
-    ctx.ui.notify(`${branches.length} GSD branches found, none are merged into ${mainBranch} yet.`, "info");
-    return;
-  }
-
-  let deleted = 0;
-  for (const branch of merged) {
-    try {
-      nativeBranchDelete(basePath, branch, false);
-      deleted++;
-    } catch { /* skip branches that can't be deleted */ }
-  }
-
-  ctx.ui.notify(`Cleaned up ${deleted} merged branches. ${branches.length - deleted} remain.`, "success");
 }
 
+/**
+ * Cleanup snapshots — delegates to doctor fix for snapshot_ref_bloat.
+ */
 export async function handleCleanupSnapshots(ctx: ExtensionCommandContext, basePath: string): Promise<void> {
-  let refs: string[];
-  try {
-    refs = nativeForEachRef(basePath, "refs/gsd/snapshots/");
-  } catch {
-    ctx.ui.notify("No snapshot refs found.", "info");
-    return;
-  }
+  const { runGSDDoctor } = await import("./doctor.js");
+  const report = await runGSDDoctor(basePath, { fix: true });
 
-  if (refs.length === 0) {
+  const snapshotFixes = report.fixesApplied.filter(f => f.includes("snapshot ref"));
+  const snapshotIssues = report.issues.filter(i => i.code === "snapshot_ref_bloat");
+
+  if (snapshotFixes.length > 0) {
+    ctx.ui.notify(snapshotFixes.join("\n"), "success");
+  } else if (snapshotIssues.length > 0) {
+    ctx.ui.notify(snapshotIssues.map(i => i.message).join("\n"), "info");
+  } else {
     ctx.ui.notify("No snapshot refs to clean up.", "info");
-    return;
   }
-
-  const byLabel = new Map<string, string[]>();
-  for (const ref of refs) {
-    const parts = ref.split("/");
-    const label = parts.slice(0, -1).join("/");
-    if (!byLabel.has(label)) byLabel.set(label, []);
-    byLabel.get(label)!.push(ref);
-  }
-
-  let pruned = 0;
-  for (const [, labelRefs] of byLabel) {
-    const sorted = labelRefs.sort();
-    for (const old of sorted.slice(0, -5)) {
-      try {
-        nativeUpdateRef(basePath, old);
-        pruned++;
-      } catch { /* skip */ }
-    }
-  }
-
-  ctx.ui.notify(`Pruned ${pruned} old snapshot refs. ${refs.length - pruned} remain.`, "success");
 }
 
 export async function handleCleanupWorktrees(ctx: ExtensionCommandContext, basePath: string): Promise<void> {

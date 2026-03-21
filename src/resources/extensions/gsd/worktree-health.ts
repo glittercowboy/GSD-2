@@ -104,7 +104,9 @@ export function getWorktreeHealth(
     && lastCommitAgeDays >= staleDays;
 
   // Safe to remove: merged into main, no dirty files, no unpushed commits
-  const safeToRemove = mergedIntoMain && !dirty && unpushedCommits === 0;
+  // Safe to remove: merged into main and no dirty files.
+  // Unpushed commits don't matter when the branch is merged — the work is already in main.
+  const safeToRemove = mergedIntoMain && !dirty;
 
   return {
     worktree: wt,
