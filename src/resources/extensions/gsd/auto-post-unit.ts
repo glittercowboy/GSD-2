@@ -304,36 +304,43 @@ export async function postUnitPreVerification(pctx: PostUnitContext, opts?: PreV
       try {
         const { executeTriageResolutions } = await import("./triage-resolution.js");
         const state = await deriveState(s.basePath);
-        const mid = state.activeMilestone?.id;
-        const sid = state.activeSlice?.id;
+        const mid = state.activeMilestone?.id ?? "";
+        const sid = state.activeSlice?.id ?? "";
 
-        if (mid && sid) {
-          const triageResult = executeTriageResolutions(s.basePath, mid, sid);
+        // executeTriageResolutions handles defer milestone creation even
+        // without an active milestone/slice (the "all milestones complete"
+        // scenario from #1562). inject/replan/quick-task still require mid+sid.
+        const triageResult = executeTriageResolutions(s.basePath, mid, sid);
 
-          if (triageResult.injected > 0) {
-            ctx.ui.notify(
-              `Triage: injected ${triageResult.injected} task${triageResult.injected === 1 ? "" : "s"} into ${sid} plan.`,
-              "info",
-            );
+        if (triageResult.injected > 0) {
+          ctx.ui.notify(
+            `Triage: injected ${triageResult.injected} task${triageResult.injected === 1 ? "" : "s"} into ${sid} plan.`,
+            "info",
+          );
+        }
+        if (triageResult.replanned > 0) {
+          ctx.ui.notify(
+            `Triage: replan trigger written for ${sid} — next dispatch will enter replanning.`,
+            "info",
+          );
+        }
+        if (triageResult.deferredMilestones > 0) {
+          ctx.ui.notify(
+            `Triage: created ${triageResult.deferredMilestones} deferred milestone director${triageResult.deferredMilestones === 1 ? "y" : "ies"}.`,
+            "info",
+          );
+        }
+        if (triageResult.quickTasks.length > 0) {
+          for (const qt of triageResult.quickTasks) {
+            s.pendingQuickTasks.push(qt);
           }
-          if (triageResult.replanned > 0) {
-            ctx.ui.notify(
-              `Triage: replan trigger written for ${sid} — next dispatch will enter replanning.`,
-              "info",
-            );
-          }
-          if (triageResult.quickTasks.length > 0) {
-            for (const qt of triageResult.quickTasks) {
-              s.pendingQuickTasks.push(qt);
-            }
-            ctx.ui.notify(
-              `Triage: ${triageResult.quickTasks.length} quick-task${triageResult.quickTasks.length === 1 ? "" : "s"} queued for execution.`,
-              "info",
-            );
-          }
-          for (const action of triageResult.actions) {
-            process.stderr.write(`gsd-triage: ${action}\n`);
-          }
+          ctx.ui.notify(
+            `Triage: ${triageResult.quickTasks.length} quick-task${triageResult.quickTasks.length === 1 ? "" : "s"} queued for execution.`,
+            "info",
+          );
+        }
+        for (const action of triageResult.actions) {
+          process.stderr.write(`gsd-triage: ${action}\n`);
         }
       } catch (err) {
         process.stderr.write(`gsd-triage: resolution execution failed: ${(err as Error).message}\n`);
