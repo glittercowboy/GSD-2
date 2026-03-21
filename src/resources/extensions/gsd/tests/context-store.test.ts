@@ -252,12 +252,12 @@ console.log('\n=== context-store: formatDecisionsForPrompt ===');
     {
       seq: 1, id: 'D001', when_context: 'M001/S01', scope: 'architecture',
       decision: 'use SQLite', choice: 'node:sqlite', rationale: 'built-in',
-      revisable: 'yes', superseded_by: null,
+      revisable: 'yes', made_by: 'agent', superseded_by: null,
     },
     {
       seq: 2, id: 'D002', when_context: 'M001/S02', scope: 'performance',
       decision: 'use WAL', choice: 'WAL', rationale: 'concurrent',
-      revisable: 'no', superseded_by: null,
+      revisable: 'no', made_by: 'human', superseded_by: null,
     },
   ]);
 

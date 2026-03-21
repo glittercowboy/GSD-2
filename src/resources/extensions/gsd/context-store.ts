@@ -57,6 +57,7 @@ export function queryDecisions(opts?: DecisionQueryOpts): Decision[] {
       choice: row['choice'] as string,
       rationale: row['rationale'] as string,
       revisable: row['revisable'] as string,
+      made_by: (row['made_by'] as string as import('./types.js').DecisionMadeBy) ?? 'agent',
       superseded_by: null,
     }));
   } catch {

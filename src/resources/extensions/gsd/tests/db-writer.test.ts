@@ -205,6 +205,7 @@ console.log('\n── generateDecisionsMd pipe escaping ──');
     choice: 'A',
     rationale: 'Better',
     revisable: 'No',
+    made_by: 'agent',
     superseded_by: null,
   };
   const md = generateDecisionsMd([withPipe]);
@@ -544,6 +545,7 @@ console.log('\n── Full DB round-trip: decisions ──');
     choice: row['choice'] as string,
     rationale: row['rationale'] as string,
     revisable: row['revisable'] as string,
+    made_by: (row['made_by'] as string as import('../types.js').DecisionMadeBy) ?? 'agent',
     superseded_by: (row['superseded_by'] as string) ?? null,
   }));
 
