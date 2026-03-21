@@ -434,7 +434,7 @@ test("mergeAndExit in worktree mode shows pushed status", () => {
   assert.ok(ctx.messages.some((m) => m.msg.includes("Pushed to remote")));
 });
 
-test("mergeAndExit falls back to teardown when roadmap is missing", () => {
+test("mergeAndExit falls back to teardown with preserveBranch when roadmap is missing (#1573)", () => {
   const s = makeSession({
     basePath: "/project/.gsd/worktrees/M001",
     originalBasePath: "/project",
@@ -449,10 +449,42 @@ test("mergeAndExit falls back to teardown when roadmap is missing", () => {
 
   resolver.mergeAndExit("M001", ctx);
 
-  assert.equal(findCalls(deps.calls, "teardownAutoWorktree").length, 1);
+  const teardownCalls = findCalls(deps.calls, "teardownAutoWorktree");
+  assert.equal(teardownCalls.length, 1);
+  // Branch must be preserved so commits are not orphaned (#1573)
+  assert.deepEqual(teardownCalls[0].args[2], { preserveBranch: true });
   assert.equal(findCalls(deps.calls, "mergeMilestoneToMain").length, 0);
   assert.equal(s.basePath, "/project"); // restored
-  assert.ok(ctx.messages.some((m) => m.msg.includes("no roadmap for merge")));
+  assert.ok(ctx.messages.some((m) => m.msg.includes("branch preserved")));
+});
+
+test("mergeAndExit resolves roadmap from worktree when missing at project root (#1573)", () => {
+  const s = makeSession({
+    basePath: "/project/.gsd/worktrees/M001",
+    originalBasePath: "/project",
+  });
+  // resolveMilestoneFile returns null for project root, returns path for worktree
+  const deps = makeDeps({
+    isInAutoWorktree: () => true,
+    getIsolationMode: () => "worktree",
+    resolveMilestoneFile: (basePath: string) => {
+      if (basePath === "/project") return null; // missing at project root
+      if (basePath === "/project/.gsd/worktrees/M001") {
+        return "/project/.gsd/worktrees/M001/.gsd/milestones/M001/M001-ROADMAP.md";
+      }
+      return null;
+    },
+  });
+  const ctx = makeNotifyCtx();
+  const resolver = new WorktreeResolver(s, deps);
+
+  resolver.mergeAndExit("M001", ctx);
+
+  // Should have called mergeMilestoneToMain, not bare teardown
+  assert.equal(findCalls(deps.calls, "mergeMilestoneToMain").length, 1);
+  assert.equal(findCalls(deps.calls, "teardownAutoWorktree").length, 0);
+  assert.equal(s.basePath, "/project"); // restored
+  assert.ok(ctx.messages.some((m) => m.msg.includes("merged to main")));
 });
 
 test("mergeAndExit in worktree mode restores to project root on merge failure", () => {
