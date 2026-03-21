@@ -142,3 +142,25 @@ test("auto/phases.ts milestone transition block contains worktree lifecycle", ()
     "auto/phases.ts should call resolver.enterMilestone for incoming milestone",
   );
 });
+
+// ─── Verify worktree-resolver mergeAndExit preserves branch on missing roadmap (#1573) ──
+
+test("worktree-resolver mergeAndExit preserves branch when roadmap is missing (#1573)", () => {
+  const resolverSrc = readFileSync(
+    join(__dirname, "..", "worktree-resolver.ts"),
+    "utf-8",
+  );
+
+  // The fallback teardown must pass preserveBranch: true to prevent orphaning commits
+  assert.ok(
+    resolverSrc.includes("preserveBranch: true"),
+    "worktree-resolver.ts should pass preserveBranch: true in the no-roadmap fallback",
+  );
+
+  // The worktree path should be tried as a fallback for roadmap resolution
+  assert.ok(
+    resolverSrc.includes("this.s.basePath !== originalBase") ||
+      resolverSrc.includes("roadmap-fallback"),
+    "worktree-resolver.ts should try resolving roadmap from worktree path as fallback",
+  );
+});
