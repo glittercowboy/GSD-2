@@ -20,7 +20,7 @@ import {
   ClipboardCopy,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { useGSDWorkspaceState } from "@/lib/gsd-workspace-store"
+import { useGSDWorkspaceState, buildProjectUrl } from "@/lib/gsd-workspace-store"
 import { FileContentViewer } from "@/components/gsd/file-content-viewer"
 
 type RootMode = "gsd" | "project"
@@ -472,6 +472,45 @@ export function FilesView() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
+  // ── Resizable tree panel ──
+  const [treeWidth, setTreeWidth] = useState(256)
+  const isDraggingTree = useRef(false)
+  const dragStartX = useRef(0)
+  const dragStartWidth = useRef(0)
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isDraggingTree.current) return
+      const delta = e.clientX - dragStartX.current
+      const newWidth = Math.max(180, Math.min(480, dragStartWidth.current + delta))
+      setTreeWidth(newWidth)
+    }
+    const handleMouseUp = () => {
+      if (isDraggingTree.current) {
+        isDraggingTree.current = false
+        document.body.style.cursor = ""
+        document.body.style.userSelect = ""
+      }
+    }
+    document.addEventListener("mousemove", handleMouseMove)
+    document.addEventListener("mouseup", handleMouseUp)
+    return () => {
+      document.removeEventListener("mousemove", handleMouseMove)
+      document.removeEventListener("mouseup", handleMouseUp)
+    }
+  }, [])
+
+  const handleTreeDragStart = useCallback(
+    (e: React.MouseEvent) => {
+      isDraggingTree.current = true
+      dragStartX.current = e.clientX
+      dragStartWidth.current = treeWidth
+      document.body.style.cursor = "col-resize"
+      document.body.style.userSelect = "none"
+    },
+    [treeWidth],
+  )
+
   // Expanded paths per root, restored from sessionStorage
   const [gsdExpanded, setGsdExpanded] = useState<Set<string>>(() => loadExpanded(projectCwd, "gsd"))
   const [projectExpanded, setProjectExpanded] = useState<Set<string>>(() => loadExpanded(projectCwd, "project"))
@@ -511,7 +550,7 @@ export function FilesView() {
     try {
       setLoading(true)
       setError(null)
-      const res = await fetch(`/api/files?root=${root}`)
+      const res = await fetch(buildProjectUrl(`/api/files?root=${root}`, projectCwd))
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
         throw new Error(data.error || `Failed to fetch files (${res.status})`)
@@ -528,7 +567,7 @@ export function FilesView() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [projectCwd])
 
   // Fetch tree when tab changes and data isn't cached
   useEffect(() => {
@@ -579,7 +618,7 @@ export function FilesView() {
 
     // Fetch content
     try {
-      const res = await fetch(`/api/files?root=${root}&path=${encodeURIComponent(path)}`)
+      const res = await fetch(buildProjectUrl(`/api/files?root=${root}&path=${encodeURIComponent(path)}`, projectCwd))
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
         const errMsg = data.error || `Failed to fetch file (${res.status})`
@@ -687,7 +726,7 @@ export function FilesView() {
     const toPath = toDir ? `${toDir}/${fileName}` : fileName
 
     try {
-      const res = await fetch("/api/files", {
+      const res = await fetch(buildProjectUrl("/api/files", projectCwd), {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ from: fromPath, to: toPath, root: activeRoot }),
@@ -728,7 +767,7 @@ export function FilesView() {
     } catch (err) {
       console.error("Move failed:", err)
     }
-  }, [activeRoot, activeTabKey, fetchTree])
+  }, [activeRoot, activeTabKey, fetchTree, projectCwd])
 
   // ── Context menu handlers ──
 
@@ -776,7 +815,7 @@ export function FilesView() {
   const handleCreateCommit = useCallback(async (parentDir: string, name: string, type: "file" | "directory") => {
     const newPath = parentDir ? `${parentDir}/${name}` : name
     try {
-      const res = await fetch("/api/files", {
+      const res = await fetch(buildProjectUrl("/api/files", projectCwd), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path: newPath, type, root: activeRoot }),
@@ -796,7 +835,7 @@ export function FilesView() {
     } finally {
       setCreatingIn(null)
     }
-  }, [activeRoot, fetchTree, openFileTab])
+  }, [activeRoot, fetchTree, openFileTab, projectCwd])
 
   const handleCreateCancel = useCallback(() => {
     setCreatingIn(null)
@@ -816,7 +855,7 @@ export function FilesView() {
     }
 
     try {
-      const res = await fetch("/api/files", {
+      const res = await fetch(buildProjectUrl("/api/files", projectCwd), {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ from: oldPath, to: newPath, root: activeRoot }),
@@ -854,7 +893,7 @@ export function FilesView() {
     } finally {
       setRenamingPath(null)
     }
-  }, [activeRoot, activeTabKey, fetchTree])
+  }, [activeRoot, activeTabKey, fetchTree, projectCwd])
 
   const handleRenameCancel = useCallback(() => {
     setRenamingPath(null)
@@ -869,7 +908,7 @@ export function FilesView() {
     const { path, type } = deleteConfirm
     try {
       const res = await fetch(
-        `/api/files?root=${activeRoot}&path=${encodeURIComponent(path)}`,
+        buildProjectUrl(`/api/files?root=${activeRoot}&path=${encodeURIComponent(path)}`, projectCwd),
         { method: "DELETE" },
       )
       if (!res.ok) {
@@ -902,7 +941,7 @@ export function FilesView() {
     } finally {
       setDeleteConfirm(null)
     }
-  }, [deleteConfirm, activeRoot, activeTabKey, fetchTree])
+  }, [deleteConfirm, activeRoot, activeTabKey, fetchTree, projectCwd])
 
   const handleDeleteCancel = useCallback(() => {
     setDeleteConfirm(null)
@@ -916,7 +955,7 @@ export function FilesView() {
   const handleDuplicate = useCallback(async (path: string) => {
     // Read original content
     try {
-      const res = await fetch(`/api/files?root=${activeRoot}&path=${encodeURIComponent(path)}`)
+      const res = await fetch(buildProjectUrl(`/api/files?root=${activeRoot}&path=${encodeURIComponent(path)}`, projectCwd))
       if (!res.ok) return
       const data = await res.json()
       if (typeof data.content !== "string") return
@@ -934,7 +973,7 @@ export function FilesView() {
       const newPath = parentDir ? `${parentDir}/${newName}` : newName
 
       // Create with content
-      const createRes = await fetch("/api/files", {
+      const createRes = await fetch(buildProjectUrl("/api/files", projectCwd), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path: newPath, content: data.content, root: activeRoot }),
@@ -949,13 +988,13 @@ export function FilesView() {
     } catch (err) {
       console.error("Duplicate failed:", err)
     }
-  }, [activeRoot, fetchTree, openFileTab])
+  }, [activeRoot, fetchTree, openFileTab, projectCwd])
 
   // Save handler: POST to /api/files, then re-fetch content
   const handleSave = useCallback(async (newContent: string) => {
     if (!activeTab) return
     const { root, path, key } = activeTab
-    const res = await fetch("/api/files", {
+    const res = await fetch(buildProjectUrl("/api/files", projectCwd), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path, content: newContent, root }),
@@ -965,7 +1004,7 @@ export function FilesView() {
       throw new Error(data.error || `Save failed (${res.status})`)
     }
     // Re-fetch to sync the view tab
-    const refetch = await fetch(`/api/files?root=${root}&path=${encodeURIComponent(path)}`)
+    const refetch = await fetch(buildProjectUrl(`/api/files?root=${root}&path=${encodeURIComponent(path)}`, projectCwd))
     if (refetch.ok) {
       const data = await refetch.json()
       setOpenTabs((prev) =>
@@ -974,7 +1013,7 @@ export function FilesView() {
         ),
       )
     }
-  }, [activeTab])
+  }, [activeTab, projectCwd])
 
   // Auto-select STATE.md on initial load if no tabs are open
   const autoSelectedRef = useRef(false)
@@ -991,7 +1030,7 @@ export function FilesView() {
   return (
     <div className="flex h-full">
       {/* File tree panel */}
-      <div className="w-64 flex-shrink-0 border-r border-border overflow-y-auto flex flex-col">
+      <div className="flex-shrink-0 border-r border-border overflow-y-auto flex flex-col" style={{ width: treeWidth }}>
         {/* Tab bar */}
         <div className="flex border-b border-border flex-shrink-0">
           <button
@@ -1104,6 +1143,14 @@ export function FilesView() {
             </>
           ) : null}
         </div>
+      </div>
+
+      {/* Resize drag handle */}
+      <div className="relative flex items-stretch" style={{ flexShrink: 0 }}>
+        <div
+          className="absolute left-[-3px] top-0 bottom-0 w-[7px] cursor-col-resize z-10 hover:bg-muted-foreground/20 transition-colors"
+          onMouseDown={handleTreeDragStart}
+        />
       </div>
 
       {/* File content panel */}

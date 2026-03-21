@@ -5,6 +5,7 @@ import { GitBranch, Cpu, DollarSign, Clock, Zap, AlertTriangle, Wifi, Info, Life
 import { cn } from "@/lib/utils"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
+  buildProjectUrl,
   getCurrentBranch,
   getCurrentScopeLabel,
   getLiveAutoDashboard,
@@ -51,20 +52,21 @@ export function StatusBar() {
   const statusTextEntries = Object.entries(statusTexts)
   const latestStatusText = statusTextEntries.length > 0 ? statusTextEntries[statusTextEntries.length - 1][1] : null
   const isConnecting = workspace.bootStatus === "idle" || workspace.bootStatus === "loading"
+  const projectCwd = workspace.boot?.project.cwd
 
   // ── Project-level totals from visualizer API ──
   const [projectTotals, setProjectTotals] = useState<ProjectTotals | null>(null)
 
   const fetchProjectTotals = useCallback(async () => {
     try {
-      const resp = await fetch("/api/visualizer")
+      const resp = await fetch(buildProjectUrl("/api/visualizer", projectCwd))
       if (!resp.ok) return
       const json = await resp.json()
       if (json.totals) setProjectTotals(json.totals)
     } catch {
       // Silently ignore — status bar is non-critical
     }
-  }, [])
+  }, [projectCwd])
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {

@@ -23,6 +23,7 @@ import {
   AlertCircle,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { useGSDWorkspaceState, buildProjectUrl } from "@/lib/gsd-workspace-store"
 import type {
   VisualizerData,
   VisualizerSlice,
@@ -1161,13 +1162,15 @@ function VisualizerTabList() {
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export function VisualizerView() {
+  const workspace = useGSDWorkspaceState()
+  const projectCwd = workspace.boot?.project.cwd
   const [data, setData] = useState<VisualizerData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   const fetchData = useCallback(async () => {
     try {
-      const resp = await fetch("/api/visualizer")
+      const resp = await fetch(buildProjectUrl("/api/visualizer", projectCwd))
       if (!resp.ok) {
         const body = await resp.json().catch(() => ({ error: "Unknown error" }))
         throw new Error(body.error || `HTTP ${resp.status}`)
@@ -1180,7 +1183,7 @@ export function VisualizerView() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [projectCwd])
 
   useEffect(() => {
     fetchData()
