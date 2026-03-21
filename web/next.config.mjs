@@ -29,7 +29,14 @@ const nextConfig = {
       config.externals = config.externals || [];
       // Next.js already makes externals an array of functions/regexps — append
       // a simple object entry so `require("node:module")` passes through.
-      config.externals.push({ 'node:module': 'commonjs node:module' });
+      config.externals.push({
+        'node:module': 'commonjs node:module',
+        // @gsd/native is a native addon loaded via runtime require().
+        // serverExternalPackages handles the top-level import, but webpack
+        // still tries to resolve the bare specifier inside files traced from
+        // src/ (outside web/). Explicitly externalize it.
+        '@gsd/native': 'commonjs @gsd/native',
+      });
     }
     return config;
   },

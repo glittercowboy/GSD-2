@@ -209,13 +209,16 @@ function loadNodePty(): LoadedNodePty {
       // processes require() calls with computed paths — it replaces them with
       // a "module not found" stub.  We use __non_webpack_require__ (webpack's
       // escape hatch) so the require passes through to Node's native loader
-      // at runtime.  In non-webpack environments the global doesn't exist, so
-      // we fall back to regular require.
+      // at runtime.
       //
+      // The bare `require` fallback is wrapped in Function() to prevent
+      // webpack from statically analyzing it and emitting a "critical
+      // dependency" warning. At runtime in non-webpack environments (e.g.
+      // tests) this produces an identical NodeRequire function.
        
       const nativeRequire: NodeRequire = typeof __non_webpack_require__ !== "undefined"
         ? __non_webpack_require__
-        : require;
+        : new Function("return require")() as NodeRequire;
       const nodePtyModule = nativeRequire(join(packageRoot, "lib", "index.js")) as typeof import("node-pty");
       return { nodePtyModule, packageRoot };
     } catch (error) {
