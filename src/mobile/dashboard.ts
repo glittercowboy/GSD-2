@@ -155,9 +155,12 @@ export function renderDashboard(data: DashboardData): string {
         <h1 class="page-title">${escapeHtml(serverName)}</h1>
         <p class="page-subtitle">Mobile Socket Server</p>
       </div>
-      <div class="header-status">
-        <span class="status-dot status-online"></span>
-        <span>Running</span>
+      <div style="display:flex;gap:12px;align-items:center">
+        <a href="/app" class="btn btn-sm" style="text-decoration:none">Open Mobile App</a>
+        <div class="header-status">
+          <span class="status-dot status-online"></span>
+          <span>Running</span>
+        </div>
       </div>
     </header>
 

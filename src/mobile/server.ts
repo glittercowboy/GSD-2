@@ -16,8 +16,9 @@
 
 import { createServer as createHttpServer, type Server as HttpServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createServer as createHttpsServer, type Server as HttpsServer } from "node:https";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, existsSync } from "node:fs";
+import { join, extname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { networkInterfaces } from "node:os";
 import type { Socket } from "node:net";
 
@@ -217,6 +218,11 @@ export class MobileSocketServer {
 
     if (path === "/login" && method === "POST") {
       this.handleLogin(req, res);
+      return;
+    }
+
+    // Serve PWA static assets (public, no auth required)
+    if (this.servePWAAsset(path, res)) {
       return;
     }
 
@@ -464,6 +470,60 @@ export class MobileSocketServer {
     ws.on("close", () => {
       this.connections.delete(connId);
     });
+  }
+
+  // ── PWA Static Files ─────────────────────────────────────────────────
+
+  private servePWAAsset(path: string, res: ServerResponse): boolean {
+    // Map PWA routes to static files
+    const MIME_TYPES: Record<string, string> = {
+      ".html": "text/html",
+      ".css": "text/css",
+      ".js": "application/javascript",
+      ".json": "application/json",
+      ".svg": "image/svg+xml",
+      ".png": "image/png",
+      ".ico": "image/x-icon",
+    };
+
+    // PWA app routes (serve index.html for the SPA)
+    const pwaRoutes = ["/app", "/app/"];
+    const pwaAssets = ["/app.css", "/app.js", "/manifest.json", "/service-worker.js"];
+    const pwaIconPrefixes = ["/icons/"];
+
+    let filePath: string | null = null;
+    let contentType = "text/html";
+
+    // Resolve the pwa directory relative to this module
+    const thisDir = typeof __dirname !== "undefined"
+      ? __dirname
+      : fileURLToPath(new URL(".", import.meta.url));
+    const pwaDir = join(thisDir, "pwa");
+
+    if (pwaRoutes.includes(path)) {
+      filePath = join(pwaDir, "index.html");
+      contentType = "text/html";
+    } else if (pwaAssets.includes(path)) {
+      filePath = join(pwaDir, path);
+      contentType = MIME_TYPES[extname(path)] || "application/octet-stream";
+    } else if (path.startsWith("/icons/")) {
+      filePath = join(pwaDir, path);
+      contentType = MIME_TYPES[extname(path)] || "application/octet-stream";
+    }
+
+    if (!filePath || !existsSync(filePath)) return false;
+
+    try {
+      const content = readFileSync(filePath);
+      res.writeHead(200, {
+        "Content-Type": contentType,
+        "Cache-Control": contentType === "text/html" ? "no-cache" : "public, max-age=86400",
+      });
+      res.end(content);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   // ── Helpers ─────────────────────────────────────────────────────────────
