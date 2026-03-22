@@ -668,6 +668,11 @@ export async function runGSDDoctor(basePath: string, options?: { fix?: boolean; 
       }
     } catch { /* non-fatal */ }
 
+    // Determine the first non-done slice — this is the "active" slice.
+    // Slices after it in the roadmap ordering are "future" and should not
+    // inflate error counts for missing directories (#2076).
+    const firstNonDoneSliceId = roadmap.slices.find(s => !s.done)?.id ?? null;
+
     for (const slice of roadmap.slices) {
       const unitId = `${milestoneId}/${slice.id}`;
       if (options?.scope && !matchesScope(unitId, options.scope) && options.scope !== milestoneId) continue;
@@ -708,8 +713,20 @@ export async function runGSDDoctor(basePath: string, options?: { fix?: boolean; 
       const slicePath = resolveSlicePath(basePath, milestoneId, slice.id);
       if (!slicePath) {
         const expectedPath = relSlicePath(basePath, milestoneId, slice.id);
+        // Severity logic (#2076): done slices → "warning" (cosmetic).
+        // The first non-done slice (active) → "error" (blocking).
+        // Future non-done slices (not yet started) → "info" (directories
+        // are created by ensurePreconditions on first dispatch).
+        let severity: "error" | "warning" | "info";
+        if (slice.done) {
+          severity = "warning";
+        } else if (firstNonDoneSliceId === slice.id) {
+          severity = "error";
+        } else {
+          severity = "info";
+        }
         issues.push({
-          severity: slice.done ? "warning" : "error",
+          severity,
           code: "missing_slice_dir",
           scope: "slice",
           unitId,

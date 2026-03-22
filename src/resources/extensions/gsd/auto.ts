@@ -85,7 +85,7 @@ import {
 } from "./auto-observability.js";
 import { closeoutUnit } from "./auto-unit-closeout.js";
 import { recoverTimedOutUnit } from "./auto-timeout-recovery.js";
-import { selfHealRuntimeRecords } from "./auto-recovery.js";
+import { selfHealRuntimeRecords, reconcileCompletedUnits } from "./auto-recovery.js";
 import { selectAndApplyModel, resolveModelId } from "./auto-model-selection.js";
 import {
   syncProjectRootToWorktree,
@@ -1095,6 +1095,30 @@ export async function startAuto(
     s.unitLifetimeDispatches.clear();
     if (!getLedger()) initMetrics(base);
     if (s.currentMilestoneId) setActiveMilestoneId(base, s.currentMilestoneId);
+
+    // Reconcile completed-units: if a prior session crashed between artifact
+    // write and completed-units flush, retroactively add confirmed units (#2076).
+    if (s.currentMilestoneId) {
+      try {
+        const reconciled = reconcileCompletedUnits(base, s.currentMilestoneId);
+        if (reconciled.length > 0) {
+          for (const u of reconciled) {
+            s.completedUnits.push({
+              type: u.type,
+              id: u.id,
+              startedAt: 0,
+              finishedAt: 0,
+            });
+          }
+          ctx.ui.notify(
+            `Reconciled ${reconciled.length} completed unit${reconciled.length === 1 ? "" : "s"} from on-disk artifacts.`,
+            "info",
+          );
+        }
+      } catch {
+        // Non-fatal — reconciliation is best-effort
+      }
+    }
 
     // ── Auto-worktree: re-enter worktree on resume ──
     if (

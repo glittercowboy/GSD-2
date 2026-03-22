@@ -57,6 +57,7 @@ import { initMetrics } from "./metrics.js";
 import { initRoutingHistory } from "./routing-history.js";
 import { restoreHookState, resetHookState } from "./post-unit-hooks.js";
 import { resetProactiveHealing, setLevelChangeCallback } from "./doctor-proactive.js";
+import { reconcileCompletedUnits } from "./auto-recovery.js";
 import { snapshotSkills } from "./skill-discovery.js";
 import { isDbAvailable } from "./gsd-db.js";
 import { hideFooter } from "./auto-dashboard.js";
@@ -480,6 +481,30 @@ export async function bootstrapAutoSession(
     s.currentMilestoneId = state.activeMilestone?.id ?? null;
     s.originalModelId = ctx.model?.id ?? null;
     s.originalModelProvider = ctx.model?.provider ?? null;
+
+    // Reconcile completed-units: if a prior session crashed between artifact
+    // write and completed-units flush, retroactively add confirmed units (#2076).
+    if (s.currentMilestoneId) {
+      try {
+        const reconciled = reconcileCompletedUnits(base, s.currentMilestoneId);
+        if (reconciled.length > 0) {
+          for (const u of reconciled) {
+            s.completedUnits.push({
+              type: u.type,
+              id: u.id,
+              startedAt: 0,
+              finishedAt: 0,
+            });
+          }
+          ctx.ui.notify(
+            `Reconciled ${reconciled.length} completed unit${reconciled.length === 1 ? "" : "s"} from on-disk artifacts.`,
+            "info",
+          );
+        }
+      } catch {
+        // Non-fatal — reconciliation is best-effort
+      }
+    }
 
     // Register SIGTERM handler
     registerSigtermHandler(base);

@@ -37,6 +37,7 @@ import {
   resolveMilestoneFile,
   clearPathCache,
   resolveGsdRootFile,
+  gsdRoot,
 } from "./paths.js";
 import { markSliceDoneInRoadmap } from "./roadmap-mutations.js";
 import {
@@ -790,4 +791,105 @@ export function buildLoopRemediationSteps(
       break;
   }
   return null;
+}
+
+// ─── Completed-Units Reconciliation ────────────────────────────────────────────
+
+/**
+ * Unit types that have verifiable artifacts on disk. Used by
+ * reconcileCompletedUnits to scan for crash-gap orphans.
+ */
+const RECONCILABLE_SLICE_UNIT_TYPES = [
+  "research-slice",
+  "plan-slice",
+] as const;
+
+const RECONCILABLE_MILESTONE_UNIT_TYPES = [
+  "discuss-milestone",
+  "research-milestone",
+  "plan-milestone",
+] as const;
+
+/**
+ * Reconcile completed-units.json against on-disk artifacts for a milestone.
+ *
+ * When a session terminates between artifact write and the completed-units
+ * flush, the unit is absent from completed-units.json despite its artifact
+ * existing on disk. On restart, deriveState re-derives the unit as needing
+ * dispatch, causing duplicate work or state mismatches (#2076).
+ *
+ * This function scans known unit types for the given milestone, calls
+ * verifyExpectedArtifact for each, and retroactively adds confirmed units
+ * to completed-units.json.
+ *
+ * Returns the list of newly reconciled unit entries.
+ */
+export function reconcileCompletedUnits(
+  basePath: string,
+  milestoneId: string,
+): Array<{ type: string; id: string }> {
+  // Read existing completed-units from disk
+  const completedKeysPath = join(gsdRoot(basePath), "completed-units.json");
+  let existingKeys: string[] = [];
+  try {
+    if (existsSync(completedKeysPath)) {
+      existingKeys = JSON.parse(readFileSync(completedKeysPath, "utf-8"));
+    }
+  } catch {
+    // Malformed or missing — start fresh
+  }
+  const existingSet = new Set(existingKeys);
+
+  const added: Array<{ type: string; id: string }> = [];
+
+  // Scan milestone-level unit types
+  for (const unitType of RECONCILABLE_MILESTONE_UNIT_TYPES) {
+    const key = `${unitType}/${milestoneId}`;
+    if (existingSet.has(key)) continue;
+    if (verifyExpectedArtifact(unitType, milestoneId, basePath)) {
+      added.push({ type: unitType, id: milestoneId });
+      existingKeys.push(key);
+      existingSet.add(key);
+    }
+  }
+
+  // Scan slice-level unit types
+  const milestonePath = resolveMilestonePath(basePath, milestoneId);
+  if (!milestonePath) return added;
+
+  const roadmapFile = resolveMilestoneFile(basePath, milestoneId, "ROADMAP");
+  if (!roadmapFile) return added;
+
+  let roadmapContent: string;
+  try {
+    roadmapContent = readFileSync(roadmapFile, "utf-8");
+  } catch {
+    return added;
+  }
+
+  const roadmap = parseRoadmap(roadmapContent);
+  if (!roadmap) return added;
+
+  for (const slice of roadmap.slices) {
+    const unitId = `${milestoneId}/${slice.id}`;
+
+    for (const unitType of RECONCILABLE_SLICE_UNIT_TYPES) {
+      const key = `${unitType}/${unitId}`;
+      if (existingSet.has(key)) continue;
+      if (verifyExpectedArtifact(unitType, unitId, basePath)) {
+        added.push({ type: unitType, id: unitId });
+        existingKeys.push(key);
+        existingSet.add(key);
+      }
+    }
+  }
+
+  // Persist reconciled entries to disk
+  if (added.length > 0) {
+    try {
+      atomicWriteSync(completedKeysPath, JSON.stringify(existingKeys, null, 2));
+    } catch { /* non-fatal: disk flush failure */ }
+  }
+
+  return added;
 }
