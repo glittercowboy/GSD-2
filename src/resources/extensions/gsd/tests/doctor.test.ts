@@ -643,6 +643,101 @@ Discovered an issue.
     rmSync(base, { recursive: true, force: true });
   }
 
+  // ─── Future slices should not be flagged as missing dirs (#2017) ──────
+  console.log("\n=== doctor skips unmaterialized future slices (#2017) ===");
+  {
+    const fsBase = mkdtempSync(join(tmpdir(), "gsd-doctor-future-slice-"));
+    const fsGsd = join(fsBase, ".gsd");
+    const fsMDir = join(fsGsd, "milestones", "M003");
+    // Only create the milestone dir + roadmap — no slice dirs at all,
+    // simulating the state immediately after plan-milestone.
+    mkdirSync(fsMDir, { recursive: true });
+
+    writeFileSync(join(fsMDir, "M003-ROADMAP.md"), `# M003: Future Milestone
+
+## Slices
+- [ ] **S01: First Slice** \`risk:low\` \`depends:[]\`
+  > After this: first slice done
+- [ ] **S02: Second Slice** \`risk:low\` \`depends:[S01]\`
+  > After this: second slice done
+- [ ] **S03: Third Slice** \`risk:medium\` \`depends:[S02]\`
+  > After this: third slice done
+- [ ] **S04: Fourth Slice** \`risk:low\` \`depends:[S03]\`
+  > After this: fourth slice done
+`);
+
+    const r = await runGSDDoctor(fsBase, { fix: false, scope: "M003" });
+    const sliceDirIssues = r.issues.filter(i => i.code === "missing_slice_dir");
+    const tasksDirIssues = r.issues.filter(i => i.code === "missing_tasks_dir");
+    const slicePlanIssues = r.issues.filter(i => i.code === "missing_slice_plan");
+    assertEq(sliceDirIssues.length, 0,
+      "no missing_slice_dir for unmaterialized future slices");
+    assertEq(tasksDirIssues.length, 0,
+      "no missing_tasks_dir for unmaterialized future slices");
+    assertEq(slicePlanIssues.length, 0,
+      "no missing_slice_plan for unmaterialized future slices");
+
+    // A slice that IS materialized (has a dir) should still be checked
+    const fsS01Dir = join(fsMDir, "slices", "S01");
+    mkdirSync(fsS01Dir, { recursive: true });
+    // S01 has a dir but no tasks/ — should flag missing_tasks_dir
+    const r2 = await runGSDDoctor(fsBase, { fix: false, scope: "M003" });
+    const s01TasksDirIssues = r2.issues.filter(
+      i => i.code === "missing_tasks_dir" && i.unitId === "M003/S01"
+    );
+    assertEq(s01TasksDirIssues.length, 1,
+      "missing_tasks_dir reported for materialized slice without tasks/");
+    // S02-S04 still have no dirs — should NOT be flagged
+    const futureSliceDirIssues = r2.issues.filter(
+      i => i.code === "missing_slice_dir" && i.unitId !== "M003/S01"
+    );
+    assertEq(futureSliceDirIssues.length, 0,
+      "no missing_slice_dir for S02-S04 (still unmaterialized)");
+
+    // Completed slices without dirs SHOULD still be flagged (as warnings)
+    const fsDoneBase = mkdtempSync(join(tmpdir(), "gsd-doctor-done-slice-"));
+    const fsDoneGsd = join(fsDoneBase, ".gsd");
+    const fsDoneMDir = join(fsDoneGsd, "milestones", "M001");
+    mkdirSync(fsDoneMDir, { recursive: true });
+    writeFileSync(join(fsDoneMDir, "M001-ROADMAP.md"), `# M001: Done Milestone
+
+## Slices
+- [x] **S01: Completed Slice** \`risk:low\` \`depends:[]\`
+  > After this: done
+`);
+    const r3 = await runGSDDoctor(fsDoneBase, { fix: false, scope: "M001" });
+    const doneSliceDirIssues = r3.issues.filter(i => i.code === "missing_slice_dir");
+    assertEq(doneSliceDirIssues.length, 1,
+      "missing_slice_dir reported as warning for completed slice without dir");
+
+    rmSync(fsBase, { recursive: true, force: true });
+    rmSync(fsDoneBase, { recursive: true, force: true });
+  }
+
+  // ─── Doctor fix creates tasks/ alongside slice dir (#2017) ──────────
+  console.log("\n=== doctor fix creates tasks/ alongside slice dir (#2017) ===");
+  {
+    const fxBase = mkdtempSync(join(tmpdir(), "gsd-doctor-fix-tasks-"));
+    const fxGsd = join(fxBase, ".gsd");
+    const fxMDir = join(fxGsd, "milestones", "M001");
+    const fxS01Dir = join(fxMDir, "slices", "S01");
+    // Create S01 dir but NOT tasks/ — simulating partial auto-fix
+    mkdirSync(fxS01Dir, { recursive: true });
+
+    writeFileSync(join(fxMDir, "M001-ROADMAP.md"), `# M001: Test Milestone
+
+## Slices
+- [x] **S01: Done Slice** \`risk:low\` \`depends:[]\`
+  > After this: done
+`);
+
+    const r = await runGSDDoctor(fxBase, { fix: true, scope: "M001" });
+    assertTrue(existsSync(join(fxS01Dir, "tasks")),
+      "fix creates tasks/ dir when slice dir exists but tasks/ is missing");
+
+    rmSync(fxBase, { recursive: true, force: true });
+  }
+
   report();
 }
 

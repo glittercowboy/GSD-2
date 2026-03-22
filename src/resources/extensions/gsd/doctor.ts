@@ -707,21 +707,27 @@ export async function runGSDDoctor(basePath: string, options?: { fix?: boolean; 
 
       const slicePath = resolveSlicePath(basePath, milestoneId, slice.id);
       if (!slicePath) {
+        // Unmaterialized future slices: if the slice directory doesn't exist
+        // and the slice isn't done, it's a planned-but-not-yet-started slice.
+        // Auto-mode lazily materializes directories only for the active slice
+        // (via ensurePreconditions), so flagging these is a false positive.
+        // Only report missing dirs for completed slices (cosmetic warning).
+        if (!slice.done) {
+          continue;
+        }
         const expectedPath = relSlicePath(basePath, milestoneId, slice.id);
         issues.push({
-          severity: slice.done ? "warning" : "error",
+          severity: "warning",
           code: "missing_slice_dir",
           scope: "slice",
           unitId,
-          message: slice.done
-            ? `Missing slice directory for ${unitId} (slice is complete — cosmetic only)`
-            : `Missing slice directory for ${unitId}`,
+          message: `Missing slice directory for ${unitId} (slice is complete — cosmetic only)`,
           file: expectedPath,
           fixable: true,
         });
         if (fix) {
           const absoluteSliceDir = join(milestonePath, "slices", slice.id);
-          mkdirSync(absoluteSliceDir, { recursive: true });
+          mkdirSync(join(absoluteSliceDir, "tasks"), { recursive: true });
           fixesApplied.push(`created ${absoluteSliceDir}`);
         }
         continue;
