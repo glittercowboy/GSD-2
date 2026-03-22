@@ -32,6 +32,7 @@ import {
 import {
   verifyExpectedArtifact,
   resolveExpectedArtifactPath,
+  getLastCommitNonGsdFiles,
 } from "./auto-recovery.js";
 import { writeUnitRuntimeRecord, clearUnitRuntimeRecord } from "./unit-runtime.js";
 import { runGSDDoctor, rebuildState, summarizeDoctorIssues } from "./doctor.js";
@@ -167,6 +168,30 @@ export async function postUnitPreVerification(pctx: PostUnitContext, opts?: PreV
       const commitMsg = autoCommitCurrentBranch(s.basePath, s.currentUnit.type, s.currentUnit.id, taskContext);
       if (commitMsg) {
         ctx.ui.notify(`Committed: ${commitMsg.split("\n")[0]}`, "info");
+      }
+
+      // Ghost completion detection (#1989): after an execute-task commit,
+      // verify that at least one non-.gsd/ source file was included.
+      // A commit with only .gsd/ artifacts means the LLM wrote summaries
+      // claiming work was done but never created actual source code.
+      if (commitMsg && s.currentUnit.type === "execute-task") {
+        const sourceFiles = getLastCommitNonGsdFiles(s.basePath);
+        if (sourceFiles.length === 0) {
+          const retryKey = `ghost:${s.currentUnit.type}:${s.currentUnit.id}`;
+          const attempt = (s.verificationRetryCount.get(retryKey) ?? 0) + 1;
+          s.verificationRetryCount.set(retryKey, attempt);
+          s.pendingVerificationRetry = {
+            unitId: s.currentUnit.id,
+            failureContext: `Ghost completion detected: task ${s.currentUnit.id} committed only .gsd/ files — no source code was created. The agent must write the actual implementation code, not just summaries (attempt ${attempt}).`,
+            attempt,
+          };
+          debugLog("postUnit", { phase: "ghost-completion", unitId: s.currentUnit.id, attempt });
+          ctx.ui.notify(
+            `Ghost completion: ${s.currentUnit.id} has no source code — retrying (attempt ${attempt})`,
+            "warning",
+          );
+          return "retry";
+        }
       }
     } catch (e) {
       debugLog("postUnit", { phase: "auto-commit", error: String(e) });

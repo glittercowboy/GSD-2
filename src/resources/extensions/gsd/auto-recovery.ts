@@ -169,6 +169,32 @@ export function hasImplementationArtifacts(basePath: string): boolean {
 }
 
 /**
+ * Return non-`.gsd/` files changed in the most recent commit.
+ *
+ * Used after `autoCommitCurrentBranch()` for `execute-task` units to detect
+ * "ghost completions" — commits that only touch `.gsd/` metadata without
+ * producing any implementation code (#1989).
+ *
+ * Returns an empty array when:
+ * - The last commit contains only `.gsd/` files (ghost completion).
+ * - The directory is not a git repo or git commands fail (fail-safe).
+ */
+export function getLastCommitNonGsdFiles(basePath: string): string[] {
+  try {
+    const raw = execFileSync(
+      "git", ["diff-tree", "--no-commit-id", "-r", "--name-only", "HEAD"],
+      { cwd: basePath, stdio: ["ignore", "pipe", "pipe"], encoding: "utf-8" },
+    ).trim();
+    if (!raw) return [];
+    const allFiles = raw.split("\n").filter(Boolean);
+    return allFiles.filter(f => !f.startsWith(".gsd/") && !f.startsWith(".gsd\\"));
+  } catch {
+    // Non-fatal — fail-safe returns empty so callers can decide policy
+    return [];
+  }
+}
+
+/**
  * Detect the main/master branch name.
  */
 function detectMainBranch(basePath: string): string {
