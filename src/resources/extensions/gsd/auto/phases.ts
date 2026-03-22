@@ -1067,20 +1067,20 @@ export async function runUnitPhase(
   }
 
   if (unitResult.status === "cancelled") {
-  deps.clearUnitTimeout();
-  deps.clearUnitRuntimeRecord(s.basePath, unitType, unitId);
-  emitUnitEnd(unitResult.status, false);
+    deps.clearUnitTimeout();
+    deps.clearUnitRuntimeRecord(s.basePath, unitType, unitId);
+    emitUnitEnd(unitResult.status, false);
     if (unitResult.cancelReason === "paused") {
       debugLog("autoLoop", { phase: "exit", reason: "paused" });
       return { action: "break", reason: "paused" };
     }
     ctx.ui.notify(
-    `Session creation timed out or was cancelled for ${unitType} ${unitId}. Auto-mode stopped to avoid a stale session switch. Resume manually once the session is healthy.`,
+      `Session creation timed out or was cancelled for ${unitType} ${unitId}. Auto-mode stopped to avoid a stale session switch. Resume manually once the session is healthy.`,
       "warning",
     );
-  await deps.stopAuto(ctx, pi, "Session creation failed");
-  debugLog("autoLoop", { phase: "exit", reason: "session-failed" });
-  return { action: "break", reason: "session-failed" };
+    await deps.stopAuto(ctx, pi, "Session creation failed");
+    debugLog("autoLoop", { phase: "exit", reason: "session-failed" });
+    return { action: "break", reason: "session-failed" };
   }
 
   // Now that runUnit has called newSession(), the session file path is correct.
@@ -1133,11 +1133,11 @@ export async function runUnitPhase(
           `${unitType} ${unitId} completed with 0 tool calls — hallucinated summary, will retry`,
           "warning",
         );
-		deps.clearUnitTimeout();
-		emitUnitEnd(unitResult.status, false);
+        deps.clearUnitTimeout();
+        emitUnitEnd(unitResult.status, false);
         // Do NOT add to completedUnits — fall through to next iteration
         // where dispatch will re-derive and re-dispatch this task.
-		return { action: "continue" };
+        return { action: "continue" };
       }
     }
   }

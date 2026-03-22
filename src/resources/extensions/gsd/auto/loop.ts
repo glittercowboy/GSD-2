@@ -1,7 +1,7 @@
 /**
  * auto/loop.ts — Main auto-mode execution loop.
  *
- * Iterates: derive → dispatch → guards → runUnit → finalize → repeat.
+ * Iterates: pre-dispatch → guards → dispatch → runUnit → finalize → repeat.
  * Exits when s.active becomes false or a terminal condition is reached.
  *
  * Imports from: auto/types, auto/resolve, auto/phases
@@ -128,6 +128,7 @@ export async function autoLoop(
         // ── Phase 2: Guards ───────────────────────────────────────────────
         const guardsResult = await runGuards(ic, preData.mid);
         if (guardsResult.action === "break") break;
+        if (guardsResult.action === "continue") continue;
 
         // ── Phase 3: Dispatch ─────────────────────────────────────────────
         const dispatchResult = await runDispatch(ic, preData, loopState);
