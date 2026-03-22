@@ -13,7 +13,7 @@ This milestone replaces GSD-2's split-brain markdown state with a command-driven
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Engine Foundation + Team Infrastructure** - Build WorkflowEngine, command API, agent tools, projections, state manifest, and event log foundation
-- [ ] **Phase 2: Sync Migration + Prompt Migration** - Migrate worktree sync to snapshot/restore and migrate key prompts to tool calls
+- [x] **Phase 2: Sync Migration + Prompt Migration** - Migrate worktree sync to snapshot/restore and migrate key prompts to tool calls (completed 2026-03-22)
 - [ ] **Phase 3: Event Reconciliation + Mandatory Tools** - Replace INSERT OR REPLACE with event-based merge, complete prompt migration, add gsd migrate
 - [ ] **Phase 4: Remove Parsing from Hot Path** - Reduce doctor to infrastructure checks and move markdown parsers to legacy
 - [ ] **Phase 5: Dead Code Cleanup** - Remove all dead code unlocked by prior phases (~4,600 lines)
@@ -51,9 +51,9 @@ Plans:
 **Plans:** 3 plans
 
 Plans:
-- [ ] 2-01-PLAN.md — Advisory sync lock + engine.replay() method
-- [ ] 2-02-PLAN.md — Sync function migration (snapshot/restore with locking)
-- [ ] 2-03-PLAN.md — Prompt migration (3 prompts to tool-call instructions)
+- [x] 2-01-PLAN.md — Advisory sync lock + engine.replay() method
+- [x] 2-02-PLAN.md — Sync function migration (snapshot/restore with locking)
+- [x] 2-03-PLAN.md — Prompt migration (3 prompts to tool-call instructions)
 
 ### Phase 3: Event Reconciliation + Mandatory Tools
 **Goal**: Worktree merge uses event-based reconciliation (no more INSERT OR REPLACE), remaining prompts migrated to tools, agent writes to state files produce warnings, and legacy projects can migrate via `gsd migrate`
