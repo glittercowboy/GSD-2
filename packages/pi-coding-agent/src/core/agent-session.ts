@@ -376,6 +376,12 @@ export class AgentSession {
 
 	// Track last assistant message for auto-compaction check
 	private _lastAssistantMessage: AssistantMessage | undefined = undefined;
+	private _pendingSessionSwitchEpoch = 0;
+	private _cancelledSessionSwitchEpoch = 0;
+
+	cancelPendingSessionSwitch(): void {
+		this._cancelledSessionSwitchEpoch = this._pendingSessionSwitchEpoch;
+	}
 
 	/** Internal handler for agent events - shared by subscribe and reconnect */
 	private _handleAgentEvent = (event: AgentEvent): void => {
@@ -1509,6 +1515,8 @@ export class AgentSession {
 		parentSession?: string;
 		setup?: (sessionManager: SessionManager) => Promise<void>;
 	}): Promise<boolean> {
+		const sessionSwitchEpoch = ++this._pendingSessionSwitchEpoch;
+		const wasCancelled = (): boolean => this._cancelledSessionSwitchEpoch >= sessionSwitchEpoch;
 		const previousSessionFile = this.sessionFile;
 
 		// Emit session_before_switch event with reason "new" (can be cancelled)
@@ -1525,6 +1533,9 @@ export class AgentSession {
 
 		this._disconnectFromAgent();
 		await this.abort();
+		if (wasCancelled()) {
+			return false;
+		}
 		this.agent.reset();
 		// Update cwd to current process directory — auto-mode may have chdir'd
 		// into a worktree since the original session was created.
@@ -1552,11 +1563,17 @@ export class AgentSession {
 		// Run setup callback if provided (e.g., to append initial messages)
 		if (options?.setup) {
 			await options.setup(this.sessionManager);
+			if (wasCancelled()) {
+				return false;
+			}
 			// Sync agent state with session manager after setup
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.replaceMessages(sessionContext.messages);
 		}
 
+		if (wasCancelled()) {
+			return false;
+		}
 		this._reconnectToAgent();
 
 		// Emit session_switch event with reason "new" to extensions

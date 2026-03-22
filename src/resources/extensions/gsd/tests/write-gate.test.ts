@@ -191,3 +191,12 @@ test('write-gate: markDepthVerified unblocks queue-mode writes when milestoneId 
 
   clearDiscussionFlowState();
 });
+
+test('write-gate: resetWriteGateState clears queue phase leakage', () => {
+  clearDiscussionFlowState();
+  setQueuePhaseActive(true);
+
+  resetWriteGateState();
+
+  assert.strictEqual(isQueuePhaseActive(), false, 'resetWriteGateState should clear leaked queue phase state');
+});

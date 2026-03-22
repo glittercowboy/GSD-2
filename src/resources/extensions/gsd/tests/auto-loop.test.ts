@@ -176,6 +176,10 @@ test("runUnit returns cancelled when session creation times out", async () => {
   const ctx = makeMockCtx();
   const pi = makeMockPi();
   const s = makeMockSession();
+  let cancelledSessionSwitch = false;
+  s.cmdCtx.cancelPendingSessionSwitch = () => {
+    cancelledSessionSwitch = true;
+  };
   s.cmdCtx.newSession = () => new Promise<{ cancelled: boolean }>(() => {});
   const originalSetTimeout = globalThis.setTimeout;
   (globalThis as typeof globalThis & { setTimeout: typeof setTimeout }).setTimeout =
@@ -196,6 +200,7 @@ test("runUnit returns cancelled when session creation times out", async () => {
   assert.equal(result.status, "cancelled");
   assert.equal(result.event, undefined);
   assert.equal(pi.calls.length, 0);
+  assert.equal(cancelledSessionSwitch, true, "timeout should best-effort cancel the pending session switch");
   assert.equal(isSessionSwitchInFlight(), true, "hung session should keep the switch guard active until explicit reset or a newer switch");
 
   _resetPendingResolve();

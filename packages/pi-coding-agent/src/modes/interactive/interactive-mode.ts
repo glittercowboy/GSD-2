@@ -1101,6 +1101,7 @@ export class InteractiveMode {
 				uiContext,
 				commandContextActions: {
 					waitForIdle: () => this.session.agent.waitForIdle(),
+					cancelPendingSessionSwitch: () => this.session.cancelPendingSessionSwitch(),
 					newSession: async (options) => {
 						if (this.loadingAnimation) {
 							this.loadingAnimation.stop();

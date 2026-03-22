@@ -297,6 +297,9 @@ export interface ExtensionCommandContext extends ExtensionContext {
 	/** Wait for the agent to finish streaming */
 	waitForIdle(): Promise<void>;
 
+	/** Best-effort cancellation for an in-flight session switch. */
+	cancelPendingSessionSwitch?(): void;
+
 	/** Start a new session, optionally with initialization. */
 	newSession(options?: {
 		parentSession?: string;
@@ -1353,6 +1356,7 @@ export interface ExtensionContextActions {
  */
 export interface ExtensionCommandContextActions {
 	waitForIdle: () => Promise<void>;
+	cancelPendingSessionSwitch?: () => void;
 	newSession: (options?: {
 		parentSession?: string;
 		setup?: (sessionManager: SessionManager) => Promise<void>;

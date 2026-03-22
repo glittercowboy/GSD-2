@@ -62,6 +62,9 @@ export function registerHooks(pi: ExtensionAPI): void {
   pi.on("agent_end", async (event, ctx: ExtensionContext) => {
     resetToolCallLoopGuard();
     await handleAgentEnd(pi, event, ctx);
+    if (isQueuePhaseActive() && !isAutoActive()) {
+      clearDiscussionFlowState();
+    }
   });
 
   pi.on("session_before_compact", async () => {

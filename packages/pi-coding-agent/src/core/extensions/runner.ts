@@ -150,6 +150,7 @@ export type NavigateTreeHandler = (
 export type SwitchSessionHandler = (sessionPath: string) => Promise<{ cancelled: boolean }>;
 
 export type ReloadHandler = () => Promise<void>;
+export type CancelPendingSessionSwitchHandler = () => void;
 
 export type ShutdownHandler = () => void;
 
@@ -193,6 +194,7 @@ export class ExtensionRunner {
 	private getModel: () => Model<any> | undefined = () => undefined;
 	private isIdleFn: () => boolean = () => true;
 	private waitForIdleFn: () => Promise<void> = async () => {};
+	private cancelPendingSessionSwitchHandler: CancelPendingSessionSwitchHandler = () => {};
 	private abortFn: () => void = () => {};
 	private hasPendingMessagesFn: () => boolean = () => false;
 	private getContextUsageFn: () => ContextUsage | undefined = () => undefined;
@@ -275,6 +277,7 @@ export class ExtensionRunner {
 	bindCommandContext(actions?: ExtensionCommandContextActions): void {
 		if (actions) {
 			this.waitForIdleFn = actions.waitForIdle;
+			this.cancelPendingSessionSwitchHandler = actions.cancelPendingSessionSwitch ?? (() => {});
 			this.newSessionHandler = actions.newSession;
 			this.forkHandler = actions.fork;
 			this.navigateTreeHandler = actions.navigateTree;
@@ -284,6 +287,7 @@ export class ExtensionRunner {
 		}
 
 		this.waitForIdleFn = async () => {};
+		this.cancelPendingSessionSwitchHandler = () => {};
 		this.newSessionHandler = async () => ({ cancelled: false });
 		this.forkHandler = async () => ({ cancelled: false });
 		this.navigateTreeHandler = async () => ({ cancelled: false });
@@ -525,6 +529,7 @@ export class ExtensionRunner {
 		return {
 			...this.createContext(),
 			waitForIdle: () => this.waitForIdleFn(),
+			cancelPendingSessionSwitch: () => this.cancelPendingSessionSwitchHandler(),
 			newSession: (options) => this.newSessionHandler(options),
 			fork: (entryId) => this.forkHandler(entryId),
 			navigateTree: (targetId, options) => this.navigateTreeHandler(targetId, options),

@@ -17,6 +17,7 @@ export function setQueuePhaseActive(active: boolean): void {
 
 export function resetWriteGateState(): void {
   depthVerificationDone = false;
+  activeQueuePhase = false;
 }
 
 export function clearDiscussionFlowState(): void {

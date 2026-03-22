@@ -62,6 +62,10 @@ export async function runUnit(
   if (sessionTimeoutHandle) clearTimeout(sessionTimeoutHandle);
 
   if (sessionResult.cancelled) {
+    const cmdCtxAny = s.cmdCtx as Record<string, unknown> | null;
+    if (typeof cmdCtxAny?.cancelPendingSessionSwitch === "function") {
+      (cmdCtxAny.cancelPendingSessionSwitch as () => void)();
+    }
     debugLog("runUnit-session-timeout", { unitType, unitId });
     return { status: "cancelled" };
   }

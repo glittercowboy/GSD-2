@@ -20,6 +20,7 @@ import type { ExtensionCommandContextActions } from "../../core/extensions/index
 export function createDefaultCommandContextActions(session: AgentSession): ExtensionCommandContextActions {
 	return {
 		waitForIdle: () => session.agent.waitForIdle(),
+		cancelPendingSessionSwitch: () => session.cancelPendingSessionSwitch(),
 
 		newSession: async (options) => {
 			const success = await session.newSession(options);
