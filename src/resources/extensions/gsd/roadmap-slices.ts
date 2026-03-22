@@ -264,6 +264,16 @@ function parseProseSliceHeaders(content: string): RoadmapSliceEntry[] {
       }
     }
 
+    // Extract done state from structured metadata lines — handles:
+    //   "- [x] done:true"  |  "- [ ] done:false"  |  "- done: true"  |  "done:true"
+    // This is authoritative when present — overrides header-level ✓ and (Complete) heuristics.
+    // Intentionally does NOT match bare "- [x]" (high false-positive risk from verification
+    // checklists and task lists in prose body). Only the explicit "done:" keyword is safe.
+    const doneMetaMatch = section.match(/^[-*\s]*(?:\[[ xX]\]\s*)?done:\s*(true|false)/im);
+    if (doneMetaMatch) {
+      done = doneMetaMatch[1]!.toLowerCase() === "true";
+    }
+
     slices.push({ id, title, risk: "medium" as RiskLevel, depends, done, demo: "" });
   }
 

@@ -253,3 +253,83 @@ Do the second thing.
   assert.equal(slices[0]?.id, "S01");
   assert.equal(slices[1]?.id, "S02");
 });
+
+// ── Regression: done:true/done:false metadata lines in prose headers ────────
+
+test("parseRoadmapSlices: prose headers with '- [x] done:true' metadata detected as done", () => {
+  const proseContent = `# M030: Metadata Done
+
+## Slices
+
+### S01: First Feature
+- [x] done:true
+- depends: []
+
+Some description of what was built.
+
+### S02: Second Feature
+- [ ] done:false
+- depends: [S01]
+
+Not started yet.
+`;
+  const slices = parseRoadmapSlices(proseContent);
+  assert.equal(slices.length, 2);
+  assert.equal(slices[0]?.id, "S01");
+  assert.equal(slices[0]?.done, true, "S01 should be done via '- [x] done:true'");
+  assert.equal(slices[1]?.id, "S02");
+  assert.equal(slices[1]?.done, false, "S02 should not be done");
+});
+
+test("parseRoadmapSlices: 'done:true' metadata overrides missing header marker", () => {
+  const proseContent = `# M031: Override Test
+
+## Slices
+
+### S01: Plain Header
+- done: true
+
+### S02: Also Plain
+- done: false
+`;
+  const slices = parseRoadmapSlices(proseContent);
+  assert.equal(slices.length, 2);
+  assert.equal(slices[0]?.done, true, "done:true in body should set done");
+  assert.equal(slices[1]?.done, false, "done:false in body should keep not-done");
+});
+
+test("parseRoadmapSlices: 'done:false' metadata overrides (Complete) header marker", () => {
+  const proseContent = `# M032: Conflict Test
+
+## Slices
+
+### S01: Feature (Complete)
+- done: false
+
+Description says complete but metadata says not.
+`;
+  const slices = parseRoadmapSlices(proseContent);
+  assert.equal(slices.length, 1);
+  assert.equal(slices[0]?.done, false, "explicit done:false should override (Complete) marker");
+});
+
+test("parseRoadmapSlices: bare [x] in verification checklist does NOT false-positive done", () => {
+  const proseContent = `# M033: False Positive Guard
+
+## Slices
+
+### S01: Build Feature
+
+**Verification:**
+- [x] Tests pass
+- [ ] Browser renders correctly
+- [x] API returns 200
+
+### S02: Polish
+Not started.
+`;
+  const slices = parseRoadmapSlices(proseContent);
+  assert.equal(slices.length, 2);
+  assert.equal(slices[0]?.done, false, "bare [x] in verification list must NOT set done");
+  assert.equal(slices[1]?.done, false);
+});
