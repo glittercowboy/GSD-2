@@ -167,6 +167,9 @@ export async function autoLoop(
           previousTier: undefined,
         };
 
+        // ── Progress widget (mirrors dev path in runDispatch) ──
+        deps.updateProgressWidget(ctx, iterData.unitType, iterData.unitId, iterData.state);
+
         // ── Guards (shared with dev path) ──
         const guardsResult = await runGuards(ic, s.currentMilestoneId ?? "workflow");
         if (guardsResult.action === "break") break;

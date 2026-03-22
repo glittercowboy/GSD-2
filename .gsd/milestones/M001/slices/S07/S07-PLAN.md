@@ -25,7 +25,7 @@
   - Verify: `npx tsx --test src/resources/extensions/gsd/tests/commands-workflow-custom.test.ts`
   - Done when: All six subcommands route correctly, catalog completions return expected results, tests pass.
 
-- [ ] **T02: Wire progress widget into custom engine loop and fix dashboard overlay** `est:20m`
+- [x] **T02: Wire progress widget into custom engine loop and fix dashboard overlay** `est:20m`
   - Why: The custom engine path in `auto/loop.ts` (line ~127) bypasses `runDispatch` where `deps.updateProgressWidget()` normally gets called — so the TUI widget never renders during workflow execution. The dashboard overlay's `unitLabel()` is missing a `custom-step` case, causing it to fall through to the default which returns the raw type string.
   - Files: `src/resources/extensions/gsd/auto/loop.ts`, `src/resources/extensions/gsd/dashboard-overlay.ts`, `src/resources/extensions/gsd/tests/dashboard-custom-engine.test.ts`
   - Do: (1) In `auto/loop.ts`, add `deps.updateProgressWidget(ctx, iterData.unitType, iterData.unitId, iterData.state)` in the custom engine path — after building `iterData` and before `runGuards`. (2) In `dashboard-overlay.ts`, add `case "custom-step": return "Workflow Step";` to the `unitLabel()` switch statement. (3) Write test file: test that `unitLabel("custom-step")` returns "Workflow Step"; test that the `autoLoop` custom engine path includes `updateProgressWidget` in the mock deps call log (use the existing `custom-engine-loop-integration.test.ts` pattern).

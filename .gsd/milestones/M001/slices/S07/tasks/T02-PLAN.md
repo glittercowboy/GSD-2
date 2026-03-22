@@ -53,3 +53,10 @@ The custom engine path in `auto/loop.ts` bypasses `runDispatch` (which is where 
 - `src/resources/extensions/gsd/auto/loop.ts` — modified with `updateProgressWidget` call in custom engine path
 - `src/resources/extensions/gsd/dashboard-overlay.ts` — modified with `custom-step` case in `unitLabel()`
 - `src/resources/extensions/gsd/tests/dashboard-custom-engine.test.ts` — new test file verifying both changes
+
+## Observability Impact
+
+- **Progress widget:** The TUI progress widget now renders during custom workflow execution (previously blank). The widget shows the current `custom-step` unit type and ID, matching the dev path behavior. Visible in the dashboard overlay's "Now:" line.
+- **Dashboard overlay:** `unitLabel("custom-step")` now returns `"Workflow Step"` instead of the raw `"custom-step"` string, making the overlay display human-readable for custom workflow units.
+- **Inspection:** Run `rg "updateProgressWidget" src/resources/extensions/gsd/auto/loop.ts` to verify the call exists in the custom engine path. Run `rg "custom-step" src/resources/extensions/gsd/dashboard-overlay.ts` to verify the label case exists.
+- **Failure state:** If `updateProgressWidget` throws during the custom engine path, the blanket catch in `autoLoop` handles it with graduated recovery (same as any iteration error). The widget call is side-effect only and does not affect engine dispatch.
