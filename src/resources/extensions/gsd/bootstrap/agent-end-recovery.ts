@@ -33,7 +33,8 @@ export async function handleAgentEnd(
 
     if (isTransientNetworkError(errorMsg)) {
       const currentModelId = ctx.model?.id ?? "unknown";
-      const retryKey = `network-retry:${currentModelId}`;
+      const currentProvider = ctx.model?.provider ?? "unknown";
+      const retryKey = `network-retry:${currentProvider}/${currentModelId}`;
       const currentRetries = getNetworkRetryCount(retryKey);
       const maxRetries = 2;
       if (currentRetries < maxRetries) {

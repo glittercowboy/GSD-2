@@ -150,7 +150,7 @@ export type NavigateTreeHandler = (
 export type SwitchSessionHandler = (sessionPath: string) => Promise<{ cancelled: boolean }>;
 
 export type ReloadHandler = () => Promise<void>;
-export type CancelPendingSessionSwitchHandler = () => void;
+export type CancelPendingNewSessionHandler = () => void;
 export type ClearQueueHandler = () => { steering: string[]; followUp: string[] };
 
 export type ShutdownHandler = () => void;
@@ -195,7 +195,7 @@ export class ExtensionRunner {
 	private getModel: () => Model<any> | undefined = () => undefined;
 	private isIdleFn: () => boolean = () => true;
 	private waitForIdleFn: () => Promise<void> = async () => {};
-	private cancelPendingSessionSwitchHandler: CancelPendingSessionSwitchHandler = () => {};
+	private cancelPendingNewSessionHandler: CancelPendingNewSessionHandler = () => {};
 	private clearQueueHandler: ClearQueueHandler = () => ({ steering: [], followUp: [] });
 	private abortFn: () => void = () => {};
 	private hasPendingMessagesFn: () => boolean = () => false;
@@ -279,7 +279,7 @@ export class ExtensionRunner {
 	bindCommandContext(actions?: ExtensionCommandContextActions): void {
 		if (actions) {
 			this.waitForIdleFn = actions.waitForIdle;
-			this.cancelPendingSessionSwitchHandler = actions.cancelPendingSessionSwitch ?? (() => {});
+			this.cancelPendingNewSessionHandler = actions.cancelPendingNewSession ?? (() => {});
 			this.clearQueueHandler = actions.clearQueue ?? (() => ({ steering: [], followUp: [] }));
 			this.newSessionHandler = actions.newSession;
 			this.forkHandler = actions.fork;
@@ -290,7 +290,7 @@ export class ExtensionRunner {
 		}
 
 		this.waitForIdleFn = async () => {};
-		this.cancelPendingSessionSwitchHandler = () => {};
+		this.cancelPendingNewSessionHandler = () => {};
 		this.clearQueueHandler = () => ({ steering: [], followUp: [] });
 		this.newSessionHandler = async () => ({ cancelled: false });
 		this.forkHandler = async () => ({ cancelled: false });
@@ -533,7 +533,7 @@ export class ExtensionRunner {
 		return {
 			...this.createContext(),
 			waitForIdle: () => this.waitForIdleFn(),
-			cancelPendingSessionSwitch: () => this.cancelPendingSessionSwitchHandler(),
+			cancelPendingNewSession: () => this.cancelPendingNewSessionHandler(),
 			clearQueue: () => this.clearQueueHandler(),
 			newSession: (options) => this.newSessionHandler(options),
 			fork: (entryId) => this.forkHandler(entryId),

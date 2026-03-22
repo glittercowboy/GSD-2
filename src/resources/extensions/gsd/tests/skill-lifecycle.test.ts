@@ -5,6 +5,9 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { UnitMetrics } from "../metrics.js";
 
 // ─── Test helpers ─────────────────────────────────────────────────────────────
@@ -28,8 +31,30 @@ function makeUnit(overrides: Partial<UnitMetrics> = {}): UnitMetrics {
 // ─── Skill Telemetry ──────────────────────────────────────────────────────────
 
 describe("skill-telemetry", () => {
-  // Note: captureAvailableSkills/getAndClearSkills depend on filesystem (getAgentDir)
-  // so we test the data flow via getSkillLastUsed and detectStaleSkills which are pure
+  it("captureAvailableSkills excludes disable-model-invocation skills", async () => {
+    const { captureAvailableSkills, getAndClearSkills, resetSkillTelemetry } = await import("../skill-telemetry.js");
+
+    const projectDir = mkdtempSync(join(tmpdir(), "skill-telemetry-project-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "skill-telemetry-agent-"));
+
+    const projectSkillDir = join(projectDir, ".pi", "skills", "visible-skill");
+    mkdirSync(projectSkillDir, { recursive: true });
+    writeFileSync(
+      join(projectSkillDir, "SKILL.md"),
+      "---\nname: visible-skill\ndescription: Visible skill.\n---\n\n# Visible\n",
+    );
+
+    const hiddenSkillDir = join(agentDir, "skills", "hidden-skill");
+    mkdirSync(hiddenSkillDir, { recursive: true });
+    writeFileSync(
+      join(hiddenSkillDir, "SKILL.md"),
+      "---\nname: hidden-skill\ndescription: Hidden skill.\ndisable-model-invocation: true\n---\n\n# Hidden\n",
+    );
+
+    captureAvailableSkills(projectDir, agentDir);
+    assert.deepEqual(getAndClearSkills(), ["visible-skill"]);
+    resetSkillTelemetry();
+  });
 
   it("getSkillLastUsed returns most recent timestamp per skill", async () => {
     const { getSkillLastUsed } = await import("../skill-telemetry.js");
@@ -66,13 +91,13 @@ describe("skill-health", () => {
   });
 
   it("computeStaleAvoidList excludes already-avoided skills", async () => {
-    // This test requires filesystem access for loadLedgerFromDisk
-    // so we test the filtering logic conceptually
+    // This test depends on whatever skills are installed locally, so assert the
+    // filtering invariant rather than a specific empty result.
     const { computeStaleAvoidList } = await import("../skill-health.js");
 
-    // With no metrics file, should return empty
     const result = computeStaleAvoidList("/nonexistent/path", ["some-skill"]);
-    assert.deepEqual(result, []);
+    assert.ok(Array.isArray(result));
+    assert.ok(!result.includes("some-skill"));
   });
 });
 

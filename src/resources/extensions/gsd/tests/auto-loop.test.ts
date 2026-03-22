@@ -177,7 +177,7 @@ test("runUnit returns cancelled when session creation times out", async () => {
   const pi = makeMockPi();
   const s = makeMockSession();
   let cancelledSessionSwitch = false;
-  s.cmdCtx.cancelPendingSessionSwitch = () => {
+  s.cmdCtx.cancelPendingNewSession = () => {
     cancelledSessionSwitch = true;
   };
   s.cmdCtx.newSession = () => new Promise<{ cancelled: boolean }>(() => {});

@@ -379,7 +379,7 @@ export class AgentSession {
 	private _pendingSessionSwitchEpoch = 0;
 	private _cancelledSessionSwitchEpoch = 0;
 
-	cancelPendingSessionSwitch(): void {
+	cancelPendingNewSession(): void {
 		this._cancelledSessionSwitchEpoch = this._pendingSessionSwitchEpoch;
 	}
 

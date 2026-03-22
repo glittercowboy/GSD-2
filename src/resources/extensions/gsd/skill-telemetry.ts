@@ -13,7 +13,7 @@
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { getAgentDir } from "@gsd/pi-coding-agent";
+import { getAgentDir, loadSkills } from "@gsd/pi-coding-agent";
 
 // ─── In-memory state ──────────────────────────────────────────────────────────
 
@@ -29,9 +29,10 @@ const activelyLoadedSkills = new Set<string>();
  * Capture the list of available skill names at dispatch time.
  * Called before each unit starts.
  */
-export function captureAvailableSkills(): void {
-  const skillsDir = join(getAgentDir(), "skills");
-  availableSkills = listSkillNames(skillsDir);
+export function captureAvailableSkills(basePath: string, agentDir?: string): void {
+  availableSkills = loadSkills({ cwd: basePath, agentDir }).skills
+    .filter((skill) => !skill.disableModelInvocation)
+    .map((skill) => skill.name);
   activelyLoadedSkills.clear();
 }
 

@@ -297,8 +297,8 @@ export interface ExtensionCommandContext extends ExtensionContext {
 	/** Wait for the agent to finish streaming */
 	waitForIdle(): Promise<void>;
 
-	/** Best-effort cancellation for an in-flight session switch. */
-	cancelPendingSessionSwitch?(): void;
+	/** Best-effort cancellation for an in-flight newSession transition. */
+	cancelPendingNewSession?(): void;
 
 	/** Clear queued steering/follow-up messages from the current session. */
 	clearQueue?(): { steering: string[]; followUp: string[] };
@@ -1359,7 +1359,7 @@ export interface ExtensionContextActions {
  */
 export interface ExtensionCommandContextActions {
 	waitForIdle: () => Promise<void>;
-	cancelPendingSessionSwitch?: () => void;
+	cancelPendingNewSession?: () => void;
 	clearQueue?: () => { steering: string[]; followUp: string[] };
 	newSession: (options?: {
 		parentSession?: string;
