@@ -302,7 +302,7 @@ test("M4: sidecar rewrite-docs is skipped and rewriteAttemptCount reset when cou
     // so the loop exits cleanly without needing an agent_end resolve.
     resolveDispatch: async () => {
       deps.callLog.push("resolveDispatch");
-      return { action: "stop" as const, reason: "test-exit" };
+      return { action: "stop" as const, reason: "test-exit", level: "info" as const };
     },
     stopAuto: async () => { deps.callLog.push("stopAuto"); },
     postUnitPostVerification: async () => {
