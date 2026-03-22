@@ -20,6 +20,13 @@ A researcher explored the codebase and a planner decomposed the work — you are
 
 {{slicePlanExcerpt}}
 
+## Tool Selection Guidelines
+
+- Use `bash` for quick commands that complete in <10 seconds (file operations, quick builds, single commands).
+- Use `async_bash` for commands that take 10+ seconds but are expected to complete (tests, builds, installs, long-running scripts). Follow with `await_job` to get the result.
+- Use `bg_shell` for processes that run indefinitely (dev servers, watchers, daemons). Set `type:'server'` and `ready_port` for servers to enable automatic readiness detection.
+- Never use `bash` with `&` — it causes hangs due to stream inheritance. Use `bg_shell` instead.
+
 ## Backing Source Artifacts
 - Slice plan: `{{planPath}}`
 - Task plan source: `{{taskPlanPath}}`
