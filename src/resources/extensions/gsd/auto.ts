@@ -360,6 +360,18 @@ export function isAutoPaused(): boolean {
   return s.paused;
 }
 
+export async function resumeAutoAfterDelay(
+  ctx: ExtensionContext,
+  pi: ExtensionAPI,
+): Promise<void> {
+  if (!s.paused) return;
+  const base = s.originalBasePath || s.basePath;
+  if (!base) return;
+  await startAuto(ctx as unknown as ExtensionCommandContext, pi, base, s.verbose, {
+    step: s.stepMode,
+  });
+}
+
 /**
  * Return the model captured at auto-mode start for this session.
  * Used by error-recovery to fall back to the session's own model
@@ -1061,6 +1073,7 @@ export async function startAuto(
       return;
     }
 
+    clearAutoResumeTimers();
     s.paused = false;
     s.active = true;
     s.verbose = verboseMode;
