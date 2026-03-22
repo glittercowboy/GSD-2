@@ -10,28 +10,28 @@ See: .planning/PROJECT.md (updated 2026-03-22)
 ## Current Position
 
 Phase: 1 of 5 (Engine Foundation + Team Infrastructure)
-Plan: 3 of 5 in current phase
+Plan: 5 of 5 in current phase
 Status: Executing
-Last activity: 2026-03-22 — Completed 1-03: Projection renderers (PLAN, ROADMAP, SUMMARY, STATE)
+Last activity: 2026-03-22 — Completed 1-04: Workflow tools + engine bridge
 
-Progress: [██████░░░░] 12%
+Progress: [████████░░] 16%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 1
-- Average duration: 6 min
-- Total execution time: 0.1 hours
+- Total plans completed: 4
+- Average duration: 5 min
+- Total execution time: 0.3 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 1 - Engine Foundation | 1 | 6 min | 6 min |
+| 1 - Engine Foundation | 4 | 19 min | 5 min |
 
 **Recent Trend:**
-- Last 5 plans: 1-01 (6 min)
-- Trend: Starting
+- Last 5 plans: 1-01 (6 min), 1-02 (5 min), 1-03 (4 min), 1-04 (4 min)
+- Trend: Steady
 
 *Updated after each plan completion*
 
@@ -51,6 +51,9 @@ Recent decisions affecting current work:
 - 1-03: Pure content renderers separated from disk writers for testability without DB
 - 1-03: renderStateContent matches buildStateMarkdown format exactly for backward compat
 - 1-03: All projection writes wrapped in try/catch per D-02 (non-fatal failure)
+- 1-04: Dynamic import of workflow-engine.js in tool execute functions to avoid circular deps
+- 1-04: Engine bridge in deriveState after cache check, before markdown parse
+- 1-04: Telemetry uses module-level counters with copy-on-read for thread safety
 
 ### Pending Todos
 
@@ -63,5 +66,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-03-22
-Stopped at: Completed 1-03-PLAN.md — Projection renderers
+Stopped at: Completed 1-04-PLAN.md — Workflow tools + engine bridge
 Resume file: None

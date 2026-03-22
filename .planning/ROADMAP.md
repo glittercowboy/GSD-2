@@ -34,9 +34,9 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 Plans:
 - [x] 1-01-PLAN.md — Schema v5 migration + WorkflowEngine class skeleton
-- [ ] 1-02-PLAN.md — All 7 command handlers (complete_task through report_blocker)
+- [x] 1-02-PLAN.md — All 7 command handlers (complete_task through report_blocker)
 - [x] 1-03-PLAN.md — Projection renderers (PLAN, ROADMAP, SUMMARY, STATE markdown)
-- [ ] 1-04-PLAN.md — Agent tool registration + deriveState() engine bridge + telemetry
+- [x] 1-04-PLAN.md — Agent tool registration + deriveState() engine bridge + telemetry
 - [ ] 1-05-PLAN.md — State manifest (snapshot/restore) + JSONL event log (fork-point detection)
 
 ### Phase 2: Sync Migration + Prompt Migration
@@ -91,7 +91,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Engine Foundation + Team Infrastructure | 0/5 | Planning complete | - |
+| 1. Engine Foundation + Team Infrastructure | 4/5 | In progress | - |
 | 2. Sync Migration + Prompt Migration | 0/TBD | Not started | - |
 | 3. Event Reconciliation + Mandatory Tools | 0/TBD | Not started | - |
 | 4. Remove Parsing from Hot Path | 0/TBD | Not started | - |
