@@ -1700,6 +1700,7 @@ test("autoLoop lifecycle: advances through research → plan → execute → ver
 
   const deps = makeMockDeps({
     deriveState: async () => {
+      deriveCallCount++;
       deps.callLog.push("deriveState");
 
       // Use dispatch count to determine phase: each pre-dispatch derive
