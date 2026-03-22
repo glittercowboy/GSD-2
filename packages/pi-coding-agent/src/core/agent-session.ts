@@ -879,12 +879,20 @@ export class AgentSession {
 		return Array.from(unique);
 	}
 
-	private _findSkillByName(skillName: string) {
-		return this.resourceLoader.getSkills().skills.find((skill) => skill.name === skillName);
+	private _findSkillByName(skillName: string, options?: { allowHidden?: boolean }) {
+		const allowHidden = options?.allowHidden ?? false;
+		return this.resourceLoader
+			.getSkills()
+			.skills.find((skill) => skill.name === skillName && (allowHidden || !skill.disableModelInvocation));
 	}
 
 	private _formatMissingSkillMessage(skillName: string): string {
-		const availableSkills = this.resourceLoader.getSkills().skills.map((skill) => skill.name).join(", ") || "(none)";
+		const availableSkills =
+			this.resourceLoader
+				.getSkills()
+				.skills.filter((skill) => !skill.disableModelInvocation)
+				.map((skill) => skill.name)
+				.join(", ") || "(none)";
 		return `Skill "${skillName}" not found. Available skills: ${availableSkills}`;
 	}
 
@@ -903,8 +911,8 @@ export class AgentSession {
 		return args && args.trim() ? `${skillBlock}\n\n${args.trim()}` : skillBlock;
 	}
 
-	private _expandSkillByName(skillName: string, args?: string): string {
-		const skill = this._findSkillByName(skillName);
+	private _expandSkillByName(skillName: string, args?: string, options?: { allowHidden?: boolean }): string {
+		const skill = this._findSkillByName(skillName, options);
 		if (!skill) {
 			throw new Error(this._formatMissingSkillMessage(skillName));
 		}
@@ -918,7 +926,7 @@ export class AgentSession {
 	}
 
 	private _formatSkillInvocation(skillName: string, args?: string): string {
-		return this._expandSkillByName(skillName, args);
+		return this._expandSkillByName(skillName, args, { allowHidden: true });
 	}
 
 	private _rebuildSystemPrompt(toolNames: string[]): string {
@@ -1166,7 +1174,7 @@ export class AgentSession {
 		const skillName = spaceIndex === -1 ? text.slice(7) : text.slice(7, spaceIndex);
 		const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1).trim();
 
-		if (!this._findSkillByName(skillName)) return text;
+		if (!this._findSkillByName(skillName, { allowHidden: true })) return text;
 
 		try {
 			return this._formatSkillInvocation(skillName, args);
@@ -1185,7 +1193,7 @@ export class AgentSession {
 			name: "Skill",
 			label: "Skill",
 			description:
-				"Execute a skill within the main conversation. Use this tool when users ask for a slash command or reference a skill by name. Returns the expanded skill block and appends args after it.",
+				"Execute an installed skill within the main conversation. Use this tool when users reference a skill by name or when the prompt exposes matching skills in <available_skills>. Returns the expanded skill block and appends args after it.",
 			parameters: skillSchema,
 			execute: async (_toolCallId, params: unknown) => {
 				const input = params as { skill: string; args?: string };

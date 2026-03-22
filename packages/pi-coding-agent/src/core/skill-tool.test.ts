@@ -14,11 +14,21 @@ import { SettingsManager } from "./settings-manager.js";
 
 let testDir: string;
 
-function writeSkill(cwd: string, name: string, description: string, body = `# ${name}\n`): string {
+function writeSkill(
+	cwd: string,
+	name: string,
+	description: string,
+	body = `# ${name}\n`,
+	options?: { disableModelInvocation?: boolean },
+): string {
 	const skillDir = join(cwd, ".pi", "skills", name);
 	mkdirSync(skillDir, { recursive: true });
 	const skillPath = join(skillDir, "SKILL.md");
-	writeFileSync(skillPath, `---\nname: ${name}\ndescription: ${description}\n---\n\n${body}`);
+	const disableModelInvocation = options?.disableModelInvocation === true;
+	writeFileSync(
+		skillPath,
+		`---\nname: ${name}\ndescription: ${description}${disableModelInvocation ? "\ndisable-model-invocation: true" : ""}\n---\n\n${body}`,
+	);
 	return skillPath;
 }
 
@@ -85,6 +95,43 @@ describe("Skill tool", () => {
 		const message = result.content[0]?.type === "text" ? result.content[0].text : "";
 		assert.match(message, /^Skill "nonexistent" not found\. Available skills: /);
 		assert.match(message, /swift-testing/);
+	});
+
+	it("does not expose disable-model-invocation skills through the Skill tool", async () => {
+		writeSkill(testDir, "visible-skill", "Visible skill description.");
+		writeSkill(
+			testDir,
+			"hidden-skill",
+			"Hidden skill description.",
+			"# Hidden Skill\nUse only via explicit /skill command.\n",
+			{ disableModelInvocation: true },
+		);
+		const session = await createSession();
+		const tool = session.state.tools.find((entry) => entry.name === "Skill");
+		assert.ok(tool, "Skill tool should be registered");
+
+		const result = await tool.execute("call-3", { skill: "hidden-skill" });
+		const message = result.content[0]?.type === "text" ? result.content[0].text : "";
+		assert.match(message, /^Skill "hidden-skill" not found\. Available skills: /);
+		assert.match(message, /visible-skill/);
+		assert.doesNotMatch(message, /Available skills: .*hidden-skill/);
+	});
+
+	it("still expands disable-model-invocation skills via explicit /skill commands", async () => {
+		const skillPath = writeSkill(
+			testDir,
+			"hidden-skill",
+			"Hidden skill description.",
+			"# Hidden Skill\nUse only via explicit /skill command.\n",
+			{ disableModelInvocation: true },
+		);
+		const session = await createSession();
+
+		const expanded = (session as any)._expandSkillCommand("/skill:hidden-skill") as string;
+		assert.equal(
+			expanded,
+			`<skill name="hidden-skill" location="${skillPath}">\nReferences are relative to ${join(testDir, ".pi", "skills", "hidden-skill")}.\n\n# Hidden Skill\nUse only via explicit /skill command.\n</skill>`,
+		);
 	});
 
 	it("includes skill catalog in the default session prompt", async () => {
