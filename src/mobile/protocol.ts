@@ -96,6 +96,32 @@ export interface MobileExtensionUIResponseMessage {
   cancelled?: boolean;
 }
 
+/** Browse all sessions for the project (full discovery) */
+export interface MobileBrowseSessionsMessage {
+  type: "browse_sessions";
+  id: string;
+  query?: string;
+  sortMode?: "recent" | "threaded";
+}
+
+/** Request a session handoff — take over the active desktop session */
+export interface MobileHandoffRequestMessage {
+  type: "handoff_request";
+  id: string;
+  /** If set, request handoff of this specific session. Otherwise, take the active session. */
+  sessionPath?: string;
+}
+
+/** Resume last session on reconnect */
+export interface MobileResumeMessage {
+  type: "resume";
+  id: string;
+  /** The session path the client was last attached to */
+  lastSessionPath?: string;
+  /** The device token (for identifying returning clients) */
+  deviceId?: string;
+}
+
 /** Ping to keep connection alive */
 export interface MobilePingMessage {
   type: "ping";
@@ -114,6 +140,9 @@ export type MobileClientMessage =
   | MobileNewSessionMessage
   | MobileSwitchSessionMessage
   | MobileExtensionUIResponseMessage
+  | MobileBrowseSessionsMessage
+  | MobileHandoffRequestMessage
+  | MobileResumeMessage
   | MobilePingMessage;
 
 // ============================================================================
@@ -169,6 +198,35 @@ export interface MobilePongMessage {
   type: "pong";
 }
 
+/** Session changed on the server (desktop switched, another mobile client took over, etc.) */
+export interface MobileSessionChangedMessage {
+  type: "session_changed";
+  /** The new active session */
+  sessionId: string | null;
+  sessionPath: string | null;
+  sessionName?: string;
+  /** Who triggered the change */
+  changedBy: "desktop" | "mobile" | "server";
+  /** If another mobile client took over, their device name */
+  changedByDevice?: string;
+}
+
+/** Result of a handoff request */
+export interface MobileHandoffResultMessage {
+  type: "handoff_result";
+  id: string;
+  success: boolean;
+  error?: string;
+  /** Session info on success */
+  sessionId?: string;
+  sessionPath?: string;
+  sessionName?: string;
+  /** Current session state snapshot */
+  messageCount?: number;
+  isStreaming?: boolean;
+  phase?: string;
+}
+
 /** Server is shutting down */
 export interface MobileServerShutdownMessage {
   type: "server_shutdown";
@@ -181,5 +239,7 @@ export type MobileServerMessage =
   | MobileSessionEventMessage
   | MobileBridgeStatusMessage
   | MobileExtensionUIRequestMessage
+  | MobileSessionChangedMessage
+  | MobileHandoffResultMessage
   | MobilePongMessage
   | MobileServerShutdownMessage;

@@ -22,7 +22,7 @@
 
 export { MobileSocketServer, type MobileSocketServerOptions, type MobileSocketServerInfo } from "./server.ts";
 export { MobileAuthManager, type PairedDevice } from "./auth.ts";
-export { MobileConnection, type MobileConnectionConfig } from "./connection.ts";
+export { MobileConnection, type MobileConnectionConfig, type HandoffCallback } from "./connection.ts";
 export { runMobileCLI, type MobileCLIOptions } from "./cli.ts";
 export { SimpleWebSocket, upgradeToWebSocket } from "./websocket.ts";
 export {
@@ -57,6 +57,9 @@ export type {
   MobileNewSessionMessage,
   MobileSwitchSessionMessage,
   MobileExtensionUIResponseMessage,
+  MobileBrowseSessionsMessage,
+  MobileHandoffRequestMessage,
+  MobileResumeMessage,
   MobilePingMessage,
 
   // Server → Client
@@ -66,6 +69,8 @@ export type {
   MobileSessionEventMessage,
   MobileBridgeStatusMessage,
   MobileExtensionUIRequestMessage,
+  MobileSessionChangedMessage,
+  MobileHandoffResultMessage,
   MobilePongMessage,
   MobileServerShutdownMessage,
 } from "./protocol.ts";

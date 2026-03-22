@@ -11,16 +11,38 @@ import type { MobileAuthManager, PairedDevice } from "./auth.ts";
 import type {
   MobileClientMessage,
   MobileServerMessage,
+  MobileSessionChangedMessage,
+  MobileHandoffResultMessage,
 } from "./protocol.ts";
 import type { BridgeService } from "../web/bridge-service.ts";
 import type { BridgeEvent, BridgeRuntimeSnapshot } from "../web/bridge-service.ts";
 import type { RpcExtensionUIRequest, RpcExtensionUIResponse } from "../../packages/pi-coding-agent/src/modes/rpc/rpc-types.ts";
+
+/** Callback for notifying the server about handoff events */
+export type HandoffCallback = (event: {
+  type: "session_taken" | "session_released";
+  connectionId: string;
+  deviceName: string;
+  sessionPath: string | null;
+}) => void;
 
 export interface MobileConnectionConfig {
   bridge: BridgeService;
   auth: MobileAuthManager;
   projectCwd: string;
   serverVersion: string;
+  /** Called when this connection takes or releases a session */
+  onHandoff?: HandoffCallback;
+  /** Lists all sessions for the project */
+  listSessions?: () => Array<{
+    id: string;
+    path: string;
+    name?: string;
+    createdAt: string;
+    modifiedAt: string;
+    messageCount: number;
+    isActive: boolean;
+  }>;
 }
 
 export class MobileConnection {
@@ -31,6 +53,7 @@ export class MobileConnection {
   private authenticated = false;
   private unsubscribeBridge: (() => void) | null = null;
   private attached = false;
+  private attachedSessionPath: string | null = null;
   private pingInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor(id: string, ws: SimpleWebSocket, config: MobileConnectionConfig) {
@@ -122,6 +145,15 @@ export class MobileConnection {
         break;
       case "extension_ui_response":
         this.handleExtensionUIResponse(message);
+        break;
+      case "browse_sessions":
+        this.handleBrowseSessions(message);
+        break;
+      case "handoff_request":
+        this.handleHandoffRequest(message);
+        break;
+      case "resume":
+        this.handleResume(message);
         break;
       default:
         this.sendError("unknown_message", `Unknown message type: ${(message as { type: string }).type}`);
@@ -225,6 +257,15 @@ export class MobileConnection {
         this.forwardBridgeEvent(event);
       });
       this.attached = true;
+      this.attachedSessionPath = message.sessionPath || snapshot.activeSessionFile;
+
+      // Notify server of session takeover
+      this.config.onHandoff?.({
+        type: "session_taken",
+        connectionId: this.id,
+        deviceName: this.device?.name || "Unknown",
+        sessionPath: this.attachedSessionPath,
+      });
 
       // Send current state
       const stateResponse = await bridge.sendInput({ type: "get_state" });
@@ -248,12 +289,24 @@ export class MobileConnection {
   }
 
   private handleDetachSession(message: MobileClientMessage & { type: "detach_session" }): void {
+    const prevPath = this.attachedSessionPath;
     if (this.unsubscribeBridge) {
       this.unsubscribeBridge();
       this.unsubscribeBridge = null;
     }
     this.attached = false;
+    this.attachedSessionPath = null;
     this.send({ type: "response", id: message.id, success: true });
+
+    // Notify server of session release
+    if (prevPath) {
+      this.config.onHandoff?.({
+        type: "session_released",
+        connectionId: this.id,
+        deviceName: this.device?.name || "Unknown",
+        sessionPath: prevPath,
+      });
+    }
   }
 
   private async handlePrompt(message: MobileClientMessage & { type: "prompt" }): Promise<void> {
@@ -305,6 +358,219 @@ export class MobileConnection {
       });
     }
   }
+
+  // ── Session Discovery & Handoff ──────────────────────────────────────
+
+  private handleBrowseSessions(message: MobileClientMessage & { type: "browse_sessions" }): void {
+    try {
+      const sessions = this.config.listSessions?.() || [];
+      const query = message.query?.toLowerCase();
+
+      let filtered = sessions;
+      if (query) {
+        filtered = sessions.filter(
+          (s) =>
+            s.name?.toLowerCase().includes(query) ||
+            s.path.toLowerCase().includes(query) ||
+            s.id.toLowerCase().includes(query),
+        );
+      }
+
+      // Sort by modified date (newest first) by default
+      if (message.sortMode !== "threaded") {
+        filtered.sort((a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime());
+      }
+
+      this.send({
+        type: "response",
+        id: message.id,
+        success: true,
+        data: { sessions: filtered },
+      });
+    } catch (error) {
+      this.send({
+        type: "response",
+        id: message.id,
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async handleHandoffRequest(message: MobileClientMessage & { type: "handoff_request" }): Promise<void> {
+    try {
+      const bridge = this.config.bridge;
+      const snapshot = bridge.getSnapshot();
+
+      // Determine which session to hand off
+      const targetPath = message.sessionPath || snapshot.activeSessionFile;
+
+      if (!targetPath) {
+        this.send({
+          type: "handoff_result",
+          id: message.id,
+          success: false,
+          error: "No active session to hand off. Start a session on the desktop first.",
+        });
+        return;
+      }
+
+      // If we're already attached, detach first
+      if (this.unsubscribeBridge) {
+        this.unsubscribeBridge();
+        this.unsubscribeBridge = null;
+      }
+
+      // Switch to target session if needed
+      if (snapshot.activeSessionFile !== targetPath) {
+        await bridge.sendInput({
+          type: "switch_session",
+          sessionPath: targetPath,
+        });
+      }
+
+      // Subscribe to bridge events (take over the session)
+      this.unsubscribeBridge = bridge.subscribe((event: BridgeEvent) => {
+        this.forwardBridgeEvent(event);
+      });
+      this.attached = true;
+      this.attachedSessionPath = targetPath;
+
+      // Get the current state
+      const updatedSnapshot = bridge.getSnapshot();
+
+      // Notify server of takeover
+      this.config.onHandoff?.({
+        type: "session_taken",
+        connectionId: this.id,
+        deviceName: this.device?.name || "Unknown",
+        sessionPath: targetPath,
+      });
+
+      // Send handoff result with full context
+      this.send({
+        type: "handoff_result",
+        id: message.id,
+        success: true,
+        sessionId: updatedSnapshot.activeSessionId,
+        sessionPath: updatedSnapshot.activeSessionFile,
+        sessionName: updatedSnapshot.sessionState?.sessionName,
+        messageCount: updatedSnapshot.sessionState?.messageCount,
+        isStreaming: updatedSnapshot.sessionState?.isStreaming ?? false,
+        phase: updatedSnapshot.phase,
+      });
+
+      // Also send bridge status
+      this.sendBridgeStatus(updatedSnapshot);
+    } catch (error) {
+      this.send({
+        type: "handoff_result",
+        id: message.id,
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async handleResume(message: MobileClientMessage & { type: "resume" }): Promise<void> {
+    try {
+      const bridge = this.config.bridge;
+      const snapshot = bridge.getSnapshot();
+
+      // Try to resume the last session, or fall back to the currently active one
+      const targetPath = message.lastSessionPath || snapshot.activeSessionFile;
+
+      if (!targetPath) {
+        // No session to resume — send available sessions instead
+        const sessions = this.config.listSessions?.() || [];
+        this.send({
+          type: "response",
+          id: message.id,
+          success: true,
+          data: {
+            resumed: false,
+            reason: "no_active_session",
+            sessions: sessions.slice(0, 10), // Send top 10 recent sessions
+          },
+        });
+        return;
+      }
+
+      // Switch if needed
+      if (snapshot.activeSessionFile !== targetPath) {
+        try {
+          await bridge.sendInput({
+            type: "switch_session",
+            sessionPath: targetPath,
+          });
+        } catch {
+          // Session might have been deleted — fall back to current active
+          if (snapshot.activeSessionFile) {
+            // Use the active session instead
+          } else {
+            const sessions = this.config.listSessions?.() || [];
+            this.send({
+              type: "response",
+              id: message.id,
+              success: true,
+              data: {
+                resumed: false,
+                reason: "session_not_found",
+                sessions: sessions.slice(0, 10),
+              },
+            });
+            return;
+          }
+        }
+      }
+
+      // Attach to the session
+      if (this.unsubscribeBridge) {
+        this.unsubscribeBridge();
+      }
+      this.unsubscribeBridge = bridge.subscribe((event: BridgeEvent) => {
+        this.forwardBridgeEvent(event);
+      });
+      this.attached = true;
+      this.attachedSessionPath = targetPath;
+
+      const updatedSnapshot = bridge.getSnapshot();
+
+      // Notify server
+      this.config.onHandoff?.({
+        type: "session_taken",
+        connectionId: this.id,
+        deviceName: this.device?.name || "Unknown",
+        sessionPath: targetPath,
+      });
+
+      this.send({
+        type: "response",
+        id: message.id,
+        success: true,
+        data: {
+          resumed: true,
+          sessionId: updatedSnapshot.activeSessionId,
+          sessionPath: updatedSnapshot.activeSessionFile,
+          sessionName: updatedSnapshot.sessionState?.sessionName,
+          messageCount: updatedSnapshot.sessionState?.messageCount,
+          isStreaming: updatedSnapshot.sessionState?.isStreaming ?? false,
+          phase: updatedSnapshot.phase,
+        },
+      });
+
+      this.sendBridgeStatus(updatedSnapshot);
+    } catch (error) {
+      this.send({
+        type: "response",
+        id: message.id,
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  // ── Command Forwarding ──────────────────────────────────────────────
 
   private async forwardCommand(id: string, command: Record<string, unknown>): Promise<void> {
     try {
@@ -388,6 +654,20 @@ export class MobileConnection {
 
   isAlive(): boolean {
     return this.ws.readyState === WS_OPEN;
+  }
+
+  isAttached(): boolean {
+    return this.attached;
+  }
+
+  getAttachedSessionPath(): string | null {
+    return this.attachedSessionPath;
+  }
+
+  /** Notify this connection that the session changed externally */
+  notifySessionChanged(msg: MobileSessionChangedMessage): void {
+    if (!this.attached) return;
+    this.send(msg);
   }
 
   disconnect(reason?: string): void {

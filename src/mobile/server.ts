@@ -22,9 +22,11 @@ import { fileURLToPath } from "node:url";
 import { networkInterfaces } from "node:os";
 import type { Socket } from "node:net";
 
+import { readdirSync, statSync } from "node:fs";
 import { upgradeToWebSocket } from "./websocket.ts";
 import { MobileAuthManager } from "./auth.ts";
-import { MobileConnection, type MobileConnectionConfig } from "./connection.ts";
+import { MobileConnection, type MobileConnectionConfig, type HandoffCallback } from "./connection.ts";
+import type { MobileSessionChangedMessage } from "./protocol.ts";
 import {
   loadConfig,
   saveConfig,
@@ -86,6 +88,8 @@ export class MobileSocketServer {
   private readonly version: string;
   private connectionCounter = 0;
   private startedAt = Date.now();
+  private unsubscribeBridgeWatch: (() => void) | null = null;
+  private lastKnownSessionPath: string | null = null;
 
   // Effective runtime values (overrides take precedence over config)
   private readonly effectivePort: number;
@@ -138,6 +142,15 @@ export class MobileSocketServer {
     });
 
     this.startedAt = Date.now();
+    this.lastKnownSessionPath = this.bridge.getSnapshot().activeSessionFile;
+
+    // Watch bridge for desktop-initiated session changes
+    this.unsubscribeBridgeWatch = this.bridge.subscribe((event) => {
+      if (typeof event === "object" && event !== null && "type" in event && event.type === "bridge_status") {
+        this.checkForSessionChange();
+      }
+    });
+
     const { code, expiresInSeconds } = this.auth.createPairingCode();
     const protocol = secure ? "wss" : "ws";
     const httpProtocol = secure ? "https" : "http";
@@ -155,6 +168,10 @@ export class MobileSocketServer {
   }
 
   async stop(): Promise<void> {
+    if (this.unsubscribeBridgeWatch) {
+      this.unsubscribeBridgeWatch();
+      this.unsubscribeBridgeWatch = null;
+    }
     for (const connection of this.connections.values()) {
       connection.disconnect("Server shutting down");
     }
@@ -462,6 +479,8 @@ export class MobileSocketServer {
       auth: this.auth,
       projectCwd: this.projectCwd,
       serverVersion: this.version,
+      onHandoff: (event) => this.handleHandoffEvent(event),
+      listSessions: () => this.listProjectSessions(),
     };
 
     const connection = new MobileConnection(connId, ws, config);
@@ -470,6 +489,132 @@ export class MobileSocketServer {
     ws.on("close", () => {
       this.connections.delete(connId);
     });
+  }
+
+  // ── Session Handoff & Multi-Client Coordination ──────────────────────
+
+  private handleHandoffEvent(event: {
+    type: "session_taken" | "session_released";
+    connectionId: string;
+    deviceName: string;
+    sessionPath: string | null;
+  }): void {
+    if (event.type === "session_taken" && event.sessionPath) {
+      // Notify all OTHER attached connections that the session changed
+      const notification: MobileSessionChangedMessage = {
+        type: "session_changed",
+        sessionId: this.bridge.getSnapshot().activeSessionId,
+        sessionPath: event.sessionPath,
+        sessionName: this.bridge.getSnapshot().sessionState?.sessionName,
+        changedBy: "mobile",
+        changedByDevice: event.deviceName,
+      };
+
+      for (const [id, conn] of this.connections) {
+        if (id !== event.connectionId && conn.isAttached()) {
+          conn.notifySessionChanged(notification);
+        }
+      }
+
+      this.lastKnownSessionPath = event.sessionPath;
+    }
+  }
+
+  /** Detect when the desktop (or bridge) changes the active session */
+  private checkForSessionChange(): void {
+    const snapshot = this.bridge.getSnapshot();
+    const currentPath = snapshot.activeSessionFile;
+
+    if (currentPath && currentPath !== this.lastKnownSessionPath) {
+      // Session changed externally (desktop user switched)
+      const notification: MobileSessionChangedMessage = {
+        type: "session_changed",
+        sessionId: snapshot.activeSessionId,
+        sessionPath: currentPath,
+        sessionName: snapshot.sessionState?.sessionName,
+        changedBy: "desktop",
+      };
+
+      for (const conn of this.connections.values()) {
+        if (conn.isAttached()) {
+          conn.notifySessionChanged(notification);
+        }
+      }
+
+      this.lastKnownSessionPath = currentPath;
+    }
+  }
+
+  /** List all session files for the current project */
+  private listProjectSessions(): Array<{
+    id: string;
+    path: string;
+    name?: string;
+    createdAt: string;
+    modifiedAt: string;
+    messageCount: number;
+    isActive: boolean;
+  }> {
+    const snapshot = this.bridge.getSnapshot();
+    const sessionsDir = snapshot.projectSessionsDir;
+
+    if (!sessionsDir || !existsSync(sessionsDir)) return [];
+
+    try {
+      const files = readdirSync(sessionsDir).filter((f) => f.endsWith(".jsonl"));
+      const sessions: Array<{
+        id: string;
+        path: string;
+        name?: string;
+        createdAt: string;
+        modifiedAt: string;
+        messageCount: number;
+        isActive: boolean;
+      }> = [];
+
+      for (const file of files) {
+        const filePath = join(sessionsDir, file);
+        try {
+          const stat = statSync(filePath);
+          const content = readFileSync(filePath, "utf-8");
+          const lines = content.split("\n").filter(Boolean);
+
+          let id = "";
+          let name: string | undefined;
+          let messageCount = 0;
+
+          for (const line of lines) {
+            try {
+              const entry = JSON.parse(line);
+              if (entry.type === "session") {
+                id = entry.id || id;
+              } else if (entry.type === "session_info" && entry.name) {
+                name = entry.name;
+              } else if (entry.type === "message") {
+                messageCount++;
+              }
+            } catch { /* skip malformed lines */ }
+          }
+
+          if (id) {
+            sessions.push({
+              id,
+              path: filePath,
+              name,
+              createdAt: stat.birthtime.toISOString(),
+              modifiedAt: stat.mtime.toISOString(),
+              messageCount,
+              isActive: filePath === snapshot.activeSessionFile,
+            });
+          }
+        } catch { /* skip unreadable files */ }
+      }
+
+      sessions.sort((a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime());
+      return sessions;
+    } catch {
+      return [];
+    }
   }
 
   // ── PWA Static Files ─────────────────────────────────────────────────

@@ -19,6 +19,8 @@ const state = {
   currentView: "connect",
   sessions: [],
   activeSession: null,
+  activeSessionPath: null,
+  activeSessionName: null,
   messages: [],
   bridgePhase: "waiting",
   isStreaming: false,
@@ -27,6 +29,8 @@ const state = {
   reconnectAttempts: 0,
   maxReconnectAttempts: 5,
   extensionDialog: null,
+  /** Track last session for resume on reconnect */
+  lastSessionPath: null,
 };
 
 // ── Constants ───────────────────────────────────────────
@@ -60,6 +64,7 @@ function loadSavedState() {
     if (saved.deviceToken) state.deviceToken = saved.deviceToken;
     if (saved.deviceId) state.deviceId = saved.deviceId;
     if (saved.serverUrl) state.serverUrl = saved.serverUrl;
+    if (saved.lastSessionPath) state.lastSessionPath = saved.lastSessionPath;
   } catch { /* ignore */ }
 }
 
@@ -68,6 +73,7 @@ function saveState() {
     deviceToken: state.deviceToken,
     deviceId: state.deviceId,
     serverUrl: state.serverUrl,
+    lastSessionPath: state.lastSessionPath,
   }));
 }
 
@@ -206,6 +212,12 @@ function handleMessage(msg) {
     case "extension_ui_request":
       handleExtensionUI(msg);
       break;
+    case "session_changed":
+      handleSessionChanged(msg);
+      break;
+    case "handoff_result":
+      handleHandoffResult(msg);
+      break;
     case "server_shutdown":
       showToast("Server is shutting down");
       disconnect();
@@ -223,8 +235,14 @@ function handleAuthResult(msg) {
     state.serverVersion = msg.serverVersion;
     state.projectCwd = msg.projectCwd;
     saveState();
-    switchView("sessions");
-    requestSessionList();
+
+    // If we have a previous session, try to resume it automatically
+    if (state.lastSessionPath) {
+      requestResume(state.lastSessionPath);
+    } else {
+      // First connect — try handoff of the active desktop session
+      requestHandoff();
+    }
   } else {
     // If token auth failed, clear saved token and show pairing
     if (state.deviceToken) {
@@ -250,10 +268,41 @@ function handleResponse(msg) {
     saveState();
   }
 
-  // Handle session list
+  // Handle session list (legacy)
   if (pending && pending.type === "list_sessions" && msg.success) {
     state.sessions = msg.data?.sessions || [];
     renderSessionList();
+  }
+
+  // Handle full session browser results
+  if (pending && pending.type === "browse_sessions" && msg.success) {
+    state.sessions = msg.data?.sessions || [];
+    renderSessionList();
+  }
+
+  // Handle resume response
+  if (pending && pending.type === "resume" && msg.success) {
+    const data = msg.data || {};
+    if (data.resumed) {
+      // Successfully resumed — go straight to session
+      state.activeSession = data.sessionId;
+      state.activeSessionPath = data.sessionPath;
+      state.activeSessionName = data.sessionName;
+      state.lastSessionPath = data.sessionPath;
+      saveState();
+      updateSessionTitle(data.sessionName || "Session");
+      switchView("session");
+      sendRequest("get_messages");
+      showToast("Resumed session");
+    } else {
+      // Could not resume — show session list
+      state.sessions = data.sessions || [];
+      switchView("sessions");
+      renderSessionList();
+      if (data.reason === "session_not_found") {
+        showToast("Previous session not found");
+      }
+    }
   }
 
   // Handle messages
@@ -307,6 +356,63 @@ function handleBridgeStatus(msg) {
   updateStatusBadge();
 }
 
+function handleSessionChanged(msg) {
+  // Desktop or another mobile client changed the active session
+  const who = msg.changedBy === "desktop"
+    ? "Desktop"
+    : msg.changedByDevice || "Another device";
+
+  state.activeSession = msg.sessionId;
+  state.activeSessionPath = msg.sessionPath;
+  state.activeSessionName = msg.sessionName;
+
+  if (state.currentView === "session") {
+    showToast(`${who} switched to "${msg.sessionName || "a new session"}"`);
+    updateSessionTitle(msg.sessionName || "Session");
+    // Re-fetch messages for the new session
+    state.messages = [];
+    renderMessages();
+    sendRequest("get_messages");
+  }
+}
+
+function handleHandoffResult(msg) {
+  if (msg.success) {
+    state.activeSession = msg.sessionId;
+    state.activeSessionPath = msg.sessionPath;
+    state.activeSessionName = msg.sessionName;
+    state.lastSessionPath = msg.sessionPath;
+    saveState();
+    updateSessionTitle(msg.sessionName || "Session");
+    switchView("session");
+    sendRequest("get_messages");
+
+    const status = msg.isStreaming ? "streaming" : msg.phase || "connected";
+    showToast(`Handoff complete — ${status}`);
+  } else {
+    // No active session to hand off — fall back to session browser
+    showToast(msg.error || "No active session");
+    browseSessions();
+  }
+}
+
+// ── Handoff & Resume ────────────────────────────────────
+function requestHandoff(sessionPath) {
+  sendRequest("handoff_request", sessionPath ? { sessionPath } : {});
+}
+
+function requestResume(lastSessionPath) {
+  sendRequest("resume", {
+    lastSessionPath,
+    deviceId: state.deviceId,
+  });
+}
+
+function browseSessions(query) {
+  switchView("sessions");
+  sendRequest("browse_sessions", query ? { query } : {});
+}
+
 function handleExtensionUI(msg) {
   state.extensionDialog = msg;
   showExtensionDialog(msg);
@@ -334,20 +440,21 @@ function sendRequest(type, data = {}) {
 }
 
 function requestSessionList() {
-  sendRequest("list_sessions");
+  sendRequest("browse_sessions");
 }
 
 function attachSession(sessionPath) {
-  sendRequest("attach_session", { sessionPath });
-  sendRequest("get_messages");
+  // Use handoff for full context transfer
   state.messages = [];
-  switchView("session");
+  requestHandoff(sessionPath);
 }
 
 function detachSession() {
   sendRequest("detach_session");
   state.messages = [];
   state.activeSession = null;
+  state.activeSessionPath = null;
+  state.activeSessionName = null;
   switchView("sessions");
   requestSessionList();
 }
@@ -553,6 +660,11 @@ function formatContent(text) {
   html = html.replace(/\n/g, "<br>");
 
   return html;
+}
+
+function updateSessionTitle(name) {
+  const el = document.querySelector(".session-title");
+  if (el) el.textContent = name || "Session";
 }
 
 function updateStatusBadge() {
