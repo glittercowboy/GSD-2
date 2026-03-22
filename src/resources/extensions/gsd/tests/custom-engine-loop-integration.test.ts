@@ -151,7 +151,7 @@ function makeMockDeps(overrides?: Partial<LoopDeps>): LoopDeps & { callLog: stri
     pruneQueueOrder: () => {},
     isInAutoWorktree: () => false,
     shouldUseWorktreeIsolation: () => false,
-    mergeMilestoneToMain: () => ({ pushed: false }),
+    mergeMilestoneToMain: () => ({ pushed: false, codeFilesChanged: false }),
     teardownAutoWorktree: () => {},
     createAutoWorktree: () => "/tmp/wt",
     captureIntegrationBranch: () => {},
