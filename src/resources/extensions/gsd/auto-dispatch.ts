@@ -501,12 +501,16 @@ export const DISPATCH_RULES: DispatchRule[] = [
       // Safety guard (#1368): verify all roadmap slices have SUMMARY files before
       // allowing milestone validation. If any slice lacks a summary, the milestone
       // is not genuinely complete — something skipped earlier slices.
+      // Exception: slices marked [x] at plan time with no slice directory are
+      // "carried-forward" from prior milestones and don't need a SUMMARY.
       const roadmapFile = resolveMilestoneFile(basePath, mid, "ROADMAP");
       const roadmapContent = roadmapFile ? await loadFile(roadmapFile) : null;
       if (roadmapContent) {
         const roadmap = parseRoadmap(roadmapContent);
         const missingSlices: string[] = [];
         for (const slice of roadmap.slices) {
+          const sliceDir = resolveSlicePath(basePath, mid, slice.id);
+          if (!sliceDir) continue; // no directory = carried-forward, not missing
           const summaryPath = resolveSliceFile(basePath, mid, slice.id, "SUMMARY");
           if (!summaryPath || !existsSync(summaryPath)) {
             missingSlices.push(slice.id);
@@ -558,12 +562,15 @@ export const DISPATCH_RULES: DispatchRule[] = [
       if (state.phase !== "completing-milestone") return null;
 
       // Safety guard (#1368): verify all roadmap slices have SUMMARY files.
+      // Exception: carried-forward slices (no slice directory) are skipped.
       const roadmapFile = resolveMilestoneFile(basePath, mid, "ROADMAP");
       const roadmapContent = roadmapFile ? await loadFile(roadmapFile) : null;
       if (roadmapContent) {
         const roadmap = parseRoadmap(roadmapContent);
         const missingSlices: string[] = [];
         for (const slice of roadmap.slices) {
+          const sliceDir = resolveSlicePath(basePath, mid, slice.id);
+          if (!sliceDir) continue; // no directory = carried-forward, not missing
           const summaryPath = resolveSliceFile(basePath, mid, slice.id, "SUMMARY");
           if (!summaryPath || !existsSync(summaryPath)) {
             missingSlices.push(slice.id);
