@@ -390,6 +390,40 @@ test("all events from a mock iteration have monotonically increasing seq and sam
   }
 });
 
+test("runUnitPhase emits unit-end with cancelled status when session creation fails", async () => {
+  const capture = createEventCapture();
+  const deps = makeMockDeps(capture);
+  const ic = makeIC(deps);
+  (ic.s as any).cmdCtx.newSession = () => Promise.resolve({ cancelled: true });
+
+  const iterData: IterationData = {
+    unitType: "execute-task",
+    unitId: "M001/S01/T01",
+    prompt: "do stuff",
+    finalPrompt: "do stuff",
+    pauseAfterUatDispatch: false,
+    observabilityIssues: [],
+    state: { phase: "executing", activeMilestone: { id: "M001" }, activeSlice: { id: "S01" }, registry: [], blockers: [] } as any,
+    mid: "M001",
+    midTitle: "Test",
+    isRetry: false,
+    previousTier: undefined,
+  };
+  const loopState: LoopState = { recentUnits: [{ key: "execute-task/M001/S01/T01" }], stuckRecoveryAttempts: 0 };
+
+  const result = await runUnitPhase(ic, iterData, loopState);
+  assert.equal(result.action, "break");
+  assert.equal(result.reason, "session-failed");
+
+  const startEvents = capture.events.filter(e => e.eventType === "unit-start");
+  const endEvents = capture.events.filter(e => e.eventType === "unit-end");
+  assert.equal(startEvents.length, 1, "should emit exactly one unit-start");
+  assert.equal(endEvents.length, 1, "should emit exactly one unit-end for cancelled unit");
+  assert.equal((endEvents[0].data as any).status, "cancelled");
+  assert.equal((endEvents[0].data as any).artifactVerified, false);
+  assert.equal(endEvents[0].causedBy?.seq, startEvents[0].seq);
+});
+
 test("dispatch-match events include matchedRule field matching the rule name", async () => {
   const capture = createEventCapture();
   const RULE_NAME = "priority-execution-rule";

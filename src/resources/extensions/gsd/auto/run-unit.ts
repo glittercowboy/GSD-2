@@ -9,7 +9,7 @@ import type { ExtensionAPI, ExtensionContext } from "@gsd/pi-coding-agent";
 import type { AutoSession } from "./session.js";
 import { NEW_SESSION_TIMEOUT_MS } from "./session.js";
 import type { UnitResult } from "./types.js";
-import { _setCurrentResolve, _setSessionSwitchInFlight } from "./resolve.js";
+import { _beginSessionSwitch, _endSessionSwitch, _setCurrentResolve } from "./resolve.js";
 import { debugLog } from "../debug-logger.js";
 
 /**
@@ -35,10 +35,10 @@ export async function runUnit(
 
   let sessionResult: { cancelled: boolean };
   let sessionTimeoutHandle: ReturnType<typeof setTimeout> | undefined;
-  _setSessionSwitchInFlight(true);
+  const sessionSwitchToken = _beginSessionSwitch();
   try {
     const sessionPromise = s.cmdCtx!.newSession().finally(() => {
-      _setSessionSwitchInFlight(false);
+      _endSessionSwitch(sessionSwitchToken);
     });
     const timeoutPromise = new Promise<{ cancelled: true }>((resolve) => {
       sessionTimeoutHandle = setTimeout(
@@ -73,7 +73,7 @@ export async function runUnit(
   // ── Create the agent_end promise (per-unit one-shot) ──
   // This happens after newSession completes so session-switch agent_end events
   // from the previous session cannot resolve the new unit.
-  _setSessionSwitchInFlight(false);
+  _endSessionSwitch(sessionSwitchToken);
   const unitPromise = new Promise<UnitResult>((resolve) => {
     _setCurrentResolve(resolve);
   });

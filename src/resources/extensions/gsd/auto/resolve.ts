@@ -20,7 +20,8 @@ import { debugLog } from "../debug-logger.js";
 // scoped pendingResolve + pendingAgentEndQueue pattern.
 
 let _currentResolve: ((result: UnitResult) => void) | null = null;
-let _sessionSwitchInFlight = false;
+let _sessionSwitchInFlightToken: number | null = null;
+let _nextSessionSwitchToken = 1;
 
 // ─── Setters (needed for cross-module mutation) ─────────────────────────────
 
@@ -28,8 +29,16 @@ export function _setCurrentResolve(fn: ((result: UnitResult) => void) | null): v
   _currentResolve = fn;
 }
 
-export function _setSessionSwitchInFlight(v: boolean): void {
-  _sessionSwitchInFlight = v;
+export function _beginSessionSwitch(): number {
+  const token = _nextSessionSwitchToken++;
+  _sessionSwitchInFlightToken = token;
+  return token;
+}
+
+export function _endSessionSwitch(token: number): void {
+  if (_sessionSwitchInFlightToken === token) {
+    _sessionSwitchInFlightToken = null;
+  }
 }
 
 export function _clearCurrentResolve(): void {
@@ -47,7 +56,7 @@ export function _clearCurrentResolve(): void {
  * session switch), the event is dropped with a debug warning.
  */
 export function resolveAgentEnd(event: AgentEndEvent): void {
-  if (_sessionSwitchInFlight) {
+  if (_sessionSwitchInFlightToken !== null) {
     debugLog("resolveAgentEnd", { status: "ignored-during-switch" });
     return;
   }
@@ -65,7 +74,7 @@ export function resolveAgentEnd(event: AgentEndEvent): void {
 }
 
 export function isSessionSwitchInFlight(): boolean {
-  return _sessionSwitchInFlight;
+  return _sessionSwitchInFlightToken !== null;
 }
 
 /** Test helper: whether a unit resolve callback is currently installed. */
@@ -99,7 +108,8 @@ export function resolveAgentEndCancelled(): void {
  */
 export function _resetPendingResolve(): void {
   _currentResolve = null;
-  _sessionSwitchInFlight = false;
+  _sessionSwitchInFlightToken = null;
+  _nextSessionSwitchToken = 1;
 }
 
 /**

@@ -12,7 +12,7 @@ const toolDescriptions: Record<string, string> = {
 	bash: "Execute bash commands (ls, grep, find, etc.)",
 	edit: "Make surgical edits to files (find exact text and replace)",
 	write: "Create or overwrite files",
-	Skill: "Expand and execute an installed skill by name",
+	Skill: "Expand and execute a model-visible installed skill by name (hidden skills require explicit /skill:name)",
 	grep: "Search file contents for patterns (respects .gitignore)",
 	find: "Find files by glob pattern (respects .gitignore)",
 	ls: "List directory contents",

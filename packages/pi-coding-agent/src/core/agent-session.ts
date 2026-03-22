@@ -1193,7 +1193,7 @@ export class AgentSession {
 			name: "Skill",
 			label: "Skill",
 			description:
-				"Execute an installed skill within the main conversation. Use this tool when users reference a skill by name or when the prompt exposes matching skills in <available_skills>. Returns the expanded skill block and appends args after it.",
+				"Execute a model-visible installed skill within the main conversation. Use this tool when users reference a visible skill by name or when the prompt exposes matching skills in <available_skills>. Hidden skills require explicit /skill:name. Returns the expanded skill block and appends args after it.",
 			parameters: skillSchema,
 			execute: async (_toolCallId, params: unknown) => {
 				const input = params as { skill: string; args?: string };

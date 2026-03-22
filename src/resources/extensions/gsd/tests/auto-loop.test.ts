@@ -9,6 +9,8 @@ import {
   runUnit,
   autoLoop,
   detectStuck,
+  _beginSessionSwitch,
+  _endSessionSwitch,
   _resetPendingResolve,
   _setActiveSession,
   isSessionSwitchInFlight,
@@ -225,6 +227,19 @@ test("runUnit only arms resolve after newSession completes", async () => {
   const result = await resultPromise;
   assert.equal(result.status, "completed");
   assert.equal(pi.calls.length, 1);
+});
+
+test("stale session switch completion does not clear a newer switch", () => {
+  _resetPendingResolve();
+
+  const firstToken = _beginSessionSwitch();
+  const secondToken = _beginSessionSwitch();
+
+  _endSessionSwitch(firstToken);
+  assert.equal(isSessionSwitchInFlight(), true, "stale completion must not clear the newer session switch");
+
+  _endSessionSwitch(secondToken);
+  assert.equal(isSessionSwitchInFlight(), false, "current session switch should clear when its own token settles");
 });
 
 // ─── Structural assertions ───────────────────────────────────────────────────

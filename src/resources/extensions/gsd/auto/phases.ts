@@ -1076,6 +1076,7 @@ export async function runUnitPhase(
   }
 
   if (unitResult.status === "cancelled") {
+	deps.emitJournalEvent({ ts: new Date().toISOString(), flowId: ic.flowId, seq: ic.nextSeq(), eventType: "unit-end", data: { unitType, unitId, status: unitResult.status, artifactVerified: false }, causedBy: { flowId: ic.flowId, seq: unitStartSeq } });
     ctx.ui.notify(
       `Session creation timed out or was cancelled for ${unitType} ${unitId}. Will retry.`,
       "warning",
