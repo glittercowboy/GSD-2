@@ -83,6 +83,45 @@ function clearProjectRootStateFiles(basePath: string, milestoneId: string): void
     }
   }
 
+  // Clean root-level .gsd/ files that syncWorktreeStateBack() may have
+  // dirtied (#1985).  These are the same files the squash merge will bring
+  // in from the milestone branch, so restoring/removing them pre-merge is
+  // safe and avoids "local changes would be overwritten" rejections.
+  const syncBackFiles = [
+    "DECISIONS.md",
+    "REQUIREMENTS.md",
+    "PROJECT.md",
+    "KNOWLEDGE.md",
+    "OVERRIDES.md",
+    "QUEUE.md",
+    "completed-units.json",
+  ];
+  for (const f of syncBackFiles) {
+    const filePath = join(gsdDir, f);
+    try {
+      // Check if the file is tracked by git
+      const isTracked = execFileSync(
+        "git",
+        ["ls-files", filePath],
+        { cwd: basePath, stdio: ["ignore", "pipe", "pipe"], encoding: "utf-8" },
+      ).trim();
+      if (isTracked) {
+        // Tracked and potentially modified — restore to HEAD so the merge
+        // can cleanly apply the milestone branch version.
+        execFileSync("git", ["checkout", "HEAD", "--", filePath], {
+          cwd: basePath,
+          stdio: "ignore",
+        });
+      } else if (existsSync(filePath)) {
+        // Untracked — safe to delete; the merge will recreate from the
+        // milestone branch if the file exists there.
+        unlinkSync(filePath);
+      }
+    } catch {
+      /* non-fatal — git command may fail, file may not exist */
+    }
+  }
+
   // Clean up entire synced milestone directory and runtime/units.
   // syncStateToProjectRoot() copies these into the project root during
   // execution.  If they remain as untracked files when we attempt

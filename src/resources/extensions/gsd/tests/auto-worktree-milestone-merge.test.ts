@@ -771,6 +771,63 @@ async function main(): Promise<void> {
       assertTrue(existsSync(join(repo, "real-code.ts")), "real-code.ts merged to main");
     }
 
+    // ─── Test 20: #1985 — tracked root-level .gsd/ files dirtied by syncWorktreeStateBack ──
+    console.log("\n=== #1985: tracked .gsd/ root files cleaned before merge ===");
+    {
+      const repo = freshRepo();
+
+      // Force-track DECISIONS.md (simulates projects where .gsd/ files are
+      // force-added despite .gsd being in .gitignore)
+      writeFileSync(join(repo, ".gsd", "DECISIONS.md"), "# Decisions\n\n| ID | Decision |\n");
+      run("git add -f .gsd/DECISIONS.md", repo);
+      run("git commit -m 'track DECISIONS.md'", repo);
+
+      const wtPath = createAutoWorktree(repo, "M200");
+
+      addSliceToMilestone(repo, wtPath, "M200", "S01", "Tracked GSD files", [
+        { file: "feature.ts", content: "export const feat = true;\n", message: "add feature" },
+      ]);
+
+      // Also commit an updated DECISIONS.md on the milestone branch (worktree)
+      const wtDecisions = join(wtPath, ".gsd", "DECISIONS.md");
+      mkdirSync(join(wtPath, ".gsd"), { recursive: true });
+      writeFileSync(wtDecisions, "# Decisions\n\n| ID | Decision |\n| D001 | Use widgets |\n");
+      run("git add -f .gsd/DECISIONS.md", wtPath);
+      run("git commit -m 'update DECISIONS.md in milestone'", wtPath);
+
+      // Simulate syncWorktreeStateBack: overwrite the project root's tracked
+      // DECISIONS.md with the worktree version — this is what creates the
+      // dirty working tree that previously blocked the merge.
+      writeFileSync(
+        join(repo, ".gsd", "DECISIONS.md"),
+        "# Decisions\n\n| ID | Decision |\n| D001 | Use widgets |\n",
+      );
+
+      // Verify the file is dirty before merge
+      const dirtyStatus = run("git status --porcelain .gsd/DECISIONS.md", repo);
+      assertTrue(dirtyStatus.length > 0, "#1985: DECISIONS.md is dirty before merge");
+
+      const roadmap = makeRoadmap("M200", "Tracked GSD cleanup", [
+        { id: "S01", title: "Tracked GSD files" },
+      ]);
+
+      let threw = false;
+      let errorMsg = "";
+      try {
+        const result = mergeMilestoneToMain(repo, "M200", roadmap);
+        assertTrue(
+          result.commitMessage.includes("feat(M200)"),
+          "#1985: merge succeeds despite previously-dirty tracked .gsd/ files",
+        );
+      } catch (err: unknown) {
+        threw = true;
+        errorMsg = err instanceof Error ? err.message : String(err);
+        console.error("#1985 regression:", errorMsg);
+      }
+      assertTrue(!threw, `#1985: merge must not fail on tracked .gsd/ files dirtied by syncWorktreeStateBack (got: ${errorMsg})`);
+      assertTrue(existsSync(join(repo, "feature.ts")), "#1985: feature.ts on main after merge");
+    }
+
   } finally {
     process.chdir(savedCwd);
     for (const d of tempDirs) {
