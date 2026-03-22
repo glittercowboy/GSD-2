@@ -125,9 +125,12 @@ export function parseRoadmap(content: string): Roadmap {
 
 function _parseRoadmapImpl(content: string): Roadmap {
   const stopTimer = debugTime("parse-roadmap");
-  // Try native parser first for better performance
+  // Try native parser first for better performance.
+  // Fall through to TS parser when native returns 0 slices but the content
+  // likely contains slice structure — the Rust parser only handles checkbox
+  // format, not prose headers or tables (#1931).
   const nativeResult = nativeParseRoadmap(content);
-  if (nativeResult) {
+  if (nativeResult && nativeResult.slices.length > 0) {
     stopTimer({ native: true, slices: nativeResult.slices.length, boundaryEntries: nativeResult.boundaryMap.length });
     debugCount("parseRoadmapCalls");
     return nativeResult;

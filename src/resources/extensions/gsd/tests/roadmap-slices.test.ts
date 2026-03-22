@@ -253,3 +253,54 @@ Do the second thing.
   assert.equal(slices[0]?.id, "S01");
   assert.equal(slices[1]?.id, "S02");
 });
+
+test("parseRoadmapSlices: hybrid roadmap — checkbox completion merged into prose H3 headers", () => {
+  // Bug scenario: checkboxes with [x] in one section, prose ### headers in ## Slices.
+  // The checkbox parser finds nothing in ## Slices, prose parser returns done:false.
+  // mergeCheckboxCompletionState should set done:true from the [x] checkbox.
+  const content = `# M003: Hybrid Roadmap
+
+## Strategic Reasoning
+
+### Slice Ordering Rationale
+
+- [x] **S01: RBAC** \`risk:low\` \`depends:[]\` — Role enforcement.
+- [ ] **S02: App Filter** \`risk:medium\` \`depends:[S01]\` — Per-app filtering.
+
+## Slices
+
+### S01 — Role-Based Access Control
+- **Risk:** low
+- **Depends:** none
+
+### S02 — App Filter & Per-App Costs
+- **Risk:** medium
+- **Depends:** S01
+
+## Milestone Definition of Done
+`;
+  const slices = parseRoadmapSlices(content);
+  assert.equal(slices.length, 2, "should find both slices from prose headers");
+  assert.equal(slices[0]?.id, "S01");
+  assert.equal(slices[0]?.done, true, "S01 should be done from checkbox [x] in different section");
+  assert.equal(slices[1]?.id, "S02");
+  assert.equal(slices[1]?.done, false, "S02 should be not done from checkbox [ ]");
+});
+
+test("parseRoadmapSlices: checkbox completion merge is additive — no effect when checkboxes absent", () => {
+  // When no checkbox lines exist, prose parser alone determines done state.
+  const content = `# M004: Pure Prose
+
+## Slices
+
+### S01 — First Slice
+Some description.
+
+### S02 — Second Slice
+Another description.
+`;
+  const slices = parseRoadmapSlices(content);
+  assert.equal(slices.length, 2);
+  assert.equal(slices[0]?.done, false, "S01 default done=false without checkboxes");
+  assert.equal(slices[1]?.done, false, "S02 default done=false without checkboxes");
+});

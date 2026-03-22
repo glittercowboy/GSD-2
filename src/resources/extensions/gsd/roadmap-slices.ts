@@ -135,13 +135,65 @@ function parseTableSlices(section: string): RoadmapSliceEntry[] {
   return slices;
 }
 
+/**
+ * Merge completion state from checkbox-format lines found anywhere in the
+ * document into prose-parsed slices.
+ *
+ * Handles hybrid roadmaps where checkboxes (- [x] **S01: ...**) live in
+ * a different section (e.g. "### Slice Ordering Rationale") than the H3
+ * prose headers (### S01 — Title) under "## Slices". The prose parser
+ * finds the structural slices but cannot detect [x] completion state.
+ *
+ * Scans the full content for checkbox lines matching slice IDs. When a
+ * checkbox `[x]` is found for a slice ID that exists in the parsed list,
+ * sets `done: true`. When `[ ]` is found, sets `done: false`. If multiple
+ * checkboxes reference the same ID, the last one wins.
+ *
+ * Only modifies `done` — does not add slices that don't exist in the
+ * parsed list (no phantom slices).
+ */
+function mergeCheckboxCompletionState(
+  slices: RoadmapSliceEntry[],
+  fullContent: string,
+): RoadmapSliceEntry[] {
+  if (slices.length === 0) return slices;
+
+  // Build a set of known slice IDs for fast lookup
+  const knownIds = new Set(slices.map(s => s.id));
+
+  // Scan full document for checkbox lines with slice IDs
+  const checkboxPattern = /^\s*-\s+\[([ xX])\]\s+\*\*(S\d+)[:\s\u2014\u2013-]/gm;
+  const completionState = new Map<string, boolean>();
+  let match: RegExpExecArray | null;
+
+  while ((match = checkboxPattern.exec(fullContent)) !== null) {
+    const done = match[1]!.toLowerCase() === "x";
+    const id = match[2]!;
+    if (knownIds.has(id)) {
+      completionState.set(id, done);
+    }
+  }
+
+  // Merge into slices
+  if (completionState.size > 0) {
+    for (const slice of slices) {
+      const cbDone = completionState.get(slice.id);
+      if (cbDone !== undefined) {
+        slice.done = cbDone;
+      }
+    }
+  }
+
+  return slices;
+}
+
 export function parseRoadmapSlices(content: string): RoadmapSliceEntry[] {
   const slicesSection = extractSlicesSection(content);
   if (!slicesSection) {
     // Fallback: detect prose-style slice headers (## Slice S01: Title)
     // when the LLM writes freeform prose instead of the ## Slices checklist.
     // This prevents a permanent "No slice eligible" block (#807).
-    return parseProseSliceHeaders(content);
+    return mergeCheckboxCompletionState(parseProseSliceHeaders(content), content);
   }
 
   // Try table format first — if the section contains pipe-delimited rows with
@@ -189,7 +241,7 @@ export function parseRoadmapSlices(content: string): RoadmapSliceEntry[] {
   // (e.g. the LLM used H3 prose headers instead of checkboxes), fall through
   // to the prose-header parser as a second-chance fallback.
   if (slices.length === 0) {
-    return parseProseSliceHeaders(content);
+    return mergeCheckboxCompletionState(parseProseSliceHeaders(content), content);
   }
 
   return slices;
