@@ -1411,6 +1411,106 @@ async function main(): Promise<void> {
     rmSync(repo, { recursive: true, force: true });
   }
 
+  // ─── autoCommit excludes other milestone dirs when GSD_MILESTONE_LOCK set (#1991) ──
+
+  console.log("\n=== autoCommit: GSD_MILESTONE_LOCK excludes other milestones ===");
+
+  {
+    const repo = mkdtempSync(join(tmpdir(), "gsd-milestone-lock-"));
+    run("git init -b main", repo);
+    run("git config user.email test@test.com", repo);
+    run("git config user.name Test", repo);
+    writeFileSync(join(repo, "README.md"), "init");
+    run("git add -A && git commit -m init", repo);
+
+    // Set up: two milestones M032 and M033 with artifacts
+    mkdirSync(join(repo, ".gsd", "milestones", "M032", "slices", "S01"), { recursive: true });
+    mkdirSync(join(repo, ".gsd", "milestones", "M033", "slices", "S01"), { recursive: true });
+    writeFileSync(join(repo, ".gsd", "milestones", "M032", "M032-SUMMARY.md"), "# M032 Summary (fabricated)");
+    writeFileSync(join(repo, ".gsd", "milestones", "M032", "slices", "S01", "S01-SUMMARY.md"), "# S01 Summary");
+    writeFileSync(join(repo, ".gsd", "milestones", "M033", "ROADMAP.md"), "# M033 Roadmap");
+    mkdirSync(join(repo, "src"), { recursive: true });
+    writeFileSync(join(repo, "src", "app.ts"), "const x = 1;");
+
+    // Simulate parallel worker locked to M033
+    const originalLock = process.env.GSD_MILESTONE_LOCK;
+    process.env.GSD_MILESTONE_LOCK = "M033";
+
+    try {
+      const svc = new GitServiceImpl(repo);
+      const msg = svc.autoCommit("execute-task", "M033/S01/T01");
+      assertTrue(msg !== null, "milestone-lock: commit succeeds");
+
+      const committed = run("git show --name-only HEAD", repo);
+
+      // M033 artifacts SHOULD be committed (own milestone)
+      assertTrue(committed.includes(".gsd/milestones/M033/"),
+        "milestone-lock: M033 artifacts ARE in commit (own milestone)");
+
+      // M032 artifacts should NOT be committed (other milestone)
+      assertTrue(!committed.includes(".gsd/milestones/M032/"),
+        "milestone-lock: M032 artifacts are NOT in commit (other milestone)");
+
+      // Source files SHOULD be committed
+      assertTrue(committed.includes("src/app.ts"),
+        "milestone-lock: source files ARE in commit");
+    } finally {
+      // Restore env
+      if (originalLock === undefined) {
+        delete process.env.GSD_MILESTONE_LOCK;
+      } else {
+        process.env.GSD_MILESTONE_LOCK = originalLock;
+      }
+    }
+
+    rmSync(repo, { recursive: true, force: true });
+  }
+
+  // ─── autoCommit without GSD_MILESTONE_LOCK commits all milestones ──
+
+  console.log("\n=== autoCommit: no GSD_MILESTONE_LOCK commits all milestones ===");
+
+  {
+    const repo = mkdtempSync(join(tmpdir(), "gsd-no-milestone-lock-"));
+    run("git init -b main", repo);
+    run("git config user.email test@test.com", repo);
+    run("git config user.name Test", repo);
+    writeFileSync(join(repo, "README.md"), "init");
+    run("git add -A && git commit -m init", repo);
+
+    // Set up: two milestones
+    mkdirSync(join(repo, ".gsd", "milestones", "M032"), { recursive: true });
+    mkdirSync(join(repo, ".gsd", "milestones", "M033"), { recursive: true });
+    writeFileSync(join(repo, ".gsd", "milestones", "M032", "ROADMAP.md"), "# M032");
+    writeFileSync(join(repo, ".gsd", "milestones", "M033", "ROADMAP.md"), "# M033");
+
+    // Ensure GSD_MILESTONE_LOCK is NOT set
+    const originalLock = process.env.GSD_MILESTONE_LOCK;
+    delete process.env.GSD_MILESTONE_LOCK;
+
+    try {
+      const svc = new GitServiceImpl(repo);
+      const msg = svc.autoCommit("execute-task", "M033/S01/T01");
+      assertTrue(msg !== null, "no-lock: commit succeeds");
+
+      const committed = run("git show --name-only HEAD", repo);
+
+      // Both milestones SHOULD be committed when no lock is set
+      assertTrue(committed.includes(".gsd/milestones/M032/"),
+        "no-lock: M032 artifacts ARE in commit");
+      assertTrue(committed.includes(".gsd/milestones/M033/"),
+        "no-lock: M033 artifacts ARE in commit");
+    } finally {
+      if (originalLock === undefined) {
+        delete process.env.GSD_MILESTONE_LOCK;
+      } else {
+        process.env.GSD_MILESTONE_LOCK = originalLock;
+      }
+    }
+
+    rmSync(repo, { recursive: true, force: true });
+  }
+
   report();
 }
 

@@ -9,7 +9,7 @@
  */
 
 import { execFileSync, execSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { gsdRoot } from "./paths.js";
 import { GIT_NO_PROMPT_ENV } from "./git-constants.js";
@@ -527,7 +527,33 @@ export class GitServiceImpl {
     // Native path uses libgit2 (single syscall), fallback spawns git.
     if (!nativeHasChanges(this.basePath)) return null;
 
-    this.smartStage(extraExclusions);
+    // Parallel worker isolation (#1991): when GSD_MILESTONE_LOCK is set,
+    // this process is scoped to a single milestone. Exclude all other
+    // milestone directories from staging so a worker cannot accidentally
+    // commit artifacts (SUMMARY, VALIDATION, etc.) for milestones it
+    // doesn't own. Without this guard, a parallel worker can fabricate
+    // the entire artifact tree of a sibling milestone in a single commit.
+    const allExclusions = [...extraExclusions];
+    const milestoneLock = process.env.GSD_MILESTONE_LOCK;
+    if (milestoneLock) {
+      try {
+        const msDir = join(gsdRoot(this.basePath), "milestones");
+        if (existsSync(msDir)) {
+          const entries = readdirSync(msDir, { withFileTypes: true });
+          for (const entry of entries) {
+            if (entry.isDirectory() && entry.name !== milestoneLock) {
+              allExclusions.push(`.gsd/milestones/${entry.name}/`);
+            }
+          }
+        }
+      } catch {
+        // Non-fatal: if we can't read the milestones dir, proceed without
+        // extra exclusions. The commit will include all milestone artifacts
+        // (same as before this fix).
+      }
+    }
+
+    this.smartStage(allExclusions);
 
     // After smart staging, check if anything was actually staged
     // (all changes might have been runtime files that got excluded)
