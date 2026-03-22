@@ -590,11 +590,14 @@ export async function runDispatch(
         return { action: "break", reason: "stuck-detected" };
       }
     } else {
-      // Progress detected — reset recovery counter
-      if (loopState.stuckRecoveryAttempts > 0) {
+      // Progress detected — reset recovery counter only when a genuinely different
+      // unit appeared (prev entry exists and key changed). This prevents premature
+      // resets when the window is still building up from scratch on session resume.
+      const prevEntry = loopState.recentUnits[loopState.recentUnits.length - 2];
+      if (loopState.stuckRecoveryAttempts > 0 && prevEntry && prevEntry.key !== derivedKey) {
         debugLog("autoLoop", {
           phase: "stuck-counter-reset",
-          from: loopState.recentUnits[loopState.recentUnits.length - 2]?.key ?? "",
+          from: prevEntry.key,
           to: derivedKey,
         });
         loopState.stuckRecoveryAttempts = 0;
