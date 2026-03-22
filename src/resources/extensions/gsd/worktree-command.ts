@@ -14,6 +14,7 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@gsd/pi-coding-agent
 import { loadPrompt } from "./prompt-loader.js";
 import { autoCommitCurrentBranch, getMainBranch, resolveGitHeadPath, nudgeGitBranchCache } from "./worktree.js";
 import { runWorktreePostCreateHook } from "./auto-worktree.js";
+import { _resetHasChangesCache } from "./native-git-bridge.js";
 import { showConfirm } from "../shared/tui.js";
 import { gsdRoot, milestonesDir } from "./paths.js";
 import {
@@ -317,6 +318,7 @@ async function handleCreate(
   try {
     // Auto-commit dirty files before leaving current workspace (must happen
     // before createWorktree so the new worktree forks from committed HEAD)
+    _resetHasChangesCache();
     const commitMsg = autoCommitCurrentBranch(basePath, "worktree-switch", name);
 
     // Create from the main tree, not from inside another worktree
@@ -402,6 +404,7 @@ async function handleSwitch(
     }
 
     // Auto-commit dirty files before leaving current workspace
+    _resetHasChangesCache();
     const commitMsg = autoCommitCurrentBranch(basePath, "worktree-switch", name);
 
     // Track original cwd before switching
@@ -439,6 +442,7 @@ async function handleReturn(ctx: ExtensionCommandContext): Promise<void> {
   }
 
   // Auto-commit dirty files before leaving worktree
+  _resetHasChangesCache();
   const commitMsg = autoCommitCurrentBranch(process.cwd(), "worktree-return", "worktree");
 
   const returnTo = originalCwd;

@@ -343,6 +343,17 @@ export function nativeHasStagedChanges(basePath: string): boolean {
 }
 
 /**
+ * List file paths that are currently staged (in the index vs HEAD).
+ * Returns an array of relative paths. Used for post-commit verification
+ * to detect when auto-commit missed source files (#M013-RCA).
+ */
+export function nativeStagedFileNames(basePath: string): string[] {
+  const output = gitExec(basePath, ["diff", "--cached", "--name-only"], true);
+  if (!output) return [];
+  return output.split("\n").filter(Boolean);
+}
+
+/**
  * Get diff statistics.
  * Use fromRef="HEAD", toRef="WORKDIR" for working tree diff.
  * Use fromRef="HEAD", toRef="INDEX" for staged diff.

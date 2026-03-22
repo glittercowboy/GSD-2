@@ -15,6 +15,7 @@
 
 import { existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
+import { _resetHasChangesCache } from "./native-git-bridge.js";
 import type { AutoSession } from "./auto/session.js";
 import { debugLog } from "./debug-logger.js";
 
@@ -232,6 +233,7 @@ export class WorktreeResolver {
     });
 
     try {
+      _resetHasChangesCache();
       this.deps.autoCommitCurrentBranch(this.s.basePath, "stop", milestoneId);
     } catch (err) {
       debugLog("WorktreeResolver", {

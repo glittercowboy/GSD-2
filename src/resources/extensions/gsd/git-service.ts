@@ -28,6 +28,7 @@ import {
   nativeAddAllWithExclusions,
   nativeResetPaths,
   nativeHasStagedChanges,
+  nativeStagedFileNames,
   nativeCommit,
   nativeRmCached,
   nativeUpdateRef,
@@ -527,11 +528,42 @@ export class GitServiceImpl {
     // Native path uses libgit2 (single syscall), fallback spawns git.
     if (!nativeHasChanges(this.basePath)) return null;
 
+    // Snapshot which files the working tree has BEFORE staging.
+    // Used post-commit to detect when source files were silently missed.
+    let preStageDirtyFiles: string[] = [];
+    try {
+      const statusOutput = runGit(this.basePath, ["status", "--porcelain"], { allowFailure: true });
+      preStageDirtyFiles = statusOutput
+        .split("\n")
+        .filter(Boolean)
+        .map(line => line.slice(3).trim())
+        .filter(f => !f.startsWith(".gsd/"));
+    } catch {
+      // Non-fatal — skip the verification if status fails
+    }
+
     this.smartStage(extraExclusions);
 
     // After smart staging, check if anything was actually staged
     // (all changes might have been runtime files that got excluded)
     if (!nativeHasStagedChanges(this.basePath)) return null;
+
+    // Post-stage verification: if the working tree had non-.gsd/ files dirty
+    // but NONE of them ended up staged, something went wrong with staging.
+    // This detects the M013 scenario where source files are silently missed
+    // by smartStage (e.g. due to .gitignore patterns, symlink issues, or
+    // pathspec errors) and only .gsd/ metadata gets committed.
+    if (preStageDirtyFiles.length > 0) {
+      const stagedFiles = nativeStagedFileNames(this.basePath);
+      const stagedSourceFiles = stagedFiles.filter(f => !f.startsWith(".gsd/"));
+      if (stagedSourceFiles.length === 0) {
+        console.error(
+          `[GSD] WARNING: Auto-commit for ${unitId} has ${preStageDirtyFiles.length} dirty ` +
+          `source file(s) but NONE were staged. Staged files are all .gsd/ metadata. ` +
+          `Source files at risk: ${preStageDirtyFiles.slice(0, 5).join(", ")}`,
+        );
+      }
+    }
 
     const message = taskContext
       ? buildTaskCommitMessage(taskContext)

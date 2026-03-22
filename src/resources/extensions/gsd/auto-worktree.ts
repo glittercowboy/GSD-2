@@ -803,8 +803,13 @@ export function isInAutoWorktree(basePath: string): boolean {
   const resolvedBase = existsSync(basePath) ? realpathSync(basePath) : basePath;
   const wtDir = join(resolvedBase, ".gsd", "worktrees");
   if (!cwd.startsWith(wtDir)) return false;
-  const branch = nativeGetCurrentBranch(cwd);
-  return branch.startsWith("milestone/");
+  try {
+    const branch = nativeGetCurrentBranch(cwd);
+    return branch.startsWith("milestone/");
+  } catch {
+    // Corrupted worktree (.git missing or unreadable) — not a valid auto-worktree (#1705)
+    return false;
+  }
 }
 
 /**
@@ -878,6 +883,22 @@ export function enterAutoWorktree(
     );
   }
 
+  // Validate branch matches expected milestone branch (#M013-RCA).
+  // Without this check, a worktree on the wrong branch (e.g. deseltrus
+  // instead of milestone/M013) silently accepts commits that never land
+  // on the milestone branch, causing total source loss on teardown.
+  const expectedBranch = autoWorktreeBranch(milestoneId);
+  const actualBranch = nativeGetCurrentBranch(p);
+  if (actualBranch !== expectedBranch) {
+    throw new GSDError(
+      GSD_GIT_ERROR,
+      `Auto-worktree for ${milestoneId} is on branch "${actualBranch}" ` +
+        `instead of expected "${expectedBranch}". ` +
+        `The worktree state is corrupted — remove it with: ` +
+        `git worktree remove --force "${p}" and retry.`,
+    );
+  }
+
   const previousCwd = process.cwd();
 
   try {
@@ -916,7 +937,13 @@ export function getActiveAutoWorktreeContext(): {
   if (!cwd.startsWith(wtDir)) return null;
   const worktreeName = detectWorktreeName(cwd);
   if (!worktreeName) return null;
-  const branch = nativeGetCurrentBranch(cwd);
+  let branch: string;
+  try {
+    branch = nativeGetCurrentBranch(cwd);
+  } catch {
+    // Corrupted worktree (.git missing or unreadable) — not a valid context (#1705)
+    return null;
+  }
   if (!branch.startsWith("milestone/")) return null;
   return {
     originalBase,
@@ -930,21 +957,21 @@ export function getActiveAutoWorktreeContext(): {
 /**
  * Auto-commit any dirty (uncommitted) state in the given directory.
  * Returns true if a commit was made, false if working tree was clean.
+ *
+ * IMPORTANT: Throws on staging/commit failures instead of swallowing them.
+ * A silent failure here causes source-file loss when the worktree is torn
+ * down after merge (#M013-RCA, B3).
  */
 function autoCommitDirtyState(cwd: string): boolean {
-  try {
-    const status = nativeWorkingTreeStatus(cwd);
-    if (!status) return false;
-    nativeAddAllWithExclusions(cwd, RUNTIME_EXCLUSION_PATHS);
-    const result = nativeCommit(
-      cwd,
-      "chore: auto-commit before milestone merge",
-    );
-    return result !== null;
-  } catch (e) {
-    debugLog("autoCommitDirtyState", { error: String(e) });
-    return false;
-  }
+  const status = nativeWorkingTreeStatus(cwd);
+  if (!status) return false;
+
+  nativeAddAllWithExclusions(cwd, RUNTIME_EXCLUSION_PATHS);
+  const result = nativeCommit(
+    cwd,
+    "chore: auto-commit before milestone merge",
+  );
+  return result !== null;
 }
 
 /**
@@ -1258,10 +1285,9 @@ export function mergeMilestoneToMain(
   //     throws only when the milestone has unanchored code changes, passes
   //     through when the code is genuinely already on the integration branch.
 
-  // 10a. Pre-teardown safety net (#1853): if the worktree still has uncommitted
-  // changes (e.g. nativeHasChanges cache returned stale false, or auto-commit
-  // silently failed), force one final commit so code is not destroyed by
-  // `git worktree remove --force`.
+  // 10a. Pre-teardown safety net (#1853, #M013-RCA): if the worktree still has
+  // uncommitted changes, force one final commit. If that commit ALSO fails,
+  // abort the teardown to prevent data loss instead of silently continuing.
   if (existsSync(worktreeCwd)) {
     try {
       const dirtyCheck = nativeWorkingTreeStatus(worktreeCwd);
@@ -1271,14 +1297,57 @@ export function mergeMilestoneToMain(
           worktreeCwd,
           status: dirtyCheck.slice(0, 200),
         });
+
+        // Check if the dirty files include source code (not just .gsd/ metadata)
+        const dirtyLines = dirtyCheck.split("\n").filter(Boolean);
+        const dirtySourceFiles = dirtyLines
+          .map(line => line.slice(3).trim())
+          .filter(f => !f.startsWith(".gsd/"));
+
         nativeAddAllWithExclusions(worktreeCwd, RUNTIME_EXCLUSION_PATHS);
         nativeCommit(worktreeCwd, "chore: pre-teardown auto-commit of uncommitted worktree changes");
+
+        if (dirtySourceFiles.length > 0) {
+          debugLog("mergeMilestoneToMain", {
+            phase: "pre-teardown-source-saved",
+            sourceFiles: dirtySourceFiles.slice(0, 10),
+            count: dirtySourceFiles.length,
+          });
+        }
       }
     } catch (e) {
+      // Pre-teardown commit failed. Check if source files are at risk.
+      // If yes, abort the teardown entirely — losing code is worse than
+      // leaving a worktree directory around.
       debugLog("mergeMilestoneToMain", {
         phase: "pre-teardown-commit-error",
         error: String(e),
       });
+      try {
+        const rescueCheck = nativeWorkingTreeStatus(worktreeCwd);
+        if (rescueCheck) {
+          const rescueLines = rescueCheck.split("\n").filter(Boolean);
+          const rescueSourceFiles = rescueLines
+            .map(line => line.slice(3).trim())
+            .filter(f => !f.startsWith(".gsd/"));
+          if (rescueSourceFiles.length > 0) {
+            throw new GSDError(
+              GSD_GIT_ERROR,
+              `Pre-teardown auto-commit failed and worktree has ${rescueSourceFiles.length} ` +
+                `uncommitted source file(s): ${rescueSourceFiles.slice(0, 5).join(", ")}. ` +
+                `Aborting teardown to prevent data loss. ` +
+                `Worktree preserved at: ${worktreeCwd}`,
+            );
+          }
+        }
+      } catch (innerErr) {
+        if (innerErr instanceof GSDError) throw innerErr;
+        // If even the rescue check fails, log and continue
+        debugLog("mergeMilestoneToMain", {
+          phase: "pre-teardown-rescue-check-failed",
+          error: String(innerErr),
+        });
+      }
     }
   }
 
