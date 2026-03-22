@@ -222,9 +222,13 @@ export function parsePreferencesMarkdown(content: string): GSDPreferences | null
     return parseHeadingListFormat(content);
   }
 
-  if (!_warnedUnrecognizedFormat) {
+  // Warn when a non-empty file exists but lacks frontmatter delimiters (#2036).
+  if (content.trim().length > 0 && !_warnedUnrecognizedFormat) {
     _warnedUnrecognizedFormat = true;
-    console.warn("[parsePreferencesMarkdown] preferences.md exists but uses an unrecognized format — skipping.");
+    console.warn(
+      "[GSD] Warning: preferences file was not parsed — content does not use YAML frontmatter delimiters (---). " +
+      "Wrap your preferences in --- fences. See https://github.com/gsd-build/gsd-2/issues/2036",
+    );
   }
   return null;
 }
