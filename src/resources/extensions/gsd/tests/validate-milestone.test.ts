@@ -380,3 +380,108 @@ test("buildLoopRemediationSteps returns steps for validate-milestone", () => {
     cleanup(base);
   }
 });
+
+// ─── #2056: dispatch guards must skip undone slices ───────────────────────
+
+const PARTIAL_DONE_ROADMAP = `# M001: Test Milestone
+
+## Vision
+Test
+
+## Success Criteria
+- It works
+
+## Slices
+
+- [x] **S01: First slice** \`risk:low\` \`depends:[]\`
+  > After this: first done
+- [ ] **S02: Second slice** \`risk:low\` \`depends:[S01]\`
+  > After this: second done
+
+## Boundary Map
+
+| From | To | Produces | Consumes |
+|------|-----|----------|----------|
+| S01  | S02  | output | nothing |
+| S02  | terminal | output | nothing |
+`;
+
+test("validating-milestone dispatch guard skips undone slices (#2056)", async () => {
+  const base = makeTmpBase();
+  try {
+    // Roadmap has S01 done but S02 not done
+    writeRoadmap(base, "M001", PARTIAL_DONE_ROADMAP);
+    // Only S01 has a SUMMARY (S02 is not done, so no summary expected)
+    writeSliceSummary(base, "M001", "S01", "# S01 Summary\nDone.");
+
+    const state: GSDState = {
+      activeMilestone: { id: "M001", title: "Test" },
+      activeSlice: null,
+      activeTask: null,
+      phase: "validating-milestone",
+      recentDecisions: [],
+      blockers: [],
+      nextAction: "Validate milestone M001.",
+      registry: [{ id: "M001", title: "Test", status: "active" }],
+      progress: { milestones: { done: 0, total: 1 } },
+    };
+
+    const ctx: DispatchContext = {
+      basePath: base,
+      mid: "M001",
+      midTitle: "Test",
+      state,
+      prefs: undefined,
+    };
+
+    const result = await resolveDispatch(ctx);
+    // Should dispatch validate-milestone, NOT stop with missing SUMMARY error
+    assert.equal(result.action, "dispatch", `Expected dispatch but got ${result.action}: ${"reason" in result ? result.reason : ""}`);
+    if (result.action === "dispatch") {
+      assert.equal(result.unitType, "validate-milestone");
+    }
+  } finally {
+    cleanup(base);
+  }
+});
+
+test("completing-milestone dispatch guard skips undone slices (#2056)", async () => {
+  const base = makeTmpBase();
+  try {
+    // Roadmap has S01 done but S02 not done
+    writeRoadmap(base, "M001", PARTIAL_DONE_ROADMAP);
+    // Only S01 has a SUMMARY
+    writeSliceSummary(base, "M001", "S01", "# S01 Summary\nDone.");
+    // Create a dummy implementation file so the artifacts guard passes
+    writeFileSync(join(base, "index.ts"), "export const x = 1;");
+
+    const state: GSDState = {
+      activeMilestone: { id: "M001", title: "Test" },
+      activeSlice: null,
+      activeTask: null,
+      phase: "completing-milestone",
+      recentDecisions: [],
+      blockers: [],
+      nextAction: "Complete milestone M001.",
+      registry: [{ id: "M001", title: "Test", status: "active" }],
+      progress: { milestones: { done: 0, total: 1 } },
+    };
+
+    const ctx: DispatchContext = {
+      basePath: base,
+      mid: "M001",
+      midTitle: "Test",
+      state,
+      prefs: undefined,
+    };
+
+    const result = await resolveDispatch(ctx);
+    // Should dispatch complete-milestone, NOT stop with missing SUMMARY error
+    assert.equal(result.action, "dispatch", `Expected dispatch but got ${result.action}: ${"reason" in result ? result.reason : ""}`);
+    if (result.action === "dispatch") {
+      assert.equal(result.unitType, "complete-milestone");
+    }
+  } finally {
+    cleanup(base);
+  }
+});

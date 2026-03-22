@@ -498,15 +498,17 @@ export const DISPATCH_RULES: DispatchRule[] = [
     match: async ({ state, mid, midTitle, basePath, prefs }) => {
       if (state.phase !== "validating-milestone") return null;
 
-      // Safety guard (#1368): verify all roadmap slices have SUMMARY files before
-      // allowing milestone validation. If any slice lacks a summary, the milestone
-      // is not genuinely complete — something skipped earlier slices.
+      // Safety guard (#1368): verify all done roadmap slices have SUMMARY files
+      // before allowing milestone validation. If any done slice lacks a summary,
+      // the milestone is not genuinely complete — something skipped earlier slices.
+      // Only check done slices (#2056) — undone slices haven't been completed yet.
       const roadmapFile = resolveMilestoneFile(basePath, mid, "ROADMAP");
       const roadmapContent = roadmapFile ? await loadFile(roadmapFile) : null;
       if (roadmapContent) {
         const roadmap = parseRoadmap(roadmapContent);
         const missingSlices: string[] = [];
         for (const slice of roadmap.slices) {
+          if (!slice.done) continue;
           const summaryPath = resolveSliceFile(basePath, mid, slice.id, "SUMMARY");
           if (!summaryPath || !existsSync(summaryPath)) {
             missingSlices.push(slice.id);
@@ -557,13 +559,15 @@ export const DISPATCH_RULES: DispatchRule[] = [
     match: async ({ state, mid, midTitle, basePath }) => {
       if (state.phase !== "completing-milestone") return null;
 
-      // Safety guard (#1368): verify all roadmap slices have SUMMARY files.
+      // Safety guard (#1368): verify all done roadmap slices have SUMMARY files.
+      // Only check done slices (#2056) — undone slices haven't been completed yet.
       const roadmapFile = resolveMilestoneFile(basePath, mid, "ROADMAP");
       const roadmapContent = roadmapFile ? await loadFile(roadmapFile) : null;
       if (roadmapContent) {
         const roadmap = parseRoadmap(roadmapContent);
         const missingSlices: string[] = [];
         for (const slice of roadmap.slices) {
+          if (!slice.done) continue;
           const summaryPath = resolveSliceFile(basePath, mid, slice.id, "SUMMARY");
           if (!summaryPath || !existsSync(summaryPath)) {
             missingSlices.push(slice.id);
