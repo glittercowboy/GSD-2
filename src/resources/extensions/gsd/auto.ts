@@ -85,7 +85,6 @@ import {
 } from "./auto-observability.js";
 import { closeoutUnit } from "./auto-unit-closeout.js";
 import { recoverTimedOutUnit } from "./auto-timeout-recovery.js";
-// selfHealRuntimeRecords removed (D-05) — engine is authoritative
 import { selectAndApplyModel, resolveModelId } from "./auto-model-selection.js";
 import {
   syncProjectRootToWorktree,
@@ -159,12 +158,10 @@ import { pruneQueueOrder } from "./queue-order.js";
 
 import { debugLog, isDebugEnabled, writeDebugSummary } from "./debug-logger.js";
 import {
-  resolveExpectedArtifactPath,
-  verifyExpectedArtifact,
-  diagnoseExpectedArtifact,
   buildLoopRemediationSteps,
   reconcileMergeState,
 } from "./auto-recovery.js";
+import { resolveExpectedArtifactPath } from "./auto-artifact-paths.js";
 import { resolveDispatch } from "./auto-dispatch.js";
 import {
   type AutoDashboardData,
@@ -940,7 +937,6 @@ function buildLoopDeps(): LoopDeps {
 
     // Unit closeout + runtime records
     closeoutUnit,
-    verifyExpectedArtifact,
     clearUnitRuntimeRecord,
     writeUnitRuntimeRecord,
     recordOutcome,
@@ -1426,7 +1422,6 @@ export { dispatchDirectPhase } from "./auto-direct-dispatch.js";
 
 // Re-export recovery functions for external consumers
 export {
-  resolveExpectedArtifactPath,
-  verifyExpectedArtifact,
   buildLoopRemediationSteps,
 } from "./auto-recovery.js";
+export { resolveExpectedArtifactPath } from "./auto-artifact-paths.js";
