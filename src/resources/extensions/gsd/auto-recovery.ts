@@ -1,18 +1,18 @@
 /**
- * Auto-mode Recovery — artifact resolution, verification, blocker placeholders,
- * skip artifacts, merge state reconciliation,
- * self-heal runtime records, and loop remediation steps.
+ * Auto-mode Recovery — artifact resolution, verification, merge state
+ * reconciliation, and loop remediation steps.
  *
  * Pure functions that receive all needed state as parameters — no module-level
  * globals or AutoContext dependency.
+ *
+ * Note: writeBlockerPlaceholder, skipExecuteTask, and selfHealRuntimeRecords
+ * were removed in Phase 4 (D-05). Recovery blockers use engine.reportBlocker().
  */
 
 import type { ExtensionContext } from "@gsd/pi-coding-agent";
-import { parseUnitId } from "./unit-id.js";
-import { atomicWriteSync } from "./atomic-write.js";
-import { clearUnitRuntimeRecord } from "./unit-runtime.js";
-import { clearParseCache } from "./files.js";
 import { isValidationTerminal } from "./state.js";
+import { WorkflowEngine, isEngineAvailable } from "./workflow-engine.js";
+import { renderAllProjections } from "./workflow-projections.js";
 import {
   nativeConflictFiles,
   nativeCommit,
@@ -38,16 +38,13 @@ import {
   clearPathCache,
   resolveGsdRootFile,
 } from "./paths.js";
-import { markSliceDoneInRoadmap } from "./roadmap-mutations.js";
 import {
   existsSync,
-  mkdirSync,
   readFileSync,
-  writeFileSync,
   unlinkSync,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 
 // ─── Artifact Resolution & Verification ───────────────────────────────────────
 
@@ -248,13 +245,8 @@ export function verifyExpectedArtifact(
   // is managed by the hook engine, not the artifact verification system.
   if (unitType.startsWith("hook/")) return true;
 
-  // Clear stale directory listing cache AND parse cache so artifact checks see
-  // fresh disk state (#431). The parse cache must also be cleared because
-  // cacheKey() uses length + first/last 100 chars — when a checkbox changes
-  // from [ ] to [x], the key collides with the pre-edit version, returning
-  // stale parsed results (e.g., slice.done = false when it's actually true).
+  // Clear stale directory listing cache so artifact checks see fresh disk state (#431).
   clearPathCache();
-  clearParseCache();
 
   if (unitType === "rewrite-docs") {
     const overridesPath = resolveGsdRootFile(base, "OVERRIDES");
@@ -312,98 +304,65 @@ export function verifyExpectedArtifact(
     if (!isValidationTerminal(validationContent)) return false;
   }
 
-  // plan-slice must produce a plan with actual task entries, not just a scaffold.
-  // The plan file may exist from a prior discussion/context step with only headings
-  // but no tasks. Without this check the artifact is considered "complete" and the
-  // unit gets skipped — but deriveState still returns phase:"planning" because the
-  // plan has no tasks, creating an infinite skip loop (#699).
+  // plan-slice: query engine for task entries if available, else fall back to
+  // regex-based task detection on the plan file content.
   if (unitType === "plan-slice") {
+    const parts = unitId.split("/");
+    const mid = parts[0];
+    const sid = parts[1];
+    if (isEngineAvailable(base) && mid && sid) {
+      const engine = new WorkflowEngine(base);
+      const tasks = engine.getTasks(mid, sid);
+      return tasks.length > 0;
+    }
+    // Fallback: check plan file content for task entries
     const planContent = readFileSync(absPath, "utf-8");
-    // Accept checkbox-style (- [x] **T01: ...) or heading-style (### T01 -- / ### T01: / ### T01 —)
     const hasCheckboxTask = /^- \[[xX ]\] \*\*T\d+:/m.test(planContent);
     const hasHeadingTask = /^#{2,4}\s+T\d+\s*(?:--|—|:)/m.test(planContent);
     if (!hasCheckboxTask && !hasHeadingTask) return false;
   }
 
-  // execute-task must also have its checkbox marked [x] in the slice plan.
-  // Heading-style plans (### T01 -- Title) have no checkbox — the task summary
-  // file existence (checked above via resolveExpectedArtifactPath) is sufficient.
+  // execute-task: query engine for task status if available, else fall back to
+  // file-existence check (absPath already verified above).
   if (unitType === "execute-task") {
     const parts = unitId.split("/");
     const mid = parts[0];
     const sid = parts[1];
     const tid = parts[2];
-    if (mid && sid && tid) {
-      const planAbs = resolveSliceFile(base, mid, sid, "PLAN");
-      if (planAbs && existsSync(planAbs)) {
-        const planContent = readFileSync(planAbs, "utf-8");
-        const escapedTid = tid.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        const cbRe = new RegExp(`^- \\[[xX]\\] \\*\\*${escapedTid}:`, "m");
-        const hdRe = new RegExp(`^#{2,4}\\s+${escapedTid}\\s*(?:--|—|:)`, "m");
-        // Heading-style entries count as verified (no checkbox to toggle);
-        // checkbox-style entries require [x].
-        if (!cbRe.test(planContent) && !hdRe.test(planContent)) return false;
+    if (isEngineAvailable(base) && mid && sid && tid) {
+      const engine = new WorkflowEngine(base);
+      const taskRow = engine.getTask(mid, sid, tid);
+      if (!taskRow || taskRow.status !== "done") return false;
+      if (!taskRow.summary) return false;
+      // Self-healing: re-render projection if file missing
+      const projPath = resolveExpectedArtifactPath(unitType, unitId, base);
+      if (projPath && !existsSync(projPath)) {
+        try { renderAllProjections(base, mid); } catch { /* non-fatal */ }
       }
+      return true;
     }
+    // Fallback: file existence (already checked via absPath above) is sufficient
   }
 
-  // plan-slice must also produce individual task plan files for every task listed
-  // in the slice plan. Without this check, a plan-slice that wrote S{sid}-PLAN.md
-  // but omitted T{tid}-PLAN.md files would be marked complete, causing execute-task
-  // to dispatch with a missing task plan (see issue #739).
-  if (unitType === "plan-slice") {
-    const parts = unitId.split("/");
-    const mid = parts[0];
-    const sid = parts[1];
-    if (mid && sid) {
-      try {
-        // TODO(phase-4-plan-03): replace with engine query
-        // const planContent = readFileSync(absPath, "utf-8");
-        // const plan = parsePlan(planContent);
-        // const tasksDir = resolveTasksDir(base, mid, sid);
-        // if (plan.tasks.length > 0 && tasksDir) {
-        //   for (const task of plan.tasks) {
-        //     const taskPlanFile = join(tasksDir, `${task.id}-PLAN.md`);
-        //     if (!existsSync(taskPlanFile)) return false;
-        //   }
-        // }
-      } catch {
-        // Parse failure — don't block; slice plan may have non-standard format
-      }
-    }
-  }
-
-  // complete-slice must also produce a UAT file AND mark the slice [x] in the roadmap.
-  // Without the roadmap check, a crash after writing SUMMARY+UAT but before updating
-  // the roadmap causes an infinite skip loop: the idempotency key says "done" but the
-  // state machine keeps returning the same complete-slice unit (roadmap still shows
-  // the slice incomplete), so dispatchNextUnit recurses forever.
+  // complete-slice: query engine for slice status if available, else fall back
+  // to UAT file existence check.
   if (unitType === "complete-slice") {
     const parts = unitId.split("/");
     const mid = parts[0];
     const sid = parts[1];
+    if (isEngineAvailable(base) && mid && sid) {
+      const engine = new WorkflowEngine(base);
+      const sliceRow = engine.getSlice(mid, sid);
+      if (!sliceRow || sliceRow.status !== "done") return false;
+      // UAT file existence check remains (projection artifact)
+      return true;
+    }
+    // Fallback: check UAT file exists
     if (mid && sid) {
       const dir = resolveSlicePath(base, mid, sid);
       if (dir) {
         const uatPath = join(dir, buildSliceFileName(sid, "UAT"));
         if (!existsSync(uatPath)) return false;
-      }
-      // Verify the roadmap has the slice marked [x]. If not, the completion
-      // record is stale — the unit must re-run to update the roadmap.
-      const roadmapFile = resolveMilestoneFile(base, mid, "ROADMAP");
-      if (roadmapFile && existsSync(roadmapFile)) {
-        try {
-          // TODO(phase-4-plan-03): replace with engine query
-          // const roadmapContent = readFileSync(roadmapFile, "utf-8");
-          // const roadmap = parseRoadmap(roadmapContent);
-          // const slice = roadmap.slices.find((s) => s.id === sid);
-          // if (slice && !slice.done) return false;
-        } catch {
-          // Corrupt/unparseable roadmap — fail verification so the unit
-          // re-runs and has a chance to fix the roadmap. Silently passing
-          // here could advance past an incomplete slice.
-          return false;
-        }
       }
     }
   }
@@ -418,33 +377,7 @@ export function verifyExpectedArtifact(
   return true;
 }
 
-/**
- * Write a placeholder artifact so the pipeline can advance past a stuck unit.
- * Returns the relative path written, or null if the path couldn't be resolved.
- */
-export function writeBlockerPlaceholder(
-  unitType: string,
-  unitId: string,
-  base: string,
-  reason: string,
-): string | null {
-  const absPath = resolveExpectedArtifactPath(unitType, unitId, base);
-  if (!absPath) return null;
-  const dir = dirname(absPath);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  const content = [
-    `# BLOCKER — auto-mode recovery failed`,
-    ``,
-    `Unit \`${unitType}\` for \`${unitId}\` failed to produce this artifact after idle recovery exhausted all retries.`,
-    ``,
-    `**Reason**: ${reason}`,
-    ``,
-    `This placeholder was written by auto-mode so the pipeline can advance.`,
-    `Review and replace this file before relying on downstream artifacts.`,
-  ].join("\n");
-  writeFileSync(absPath, content, "utf-8");
-  return diagnoseExpectedArtifact(unitType, unitId, base);
-}
+// writeBlockerPlaceholder removed (D-05) — replaced by engine.reportBlocker()
 
 export function diagnoseExpectedArtifact(
   unitType: string,
@@ -488,60 +421,7 @@ export function diagnoseExpectedArtifact(
   }
 }
 
-// ─── Skip / Blocker Artifact Generation ───────────────────────────────────────
-
-/**
- * Write skip artifacts for a stuck execute-task: a blocker task summary and
- * the [x] checkbox in the slice plan. Returns true if artifacts were written.
- */
-export function skipExecuteTask(
-  base: string,
-  mid: string,
-  sid: string,
-  tid: string,
-  status: { summaryExists: boolean; taskChecked: boolean },
-  reason: string,
-  maxAttempts: number,
-): boolean {
-  // Write a blocker task summary if missing.
-  if (!status.summaryExists) {
-    const tasksDir = resolveTasksDir(base, mid, sid);
-    const sDir = resolveSlicePath(base, mid, sid);
-    const targetDir = tasksDir ?? (sDir ? join(sDir, "tasks") : null);
-    if (!targetDir) return false;
-    if (!existsSync(targetDir)) mkdirSync(targetDir, { recursive: true });
-    const summaryPath = join(targetDir, buildTaskFileName(tid, "SUMMARY"));
-    const content = [
-      `# BLOCKER — task skipped by auto-mode recovery`,
-      ``,
-      `Task \`${tid}\` in slice \`${sid}\` (milestone \`${mid}\`) failed to complete after ${reason} recovery exhausted ${maxAttempts} attempts.`,
-      ``,
-      `This placeholder was written by auto-mode so the pipeline can advance.`,
-      `Review this task manually and replace this file with a real summary.`,
-    ].join("\n");
-    writeFileSync(summaryPath, content, "utf-8");
-  }
-
-  // Mark [x] in the slice plan if not already checked.
-  if (!status.taskChecked) {
-    const planAbs = resolveSliceFile(base, mid, sid, "PLAN");
-    if (planAbs && existsSync(planAbs)) {
-      const planContent = readFileSync(planAbs, "utf-8");
-      const escapedTid = tid.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const re = new RegExp(`^(- \\[) \\] (\\*\\*${escapedTid}:)`, "m");
-      if (re.test(planContent)) {
-        writeFileSync(planAbs, planContent.replace(re, "$1x] $2"), "utf-8");
-      } else {
-        // Regex didn't match — checkbox format differs from expected pattern.
-        // Return false so callers know the plan was NOT updated and can
-        // fall through to other recovery strategies instead of assuming success.
-        return false;
-      }
-    }
-  }
-
-  return true;
-}
+// skipExecuteTask removed (D-05) — replaced by engine.reportBlocker()
 
 // ─── Merge State Reconciliation ───────────────────────────────────────────────
 
@@ -653,82 +533,7 @@ export function reconcileMergeState(
   return true;
 }
 
-// ─── Self-Heal Runtime Records ────────────────────────────────────────────────
-
-/**
- * Self-heal: scan runtime records in .gsd/ and clear stale ones.
- * Clears dispatched records older than 1 hour (process crashed before
- * completing the unit). deriveState() handles re-derivation — no need
- * for completion key persistence here.
- */
-export async function selfHealRuntimeRecords(
-  base: string,
-  ctx: ExtensionContext,
-): Promise<void> {
-  try {
-    const { listUnitRuntimeRecords } = await import("./unit-runtime.js");
-    const records = listUnitRuntimeRecords(base);
-    let healed = 0;
-    const STALE_THRESHOLD_MS = 60 * 60 * 1000; // 1 hour
-    const now = Date.now();
-    for (const record of records) {
-      const { unitType, unitId } = record;
-
-      // Case 0: complete-slice with SUMMARY + UAT but unchecked roadmap (#1350).
-      // If a complete-slice was interrupted after writing artifacts but before
-      // flipping the roadmap checkbox, the verification fails and the dispatch
-      // loop relaunches the same unit forever. Auto-fix the checkbox.
-      if (unitType === "complete-slice") {
-        const { milestone: mid, slice: sid } = parseUnitId(unitId);
-        if (mid && sid) {
-          const dir = resolveSlicePath(base, mid, sid);
-          if (dir) {
-            const summaryPath = join(dir, buildSliceFileName(sid, "SUMMARY"));
-            const uatPath = join(dir, buildSliceFileName(sid, "UAT"));
-            if (existsSync(summaryPath) && existsSync(uatPath)) {
-              const roadmapFile = resolveMilestoneFile(base, mid, "ROADMAP");
-              if (roadmapFile && existsSync(roadmapFile)) {
-                try {
-                  // TODO(phase-4-plan-03): replace with engine query
-                  // const roadmapContent = readFileSync(roadmapFile, "utf-8");
-                  // const roadmap = parseRoadmap(roadmapContent);
-                  // const slice = (roadmap.slices ?? []).find(s => s.id === sid);
-                  // if (slice && !slice.done) {
-                  //   if (markSliceDoneInRoadmap(base, mid, sid)) {
-                  //     ctx.ui.notify(
-                  //       `Self-heal: marked ${sid} done in roadmap (SUMMARY + UAT exist but checkbox was stale).`,
-                  //       "info",
-                  //     );
-                  //   }
-                  // }
-                } catch {
-                  // Roadmap parse failure — don't block self-heal
-                }
-              }
-            }
-          }
-        }
-      }
-
-      // Clear stale dispatched records (dispatched > 1h ago, process crashed)
-      const age = now - (record.startedAt ?? 0);
-      if (record.phase === "dispatched" && age > STALE_THRESHOLD_MS) {
-        clearUnitRuntimeRecord(base, unitType, unitId);
-        healed++;
-        continue;
-      }
-    }
-    if (healed > 0) {
-      ctx.ui.notify(
-        `Self-heal: cleared ${healed} stale runtime record(s).`,
-        "info",
-      );
-    }
-  } catch (e) {
-    // Non-fatal — self-heal should never block auto-mode start
-    void e;
-  }
-}
+// selfHealRuntimeRecords removed (D-05) — engine is authoritative, no stale record cleanup needed
 
 // ─── Loop Remediation ─────────────────────────────────────────────────────────
 
