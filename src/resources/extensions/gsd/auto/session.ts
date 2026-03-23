@@ -106,7 +106,6 @@ export class AutoSession {
   // ── Current unit ─────────────────────────────────────────────────────────
   currentUnit: CurrentUnit | null = null;
   currentUnitRouting: UnitRouting | null = null;
-  completedUnits: CompletedUnit[] = [];
   currentMilestoneId: string | null = null;
 
   // ── Model state ──────────────────────────────────────────────────────────
@@ -163,7 +162,6 @@ export class AutoSession {
   completeCurrentUnit(): CompletedUnit | null {
     if (!this.currentUnit) return null;
     const done: CompletedUnit = { ...this.currentUnit, finishedAt: Date.now() };
-    this.completedUnits.push(done);
     this.currentUnit = null;
     return done;
   }
@@ -193,7 +191,6 @@ export class AutoSession {
     // Unit
     this.currentUnit = null;
     this.currentUnitRouting = null;
-    this.completedUnits = [];
     this.currentMilestoneId = null;
 
     // Model
@@ -234,7 +231,7 @@ export class AutoSession {
       activeRunDir: this.activeRunDir,
       currentMilestoneId: this.currentMilestoneId,
       currentUnit: this.currentUnit,
-      completedUnits: this.completedUnits.length,
+      completedUnits: 0,
       unitDispatchCount: Object.fromEntries(this.unitDispatchCount),
     };
   }
