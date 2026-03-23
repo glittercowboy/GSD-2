@@ -2,12 +2,17 @@
 // Renders PLAN.md, ROADMAP.md, SUMMARY.md, and STATE.md from database rows.
 // Projections are read-only views of engine state (Layer 3 of the architecture).
 
-import { _getAdapter } from "./gsd-db.js";
+import { _getAdapter, isDbAvailable } from "./gsd-db.js";
 import { atomicWriteSync } from "./atomic-write.js";
 import { join } from "node:path";
 import { mkdirSync, existsSync } from "node:fs";
+import { logWarning } from "./workflow-logger.js";
 
 import type { MilestoneRow, SliceRow, TaskRow } from "./workflow-engine.js";
+// Circular import: workflow-engine.ts imports this file, but ESM resolves
+// circular imports for named exports as long as they're accessed at runtime
+// (not during module evaluation). renderStateProjection only runs at runtime.
+import { WorkflowEngine, isEngineAvailable } from "./workflow-engine.js";
 import type { GSDState, MilestoneRegistryEntry } from "./types.js";
 
 // ─── PLAN.md Projection ──────────────────────────────────────────────────
@@ -261,22 +266,19 @@ export function renderStateContent(state: GSDState): string {
  */
 export function renderStateProjection(basePath: string): void {
   try {
-    // Dynamic import to avoid circular dependency at module level
-    const { isDbAvailable, _getAdapter } = require("./gsd-db.js") as typeof import("./gsd-db.js");
-    if (!isDbAvailable()) return; // DB was closed — skip silently
-    // Probe the DB handle to detect stale connections (adapter set but handle closed)
-    try { _getAdapter()?.prepare("SELECT 1").get(); } catch { return; }
-    const { isEngineAvailable, getEngine } = require("./workflow-engine.js") as typeof import("./workflow-engine.js");
-    if (!isEngineAvailable(basePath)) return; // Engine tables don't exist yet
-    const engine = getEngine(basePath);
+    if (!isDbAvailable()) return;
+    // Probe DB handle — adapter may be set but underlying handle closed
+    const adapter = _getAdapter();
+    if (!adapter) return;
+    try { adapter.prepare("SELECT 1").get(); } catch { return; }
+    if (!isEngineAvailable(basePath)) return;
+    const engine = new WorkflowEngine(basePath);
     const state = engine.deriveState();
     const content = renderStateContent(state);
     const dir = join(basePath, ".gsd");
     mkdirSync(dir, { recursive: true });
     atomicWriteSync(join(dir, "STATE.md"), content);
   } catch (err) {
-    // Non-fatal per D-02 — projection failure should not block
-    const { logWarning } = require("./workflow-logger.js") as typeof import("./workflow-logger.js");
     logWarning("projection", `renderStateProjection failed: ${(err as Error).message}`);
   }
 }
