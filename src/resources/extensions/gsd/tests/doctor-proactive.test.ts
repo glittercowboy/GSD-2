@@ -334,6 +334,16 @@ async function main(): Promise<void> {
       }
     }
 
+    // ─── Wave 0: Projection drift test (DOC-03 — TODO until Plan 4-02) ──
+    console.log("\n=== projection drift: preDispatchHealthGate re-renders stale projections (DOC-03 — TODO) ===");
+    {
+      // This test will be implemented when Plan 4-02 Task 2 adds projection drift
+      // detection to preDispatchHealthGate. For now, mark as TODO placeholder.
+      // The test should: set up a stale projection file (mtime in past), add a newer
+      // event log entry, call preDispatchHealthGate, and verify projections were re-rendered.
+      console.log("  TODO: preDispatchHealthGate re-renders projections when event log is newer than projection files");
+    }
+
   } finally {
     resetProactiveHealing();
     for (const dir of cleanups) {

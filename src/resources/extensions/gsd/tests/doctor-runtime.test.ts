@@ -346,6 +346,37 @@ node_modules/
       console.log("\n=== stranded_lock_directory (skipped on Windows) ===");
     }
 
+    // ─── Test: checkRuntimeHealth does not push orphaned_completed_units (DOC-01 regression) ──
+    console.log("\n=== checkRuntimeHealth regression: no orphaned_completed_units ===");
+    {
+      const dir = createMinimalProject();
+      cleanups.push(dir);
+
+      // Run doctor and check that checkRuntimeHealth does not push orphaned_completed_units issues
+      // (This is a regression guard — once DOC-01 removes this check, it must never return.)
+      const detect = await runGSDDoctor(dir);
+      // Note: We check that the issue code does NOT appear. Currently it may appear if
+      // completed-units.json exists with orphans, but the important thing is the check
+      // itself is guarded. This test will become a true regression guard after DOC-01.
+      // For now, with no completed-units.json, the code should not produce this issue.
+      const orphanIssues = detect.issues.filter(i => i.code === "orphaned_completed_units");
+      assertEq(orphanIssues.length, 0, "checkRuntimeHealth does not push orphaned_completed_units when no completed-units.json exists");
+    }
+
+    // ─── Wave 0: checkEngineHealth tests (DOC-05 — RED until Plan 4-02) ──────
+    // These tests target checkEngineHealth() which does not exist yet.
+    // They are scaffolded as TODO placeholders until 4-02 implements the function.
+    console.log("\n=== checkEngineHealth tests (DOC-05 — TODO until 4-02) ===");
+    {
+      // checkEngineHealth is not yet implemented. Mark tests as TODO.
+      // When Plan 4-02 creates checkEngineHealth in doctor-checks.ts, these
+      // will be converted from console placeholders to real assertions.
+      console.log("  TODO: checkEngineHealth reports db_orphaned_task when task references non-existent slice");
+      console.log("  TODO: checkEngineHealth reports db_orphaned_slice when slice references non-existent milestone");
+      console.log("  TODO: checkEngineHealth reports db_done_task_no_summary when done task has no summary");
+      console.log("  TODO: checkEngineHealth reports db_duplicate_id when duplicate IDs exist");
+    }
+
     // ─── Test: orphaned_completed_units NOT auto-fixed at fixLevel="task" (#1809) ──
     // Regression: task-level doctor was removing completed-unit keys whose artifacts
     // were temporarily missing, causing deriveState to revert the user to S01 and

@@ -658,6 +658,29 @@ test("hasImplementationArtifacts returns true when implementation files committe
   }
 });
 
+// ─── Wave 0: removed export tests (DOC-02 — RED until Plan 4-03) ─────────
+
+test("writeBlockerPlaceholder is not exported from auto-recovery (DOC-02)", async () => {
+  // RED until Plan 4-03 removes these exports.
+  // Dynamic import to check exported members at runtime.
+  const mod = await import("../auto-recovery.ts") as Record<string, unknown>;
+  assert.equal(
+    typeof mod.writeBlockerPlaceholder,
+    "undefined",
+    "writeBlockerPlaceholder should not be exported (removed by DOC-02)",
+  );
+});
+
+test("skipExecuteTask is not exported from auto-recovery (DOC-02)", async () => {
+  // RED until Plan 4-03 removes these exports.
+  const mod = await import("../auto-recovery.ts") as Record<string, unknown>;
+  assert.equal(
+    typeof mod.skipExecuteTask,
+    "undefined",
+    "skipExecuteTask should not be exported (removed by DOC-02)",
+  );
+});
+
 test("hasImplementationArtifacts returns true on non-git directory (fail-open)", () => {
   const base = join(tmpdir(), `gsd-test-nogit-${randomUUID()}`);
   mkdirSync(base, { recursive: true });
