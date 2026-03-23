@@ -85,13 +85,22 @@ let _lockAcquiredAt: number = 0;
 const LOCK_FILE = "auto.lock";
 
 /**
+ * Sanitize a milestone ID for use in file paths. Prevents path traversal
+ * by rejecting IDs containing directory separators or other unsafe chars.
+ */
+function sanitizeMilestoneId(mid: string): string | null {
+  return /^[a-zA-Z0-9_-]+$/.test(mid) ? mid : null;
+}
+
+/**
  * Derive the effective lock file name for the current process.
  * Parallel workers use a per-milestone lock file to avoid contending
  * with the coordinator or other workers on the shared `.gsd/` directory.
  */
 function effectiveLockFile(): string {
   if (process.env.GSD_PARALLEL_WORKER && process.env.GSD_MILESTONE_LOCK) {
-    return `auto-${process.env.GSD_MILESTONE_LOCK}.lock`;
+    const mid = sanitizeMilestoneId(process.env.GSD_MILESTONE_LOCK);
+    if (mid) return `auto-${mid}.lock`;
   }
   return LOCK_FILE;
 }
@@ -167,11 +176,19 @@ function ensureExitHandler(_gsdDir: string): void {
     // Clean ALL registered lock paths, not just the current one (#1578).
     // Lock files accumulate across main project .gsd/, worktree .gsd/,
     // and projects registry paths — cleanup must cover all of them.
+    const elf = effectiveLockFile();
     for (const dir of _lockDirRegistry) {
       try {
-        const lockFile = join(dir, LOCK_FILE);
+        const lockFile = join(dir, elf);
         if (existsSync(lockFile)) unlinkSync(lockFile);
       } catch { /* best-effort */ }
+      // Also try the canonical LOCK_FILE in case it differs
+      if (elf !== LOCK_FILE) {
+        try {
+          const canonical = join(dir, LOCK_FILE);
+          if (existsSync(canonical)) unlinkSync(canonical);
+        } catch { /* best-effort */ }
+      }
       try {
         const lockDir = join(dir + ".lock");
         if (existsSync(lockDir)) rmSync(lockDir, { recursive: true, force: true });
@@ -232,9 +249,10 @@ export function acquireSessionLock(basePath: string): SessionLockResult {
 
   // Parallel workers lock a per-milestone subdirectory instead of the shared
   // .gsd/ root. This prevents contention with the coordinator and other workers.
-  const lockTarget = (process.env.GSD_PARALLEL_WORKER && process.env.GSD_MILESTONE_LOCK)
-    ? join(gsdDir, "parallel", process.env.GSD_MILESTONE_LOCK)
-    : gsdDir;
+  const mid = (process.env.GSD_PARALLEL_WORKER && process.env.GSD_MILESTONE_LOCK)
+    ? sanitizeMilestoneId(process.env.GSD_MILESTONE_LOCK)
+    : null;
+  const lockTarget = mid ? join(gsdDir, "parallel", mid) : gsdDir;
 
   try {
     // Try to acquire an exclusive OS-level lock on the lock target.
@@ -516,9 +534,16 @@ export function releaseSessionLock(basePath: string): void {
     // Non-fatal
   }
 
-  // Remove the proper-lockfile directory (.gsd.lock/) for the current path
+  // Remove the proper-lockfile directory for the current lock target.
+  // For parallel workers this is .gsd/parallel/<MID>.lock/, for normal
+  // sessions it is .gsd.lock/.
+  const gsdDir = gsdRoot(basePath);
+  const mid = (process.env.GSD_PARALLEL_WORKER && process.env.GSD_MILESTONE_LOCK)
+    ? sanitizeMilestoneId(process.env.GSD_MILESTONE_LOCK)
+    : null;
+  const releaseLockTarget = mid ? join(gsdDir, "parallel", mid) : gsdDir;
   try {
-    const lockDir = join(gsdRoot(basePath) + ".lock");
+    const lockDir = join(releaseLockTarget + ".lock");
     if (existsSync(lockDir)) rmSync(lockDir, { recursive: true, force: true });
   } catch {
     // Non-fatal
@@ -526,11 +551,18 @@ export function releaseSessionLock(basePath: string): void {
 
   // Clean ALL registered lock paths (#1578) — lock files accumulate across
   // main project .gsd/, worktree .gsd/, and projects registry paths.
+  const elf = effectiveLockFile();
   for (const dir of _lockDirRegistry) {
     try {
-      const lockFile = join(dir, LOCK_FILE);
+      const lockFile = join(dir, elf);
       if (existsSync(lockFile)) unlinkSync(lockFile);
     } catch { /* best-effort */ }
+    if (elf !== LOCK_FILE) {
+      try {
+        const canonical = join(dir, LOCK_FILE);
+        if (existsSync(canonical)) unlinkSync(canonical);
+      } catch { /* best-effort */ }
+    }
     try {
       const lockDir = join(dir + ".lock");
       if (existsSync(lockDir)) rmSync(lockDir, { recursive: true, force: true });

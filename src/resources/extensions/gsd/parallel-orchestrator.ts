@@ -523,11 +523,11 @@ export function spawnWorker(
       env: {
         ...process.env,
         GSD_MILESTONE_LOCK: milestoneId,
-        // Point workers at their own worktree so session lock, state
-        // derivation, and artifact writes target the isolated worktree —
-        // not the shared project root. This prevents lock contention with
-        // the coordinator and cross-milestone artifact pollution.
-        GSD_PROJECT_ROOT: worker.worktreePath,
+        // Pass the real project root so workers can locate the shared .gsd/
+        // directory for state derivation and heartbeat writes. Lock contention
+        // is prevented by per-milestone lock targets in session-lock.ts, not
+        // by changing this env var.
+        GSD_PROJECT_ROOT: basePath,
         // Prevent workers from spawning their own parallel sessions
         GSD_PARALLEL_WORKER: "1",
       },
