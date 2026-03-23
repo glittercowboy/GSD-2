@@ -264,6 +264,7 @@ export const GSD_ROOT_FILES = {
   REQUIREMENTS: "REQUIREMENTS.md",
   OVERRIDES: "OVERRIDES.md",
   KNOWLEDGE: "KNOWLEDGE.md",
+  CODEBASE: "CODEBASE.md",
 } as const;
 
 export type GSDRootFileKey = keyof typeof GSD_ROOT_FILES;
@@ -276,6 +277,7 @@ const LEGACY_GSD_ROOT_FILES: Record<GSDRootFileKey, string> = {
   REQUIREMENTS: "requirements.md",
   OVERRIDES: "overrides.md",
   KNOWLEDGE: "knowledge.md",
+  CODEBASE: "CODEBASE.md",
 };
 
 // ─── GSD Root Discovery ───────────────────────────────────────────────────────

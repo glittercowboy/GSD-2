@@ -182,5 +182,10 @@ Examples:
     await handleExtensions(trimmed.replace(/^extensions\s*/, "").trim(), ctx);
     return true;
   }
+  if (trimmed === "codebase" || trimmed.startsWith("codebase ")) {
+    const { handleCodebase } = await import("../../commands-codebase.js");
+    await handleCodebase(trimmed.replace(/^codebase\s*/, "").trim(), ctx, pi);
+    return true;
+  }
   return false;
 }

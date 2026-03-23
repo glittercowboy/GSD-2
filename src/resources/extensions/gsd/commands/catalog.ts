@@ -15,7 +15,7 @@ export interface GsdCommandDefinition {
 type CompletionMap = Record<string, readonly GsdCommandDefinition[]>;
 
 export const GSD_COMMAND_DESCRIPTION =
-  "GSD — Get Shit Done: /gsd help|start|templates|next|auto|stop|pause|status|widget|visualize|queue|quick|discuss|capture|triage|dispatch|history|undo|rate|skip|export|cleanup|mode|prefs|config|keys|hooks|run-hook|skill-health|doctor|logs|forensics|changelog|migrate|remote|steer|knowledge|new-milestone|parallel|cmux|park|unpark|init|setup|inspect|extensions|update|fast";
+  "GSD — Get Shit Done: /gsd help|start|templates|next|auto|stop|pause|status|widget|visualize|queue|quick|discuss|capture|triage|dispatch|history|undo|rate|skip|export|cleanup|mode|prefs|config|keys|hooks|run-hook|skill-health|doctor|logs|forensics|changelog|migrate|remote|steer|knowledge|new-milestone|parallel|cmux|park|unpark|init|setup|inspect|extensions|update|fast|codebase";
 
 export const TOP_LEVEL_SUBCOMMANDS: readonly GsdCommandDefinition[] = [
   { cmd: "help", desc: "Categorized command reference with descriptions" },
@@ -67,6 +67,7 @@ export const TOP_LEVEL_SUBCOMMANDS: readonly GsdCommandDefinition[] = [
   { cmd: "extensions", desc: "Manage extensions (list, enable, disable, info)" },
   { cmd: "fast", desc: "Toggle OpenAI service tier (on/off/flex/status)" },
   { cmd: "workflow", desc: "Custom workflow lifecycle (new, run, list, validate, pause, resume)" },
+  { cmd: "codebase", desc: "Generate and manage codebase map (.gsd/CODEBASE.md)" },
 ];
 
 const NESTED_COMPLETIONS: CompletionMap = {
@@ -215,6 +216,11 @@ const NESTED_COMPLETIONS: CompletionMap = {
     { cmd: "validate", desc: "Validate a workflow definition YAML" },
     { cmd: "pause", desc: "Pause custom workflow auto-mode" },
     { cmd: "resume", desc: "Resume paused custom workflow auto-mode" },
+  ],
+  codebase: [
+    { cmd: "generate", desc: "Generate or regenerate CODEBASE.md" },
+    { cmd: "update", desc: "Incremental update (preserves descriptions)" },
+    { cmd: "stats", desc: "Show coverage and staleness" },
   ],
 };
 

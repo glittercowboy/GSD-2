@@ -99,11 +99,24 @@ export async function buildBeforeAgentStartResult(
     }
   }
 
+  let codebaseBlock = "";
+  const codebasePath = resolveGsdRootFile(process.cwd(), "CODEBASE");
+  if (existsSync(codebasePath)) {
+    try {
+      const content = readFileSync(codebasePath, "utf-8").trim();
+      if (content) {
+        codebaseBlock = `\n\n[PROJECT CODEBASE — File structure and descriptions]\n\n${content}`;
+      }
+    } catch {
+      // skip
+    }
+  }
+
   warnDeprecatedAgentInstructions();
 
   const injection = await buildGuidedExecuteContextInjection(event.prompt, process.cwd());
   const worktreeBlock = buildWorktreeContextBlock();
-  const fullSystem = `${event.systemPrompt}\n\n[SYSTEM CONTEXT — GSD]\n\n${systemContent}${preferenceBlock}${knowledgeBlock}${memoryBlock}${newSkillsBlock}${worktreeBlock}`;
+  const fullSystem = `${event.systemPrompt}\n\n[SYSTEM CONTEXT — GSD]\n\n${systemContent}${preferenceBlock}${knowledgeBlock}${codebaseBlock}${memoryBlock}${newSkillsBlock}${worktreeBlock}`;
 
   stopContextTimer({
     systemPromptSize: fullSystem.length,
