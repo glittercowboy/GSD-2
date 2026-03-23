@@ -15,7 +15,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: Engine Foundation + Team Infrastructure** - Build WorkflowEngine, command API, agent tools, projections, state manifest, and event log foundation
 - [x] **Phase 2: Sync Migration + Prompt Migration** - Migrate worktree sync to snapshot/restore and migrate key prompts to tool calls (completed 2026-03-22)
 - [x] **Phase 3: Event Reconciliation + Mandatory Tools** - Replace INSERT OR REPLACE with event-based merge, complete prompt migration, add gsd migrate (completed 2026-03-22)
-- [ ] **Phase 4: Remove Parsing from Hot Path** - Reduce doctor to infrastructure checks and move markdown parsers to legacy
+- [x] **Phase 4: Remove Parsing from Hot Path** - Reduce doctor to infrastructure checks and move markdown parsers to legacy (completed 2026-03-22)
 - [ ] **Phase 5: Dead Code Cleanup** - Remove all dead code unlocked by prior phases (~4,600 lines)
 
 ## Phase Details
@@ -112,5 +112,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | 1. Engine Foundation + Team Infrastructure | 5/5 | Complete | 2026-03-22 |
 | 2. Sync Migration + Prompt Migration | 3/3 | Complete | 2026-03-22 |
 | 3. Event Reconciliation + Mandatory Tools | 5/5 | Complete | 2026-03-22 |
-| 4. Remove Parsing from Hot Path | 3/4 | In Progress | - |
+| 4. Remove Parsing from Hot Path | 4/4 | Complete | 2026-03-22 |
 | 5. Dead Code Cleanup | 0/TBD | Not started | - |
