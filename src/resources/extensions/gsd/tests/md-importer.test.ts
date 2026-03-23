@@ -437,4 +437,183 @@ console.log('=== md-importer: round-trip fidelity ===');
 
 // ═══════════════════════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════════════════════
+// #2301: Freeform ## DXXX format parsing
+// ═══════════════════════════════════════════════════════════════════════════
+
+console.log('\n=== #2301: freeform parser — basic extraction ===');
+
+{
+  const freeformMd = `# Decisions
+
+## D001: Use SQLite for local state
+**Scope:** architecture
+**Decision:** Use SQLite for local state
+**Choice:** better-sqlite3
+**Rationale:** Fast, single-file, no server needed
+**Revisable:** Yes
+**Made By:** collaborative
+
+## D002: API layer design
+**Date:** M001
+**Scope:** api
+**Decision:** REST over GraphQL
+**Choice:** Express.js REST API
+**Rationale:** Simpler for CLI-first tool
+**Revisable:** Yes
+
+## D003 — Minimal heading only
+`;
+
+  const decisions = parseDecisionsTable(freeformMd);
+  assertEq(decisions.length, 3, '#2301: freeform parser finds all 3 decisions');
+  assertEq(decisions[0].id, 'D001', '#2301: D001 id');
+  assertEq(decisions[0].scope, 'architecture', '#2301: D001 scope');
+  assertEq(decisions[0].choice, 'better-sqlite3', '#2301: D001 choice');
+  assertEq(decisions[0].made_by, 'collaborative', '#2301: D001 made_by');
+  assertEq(decisions[1].id, 'D002', '#2301: D002 id');
+  assertEq(decisions[1].when_context, 'M001', '#2301: D002 when_context from Date field');
+  assertEq(decisions[2].id, 'D003', '#2301: D003 id from minimal heading');
+  assertEq(decisions[2].decision, 'Minimal heading only', '#2301: D003 decision from heading title');
+}
+
+console.log('\n=== #2301: freeform parser — heading variations ===');
+
+{
+  // ### and #### headings should also be recognized
+  const multiLevel = `# Decisions
+
+### D010: Triple hash heading
+**Scope:** testing
+**Decision:** Use node:test
+
+#### D011: Quadruple hash
+**Scope:** ci
+**Decision:** GitHub Actions
+
+## D012 — Em dash separator
+**Scope:** build
+**Decision:** esbuild
+`;
+
+  const decisions = parseDecisionsTable(multiLevel);
+  assertEq(decisions.length, 3, '#2301: ### and #### headings parsed');
+  assertEq(decisions[0].id, 'D010', '#2301: ### heading D010');
+  assertEq(decisions[1].id, 'D011', '#2301: #### heading D011');
+  assertEq(decisions[2].id, 'D012', '#2301: em dash separator D012');
+}
+
+console.log('\n=== #2301: freeform parser — missing fields default safely ===');
+
+{
+  const sparse = `# Decisions
+
+## D020: Only a title, no fields at all
+
+## D021: Has scope only
+**Scope:** testing
+`;
+
+  const decisions = parseDecisionsTable(sparse);
+  assertEq(decisions.length, 2, '#2301: sparse headings parsed');
+  assertEq(decisions[0].decision, 'Only a title, no fields at all', '#2301: D020 decision from heading');
+  assertEq(decisions[0].scope, '', '#2301: D020 missing scope defaults to empty');
+  assertEq(decisions[0].choice, '', '#2301: D020 missing choice defaults to empty');
+  assertEq(decisions[0].revisable, 'Yes', '#2301: D020 missing revisable defaults to Yes');
+  assertEq(decisions[0].made_by, 'agent', '#2301: D020 missing made_by defaults to agent');
+  assertEq(decisions[1].scope, 'testing', '#2301: D021 scope present');
+}
+
+console.log('\n=== #2301: table format takes priority over freeform ===');
+
+{
+  // If the file has table rows, freeform headings should NOT be parsed
+  // (table is the canonical format and the fallback only fires when table returns 0)
+  const mixed = `# Decisions Register
+
+| # | When | Scope | Decision | Choice | Rationale | Revisable? |
+|---|------|-------|----------|--------|-----------|------------|
+| D001 | M001 | arch | DB pick | SQLite | Fast | Yes |
+
+## D002: This freeform heading should be ignored when table rows exist
+**Scope:** ignored
+`;
+
+  const decisions = parseDecisionsTable(mixed);
+  assertEq(decisions.length, 1, '#2301: table takes priority, freeform ignored');
+  assertEq(decisions[0].id, 'D001', '#2301: only table D001 returned');
+}
+
+console.log('\n=== #2301: empty and non-decision content ===');
+
+{
+  const empty = parseDecisionsTable('# Decisions\n\nNo decisions yet.\n');
+  assertEq(empty.length, 0, '#2301: no-content returns empty array');
+
+  const noDecisions = parseDecisionsTable('## Introduction\nThis is not a decision.\n## Summary\nAlso not.\n');
+  assertEq(noDecisions.length, 0, '#2301: non-DXXX headings ignored');
+}
+
+console.log('\n=== #2301: freeform e2e through migrateFromMarkdown ===');
+
+{
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-freeform-e2e-'));
+  const gsdDir = path.join(tmpDir, '.gsd');
+  fs.mkdirSync(gsdDir, { recursive: true });
+
+  // Simulate the exact data-loss scenario from the issue:
+  // A project with 5 decisions in freeform format
+  fs.writeFileSync(path.join(gsdDir, 'DECISIONS.md'), `# Decisions
+
+## D001: Use SQLite
+**Scope:** architecture
+**Decision:** Use SQLite for state
+**Choice:** better-sqlite3
+**Rationale:** Fast and embedded
+
+## D002: REST API
+**Scope:** api
+**Decision:** REST over GraphQL
+**Choice:** Express.js
+**Rationale:** Simpler
+
+## D003: TypeScript
+**Scope:** language
+**Decision:** Use TypeScript
+**Choice:** TypeScript 5.x
+**Rationale:** Type safety
+
+## D004: Testing
+**Scope:** testing
+**Decision:** Use node:test
+**Choice:** built-in
+**Rationale:** No deps
+
+## D005: CI
+**Scope:** ci
+**Decision:** GitHub Actions
+**Choice:** GH Actions
+**Rationale:** Native
+`);
+
+  const dbPath = path.join(gsdDir, 'gsd.db');
+  openDatabase(dbPath);
+
+  try {
+    const result = migrateFromMarkdown(tmpDir);
+    assertEq(result.decisions, 5, '#2301 e2e: all 5 freeform decisions imported');
+
+    // Verify each decision is in the DB
+    for (let i = 1; i <= 5; i++) {
+      const d = getDecisionById(`D00${i}`);
+      assertTrue(!!d, `#2301 e2e: D00${i} found in DB after migration`);
+    }
+    assertEq(getDecisionById('D001')?.scope, 'architecture', '#2301 e2e: D001 scope preserved');
+    assertEq(getDecisionById('D003')?.choice, 'TypeScript 5.x', '#2301 e2e: D003 choice preserved');
+  } finally {
+    closeDatabase();
+    cleanupDir(tmpDir);
+  }
+}
+
 report();

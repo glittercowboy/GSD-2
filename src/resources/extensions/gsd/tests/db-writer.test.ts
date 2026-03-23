@@ -15,6 +15,7 @@ import {
 import {
   parseDecisionsTable,
   parseRequirementsSections,
+  migrateFromMarkdown,
 } from '../md-importer.ts';
 import {
   generateDecisionsMd,
@@ -605,6 +606,152 @@ console.log('\n── Full DB round-trip: requirements ──');
   }
 
   closeDatabase();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// #2301: Regeneration safety guard — refuse to overwrite when DB < file
+// ═══════════════════════════════════════════════════════════════════════════
+
+console.log('\n── #2301: guard blocks when DB < file (data loss scenario) ──');
+
+{
+  const tmpDir = makeTmpDir();
+  const dbPath = path.join(tmpDir, '.gsd', 'gsd.db');
+
+  // Pre-populate DECISIONS.md with 3 freeform decisions.
+  // The table parser will find 0 rows, so the DB will only have what we save.
+  // BUT the freeform parser now works, so let's simulate the case where
+  // the guard is needed: we manually insert only 1 decision into the DB
+  // while the file has 3 decision headings.
+  const mdPath = path.join(tmpDir, '.gsd', 'DECISIONS.md');
+  fs.writeFileSync(mdPath, `# Decisions
+
+## D001: First decision
+**Scope:** arch
+**Decision:** Use SQLite
+
+## D002: Second decision
+**Scope:** impl
+**Decision:** Use Express
+
+## D003: Third decision
+**Scope:** api
+**Decision:** REST API
+`);
+
+  openDatabase(dbPath);
+
+  try {
+    // Save a new decision — DB will have 1, file has 3 (counted by regex).
+    // The guard should prevent DECISIONS.md from being overwritten.
+    const result = await saveDecisionToDb({
+      scope: 'test',
+      decision: 'New decision after freeform',
+      choice: 'Option A',
+      rationale: 'Testing guard',
+    }, tmpDir);
+
+    assertEq(result.id, 'D001', '#2301 guard-block: decision saved to DB');
+
+    // DECISIONS.md should still contain the original freeform content
+    const content = fs.readFileSync(mdPath, 'utf-8');
+    assertTrue(content.includes('## D001: First decision'), '#2301 guard-block: preserved D001');
+    assertTrue(content.includes('## D002: Second decision'), '#2301 guard-block: preserved D002');
+    assertTrue(content.includes('## D003: Third decision'), '#2301 guard-block: preserved D003');
+  } finally {
+    closeDatabase();
+    cleanupDir(tmpDir);
+  }
+}
+
+console.log('\n── #2301: guard allows write when DB >= file ──');
+
+{
+  const tmpDir = makeTmpDir();
+  const dbPath = path.join(tmpDir, '.gsd', 'gsd.db');
+  const mdPath = path.join(tmpDir, '.gsd', 'DECISIONS.md');
+
+  openDatabase(dbPath);
+
+  try {
+    // Save 2 decisions to an empty file — DB has 2, file has 0. Should write.
+    await saveDecisionToDb({
+      scope: 'arch', decision: 'First', choice: 'A', rationale: 'R1',
+    }, tmpDir);
+    await saveDecisionToDb({
+      scope: 'impl', decision: 'Second', choice: 'B', rationale: 'R2',
+    }, tmpDir);
+
+    assertTrue(fs.existsSync(mdPath), '#2301 guard-allow: DECISIONS.md was written');
+    const content = fs.readFileSync(mdPath, 'utf-8');
+    assertTrue(content.includes('D001'), '#2301 guard-allow: D001 in regenerated file');
+    assertTrue(content.includes('D002'), '#2301 guard-allow: D002 in regenerated file');
+    // File is now in table format (generated), so it should have pipe-delimited rows
+    assertTrue(content.includes('|'), '#2301 guard-allow: table format written');
+  } finally {
+    closeDatabase();
+    cleanupDir(tmpDir);
+  }
+}
+
+console.log('\n── #2301: full data-loss prevention e2e ──');
+
+{
+  // Simulate the exact issue scenario: freeform file → worktree deletes DB →
+  // migrateFromMarkdown → saveDecisionToDb → file must NOT be destroyed
+  const tmpDir = makeTmpDir();
+  const dbPath = path.join(tmpDir, '.gsd', 'gsd.db');
+  const mdPath = path.join(tmpDir, '.gsd', 'DECISIONS.md');
+
+  // Start with 5 freeform decisions (the user's committed DECISIONS.md)
+  fs.writeFileSync(mdPath, `# Decisions
+
+## D001: Architecture
+**Scope:** arch
+**Decision:** Monorepo
+
+## D002: Database
+**Scope:** data
+**Decision:** SQLite
+
+## D003: Language
+**Scope:** lang
+**Decision:** TypeScript
+
+## D004: Testing
+**Scope:** test
+**Decision:** node:test
+
+## D005: CI
+**Scope:** ci
+**Decision:** GitHub Actions
+`);
+
+  openDatabase(dbPath);
+
+  try {
+    // Step 1: migrateFromMarkdown imports freeform decisions into DB
+    const migResult = migrateFromMarkdown(tmpDir);
+    assertEq(migResult.decisions, 5, '#2301 e2e: migration imported all 5');
+
+    // Step 2: save a new decision — DB now has 6, file has 5 → should write
+    const saveResult = await saveDecisionToDb({
+      scope: 'new', decision: 'Added during milestone', choice: 'Yes', rationale: 'Needed',
+    }, tmpDir);
+
+    assertEq(saveResult.id, 'D006', '#2301 e2e: new decision gets D006');
+
+    // Step 3: verify file was regenerated (DB 6 >= file 5) and contains all
+    const content = fs.readFileSync(mdPath, 'utf-8');
+    assertTrue(content.includes('D001'), '#2301 e2e: D001 survived');
+    assertTrue(content.includes('D005'), '#2301 e2e: D005 survived');
+    assertTrue(content.includes('D006'), '#2301 e2e: D006 added');
+    // Should now be in table format (canonical)
+    assertTrue(content.includes('|'), '#2301 e2e: regenerated as table');
+  } finally {
+    closeDatabase();
+    cleanupDir(tmpDir);
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

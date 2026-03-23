@@ -9,6 +9,7 @@
 // parseDecisionsTable() and parseRequirementsSections() with field fidelity.
 
 import { join, resolve } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
 import type { Decision, Requirement } from './types.js';
 import { resolveGsdRootFile } from './paths.js';
 import { saveFile } from './files.js';
@@ -232,6 +233,25 @@ export async function saveDecisionToDb(
 
     const md = generateDecisionsMd(allDecisions);
     const filePath = resolveGsdRootFile(basePath, 'DECISIONS');
+
+    // Safety guard: refuse to overwrite DECISIONS.md if the regenerated content
+    // has fewer decisions than the existing file (#2301).  This prevents data
+    // loss when the parser (parseDecisionsTable) fails to import a non-table
+    // format (e.g. freeform ## DXXX headings).  The new decision is still in
+    // the DB — the markdown file just won't be regenerated until the DB catches
+    // up with the file's decision count.
+    if (existsSync(filePath)) {
+      const existing = readFileSync(filePath, 'utf-8');
+      const existingCount = (existing.match(/^## D\d+|^\| D\d+/gm) || []).length;
+      if (allDecisions.length < existingCount) {
+        process.stderr.write(
+          `gsd-db: skipping DECISIONS.md regeneration — DB has ${allDecisions.length} ` +
+          `decisions but file has ${existingCount}. Regenerating would lose data.\n`,
+        );
+        return { id };
+      }
+    }
+
     await saveFile(filePath, md);
     // Invalidate file-read caches so deriveState() sees the updated markdown.
     // Do NOT clear the artifacts table — we just wrote to it intentionally.

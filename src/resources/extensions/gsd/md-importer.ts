@@ -106,6 +106,63 @@ export function parseDecisionsTable(content: string): Omit<Decision, 'seq'>[] {
     }
   }
 
+  // Fallback: if no table rows were found, try parsing freeform ## DXXX headings.
+  // LLM agents often write DECISIONS.md using "## D001: Title" sections with
+  // bold-label fields instead of a pipe-delimited table (#2301).
+  if (results.length === 0) {
+    return parseFreeformDecisions(content);
+  }
+
+  return results;
+}
+
+/**
+ * Parse freeform-format DECISIONS.md where each decision is a ## DXXX heading
+ * followed by bold-label fields like **Scope:**, **Decision:**, etc.
+ *
+ * Extracts whatever fields are present; missing fields default to empty strings.
+ * This is a best-effort fallback — the table format is canonical.
+ */
+function parseFreeformDecisions(content: string): Omit<Decision, 'seq'>[] {
+  const results: Omit<Decision, 'seq'>[] = [];
+  // Match ## D001, ## D001: Title, ### D001, etc.
+  const headingRe = /^#{2,4}\s+(D\d+)(?:[:\s—–-]+(.*))?$/gm;
+  let match: RegExpExecArray | null;
+
+  while ((match = headingRe.exec(content)) !== null) {
+    const id = match[1];
+    const titleFromHeading = (match[2] || '').trim();
+
+    // Extract the block of text until the next ## heading or end of file
+    const blockStart = match.index + match[0].length;
+    const nextHeading = content.slice(blockStart).search(/^#{2,4}\s+D\d+/m);
+    const block = nextHeading >= 0
+      ? content.slice(blockStart, blockStart + nextHeading)
+      : content.slice(blockStart);
+
+    // Extract bold-label fields: **Label:** value (possibly multi-line until next **)
+    const field = (label: string): string => {
+      const re = new RegExp(`\\*\\*${label}:\\*\\*\\s*(.+?)(?=\\n\\*\\*|\\n#{2,4}\\s|$)`, 'si');
+      const m = block.match(re);
+      return m ? m[1].trim() : '';
+    };
+
+    results.push({
+      id,
+      when_context: field('When') || field('Date') || field('Context'),
+      scope: field('Scope'),
+      decision: field('Decision') || titleFromHeading,
+      choice: field('Choice'),
+      rationale: field('Rationale') || field('Reason') || field('Why'),
+      revisable: field('Revisable') || 'Yes',
+      made_by: (() => {
+        const raw = field('Made By').toLowerCase();
+        return (VALID_MADE_BY.has(raw) ? raw : 'agent') as import('./types.js').DecisionMadeBy;
+      })(),
+      superseded_by: null,
+    });
+  }
+
   return results;
 }
 
