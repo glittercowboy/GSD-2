@@ -635,16 +635,26 @@ All 4 tables exist (milestones, slices, tasks, verification_evidence). Column co
 
 ### 15.3 Doctor Kill List Execution
 
-| Kill Target | Status |
-|-------------|--------|
-| Checkbox/file mismatch reconciliation | **NOT KILLED** — doctor-types.ts still defines `task_done_missing_summary`, `task_summary_without_done_checkbox`, `all_tasks_done_roadmap_not_checked`, etc. |
-| Placeholder summary generation | **NOT KILLED** — doctor.ts still references placeholder logic |
-| "Self-healing" state drift fixes | **NOT KILLED** — doctor-checks.ts still has STATE.md drift detection/repair |
-| Health scoring for bookkeeping | **NOT KILLED** — doctor-proactive.ts still active with health scoring |
-| Stuck detection for completion-state | **NOT KILLED** — auto/detect-stuck.ts still exists and used |
-| completed-units.json cleanup | **KILLED** — no references remain in codebase |
+PRs #2219 (Doctor Surgery) and #2220 (Dead Code Cleanup) performed significant cleanup. The analysis agent initially scored this as "NOT KILLED" because it found issue codes still defined in `doctor-types.ts`. However, the **fix handlers that acted on those codes were removed** — the codes survive intentionally for diagnostic reporting without auto-fix, which is exactly what ADR-004 prescribed.
 
-**Kill list: 1 of 6 targets killed.**
+| Kill Target | Status | Detail |
+|-------------|--------|--------|
+| Checkbox/file mismatch reconciliation | **KILLED (fix handlers)** | Fix functions removed from doctor.ts (-141 lines). Issue codes retained in doctor-types.ts for diagnostic reporting only — no auto-fix. |
+| Placeholder summary generation | **PARTIAL** | Some placeholder logic removed with doctor fix functions |
+| "Self-healing" state drift fixes | **KILLED** | auto-recovery.ts gutted (-476 net lines). Reconciliation replaced with engine health checks. |
+| Health scoring for bookkeeping | **NOT KILLED** | doctor-proactive.ts largely untouched (+31/-2) |
+| Stuck detection for completion-state | **PARTIAL** | detect-stuck.ts reduced (-16 net) but still active |
+| completed-units.json cleanup | **KILLED** | No references remain in codebase |
+
+**Actual cleanup totals across PRs #2219 + #2220:**
+- `auto-recovery.ts`: -476 net lines (reconciliation gutted)
+- `files.ts`: -317 net lines (parsers relocated to `legacy/parsers.ts`)
+- `doctor.ts`: -49 net lines (fix functions removed)
+- `auto.ts`: -69 net lines
+- Tests: -963 net lines (assertions for removed code)
+- **Total: ~2,295 net lines deleted from cleanup targets**
+
+**Corrected kill list: 3 of 6 targets killed, 1 partial, 2 not killed.**
 
 ### 15.4 Code Impact vs Promises
 
@@ -696,8 +706,8 @@ All 4 tables exist (milestones, slices, tasks, verification_evidence). Column co
 | Tool schema richness | Rich but missing forwardIntelligence | Lean params (by design) |
 | DB schema match | ~75% column coverage | Engine-specific schema (different approach) |
 | Migration phases complete | 2 of 5 | 2 of 5 |
-| Doctor kill list executed | 7 of ~15 issue codes | 1 of 6 targets |
-| Code removal delivered | ~608 of ~2,500 lines (24%) | ~3,790 of ~4,500-6,500 lines (58-84%) |
+| Doctor kill list executed | 7 of ~15 issue codes | 3 of 6 targets (fix handlers removed, codes kept for diagnostics) |
+| Code removal delivered | ~608 of ~2,500 lines (24%) | ~2,295 net lines from cleanup targets |
 | Net line impact | +7,387 (promised -2,000) | +6,973 (promised -2,500 to -4,000) |
 | Success criteria met | 1 of 5 | 1 of 7 |
 | Event sourcing | Not in ADR, not implemented | Promised and DELIVERED |
