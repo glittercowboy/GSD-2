@@ -85,7 +85,7 @@ import {
 } from "./auto-observability.js";
 import { closeoutUnit } from "./auto-unit-closeout.js";
 import { recoverTimedOutUnit } from "./auto-timeout-recovery.js";
-import { selfHealRuntimeRecords } from "./auto-recovery.js";
+// selfHealRuntimeRecords removed (D-05) — engine is authoritative
 import { selectAndApplyModel, resolveModelId } from "./auto-model-selection.js";
 import {
   syncProjectRootToWorktree,
@@ -161,9 +161,7 @@ import { debugLog, isDebugEnabled, writeDebugSummary } from "./debug-logger.js";
 import {
   resolveExpectedArtifactPath,
   verifyExpectedArtifact,
-  writeBlockerPlaceholder,
   diagnoseExpectedArtifact,
-  skipExecuteTask,
   buildLoopRemediationSteps,
   reconcileMergeState,
 } from "./auto-recovery.js";
@@ -1102,14 +1100,7 @@ export async function startAuto(
     }
     invalidateAllCaches();
 
-    // Clean stale runtime records left from the paused session
-    try {
-      await selfHealRuntimeRecords(s.basePath, ctx);
-    } catch (e) {
-      debugLog("resume-self-heal-runtime-failed", {
-        error: e instanceof Error ? e.message : String(e),
-      });
-    }
+    // Engine is authoritative — no stale record cleanup needed (D-05)
 
     if (s.pausedSessionFile) {
       const activityDir = join(gsdRoot(s.basePath), "activity");
@@ -1144,8 +1135,7 @@ export async function startAuto(
     );
     logCmuxEvent(loadEffectiveGSDPreferences()?.preferences, s.stepMode ? "Step-mode resumed." : "Auto-mode resumed.", "progress");
 
-    // Clear orphaned runtime records from prior process deaths before entering the loop
-    await selfHealRuntimeRecords(s.basePath, ctx);
+    // Engine is authoritative — no stale record cleanup needed (D-05)
 
     await autoLoop(ctx, pi, s, buildLoopDeps());
     cleanupAfterLoopExit(ctx);
@@ -1178,8 +1168,7 @@ export async function startAuto(
   }
   logCmuxEvent(loadEffectiveGSDPreferences()?.preferences, requestedStepMode ? "Step-mode started." : "Auto-mode started.", "progress");
 
-  // Clear orphaned runtime records from prior process deaths before entering the loop
-  await selfHealRuntimeRecords(s.basePath, ctx);
+  // Engine is authoritative — no stale record cleanup needed (D-05)
 
   // Dispatch the first unit
   await autoLoop(ctx, pi, s, buildLoopDeps());
@@ -1439,7 +1428,5 @@ export { dispatchDirectPhase } from "./auto-direct-dispatch.js";
 export {
   resolveExpectedArtifactPath,
   verifyExpectedArtifact,
-  writeBlockerPlaceholder,
-  skipExecuteTask,
   buildLoopRemediationSteps,
 } from "./auto-recovery.js";
