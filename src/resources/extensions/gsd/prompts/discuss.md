@@ -238,6 +238,11 @@ Before moving to output, confirm the size estimate from your reflection still ho
 
 Before writing any files, **print the planned roadmap in chat** so the user can see and approve it. Print a markdown table with columns: Slice, Title, Risk, Depends, Demo. One row per slice. Below the table, print the milestone definition of done as a bullet list.
 
+After the roadmap table, print a **Requirement Coverage** summary:
+- For each Active requirement from REQUIREMENTS.md, state which slice owns it
+- Flag any Active requirement that has no slice owner as "⚠ UNMAPPED"
+- If Deep Abstraction extracted items that didn't map to any requirement or slice, list them as "⚠ UNCOVERED"
+
 If the user raises a substantive objection, adjust the roadmap. Otherwise, present the roadmap and ask: "Ready to write, or want to adjust?" — one gate, not two.
 
 ### Naming Convention

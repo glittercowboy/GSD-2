@@ -8,7 +8,7 @@
 
 import type { ExtensionAPI, ExtensionContext, ExtensionCommandContext } from "@gsd/pi-coding-agent";
 import { showNextAction } from "../shared/tui.js";
-import { loadFile, parseRoadmap } from "./files.js";
+import { loadFile, parseRoadmap, parseResearchDepth } from "./files.js";
 import { loadPrompt, inlineTemplate } from "./prompt-loader.js";
 import { buildSkillActivationBlock } from "./auto-prompts.js";
 import { deriveState } from "./state.js";
@@ -164,6 +164,33 @@ export function checkAutoStartAfterDiscuss(): boolean {
         }
       }
     } catch { /* malformed manifest — warn but don't block */ }
+  }
+
+  // Gate 5: Content quality warnings (non-blocking)
+  if (contextFile) {
+    try {
+      const content = readFileSync(contextFile, "utf-8");
+      const warnings: string[] = [];
+      // Missing critical sections
+      const required = ["## Project Description", "## Risks and Unknowns", "## Scope"];
+      const missing = required.filter(s => !content.includes(s));
+      if (missing.length > 0) {
+        warnings.push(`CONTEXT.md missing sections: ${missing.join(", ")}`);
+      }
+      // Unreplaced placeholders
+      const placeholders = content.match(/\{\{[a-zA-Z_]+\}\}/g);
+      if (placeholders && placeholders.length > 0) {
+        warnings.push(`CONTEXT.md contains ${placeholders.length} unreplaced placeholder(s)`);
+      }
+      // Research frontmatter present but invalid
+      const { depth } = parseResearchDepth(content);
+      if (depth !== null && !["skip", "light", "standard", "deep"].includes(depth)) {
+        warnings.push(`CONTEXT.md has invalid research_depth: "${depth}"`);
+      }
+      for (const w of warnings) {
+        ctx.ui.notify(w, "warning");
+      }
+    } catch { /* non-fatal */ }
   }
 
   // Draft promotion cleanup: if a CONTEXT-DRAFT.md exists alongside the new

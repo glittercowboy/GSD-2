@@ -214,3 +214,20 @@ test("guided prompt: contains Research Calibration instructions", () => {
     "guided prompt references research_focus frontmatter field"
   );
 });
+
+// --- Requirement Coverage gap surfacing contract tests ---
+
+test("discuss prompt: roadmap preview includes requirement coverage gap surfacing", () => {
+  assert.ok(
+    discussPrompt.includes("Requirement Coverage"),
+    "discuss.md contains Requirement Coverage instruction"
+  );
+  assert.ok(
+    discussPrompt.includes("UNMAPPED"),
+    "discuss.md contains UNMAPPED warning instruction"
+  );
+  assert.ok(
+    discussPrompt.includes("UNCOVERED"),
+    "discuss.md contains UNCOVERED warning instruction"
+  );
+});
