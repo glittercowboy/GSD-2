@@ -630,8 +630,9 @@ if (!process.stdin.isTTY) {
   process.exit(1)
 }
 
-// Welcome screen — shown on every fresh interactive session before TUI takes over
-{
+// Welcome screen — shown on every fresh interactive session before TUI takes over.
+// Skip when the first-run banner was already printed in loader.ts (prevents double banner).
+if (!process.env.GSD_FIRST_RUN_BANNER) {
   const { printWelcomeScreen } = await import('./welcome-screen.js')
   printWelcomeScreen({
     version: process.env.GSD_VERSION || '0.0.0',

@@ -49,7 +49,8 @@ process.env.PI_PACKAGE_DIR = pkgDir
 process.env.PI_SKIP_VERSION_CHECK = '1'  // GSD runs its own update check in cli.ts — suppress pi's
 process.title = 'gsd'
 
-// Print branded banner on first launch (before ~/.gsd/ exists)
+// Print branded banner on first launch (before ~/.gsd/ exists).
+// Set GSD_FIRST_RUN_BANNER so cli.ts skips the duplicate welcome screen.
 if (!existsSync(appRoot)) {
   const cyan  = '\x1b[36m'
   const green = '\x1b[32m'
@@ -62,6 +63,7 @@ if (!existsSync(appRoot)) {
     `  Get Shit Done ${dim}v${gsdVersion}${reset}\n` +
     `  ${green}Welcome.${reset} Setting up your environment...\n\n`
   )
+  process.env.GSD_FIRST_RUN_BANNER = '1'
 }
 
 // GSD_CODING_AGENT_DIR — tells pi's getAgentDir() to return ~/.gsd/agent/ instead of ~/.gsd/agent/
