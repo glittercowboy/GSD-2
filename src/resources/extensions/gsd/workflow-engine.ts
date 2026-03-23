@@ -2,7 +2,6 @@
 // Wraps SQLite via the existing DbAdapter to provide typed query methods
 // for milestones, slices, tasks, and verification evidence. Implements
 // deriveState() to return GSDState from direct DB reads.
-// Copyright (c) 2026 Jeremy McSpadden <jeremy@fluxlabs.net>
 
 import type { DbAdapter } from "./gsd-db.js";
 import { _getAdapter, isDbAvailable } from "./gsd-db.js";
@@ -11,6 +10,7 @@ import { writeManifest } from "./workflow-manifest.js";
 import { appendEvent, compactMilestoneEvents } from "./workflow-events.js";
 import type { WorkflowEvent } from "./workflow-events.js";
 import { renderAllProjections } from "./workflow-projections.js";
+import { logWarning, logError } from "./workflow-logger.js";
 import {
   completeTask as _completeTask,
   completeSlice as _completeSlice,
@@ -176,20 +176,20 @@ export class WorkflowEngine {
       try {
         renderAllProjections(this.basePath, milestoneId);
       } catch (err) {
-        process.stderr.write(`workflow-engine: projection render failed (non-fatal): ${(err as Error).message}\n`);
+        logWarning("projection", `render failed after ${cmd}: ${(err as Error).message}`, { cmd, milestoneId });
       }
     }
     // Write manifest after every command (MAN-03, D-08)
     try {
       writeManifest(this.basePath, this.db);
     } catch (err) {
-      process.stderr.write(`workflow-engine: manifest write failed (non-fatal): ${(err as Error).message}\n`);
+      logWarning("manifest", `write failed after ${cmd}: ${(err as Error).message}`, { cmd });
     }
     // Append event (EVT-01, D-09)
     try {
       appendEvent(this.basePath, { cmd, params, ts: new Date().toISOString(), actor: "agent" });
     } catch (err) {
-      process.stderr.write(`workflow-engine: event append failed (non-fatal): ${(err as Error).message}\n`);
+      logWarning("event-log", `append failed after ${cmd}: ${(err as Error).message}`, { cmd });
     }
   }
 
@@ -213,10 +213,7 @@ export class WorkflowEngine {
       try {
         compactMilestoneEvents(this.basePath, params.milestoneId);
       } catch (err) {
-        // Non-fatal: compaction failure must not block slice completion
-        process.stderr.write(
-          `event-compaction: failed for ${params.milestoneId}: ${(err as Error).message}\n`,
-        );
+        logWarning("compaction", `failed for ${params.milestoneId}: ${(err as Error).message}`, { milestoneId: params.milestoneId });
       }
     }
 
@@ -274,7 +271,7 @@ export class WorkflowEngine {
 
     const handler = handlers[event.cmd];
     if (!handler) {
-      process.stderr.write(`workflow-engine: replay skipping unknown cmd: ${event.cmd}\n`);
+      logWarning("engine", `replay skipping unknown cmd: ${event.cmd}`, { cmd: event.cmd });
       return;
     }
 
@@ -286,7 +283,7 @@ export class WorkflowEngine {
         try { renderAllProjections(this.basePath, milestoneId); } catch { /* non-fatal */ }
       }
     } catch (err) {
-      process.stderr.write(`workflow-engine: replay skipping ${event.cmd} (${event.hash ?? "?"}): ${(err as Error).message}\n`);
+      logWarning("engine", `replay skipping ${event.cmd} (${event.hash ?? "?"}): ${(err as Error).message}`, { cmd: event.cmd });
     }
   }
 

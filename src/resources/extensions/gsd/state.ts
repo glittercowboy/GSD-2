@@ -197,11 +197,13 @@ export async function deriveState(basePath: string): Promise<GSDState> {
           // D-14: validate migration output, log discrepancies
           const { discrepancies } = validateMigration(basePath);
           if (discrepancies.length > 0) {
-            process.stderr.write(`workflow-migration: ${discrepancies.length} discrepancy(ies) after migration (engine state is authoritative)\n`);
+            const { logWarning } = await import('./workflow-logger.js');
+            logWarning("migration", `${discrepancies.length} discrepancy(ies) after migration`, { discrepancies: discrepancies.join("; ") });
           }
         }
       } catch (migErr) {
-        process.stderr.write(`workflow-migration: auto-migration failed: ${(migErr as Error).message}\n`);
+        const { logError } = await import('./workflow-logger.js');
+        logError("migration", `auto-migration failed: ${(migErr as Error).message}`);
         // Continue — engine may still have valid state from prior migration
       }
 
@@ -213,6 +215,10 @@ export async function deriveState(basePath: string): Promise<GSDState> {
     }
   } catch {
     // Fall through to legacy markdown parse — engine not yet initialized or import failed
+    try {
+      const { logWarning } = await import('./workflow-logger.js');
+      logWarning("state", "engine unavailable, falling back to markdown parsing");
+    } catch { /* logger itself not available — truly early init */ }
   }
 
   const stopTimer = debugTime("derive-state-impl");
