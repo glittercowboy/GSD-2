@@ -147,8 +147,35 @@ Examples:
     return true;
   }
   if (trimmed === "migrate" || trimmed.startsWith("migrate ")) {
+    const migrateArgs = trimmed.replace(/^migrate\s*/, "").trim();
+
+    // D-12: explicit engine migration failsafe (markdown .gsd/ -> engine DB state)
+    if (migrateArgs === "--engine" || migrateArgs.startsWith("--engine ")) {
+      try {
+        const { migrateFromMarkdown, validateMigration } = await import("../../workflow-migration.js");
+        ctx.ui.notify("Running engine migration (markdown -> engine DB)...", "info");
+        migrateFromMarkdown(process.cwd());
+        const { discrepancies } = validateMigration(process.cwd());
+        if (discrepancies.length > 0) {
+          ctx.ui.notify(
+            `Migration complete with ${discrepancies.length} discrepancy(ies):\n${discrepancies.map(d => `  - ${d}`).join("\n")}`,
+            "warning",
+          );
+        } else {
+          ctx.ui.notify("Engine migration complete — all entities migrated successfully.", "info");
+        }
+      } catch (err) {
+        ctx.ui.notify(
+          `Engine migration failed: ${err instanceof Error ? err.message : String(err)}`,
+          "error",
+        );
+      }
+      return true;
+    }
+
+    // Existing v1-to-v2 migration (.planning/ -> .gsd/)
     const { handleMigrate } = await import("../../migrate/command.js");
-    await handleMigrate(trimmed.replace(/^migrate\s*/, "").trim(), ctx, pi);
+    await handleMigrate(migrateArgs, ctx, pi);
     return true;
   }
   if (trimmed === "resolve-conflict" || trimmed.startsWith("resolve-conflict ")) {
