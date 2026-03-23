@@ -75,21 +75,38 @@ isEngineAvailable(basePath)
   └─ milestones table exists in sqlite_master
 ```
 
-### 7 Command Handlers
+### 17 Command Handlers
 
 All run inside `transaction()`. All trigger `afterCommand()` on success.
+
+#### Original 7 (task/slice execution lifecycle)
 
 | Command | Tool Name | DB Mutation | Returns |
 |---------|-----------|-------------|---------|
 | `completeTask` | `gsd_complete_task` | UPDATE tasks SET status='done', summary, completed_at; INSERT verification_evidence | taskId, progress, nextTask |
 | `completeSlice` | `gsd_complete_slice` | UPDATE slices SET status='done', summary, uat_result, completed_at | sliceId, progress, nextSlice |
 | `planSlice` | `gsd_plan_slice` | INSERT tasks (batch) with seq order | sliceId, taskCount, taskIds |
-| `saveDecision` | `gsd_save_decision` | INSERT decisions with auto-seq | id (D001, D002...) |
+| `saveDecision` | `gsd_engine_save_decision` | INSERT decisions with auto-seq | id (D001, D002...) |
 | `startTask` | `gsd_start_task` | UPDATE tasks SET status='in-progress', started_at | taskId, startedAt |
 | `recordVerification` | `gsd_record_verification` | INSERT verification_evidence | taskId, evidenceId |
 | `reportBlocker` | `gsd_report_blocker` | UPDATE tasks SET status='blocked', blocker | taskId |
 
-**Idempotency:** Calling completeTask on an already-done task returns current state without error.
+#### New 10 (complete pipeline coverage)
+
+| Command | Tool Name | DB Mutation | Returns |
+|---------|-----------|-------------|---------|
+| `createMilestone` | `gsd_create_milestone` | INSERT milestones (status='active'); idempotent | milestoneId, status |
+| `planMilestone` | `gsd_plan_milestone` | DELETE + INSERT slices (batch); first eligible → active | milestoneId, sliceCount, activeSlice |
+| `completeMilestone` | `gsd_complete_milestone` | UPDATE milestones SET status='done'; validates all slices done | milestoneId, completedAt |
+| `validateMilestone` | `gsd_validate_milestone` | INSERT remediation slices if verdict=needs-remediation | milestoneId, verdict |
+| `updateRoadmap` | `gsd_update_roadmap` | Add/remove/reorder slices atomically; only pending can be removed | milestoneId, added, removed |
+| `saveContext` | `gsd_save_context` | Pass-through (afterCommand renders CONTEXT.md) | milestoneId, saved |
+| `saveResearch` | `gsd_save_research` | Pass-through (afterCommand renders RESEARCH.md) | milestoneId, sliceId, saved |
+| `saveRequirements` | `gsd_save_requirements` | UPSERT requirements table | count, requirementIds |
+| `saveUatResult` | `gsd_save_uat_result` | UPDATE slices SET uat_result (JSON verdict+checks) | milestoneId, sliceId, verdict |
+| `saveKnowledge` | `gsd_save_knowledge` | Pass-through (afterCommand renders KNOWLEDGE.md) | saved |
+
+**Idempotency:** completeTask, createMilestone safe to call multiple times.
 
 ### afterCommand (post-mutation side effects)
 
@@ -263,6 +280,29 @@ Auto-loop integration (auto/phases.ts):
 
 ---
 
+## Dispatch Unit → Tool Call Mapping
+
+Every auto-mode dispatch unit type has a corresponding tool call:
+
+| Dispatch Unit | Phase Trigger | Tool Call(s) Agent Uses |
+|---|---|---|
+| discuss-milestone | needs-discussion / pre-planning | `gsd_create_milestone`, `gsd_save_context`, `gsd_save_requirements` |
+| research-milestone | pre-planning (no research) | `gsd_save_research` |
+| plan-milestone | pre-planning (has research) | `gsd_plan_milestone`, `gsd_engine_save_decision` |
+| research-slice | planning (no slice research) | `gsd_save_research(slice_id)` |
+| plan-slice | planning | `gsd_plan_slice` |
+| replan-slice | replanning-slice | `gsd_update_roadmap`, `gsd_plan_slice` |
+| execute-task | executing | `gsd_start_task`, `gsd_record_verification`, `gsd_complete_task` |
+| reactive-execute | executing (multi-task) | `gsd_start_task` + `gsd_complete_task` (per task) |
+| complete-slice | summarizing | `gsd_complete_slice` |
+| run-uat | post-completion | `gsd_save_uat_result` |
+| reassess-roadmap | post-completion | `gsd_update_roadmap`, `gsd_engine_save_decision` |
+| validate-milestone | validating-milestone | `gsd_validate_milestone` |
+| complete-milestone | completing-milestone | `gsd_complete_milestone`, `gsd_save_knowledge` |
+| rewrite-docs | override gate | `gsd_update_roadmap`, `gsd_engine_save_decision` |
+
+---
+
 ## Auto-Loop Integration
 
 ### Unit Lifecycle
@@ -320,9 +360,9 @@ When deriveState() returns phase="completing-milestone":
 ### Core Engine
 | File | Lines | Purpose |
 |------|-------|---------|
-| `workflow-engine.ts` | ~555 | Engine singleton, query methods, deriveState, replay |
+| `workflow-engine.ts` | ~720 | Engine singleton, 17 methods, deriveState, replay |
 | `workflow-engine-schema.ts` | ~87 | v5 schema DDL |
-| `workflow-commands.ts` | ~524 | 7 command handlers with transactions |
+| `workflow-commands.ts` | ~1050 | 17 command handlers with transactions |
 | `workflow-projections.ts` | ~420 | DB → markdown renderers |
 | `workflow-events.ts` | ~140 | Event log, fork-point, compaction |
 | `workflow-manifest.ts` | ~169 | Snapshot/restore for bootstrap |
@@ -340,7 +380,7 @@ When deriveState() returns phase="completing-milestone":
 ### Integration
 | File | Lines | Purpose |
 |------|-------|---------|
-| `bootstrap/workflow-tools.ts` | ~464 | 7 agent-callable tools |
+| `bootstrap/workflow-tools.ts` | ~1090 | 17 agent-callable tools |
 | `bootstrap/register-hooks.ts` | ~217 | tool_call intercept wiring |
 | `bootstrap/dynamic-tools.ts` | varies | ensureDbOpen + DB path resolution |
 | `state.ts` | varies | Dual-path deriveState + cache |
