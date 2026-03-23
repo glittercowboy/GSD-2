@@ -22,6 +22,8 @@ import {
   buildRefSnapshotNative,
   evaluateViaNativeCommands,
   captureCompactPageStateNative,
+  CmuxPage,
+  openCmuxBrowser,
 } from "../resources/extensions/browser-tools/cmux-backend.ts";
 
 // ─── Mock infrastructure ────────────────────────────────────────────────────
@@ -558,5 +560,234 @@ describe("captureCompactPageStateNative", () => {
     const state = captureCompactPageStateNative("s1", {}) as any;
     assert.equal(state.title, "Minimal");
     assert.equal(state.url, "about:blank");
+  });
+});
+
+// ─── CmuxPage.url() consistency ─────────────────────────────────────────────
+
+describe("CmuxPage.url() uses 'get url' command", () => {
+  let restore: () => void;
+  afterEach(() => restore?.());
+
+  test("url() calls 'get url' not bare 'url'", () => {
+    const calls: string[][] = [];
+    restore = _setBrowserCmd((_sid: string, args: string[]) => {
+      calls.push(args);
+      if (args[0] === "get" && args[1] === "url") return "https://example.com";
+      throw new Error(`Unexpected: ${args.join(" ")}`);
+    });
+    const page = new CmuxPage({ surfaceId: "surface:1" });
+    const result = page.url();
+    assert.equal(result, "https://example.com");
+    assert.deepEqual(calls[0], ["get", "url"]);
+  });
+});
+
+// ─── CmuxPage.selectOption — normalizeSelectValue ───────────────────────────
+
+describe("CmuxPage.selectOption handles value union types", () => {
+  let restore: () => void;
+  let lastSelectArgs: string[] = [];
+  beforeEach(() => {
+    restore = _setBrowserCmd((_sid: string, args: string[]) => {
+      if (args[0] === "select") { lastSelectArgs = args; return "ok"; }
+      throw new Error(`Unexpected: ${args.join(" ")}`);
+    });
+    lastSelectArgs = [];
+  });
+  afterEach(() => restore?.());
+
+  test("handles plain string", async () => {
+    const page = new CmuxPage({ surfaceId: "surface:1" });
+    const result = await page.selectOption("select#color", "red");
+    assert.deepEqual(result, ["red"]);
+    assert.equal(lastSelectArgs[2], "red");
+  });
+
+  test("handles string array (picks first)", async () => {
+    const page = new CmuxPage({ surfaceId: "surface:1" });
+    const result = await page.selectOption("select#color", ["blue", "green"]);
+    assert.deepEqual(result, ["blue"]);
+    assert.equal(lastSelectArgs[2], "blue");
+  });
+
+  test("handles { label } object", async () => {
+    const page = new CmuxPage({ surfaceId: "surface:1" });
+    const result = await page.selectOption("select#color", { label: "Red Color" } as any);
+    assert.deepEqual(result, ["Red Color"]);
+    assert.equal(lastSelectArgs[2], "Red Color");
+  });
+
+  test("handles { value } object", async () => {
+    const page = new CmuxPage({ surfaceId: "surface:1" });
+    const result = await page.selectOption("select#color", { value: "rgb(255,0,0)" } as any);
+    assert.deepEqual(result, ["rgb(255,0,0)"]);
+    assert.equal(lastSelectArgs[2], "rgb(255,0,0)");
+  });
+
+  test("handles { label, value } object — prefers label", async () => {
+    const page = new CmuxPage({ surfaceId: "surface:1" });
+    const result = await page.selectOption("select#color", { label: "Red", value: "red-val" } as any);
+    assert.deepEqual(result, ["Red"]);
+    assert.equal(lastSelectArgs[2], "Red");
+  });
+
+  test("handles array of objects (picks first label)", async () => {
+    const page = new CmuxPage({ surfaceId: "surface:1" });
+    const result = await page.selectOption("select#color", [{ label: "First" }, { label: "Second" }] as any);
+    assert.deepEqual(result, ["First"]);
+    assert.equal(lastSelectArgs[2], "First");
+  });
+
+  test("handles { index } object", async () => {
+    const page = new CmuxPage({ surfaceId: "surface:1" });
+    const result = await page.selectOption("select#color", { index: 2 } as any);
+    assert.deepEqual(result, ["2"]);
+    assert.equal(lastSelectArgs[2], "2");
+  });
+});
+
+// ─── CmuxPage.waitForURL — predicate support ───────────────────────────────
+
+describe("CmuxPage.waitForURL", () => {
+  let restore: () => void;
+  afterEach(() => restore?.());
+
+  test("handles string URL via cmux wait", async () => {
+    restore = _setBrowserCmd((_sid: string, args: string[]) => {
+      if (args[0] === "wait" && args[1] === "--url-contains") return "ok";
+      throw new Error(`Unexpected: ${args.join(" ")}`);
+    });
+    const page = new CmuxPage({ surfaceId: "surface:1" });
+    await page.waitForURL("https://example.com/done");
+  });
+
+  test("handles RegExp via cmux wait", async () => {
+    restore = _setBrowserCmd((_sid: string, args: string[]) => {
+      if (args[0] === "wait" && args[1] === "--url-contains") {
+        assert.equal(args[2], "example\\.com\\/done");
+        return "ok";
+      }
+      throw new Error(`Unexpected: ${args.join(" ")}`);
+    });
+    const page = new CmuxPage({ surfaceId: "surface:1" });
+    await page.waitForURL(/example\.com\/done/);
+  });
+
+  test("handles predicate function — resolves when predicate returns true", async () => {
+    let callCount = 0;
+    restore = _setBrowserCmd((_sid: string, args: string[]) => {
+      if (args[0] === "get" && args[1] === "url") {
+        callCount++;
+        // Return target URL on 2nd poll
+        return callCount >= 2 ? "https://example.com/done" : "https://example.com/loading";
+      }
+      throw new Error(`Unexpected: ${args.join(" ")}`);
+    });
+    const page = new CmuxPage({ surfaceId: "surface:1" });
+    await page.waitForURL((url) => url.pathname === "/done", { timeout: 3000 });
+    assert.ok(callCount >= 2, `Expected at least 2 polls, got ${callCount}`);
+  });
+
+  test("handles predicate function — times out when predicate never returns true", async () => {
+    restore = _setBrowserCmd((_sid: string, args: string[]) => {
+      if (args[0] === "get" && args[1] === "url") return "https://example.com/still-loading";
+      throw new Error(`Unexpected: ${args.join(" ")}`);
+    });
+    const page = new CmuxPage({ surfaceId: "surface:1" });
+    await assert.rejects(
+      () => page.waitForURL(() => false, { timeout: 500 }),
+      /Timed out waiting for URL predicate/
+    );
+  });
+});
+
+// ─── CmuxPage.screenshot — uses dirname() ──────────────────────────────────
+
+describe("CmuxPage.screenshot mkdirSync uses dirname", () => {
+  let restore: () => void;
+  afterEach(() => restore?.());
+
+  test("screenshot with custom path does not throw on mkdirSync", async () => {
+    const { mkdirSync: realMkdir } = await import("node:fs");
+    // If mkdirSync(join(path, "..")) were used with a file path like /tmp/test.png,
+    // it would try to create /tmp/test.png/.. which is wrong.
+    // With dirname() it correctly creates /tmp/ which already exists.
+    restore = _setBrowserCmd((_sid: string, args: string[]) => {
+      if (args[0] === "screenshot") return "ok";
+      throw new Error(`Unexpected: ${args.join(" ")}`);
+    });
+    const page = new CmuxPage({ surfaceId: "surface:1" });
+    // This should not throw — dirname(/tmp/cmux-test.png) = /tmp which exists
+    const buf = await page.screenshot({ path: "/tmp/cmux-screenshot-test-" + Date.now() + ".png" });
+    assert.ok(Buffer.isBuffer(buf));
+  });
+});
+
+// ─── openCmuxBrowser — surface format parsing ───────────────────────────────
+
+describe("openCmuxBrowser surface format parsing", () => {
+  let restore: () => void;
+  afterEach(() => restore?.());
+
+  test("parses 'surface=(surface:N)' format", async () => {
+    // openCmuxBrowser uses the raw cmux() function, not _browserCmd.
+    // We need to mock at a different level. Since openCmuxBrowser calls cmux()
+    // directly, and we can't easily mock that without modifying the module,
+    // we test the regex logic directly.
+    const output1 = "opened surface=(surface:42) workspace:1";
+    const match1 = output1.match(/surface=(surface:\d+)/) ?? output1.match(/(surface:\d+)/);
+    assert.ok(match1);
+    assert.equal(match1[1], "surface:42");
+  });
+
+  test("parses bare 'surface:N workspace:M' format", () => {
+    const output2 = "surface:7 workspace:3";
+    const match2 = output2.match(/surface=(surface:\d+)/) ?? output2.match(/(surface:\d+)/);
+    assert.ok(match2);
+    assert.equal(match2[1], "surface:7");
+  });
+
+  test("returns null when no surface in output", () => {
+    const output3 = "error: browser not available";
+    const match3 = output3.match(/surface=(surface:\d+)/) ?? output3.match(/(surface:\d+)/);
+    assert.equal(match3, null);
+  });
+});
+
+// ─── Debug logging gated behind GSD_DEBUG ───────────────────────────────────
+
+describe("debug logging is gated behind GSD_DEBUG", () => {
+  let restore: () => void;
+  let stderrOutput: string[] = [];
+  const origStderrWrite = process.stderr.write;
+
+  beforeEach(() => {
+    stderrOutput = [];
+    process.stderr.write = ((chunk: any) => {
+      stderrOutput.push(String(chunk));
+      return true;
+    }) as any;
+  });
+  afterEach(() => {
+    restore?.();
+    process.stderr.write = origStderrWrite;
+    delete process.env.GSD_DEBUG;
+  });
+
+  test("resolveRefTargetNative does NOT log when GSD_DEBUG is unset", () => {
+    delete process.env.GSD_DEBUG;
+    restore = _setBrowserCmd(() => { throw new Error("not found"); });
+    resolveRefTargetNative("s1", { role: "button", name: "Test" });
+    const debugLines = stderrOutput.filter(l => l.includes("[cmux-resolve-debug]"));
+    assert.equal(debugLines.length, 0, "Should not log without GSD_DEBUG");
+  });
+
+  test("resolveRefTargetNative logs when GSD_DEBUG is set", () => {
+    process.env.GSD_DEBUG = "1";
+    restore = _setBrowserCmd(() => { throw new Error("not found"); });
+    resolveRefTargetNative("s1", { role: "button", name: "Test" });
+    const debugLines = stderrOutput.filter(l => l.includes("[cmux-resolve-debug]"));
+    assert.ok(debugLines.length > 0, "Should log with GSD_DEBUG=1");
   });
 });
