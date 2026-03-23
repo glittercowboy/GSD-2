@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, realpathSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, realpathSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -97,7 +97,7 @@ function initGit(dir: string): void {
 }
 
 {
-  // Case 6: .gsd at basePath takes precedence over ancestor .gsd
+  // Case 6: .gsd at git root takes precedence over subdirectory .gsd (#2255)
   const outer = tmp();
   try {
     initGit(outer);
@@ -106,8 +106,28 @@ function initGit(dir: string): void {
     mkdirSync(join(inner, ".gsd"), { recursive: true });
     _clearGsdRootCache();
     const result = gsdRoot(inner);
-    assertEq(result, join(inner, ".gsd"), "precedence: nearest .gsd wins over ancestor");
+    assertEq(result, join(outer, ".gsd"), "precedence: git-root .gsd wins over subdirectory .gsd (#2255)");
   } finally { cleanup(outer); }
+}
+
+{
+  // Case 7: subdirectory .gsd symlink does not shadow git-root .gsd (#2255)
+  // Reproduces the exact scenario: user runs from a sub-dir, ensureGsdSymlink
+  // created a .gsd symlink there pointing to an empty external state dir.
+  // probeGsdRoot must still find the real .gsd at the git root.
+  const outer = tmp();
+  const emptyExternal = tmp();
+  try {
+    initGit(outer);
+    mkdirSync(join(outer, ".gsd", "milestones"), { recursive: true });
+    const sub = join(outer, "apps", "my_app", "scripts");
+    mkdirSync(sub, { recursive: true });
+    // Simulate ensureGsdSymlink having created a symlink in the sub-dir
+    symlinkSync(emptyExternal, join(sub, ".gsd"), "junction");
+    _clearGsdRootCache();
+    const result = gsdRoot(sub);
+    assertEq(result, join(outer, ".gsd"), "subdirectory symlink: git-root .gsd wins over sub-dir symlink (#2255)");
+  } finally { cleanup(outer); cleanup(emptyExternal); }
 }
 
 report();
