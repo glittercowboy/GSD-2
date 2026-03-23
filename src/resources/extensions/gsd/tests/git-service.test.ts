@@ -1433,7 +1433,8 @@ async function main(): Promise<void> {
 
     // .gitignore blocks .gsd (as ensureGitignore would do for symlink projects)
     writeFileSync(join(repo, ".gitignore"), ".gsd\n");
-    run("git add .gitignore && git commit -m 'add gitignore'", repo);
+    run('git add .gitignore', repo);
+    run('git commit -m "add gitignore"', repo);
 
     // Simulate new milestone artifacts created during execution
     writeFileSync(join(externalGsd, "milestones", "M009", "M009-SUMMARY.md"), "# M009 Summary");
