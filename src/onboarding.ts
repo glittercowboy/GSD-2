@@ -13,7 +13,7 @@
 import { execFile } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import type { AuthStorage } from '@gsd/pi-coding-agent'
+import { ActivityManager, type ActivityHandle, type AuthStorage } from '@gsd/pi-coding-agent'
 import { renderLogo } from './logo.js'
 import { agentDir } from './app-paths.js'
 
@@ -35,6 +35,11 @@ type PicoModule = {
   bold: (s: string) => string
   red: (s: string) => string
   reset: (s: string) => string
+}
+
+interface CliActivityApi {
+  start(owner: string, message?: string): ActivityHandle
+  run<T>(owner: string, message: string | undefined, operation: () => Promise<T>): Promise<T>
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -137,6 +142,72 @@ function isCancelError(p: ClackModule, err: unknown): boolean {
   return p.isCancel(err)
 }
 
+function createCliActivityApi(pc: PicoModule): CliActivityApi {
+  const manager = new ActivityManager()
+  let spinnerVisible = false
+  let spinnerFrame = 0
+  let spinnerTickUnsubscribe: (() => void) | undefined
+
+  const renderLine = (message: string, progress?: number) => {
+    const frame = manager.getSpinnerFrame(spinnerFrame)
+    const progressText = progress !== undefined ? ` ${Math.round(progress)}%` : ''
+    process.stderr.write(`\r${pc.cyan(frame)} ${pc.dim(`${message}${progressText}`)}\x1b[K`)
+    spinnerVisible = true
+  }
+
+  const clearLine = () => {
+    if (!spinnerVisible) return
+    process.stderr.write('\r\x1b[K')
+    spinnerVisible = false
+  }
+
+  const printFinal = (prefix: string, color: (s: string) => string, message?: string) => {
+    clearLine()
+    if (!message) return
+    process.stderr.write(`${color(prefix)} ${pc.dim(message)}\n`)
+  }
+
+  manager.subscribe((event) => {
+    const visible = event.visibleByLane.cli
+    if (visible) {
+      const message = visible.message ?? 'Working...'
+      if (!spinnerTickUnsubscribe) {
+        spinnerTickUnsubscribe = manager.subscribeClock(80, () => {
+          if (!manager.getVisible('cli')) return
+          spinnerFrame += 1
+          const active = manager.getVisible('cli')
+          if (!active) return
+          renderLine(active.message ?? 'Working...', active.progress)
+        })
+      }
+      renderLine(message, visible.progress)
+      return
+    }
+
+    if (spinnerTickUnsubscribe) {
+      spinnerTickUnsubscribe()
+      spinnerTickUnsubscribe = undefined
+    }
+    const stopped = event.activity?.lane === 'cli' ? event.activity : undefined
+    if (stopped?.state === 'failed') {
+      printFinal('✗', pc.red, stopped.message)
+    } else if (stopped?.state === 'succeeded') {
+      printFinal('✓', pc.green, stopped.message)
+    } else {
+      clearLine()
+    }
+  })
+
+  return {
+    start(owner: string, message?: string): ActivityHandle {
+      return manager.start({ owner, lane: 'cli', message })
+    },
+    run<T>(owner: string, message: string | undefined, operation: () => Promise<T>): Promise<T> {
+      return manager.run(operation, { owner, lane: 'cli', message })
+    },
+  }
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 /**
@@ -186,11 +257,12 @@ export async function runOnboarding(authStorage: AuthStorage): Promise<void> {
   // ── Intro ─────────────────────────────────────────────────────────────────
   process.stderr.write(renderLogo(pc.cyan))
   p.intro(pc.bold('Welcome to GSD — let\'s get you set up'))
+  const activity = createCliActivityApi(pc)
 
   // ── LLM Provider Selection ────────────────────────────────────────────────
   let llmConfigured = false
   try {
-    llmConfigured = await runLlmStep(p, pc, authStorage)
+    llmConfigured = await runLlmStep(p, pc, authStorage, activity)
   } catch (err) {
     // User cancelled (Ctrl+C in clack throws) or unexpected error
     if (isCancelError(p, err)) {
@@ -216,7 +288,7 @@ export async function runOnboarding(authStorage: AuthStorage): Promise<void> {
   // ── Remote Questions ─────────────────────────────────────────────────────
   let remoteConfigured: string | null = null
   try {
-    remoteConfigured = await runRemoteQuestionsStep(p, pc, authStorage)
+    remoteConfigured = await runRemoteQuestionsStep(p, pc, authStorage, activity)
   } catch (err) {
     if (isCancelError(p, err)) {
       p.cancel('Setup cancelled.')
@@ -276,7 +348,12 @@ export async function runOnboarding(authStorage: AuthStorage): Promise<void> {
 
 // ─── LLM Authentication Step ──────────────────────────────────────────────────
 
-async function runLlmStep(p: ClackModule, pc: PicoModule, authStorage: AuthStorage): Promise<boolean> {
+async function runLlmStep(
+  p: ClackModule,
+  pc: PicoModule,
+  authStorage: AuthStorage,
+  activity: CliActivityApi,
+): Promise<boolean> {
   // Build the OAuth provider list dynamically from what's registered
   const oauthProviders = authStorage.getOAuthProviders()
   const oauthMap = new Map(oauthProviders.map(op => [op.id, op]))
@@ -319,7 +396,7 @@ async function runLlmStep(p: ClackModule, pc: PicoModule, authStorage: AuthStora
       ],
     })
     if (p.isCancel(provider)) return false
-    return await runOAuthFlow(p, pc, authStorage, provider as string, oauthMap)
+    return await runOAuthFlow(p, pc, authStorage, provider as string, oauthMap, activity)
   }
 
   if (method === 'api-key') {
@@ -352,18 +429,18 @@ async function runOAuthFlow(
   authStorage: AuthStorage,
   providerId: string,
   oauthMap: Map<string, { id: string; name?: string; usesCallbackServer?: boolean }>,
+  activity: CliActivityApi,
 ): Promise<boolean> {
   const providerInfo = oauthMap.get(providerId)
   const providerName = providerInfo?.name ?? providerId
   const usesCallbackServer = providerInfo?.usesCallbackServer ?? false
 
-  const s = p.spinner()
-  s.start(`Authenticating with ${providerName}...`)
+  const authActivity = activity.start(`onboarding.oauth.${providerId}`, `Authenticating with ${providerName}...`)
 
   try {
     await authStorage.login(providerId as any, {
       onAuth: (info: { url: string; instructions?: string }) => {
-        s.stop(`Opening browser for ${providerName}`)
+        authActivity.setMessage(`Opening browser for ${providerName}`)
         openBrowser(info.url)
         p.log.info(`${pc.dim('URL:')} ${pc.cyan(info.url)}`)
         if (info.instructions) {
@@ -379,6 +456,7 @@ async function runOAuthFlow(
         return result as string
       },
       onProgress: (message: string) => {
+        authActivity.setMessage(message)
         p.log.step(pc.dim(message))
       },
       onManualCodeInput: usesCallbackServer
@@ -393,10 +471,11 @@ async function runOAuthFlow(
         : undefined,
     } as any)
 
+    authActivity.succeed(`Authenticated with ${providerName}`)
     p.log.success(`Authenticated with ${pc.green(providerName)}`)
     return true
   } catch (err) {
-    s.stop(`${providerName} authentication failed`)
+    authActivity.fail(`${providerName} authentication failed`)
     const errorMsg = err instanceof Error ? err.message : String(err)
     p.log.warn(`OAuth error: ${errorMsg}`)
 
@@ -411,7 +490,7 @@ async function runOAuthFlow(
 
     if (p.isCancel(retry) || retry === 'skip') return false
     // Recursive retry
-    return runOAuthFlow(p, pc, authStorage, providerId, oauthMap)
+    return runOAuthFlow(p, pc, authStorage, providerId, oauthMap, activity)
   }
 }
 
@@ -668,6 +747,7 @@ async function runRemoteQuestionsStep(
   p: ClackModule,
   pc: PicoModule,
   authStorage: AuthStorage,
+  activity: CliActivityApi,
 ): Promise<string | null> {
   // Check existing config
   const hasDiscord = authStorage.has('discord_bot') && !!(authStorage.get('discord_bot') as any)?.key
@@ -708,7 +788,7 @@ async function runRemoteQuestionsStep(
     authStorage.set('discord_bot', { type: 'api_key', key: trimmed })
     process.env.DISCORD_BOT_TOKEN = trimmed
 
-    const channelName = await runDiscordChannelStep(p, pc, trimmed)
+    const channelName = await runDiscordChannelStep(p, pc, trimmed, activity)
     return channelName ? `Discord #${channelName}` : 'Discord'
   }
 
@@ -725,8 +805,7 @@ async function runRemoteQuestionsStep(
     }
 
     // Validate
-    const s = p.spinner()
-    s.start('Validating Slack token...')
+    const slackValidation = activity.start('onboarding.remote.slack.validate', 'Validating Slack token...')
     try {
       const res = await fetch('https://slack.com/api/auth.test', {
         headers: { Authorization: `Bearer ${trimmed}` },
@@ -734,12 +813,12 @@ async function runRemoteQuestionsStep(
       })
       const data = await res.json() as any
       if (!data?.ok) {
-        s.stop('Slack token validation failed')
+        slackValidation.fail('Slack token validation failed')
         return null
       }
-      s.stop(`Slack authenticated as ${pc.green(data.user ?? 'bot')}`)
+      slackValidation.succeed(`Slack authenticated as ${data.user ?? 'bot'}`)
     } catch {
-      s.stop('Could not reach Slack API')
+      slackValidation.fail('Could not reach Slack API')
       return null
     }
 
@@ -773,20 +852,19 @@ async function runRemoteQuestionsStep(
     }
 
     // Validate
-    const s = p.spinner()
-    s.start('Validating Telegram bot token...')
+    const telegramValidation = activity.start('onboarding.remote.telegram.validate', 'Validating Telegram bot token...')
     try {
       const res = await fetch(`https://api.telegram.org/bot${trimmed}/getMe`, {
         signal: AbortSignal.timeout(15_000),
       })
       const data = await res.json() as any
       if (!data?.ok || !data?.result?.id) {
-        s.stop('Telegram token validation failed')
+        telegramValidation.fail('Telegram token validation failed')
         return null
       }
-      s.stop(`Telegram bot: ${pc.green(data.result.first_name ?? data.result.username ?? 'bot')}`)
+      telegramValidation.succeed(`Telegram bot: ${data.result.first_name ?? data.result.username ?? 'bot'}`)
     } catch {
-      s.stop('Could not reach Telegram API')
+      telegramValidation.fail('Could not reach Telegram API')
       return null
     }
 
@@ -803,8 +881,7 @@ async function runRemoteQuestionsStep(
     const trimmedChatId = (chatId as string).trim()
 
     // Test send
-    const ts = p.spinner()
-    ts.start('Testing message delivery...')
+    const telegramTest = activity.start('onboarding.remote.telegram.test', 'Testing message delivery...')
     try {
       const res = await fetch(`https://api.telegram.org/bot${trimmed}/sendMessage`, {
         method: 'POST',
@@ -814,12 +891,12 @@ async function runRemoteQuestionsStep(
       })
       const data = await res.json() as any
       if (!data?.ok) {
-        ts.stop(`Could not send to chat: ${data?.description ?? 'unknown error'}`)
+        telegramTest.fail(`Could not send to chat: ${data?.description ?? 'unknown error'}`)
         return null
       }
-      ts.stop('Test message sent')
+      telegramTest.succeed('Test message sent')
     } catch {
-      ts.stop('Could not reach Telegram API')
+      telegramTest.fail('Could not reach Telegram API')
       return null
     }
 
@@ -832,25 +909,29 @@ async function runRemoteQuestionsStep(
   return null
 }
 
-async function runDiscordChannelStep(p: ClackModule, pc: PicoModule, token: string): Promise<string | null> {
+async function runDiscordChannelStep(
+  p: ClackModule,
+  pc: PicoModule,
+  token: string,
+  activity: CliActivityApi,
+): Promise<string | null> {
   const headers = { Authorization: `Bot ${token}` }
 
   // Validate token
-  const s = p.spinner()
-  s.start('Validating Discord bot token...')
+  const discordValidation = activity.start('onboarding.remote.discord.validate', 'Validating Discord bot token...')
   let auth: any
   try {
     const res = await fetch('https://discord.com/api/v10/users/@me', { headers, signal: AbortSignal.timeout(15_000) })
     auth = await res.json()
   } catch {
-    s.stop('Could not reach Discord API')
+    discordValidation.fail('Could not reach Discord API')
     return null
   }
   if (!auth?.id) {
-    s.stop('Discord token validation failed')
+    discordValidation.fail('Discord token validation failed')
     return null
   }
-  s.stop(`Bot authenticated as ${pc.green(auth.username ?? 'unknown')}`)
+  discordValidation.succeed(`Bot authenticated as ${auth.username ?? 'unknown'}`)
 
   // Fetch guilds
   let guilds: Array<{ id: string; name: string }>
@@ -934,4 +1015,3 @@ async function runDiscordChannelStep(p: ClackModule, pc: PicoModule, token: stri
   p.log.success(`Discord channel: ${pc.green(channelName ? `#${channelName}` : channelId)}`)
   return channelName ?? null
 }
-

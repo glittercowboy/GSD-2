@@ -52,6 +52,6 @@ Pi's TUI is a custom terminal rendering system. Understanding its architecture p
 | Package | What it provides |
 |---------|-----------------|
 | `@mariozechner/pi-tui` | Core components (`Text`, `Box`, `Container`, `SelectList`, etc.), keyboard handling, text utilities |
-| `@mariozechner/pi-coding-agent` | Higher-level components (`DynamicBorder`, `BorderedLoader`, `CustomEditor`), theming helpers, code highlighting |
+| `@mariozechner/pi-coding-agent` | Higher-level components (`DynamicBorder`, `CustomEditor`), activity APIs (`ctx.ui.activity.*`), theming helpers, code highlighting |
 
 ---

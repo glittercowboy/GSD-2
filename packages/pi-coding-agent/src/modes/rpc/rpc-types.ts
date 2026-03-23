@@ -241,7 +241,7 @@ export type RpcExtensionUIRequest =
 			id: string;
 			method: "notify";
 			message: string;
-			notifyType?: "info" | "warning" | "error";
+			notifyType?: "info" | "warning" | "error" | "success";
 	  }
 	| {
 			type: "extension_ui_request";
@@ -257,6 +257,39 @@ export type RpcExtensionUIRequest =
 			widgetKey: string;
 			widgetLines: string[] | undefined;
 			widgetPlacement?: "aboveEditor" | "belowEditor";
+	  }
+	| {
+			type: "extension_ui_request";
+			id: string;
+			method: "activity_start";
+			activityId: string;
+			owner: string;
+			lane: "status" | "modal" | "inline" | "countdown" | "decorative" | "cli";
+			key?: string;
+			message?: string;
+			progress?: number;
+	  }
+	| {
+			type: "extension_ui_request";
+			id: string;
+			method: "activity_update";
+			activityId: string;
+			message?: string;
+			progress?: number;
+	  }
+	| {
+			type: "extension_ui_request";
+			id: string;
+			method: "activity_stop";
+			activityId: string;
+	  }
+	| {
+			type: "extension_ui_request";
+			id: string;
+			method: "activity_result";
+			activityId: string;
+			result: "succeeded" | "failed";
+			message?: string;
 	  }
 	| { type: "extension_ui_request"; id: string; method: "setTitle"; title: string }
 	| { type: "extension_ui_request"; id: string; method: "set_editor_text"; text: string };

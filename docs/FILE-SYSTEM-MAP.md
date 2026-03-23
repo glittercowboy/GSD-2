@@ -441,7 +441,6 @@
 | components/settings-selector.ts | TUI Components, Config | Settings/preferences UI |
 | components/show-images-selector.ts | TUI Components, Config | Image display toggle |
 | components/bordered-loader.ts | TUI Components | Loading spinner with border |
-| components/countdown-timer.ts | TUI Components | Countdown timer display |
 | components/dynamic-border.ts | TUI Components | Dynamic border drawing |
 | components/keybinding-hints.ts | TUI Components | Keybinding help display |
 | components/footer.ts | TUI Components | Footer information display |

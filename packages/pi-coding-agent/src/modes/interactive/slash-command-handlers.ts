@@ -24,10 +24,11 @@ import {
 	Spacer,
 	Text,
 } from "@gsd/pi-tui";
-import { spawn, spawnSync } from "child_process";
+import { spawn, spawnSync, type ChildProcess } from "child_process";
 import {
 	getShareViewerUrl,
 } from "../../config.js";
+import type { ActivityClock, ActivityHandle, ActivityStartOptions } from "../../core/activity-manager.js";
 import type { AgentSession } from "../../core/agent-session.js";
 import type { AppAction, KeybindingsManager } from "../../core/keybindings.js";
 import type { SessionManager } from "../../core/session-manager.js";
@@ -35,7 +36,6 @@ import type { SettingsManager } from "../../core/settings-manager.js";
 import { copyToClipboard } from "../../utils/clipboard.js";
 import { getChangelogPath, parseChangelog } from "../../utils/changelog.js";
 import { ArminComponent } from "./components/armin.js";
-import { BorderedLoader } from "./components/bordered-loader.js";
 import { DynamicBorder } from "./components/dynamic-border.js";
 import { appKey, editorKey, formatKeyForDisplay } from "./components/keybinding-hints.js";
 import { SelectSubmenu, THINKING_DESCRIPTIONS } from "./components/settings-selector.js";
@@ -87,6 +87,9 @@ export interface SlashCommandContext {
 	requestRender(): void;
 
 	updateTerminalTitle(): void;
+	startActivity(options: ActivityStartOptions): ActivityHandle;
+	runActivity<T>(operation: () => Promise<T>, options: ActivityStartOptions): Promise<T>;
+	getActivityClock(intervalMs: number): ActivityClock;
 
 	// Methods that stay on InteractiveMode (called from both dispatch and keybindings/events)
 	showSettingsSelector(): void;
@@ -97,6 +100,7 @@ export interface SlashCommandContext {
 	showProviderManager(): void;
 	showOAuthSelector(mode: "login" | "logout"): Promise<void>;
 	showSessionSelector(): void;
+	showDaxnuts(): void;
 	handleClearCommand(): Promise<void>;
 	handleReloadCommand(): Promise<void>;
 	handleDebugCommand(): void;
@@ -212,6 +216,10 @@ export async function dispatchSlashCommand(
 		handleArminSaysHi(ctx);
 		return true;
 	}
+	if (text === "/daxnuts") {
+		ctx.showDaxnuts();
+		return true;
+	}
 	if (text === "/resume") {
 		ctx.showSessionSelector();
 		return true;
@@ -262,51 +270,27 @@ async function handleShareCommand(ctx: SlashCommandContext): Promise<void> {
 		return;
 	}
 
-	// Show cancellable loader, replacing the editor
-	const loader = new BorderedLoader(ctx.ui, theme, "Creating gist...");
-	ctx.editorContainer.clear();
-	ctx.editorContainer.addChild(loader);
-	ctx.ui.setFocus(loader);
-	ctx.requestRender();
-
-	const restoreEditor = () => {
-		loader.dispose();
-		ctx.editorContainer.clear();
-		ctx.editorContainer.addChild(ctx.editor);
-		ctx.ui.setFocus(ctx.editor);
-		try {
-			fs.unlinkSync(tmpFile);
-		} catch {
-			// Ignore cleanup errors
-		}
-	};
-
-	// Create a secret gist asynchronously
-	let proc: ReturnType<typeof spawn> | null = null;
-
-	loader.onAbort = () => {
-		proc?.kill();
-		restoreEditor();
-		ctx.showStatus("Share cancelled");
-	};
-
 	try {
-		const result = await new Promise<{ stdout: string; stderr: string; code: number | null }>((resolve) => {
-			proc = spawn("gh", ["gist", "create", "--public=false", tmpFile]);
-			let stdout = "";
-			let stderr = "";
-			proc.stdout?.on("data", (data) => {
-				stdout += data.toString();
-			});
-			proc.stderr?.on("data", (data) => {
-				stderr += data.toString();
-			});
-			proc.on("close", (code) => resolve({ stdout, stderr, code }));
-		});
-
-		if (loader.signal.aborted) return;
-
-		restoreEditor();
+		const result = await ctx.runActivity(
+			() =>
+				new Promise<{ stdout: string; stderr: string; code: number | null }>((resolve) => {
+					const proc: ChildProcess = spawn("gh", ["gist", "create", "--public=false", tmpFile]);
+					let stdout = "";
+					let stderr = "";
+					proc.stdout?.on("data", (data) => {
+						stdout += data.toString();
+					});
+					proc.stderr?.on("data", (data) => {
+						stderr += data.toString();
+					});
+					proc.on("close", (code) => resolve({ stdout, stderr, code }));
+				}),
+			{
+				owner: "interactive.share",
+				lane: "modal",
+				message: "Creating gist...",
+			},
+		);
 
 		if (result.code !== 0) {
 			const errorMsg = result.stderr?.trim() || "Unknown error";
@@ -327,9 +311,12 @@ async function handleShareCommand(ctx: SlashCommandContext): Promise<void> {
 		const previewUrl = getShareViewerUrl(gistId);
 		ctx.showStatus(`Share URL: ${previewUrl}\nGist: ${gistUrl}`);
 	} catch (error: unknown) {
-		if (!loader.signal.aborted) {
-			restoreEditor();
-			ctx.showError(`Failed to create gist: ${error instanceof Error ? error.message : "Unknown error"}`);
+		ctx.showError(`Failed to create gist: ${error instanceof Error ? error.message : "Unknown error"}`);
+	} finally {
+		try {
+			fs.unlinkSync(tmpFile);
+		} catch {
+			// Ignore cleanup errors
 		}
 	}
 }
@@ -647,7 +634,13 @@ function handleEditModeCommand(arg: string | undefined, ctx: SlashCommandContext
 }
 
 function handleArminSaysHi(ctx: SlashCommandContext): void {
+	const activity = ctx.startActivity({
+		owner: "interactive.decorative",
+		lane: "decorative",
+		key: "arminsayshi",
+		message: "Rendering armin animation",
+	});
 	ctx.chatContainer.addChild(new Spacer(1));
-	ctx.chatContainer.addChild(new ArminComponent(ctx.ui));
+	ctx.chatContainer.addChild(new ArminComponent(ctx.ui, ctx.getActivityClock, activity));
 	ctx.requestRender();
 }

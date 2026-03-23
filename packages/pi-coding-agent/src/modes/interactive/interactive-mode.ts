@@ -24,7 +24,6 @@ import {
 	type Component,
 	Container,
 	fuzzyFilter,
-	Loader,
 	Markdown,
 	matchesKey,
 	ProcessTerminal,
@@ -43,6 +42,7 @@ import {
 	getUpdateInstruction,
 	VERSION,
 } from "../../config.js";
+import { ActivityManager, type ActivityHandle, type ActivityStartOptions } from "../../core/activity-manager.js";
 import { type AgentSession, type AgentSessionEvent, type PromptOptions, parseSkillBlock } from "../../core/agent-session.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
 import type {
@@ -64,8 +64,8 @@ import { getChangelogPath, getNewEntries, parseChangelog } from "../../utils/cha
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import { AssistantMessageComponent } from "./components/assistant-message.js";
+import { ActivityModalView } from "./components/activity-modal-view.js";
 import { BashExecutionComponent } from "./components/bash-execution.js";
-import { BorderedLoader } from "./components/bordered-loader.js";
 import { BranchSummaryMessageComponent } from "./components/branch-summary-message.js";
 import { CompactionSummaryMessageComponent } from "./components/compaction-summary-message.js";
 import { CustomEditor } from "./components/custom-editor.js";
@@ -114,7 +114,6 @@ import {
 	type ThemeColor,
 	theme,
 } from "./theme/theme.js";
-import { StatusActivityManager, type StatusActivityHandle } from "./status-activity-manager.js";
 
 /** Interface for components that can be expanded/collapsed */
 interface Expandable {
@@ -172,9 +171,15 @@ export class InteractiveMode {
 	private version: string;
 	private isInitialized = false;
 	private onInputCallback?: (text: string) => void;
-	private loadingAnimation: Loader | undefined = undefined;
-	private statusActivity: StatusActivityManager;
-	private agentStatusActivity: StatusActivityHandle | undefined = undefined;
+	private statusActivitySpinnerFrame = 0;
+	private modalActivitySpinnerFrame = 0;
+	private statusActivityTickUnsubscribe: (() => void) | undefined = undefined;
+	private modalActivityTickUnsubscribe: (() => void) | undefined = undefined;
+	private statusActivitySpacer: Spacer | undefined = undefined;
+	private statusActivityText: Text | undefined = undefined;
+	private modalActivityView: ActivityModalView | undefined = undefined;
+	private activityManager: ActivityManager;
+	private agentStatusActivity: ActivityHandle | undefined = undefined;
 
 	private lastSigintTime = 0;
 	private lastEscapeTime = 0;
@@ -213,11 +218,11 @@ export class InteractiveMode {
 	private pendingBashComponents: BashExecutionComponent[] = [];
 
 	// Auto-compaction state
-	private autoCompactionLoader: Loader | undefined = undefined;
+	private autoCompactionLoader: ActivityHandle | undefined = undefined;
 	private autoCompactionEscapeHandler?: () => void;
 
 	// Auto-retry state
-	private retryLoader: Loader | undefined = undefined;
+	private retryLoader: ActivityHandle | undefined = undefined;
 	private retryEscapeHandler?: () => void;
 
 	// Messages queued while compaction is running
@@ -231,6 +236,8 @@ export class InteractiveMode {
 	private extensionInput: ExtensionInputComponent | undefined = undefined;
 	private extensionEditor: ExtensionEditorComponent | undefined = undefined;
 	private extensionTerminalInputUnsubscribers = new Set<() => void>();
+	private extensionDialogCountdownActivity: ActivityHandle | undefined = undefined;
+	private extensionDialogCountdownUnsubscribe: (() => void) | undefined = undefined;
 
 	// Extension widgets (components rendered above/below the editor)
 	private extensionWidgetsAbove = new Map<string, Component & { dispose?(): void }>();
@@ -276,32 +283,11 @@ export class InteractiveMode {
 		this.widgetContainerAbove = new Container();
 		this.widgetContainerBelow = new Container();
 		this.keybindings = KeybindingsManager.create();
-		this.statusActivity = new StatusActivityManager(
-			{
-				start: (message) => {
-					this.loadingAnimation = new Loader(
-						this.ui,
-						(spinner) => theme.fg("accent", spinner),
-						(text) => theme.fg("muted", text),
-						message,
-					);
-					this.statusContainer.clear();
-					this.statusContainer.addChild(this.loadingAnimation);
-					this.ui.requestRender();
-				},
-				update: (message) => {
-					this.loadingAnimation?.setMessage(message);
-					this.ui.requestRender();
-				},
-				stop: () => {
-					this.loadingAnimation?.stop();
-					this.loadingAnimation = undefined;
-					this.statusContainer.clear();
-					this.ui.requestRender();
-				},
-			},
-			() => this.getDefaultWorkingMessage(),
-		);
+		this.activityManager = new ActivityManager();
+		this.activityManager.subscribe(() => {
+			this.syncStatusActivityLane();
+			this.syncModalActivityLane();
+		});
 		const editorPaddingX = this.settingsManager.getEditorPaddingX();
 		const autocompleteMaxVisible = this.settingsManager.getAutocompleteMaxVisible();
 		this.defaultEditor = new CustomEditor(this.ui, getEditorTheme(), this.keybindings, {
@@ -1129,7 +1115,7 @@ export class InteractiveMode {
 				commandContextActions: {
 					waitForIdle: () => this.session.agent.waitForIdle(),
 					newSession: async (options) => {
-						this.stopStatusActivity();
+						this.stopActivity();
 
 						// Delegate to AgentSession (handles setup + agent state sync)
 						const success = await this.session.newSession(options);
@@ -1391,7 +1377,10 @@ export class InteractiveMode {
 		this.setCustomEditorComponent(undefined);
 		this.defaultEditor.onExtensionShortcut = undefined;
 		this.updateTerminalTitle();
-		this.statusActivity.setWorkingMessage(undefined);
+		this.stopExtensionDialogCountdown();
+		this.activityManager.clearLane("status");
+		this.activityManager.clearByOwner("interactive.extension_dialog");
+		this.activityManager.clearByOwner("interactive.extension_command");
 	}
 
 	// Maximum total widget lines to prevent viewport overflow
@@ -1519,6 +1508,56 @@ export class InteractiveMode {
 		this.extensionTerminalInputUnsubscribers.clear();
 	}
 
+	private stopExtensionDialogCountdown(): void {
+		if (this.extensionDialogCountdownUnsubscribe) {
+			this.extensionDialogCountdownUnsubscribe();
+			this.extensionDialogCountdownUnsubscribe = undefined;
+		}
+		if (this.extensionDialogCountdownActivity) {
+			this.extensionDialogCountdownActivity.stop();
+			this.extensionDialogCountdownActivity = undefined;
+		}
+	}
+
+	private startExtensionDialogCountdown(
+		timeoutMs: number | undefined,
+		key: string,
+		onTick: (seconds: number) => void,
+		onExpire: () => void,
+	): void {
+		this.stopExtensionDialogCountdown();
+		if (!timeoutMs || timeoutMs <= 0) return;
+
+		let remainingSeconds = Math.max(1, Math.ceil(timeoutMs / 1000));
+		onTick(remainingSeconds);
+		this.extensionDialogCountdownActivity = this.startActivity({
+			owner: "interactive.extension_dialog",
+			lane: "countdown",
+			key,
+			message: `${remainingSeconds}s`,
+			progress: 0,
+		});
+
+		const totalSeconds = remainingSeconds;
+		this.extensionDialogCountdownUnsubscribe = this.activityManager.subscribeClock(1000, () => {
+			remainingSeconds--;
+			const next = Math.max(0, remainingSeconds);
+			onTick(next);
+
+			if (this.extensionDialogCountdownActivity?.isActive()) {
+				this.extensionDialogCountdownActivity.setMessage(`${next}s`);
+				const progress = Math.round(((totalSeconds - next) / totalSeconds) * 100);
+				this.extensionDialogCountdownActivity.setProgress(progress);
+			}
+
+			this.ui.requestRender();
+			if (remainingSeconds <= 0) {
+				this.stopExtensionDialogCountdown();
+				onExpire();
+			}
+		});
+	}
+
 	/**
 	 * Create the ExtensionUIContext for extensions.
 	 */
@@ -1539,14 +1578,22 @@ export class InteractiveMode {
 		opts?: ExtensionUIDialogOptions,
 	): Promise<string | undefined> {
 		return new Promise((resolve) => {
+			let settled = false;
 			if (opts?.signal?.aborted) {
 				resolve(undefined);
 				return;
 			}
 
-			const onAbort = () => {
+			const settle = (value: string | undefined) => {
+				if (settled) return;
+				settled = true;
+				opts?.signal?.removeEventListener("abort", onAbort);
 				this.hideExtensionSelector();
-				resolve(undefined);
+				resolve(value);
+			};
+
+			const onAbort = () => {
+				settle(undefined);
 			};
 			opts?.signal?.addEventListener("abort", onAbort, { once: true });
 
@@ -1554,16 +1601,18 @@ export class InteractiveMode {
 				title,
 				options,
 				(option) => {
-					opts?.signal?.removeEventListener("abort", onAbort);
-					this.hideExtensionSelector();
-					resolve(option);
+					settle(option);
 				},
 				() => {
-					opts?.signal?.removeEventListener("abort", onAbort);
-					this.hideExtensionSelector();
-					resolve(undefined);
+					settle(undefined);
 				},
-				{ tui: this.ui, timeout: opts?.timeout },
+				{ countdownSeconds: opts?.timeout ? Math.ceil(opts.timeout / 1000) : undefined },
+			);
+			this.startExtensionDialogCountdown(
+				opts?.timeout,
+				"selector",
+				(seconds) => this.extensionSelector?.setCountdownSeconds(seconds),
+				() => settle(undefined),
 			);
 
 			this.editorContainer.clear();
@@ -1578,6 +1627,7 @@ export class InteractiveMode {
 	 */
 	private hideExtensionSelector(): void {
 		this.extensionSelector?.dispose();
+		this.stopExtensionDialogCountdown();
 		this.editorContainer.clear();
 		this.editorContainer.addChild(this.editor);
 		this.extensionSelector = undefined;
@@ -1606,14 +1656,22 @@ export class InteractiveMode {
 		opts?: ExtensionUIDialogOptions,
 	): Promise<string | undefined> {
 		return new Promise((resolve) => {
+			let settled = false;
 			if (opts?.signal?.aborted) {
 				resolve(undefined);
 				return;
 			}
 
-			const onAbort = () => {
+			const settle = (value: string | undefined) => {
+				if (settled) return;
+				settled = true;
+				opts?.signal?.removeEventListener("abort", onAbort);
 				this.hideExtensionInput();
-				resolve(undefined);
+				resolve(value);
+			};
+
+			const onAbort = () => {
+				settle(undefined);
 			};
 			opts?.signal?.addEventListener("abort", onAbort, { once: true });
 
@@ -1621,16 +1679,18 @@ export class InteractiveMode {
 				title,
 				placeholder,
 				(value) => {
-					opts?.signal?.removeEventListener("abort", onAbort);
-					this.hideExtensionInput();
-					resolve(value);
+					settle(value);
 				},
 				() => {
-					opts?.signal?.removeEventListener("abort", onAbort);
-					this.hideExtensionInput();
-					resolve(undefined);
+					settle(undefined);
 				},
-				{ tui: this.ui, timeout: opts?.timeout },
+				{ countdownSeconds: opts?.timeout ? Math.ceil(opts.timeout / 1000) : undefined },
+			);
+			this.startExtensionDialogCountdown(
+				opts?.timeout,
+				"input",
+				(seconds) => this.extensionInput?.setCountdownSeconds(seconds),
+				() => settle(undefined),
 			);
 
 			this.editorContainer.clear();
@@ -1645,6 +1705,7 @@ export class InteractiveMode {
 	 */
 	private hideExtensionInput(): void {
 		this.extensionInput?.dispose();
+		this.stopExtensionDialogCountdown();
 		this.editorContainer.clear();
 		this.editorContainer.addChild(this.editor);
 		this.extensionInput = undefined;
@@ -1878,14 +1939,14 @@ export class InteractiveMode {
 	// =========================================================================
 
 	private setupKeyHandlers(): void {
-		// Set up handlers on defaultEditor - they use this.editor for text access
-		// so they work correctly regardless of which editor is active
-		this.defaultEditor.onEscape = () => {
-			if (this.loadingAnimation) {
-				this.restoreQueuedMessagesToEditor({ abort: true });
-			} else if (this.session.isBashRunning) {
-				this.session.abortBash();
-			} else if (this.isBashMode) {
+			// Set up handlers on defaultEditor - they use this.editor for text access
+			// so they work correctly regardless of which editor is active
+			this.defaultEditor.onEscape = () => {
+				if (this.activityManager.getVisible("status")) {
+					this.restoreQueuedMessagesToEditor({ abort: true });
+				} else if (this.session.isBashRunning) {
+					this.session.abortBash();
+				} else if (this.isBashMode) {
 				this.editor.setText("");
 				this.isBashMode = false;
 				this.updateEditorBorderColor();
@@ -1988,6 +2049,9 @@ export class InteractiveMode {
 			getMarkdownThemeWithSettings: () => this.getMarkdownThemeWithSettings(),
 			requestRender: () => this.ui.requestRender(),
 			updateTerminalTitle: () => this.updateTerminalTitle(),
+			startActivity: (options) => this.startActivity(options),
+			runActivity: (operation, options) => this.runActivity(operation, options),
+			getActivityClock: (intervalMs) => this.activityManager.getClock(intervalMs),
 			showSettingsSelector: () => this.showSettingsSelector(),
 			showModelsSelector: () => this.showModelsSelector(),
 			handleModelCommand: (searchTerm) => this.handleModelCommand(searchTerm),
@@ -1996,6 +2060,7 @@ export class InteractiveMode {
 			showProviderManager: () => this.showProviderManager(),
 			showOAuthSelector: (mode) => this.showOAuthSelector(mode),
 			showSessionSelector: () => this.showSessionSelector(),
+			showDaxnuts: () => this.handleDaxnuts(),
 			handleClearCommand: () => this.handleClearCommand(),
 			handleReloadCommand: () => this.handleReloadCommand(),
 			handleDebugCommand: () => this.handleDebugCommand(),
@@ -2057,7 +2122,12 @@ export class InteractiveMode {
 	private addMessageToChat(message: AgentMessage, options?: { populateHistory?: boolean }): void {
 		switch (message.role) {
 			case "bashExecution": {
-				const component = new BashExecutionComponent(message.command, this.ui, message.excludeFromContext);
+					const component = new BashExecutionComponent(
+						message.command,
+						this.ui,
+						this.activityManager.getClock(80),
+						message.excludeFromContext,
+					);
 				if (message.output) {
 					component.appendOutput(message.output);
 				}
@@ -2625,27 +2695,130 @@ export class InteractiveMode {
 		return `Working... (${appKey(this.keybindings, "interrupt")} to interrupt)`;
 	}
 
-	private startStatusActivity(options?: { message?: string }): StatusActivityHandle {
-		return this.statusActivity.start(options);
+	private syncStatusActivityLane(): void {
+		const active = this.activityManager.getVisible("status");
+		if (!active) {
+			this.stopStatusActivityClock();
+			this.statusActivitySpacer = undefined;
+			this.statusActivityText = undefined;
+			this.statusContainer.clear();
+			this.ui.requestRender();
+			return;
+		}
+
+		this.ensureStatusActivityClock();
+		const message = active.message ?? this.getDefaultWorkingMessage();
+		const line = this.renderActivityLine(this.statusActivitySpinnerFrame, message);
+		if (!this.statusActivityText || !this.statusActivitySpacer) {
+			this.statusActivitySpacer = new Spacer(1);
+			this.statusActivityText = new Text(line, 1, 0);
+			this.statusContainer.clear();
+			this.statusContainer.addChild(this.statusActivitySpacer);
+			this.statusContainer.addChild(this.statusActivityText);
+			this.ui.requestRender();
+			return;
+		}
+		this.statusActivityText.setText(line);
+		this.ui.requestRender();
 	}
 
-	private async runStatusActivity<T>(operation: () => Promise<T>, options?: { message?: string }): Promise<T> {
-		return this.statusActivity.run(operation, options);
+	private syncModalActivityLane(): void {
+		const active = this.activityManager.getVisible("modal");
+		if (!active) {
+			this.stopModalActivityClock();
+			if (this.modalActivityView) {
+				this.modalActivityView.dispose();
+				this.modalActivityView = undefined;
+				this.editorContainer.clear();
+				this.editorContainer.addChild(this.editor as Component);
+				this.ui.setFocus(this.editor as Component);
+				this.ui.requestRender();
+			}
+			return;
+		}
+
+		this.ensureModalActivityClock();
+		const message = active.message ?? this.getDefaultWorkingMessage();
+		const line = this.renderActivityLine(this.modalActivitySpinnerFrame, message);
+		if (!this.modalActivityView) {
+			this.modalActivityView = new ActivityModalView(line);
+			this.editorContainer.clear();
+			this.editorContainer.addChild(this.modalActivityView);
+			this.ui.setFocus(this.modalActivityView);
+			this.ui.requestRender();
+			return;
+		}
+		this.modalActivityView.setMessage(line);
+		this.ui.requestRender();
 	}
 
-	private stopStatusActivity(handle?: StatusActivityHandle): void {
+	private renderActivityLine(frame: number, message: string): string {
+		const spinner = this.activityManager.getSpinnerFrame(frame);
+		return `${theme.fg("accent", spinner)} ${theme.fg("muted", message)}`;
+	}
+
+	private ensureStatusActivityClock(): void {
+		if (this.statusActivityTickUnsubscribe) return;
+		this.statusActivityTickUnsubscribe = this.activityManager.subscribeClock(80, () => {
+			if (!this.activityManager.getVisible("status") || !this.statusActivityText) return;
+			this.statusActivitySpinnerFrame += 1;
+			const message = this.activityManager.getVisible("status")?.message ?? this.getDefaultWorkingMessage();
+			this.statusActivityText.setText(this.renderActivityLine(this.statusActivitySpinnerFrame, message));
+			this.ui.requestRender();
+		});
+	}
+
+	private stopStatusActivityClock(): void {
+		if (this.statusActivityTickUnsubscribe) {
+			this.statusActivityTickUnsubscribe();
+			this.statusActivityTickUnsubscribe = undefined;
+		}
+		this.statusActivitySpinnerFrame = 0;
+	}
+
+	private ensureModalActivityClock(): void {
+		if (this.modalActivityTickUnsubscribe) return;
+		this.modalActivityTickUnsubscribe = this.activityManager.subscribeClock(80, () => {
+			if (!this.activityManager.getVisible("modal") || !this.modalActivityView) return;
+			this.modalActivitySpinnerFrame += 1;
+			const message = this.activityManager.getVisible("modal")?.message ?? this.getDefaultWorkingMessage();
+			this.modalActivityView.setMessage(this.renderActivityLine(this.modalActivitySpinnerFrame, message));
+			this.ui.requestRender();
+		});
+	}
+
+	private stopModalActivityClock(): void {
+		if (this.modalActivityTickUnsubscribe) {
+			this.modalActivityTickUnsubscribe();
+			this.modalActivityTickUnsubscribe = undefined;
+		}
+		this.modalActivitySpinnerFrame = 0;
+	}
+
+	private startActivity(options: ActivityStartOptions): ActivityHandle {
+		return this.activityManager.start(options);
+	}
+
+	private async runActivity<T>(operation: () => Promise<T>, options: ActivityStartOptions): Promise<T> {
+		return this.activityManager.run(operation, options);
+	}
+
+	private stopActivity(handle?: ActivityHandle): void {
 		if (handle) {
 			handle.stop();
 			return;
 		}
-		this.statusActivity.clear();
+		this.activityManager.clearLane("status");
 		this.agentStatusActivity = undefined;
 	}
 
 	private async promptWithStatusActivity(text: string, options?: PromptOptions): Promise<void> {
 		const shouldTrackCommandActivity = this.isExtensionCommand(text) && !this.session.isStreaming;
 		if (shouldTrackCommandActivity) {
-			await this.runStatusActivity(() => this.session.prompt(text, options));
+			await this.runActivity(() => this.session.prompt(text, options), {
+				owner: "interactive.extension_command",
+				lane: "status",
+			});
 			return;
 		}
 
@@ -3200,22 +3373,18 @@ export class InteractiveMode {
 					}
 
 					// Set up escape handler and loader if summarizing
-					let summaryLoader: Loader | undefined;
+					let summaryActivity: ActivityHandle | undefined;
 					const originalOnEscape = this.defaultEditor.onEscape;
 
 					if (wantsSummary) {
 						this.defaultEditor.onEscape = () => {
 							this.session.abortBranchSummary();
 						};
-						this.chatContainer.addChild(new Spacer(1));
-						summaryLoader = new Loader(
-							this.ui,
-							(spinner) => theme.fg("accent", spinner),
-							(text) => theme.fg("muted", text),
-							`Summarizing branch... (${appKey(this.keybindings, "interrupt")} to cancel)`,
-						);
-						this.statusContainer.addChild(summaryLoader);
-						this.ui.requestRender();
+						summaryActivity = this.startActivity({
+							owner: "interactive.tree_summary",
+							lane: "status",
+							message: `Summarizing branch... (${appKey(this.keybindings, "interrupt")} to cancel)`,
+						});
 					}
 
 					try {
@@ -3245,10 +3414,7 @@ export class InteractiveMode {
 					} catch (error) {
 						this.showError(error instanceof Error ? error.message : String(error));
 					} finally {
-						if (summaryLoader) {
-							summaryLoader.stop();
-							this.statusContainer.clear();
-						}
+						summaryActivity?.stop();
 						this.defaultEditor.onEscape = originalOnEscape;
 					}
 				},
@@ -3303,7 +3469,7 @@ export class InteractiveMode {
 	}
 
 	private async handleResumeSession(sessionPath: string): Promise<void> {
-		this.stopStatusActivity();
+		this.stopActivity();
 
 		// Clear UI state
 		this.pendingMessagesContainer.clear();
@@ -3561,49 +3727,41 @@ export class InteractiveMode {
 
 		this.resetExtensionUI();
 
-		const loader = new BorderedLoader(this.ui, theme, "Reloading extensions, skills, prompts, themes...", {
-			cancellable: false,
-		});
-		const previousEditor = this.editor;
-		this.editorContainer.clear();
-		this.editorContainer.addChild(loader);
-		this.ui.setFocus(loader);
-		this.ui.requestRender();
-
-		const dismissLoader = (editor: Component) => {
-			loader.dispose();
-			this.editorContainer.clear();
-			this.editorContainer.addChild(editor);
-			this.ui.setFocus(editor);
-			this.ui.requestRender();
-		};
-
 		try {
-			await this.session.reload();
-			setRegisteredThemes(this.session.resourceLoader.getThemes().themes);
-			this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
-			const themeName = this.settingsManager.getTheme();
-			const themeResult = themeName ? setTheme(themeName, true) : { success: true };
-			if (!themeResult.success) {
-				this.showError(`Failed to load theme "${themeName}": ${themeResult.error}\nFell back to dark theme.`);
-			}
-			const editorPaddingX = this.settingsManager.getEditorPaddingX();
-			const autocompleteMaxVisible = this.settingsManager.getAutocompleteMaxVisible();
-			this.defaultEditor.setPaddingX(editorPaddingX);
-			this.defaultEditor.setAutocompleteMaxVisible(autocompleteMaxVisible);
-			if (this.editor !== this.defaultEditor) {
-				this.editor.setPaddingX?.(editorPaddingX);
-				this.editor.setAutocompleteMaxVisible?.(autocompleteMaxVisible);
-			}
-			this.ui.setShowHardwareCursor(this.settingsManager.getShowHardwareCursor());
-			this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
-			this.setupAutocomplete();
+			await this.runActivity(
+				async () => {
+					await this.session.reload();
+					setRegisteredThemes(this.session.resourceLoader.getThemes().themes);
+					this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
+					const themeName = this.settingsManager.getTheme();
+					const themeResult = themeName ? setTheme(themeName, true) : { success: true };
+					if (!themeResult.success) {
+						this.showError(`Failed to load theme "${themeName}": ${themeResult.error}\nFell back to dark theme.`);
+					}
+					const editorPaddingX = this.settingsManager.getEditorPaddingX();
+					const autocompleteMaxVisible = this.settingsManager.getAutocompleteMaxVisible();
+					this.defaultEditor.setPaddingX(editorPaddingX);
+					this.defaultEditor.setAutocompleteMaxVisible(autocompleteMaxVisible);
+					if (this.editor !== this.defaultEditor) {
+						this.editor.setPaddingX?.(editorPaddingX);
+						this.editor.setAutocompleteMaxVisible?.(autocompleteMaxVisible);
+					}
+					this.ui.setShowHardwareCursor(this.settingsManager.getShowHardwareCursor());
+					this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
+					this.setupAutocomplete();
+					const runner = this.session.extensionRunner;
+					if (runner) {
+						this.setupExtensionShortcuts(runner);
+					}
+					this.rebuildChatFromMessages();
+				},
+				{
+					owner: "interactive.reload",
+					lane: "modal",
+					message: "Reloading extensions, skills, prompts, themes...",
+				},
+			);
 			const runner = this.session.extensionRunner;
-			if (runner) {
-				this.setupExtensionShortcuts(runner);
-			}
-			this.rebuildChatFromMessages();
-			dismissLoader(this.editor as Component);
 			this.showLoadedResources({
 				extensionPaths: runner?.getExtensionPaths() ?? [],
 				force: false,
@@ -3615,13 +3773,12 @@ export class InteractiveMode {
 			}
 			this.showStatus("Reloaded extensions, skills, prompts, themes");
 		} catch (error) {
-			dismissLoader(previousEditor as Component);
 			this.showError(`Reload failed: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}
 
 	private async handleClearCommand(): Promise<void> {
-		this.stopStatusActivity();
+		this.stopActivity();
 
 		// New session via session (emits extension session events)
 		await this.session.newSession();
@@ -3674,8 +3831,14 @@ export class InteractiveMode {
 	}
 
 	private handleDaxnuts(): void {
+		const activity = this.startActivity({
+			owner: "interactive.decorative",
+			lane: "decorative",
+			key: "daxnuts",
+			message: "Rendering daxnuts animation",
+		});
 		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new DaxnutsComponent(this.ui));
+		this.chatContainer.addChild(new DaxnutsComponent(this.ui, this.activityManager.getClock(80), activity));
 		this.ui.requestRender();
 	}
 
@@ -3701,9 +3864,21 @@ export class InteractiveMode {
 		// If extension returned a full result, use it directly
 		if (eventResult?.result) {
 			const result = eventResult.result;
+			const bashActivity = this.startActivity({
+				owner: "interactive.bash",
+				lane: "inline",
+				key: `bash:${crypto.randomUUID()}`,
+				message: `Running... (${editorKey("selectCancel")} to cancel)`,
+			});
 
 			// Create UI component for display
-			this.bashComponent = new BashExecutionComponent(command, this.ui, excludeFromContext);
+			this.bashComponent = new BashExecutionComponent(
+				command,
+				this.ui,
+				this.activityManager.getClock(80),
+				excludeFromContext,
+				bashActivity,
+			);
 			if (this.session.isStreaming) {
 				this.pendingMessagesContainer.addChild(this.bashComponent);
 				this.pendingBashComponents.push(this.bashComponent);
@@ -3731,7 +3906,19 @@ export class InteractiveMode {
 
 		// Normal execution path (possibly with custom operations)
 		const isDeferred = this.session.isStreaming;
-		this.bashComponent = new BashExecutionComponent(command, this.ui, excludeFromContext);
+		const bashActivity = this.startActivity({
+			owner: "interactive.bash",
+			lane: "inline",
+			key: `bash:${crypto.randomUUID()}`,
+			message: `Running... (${editorKey("selectCancel")} to cancel)`,
+		});
+		this.bashComponent = new BashExecutionComponent(
+			command,
+			this.ui,
+			this.activityManager.getClock(80),
+			excludeFromContext,
+			bashActivity,
+		);
 
 		if (isDeferred) {
 			// Show in pending area when agent is streaming
@@ -3775,7 +3962,7 @@ export class InteractiveMode {
 	}
 
 	private async executeCompaction(customInstructions?: string, isAuto = false): Promise<CompactionResult | undefined> {
-		this.stopStatusActivity();
+		this.stopActivity();
 
 		// Set up escape handler during compaction
 		const originalOnEscape = this.defaultEditor.onEscape;
@@ -3783,18 +3970,13 @@ export class InteractiveMode {
 			this.session.abortCompaction();
 		};
 
-		// Show compacting status
-		this.chatContainer.addChild(new Spacer(1));
 		const cancelHint = `(${appKey(this.keybindings, "interrupt")} to cancel)`;
 		const label = isAuto ? `Auto-compacting context... ${cancelHint}` : `Compacting context... ${cancelHint}`;
-		const compactingLoader = new Loader(
-			this.ui,
-			(spinner) => theme.fg("accent", spinner),
-			(text) => theme.fg("muted", text),
-			label,
-		);
-		this.statusContainer.addChild(compactingLoader);
-		this.ui.requestRender();
+		const compactingActivity = this.startActivity({
+			owner: "interactive.compaction",
+			lane: "status",
+			message: label,
+		});
 
 		let result: CompactionResult | undefined;
 
@@ -3817,8 +3999,7 @@ export class InteractiveMode {
 				this.showError(`Compaction failed: ${message}`);
 			}
 		} finally {
-			compactingLoader.stop();
-			this.statusContainer.clear();
+			compactingActivity.stop();
 			this.defaultEditor.onEscape = originalOnEscape;
 		}
 		void this.flushCompactionQueue({ willRetry: false });
@@ -3831,7 +4012,16 @@ export class InteractiveMode {
 	}
 
 	stop(): void {
-		this.stopStatusActivity();
+		this.stopActivity();
+		this.stopExtensionDialogCountdown();
+		this.stopStatusActivityClock();
+		this.stopModalActivityClock();
+		this.modalActivityView?.dispose();
+		this.modalActivityView = undefined;
+		this.statusActivitySpacer = undefined;
+		this.statusActivityText = undefined;
+		this.statusContainer.clear();
+		this.activityManager.dispose();
 		this.clearExtensionTerminalInputListeners();
 		this.footer.dispose();
 		this.footerDataProvider.dispose();

@@ -2,7 +2,7 @@
  * Component for displaying bash command execution with streaming output.
  */
 
-import { Container, Loader, Spacer, Text, type TUI } from "@gsd/pi-tui";
+import { Container, Spacer, Text, type TUI } from "@gsd/pi-tui";
 import stripAnsi from "strip-ansi";
 import {
 	DEFAULT_MAX_BYTES,
@@ -10,6 +10,7 @@ import {
 	type TruncationResult,
 	truncateTail,
 } from "../../../core/tools/truncate.js";
+import type { ActivityClock, ActivityHandle } from "../../../core/activity-manager.js";
 import { theme } from "../theme/theme.js";
 import { DynamicBorder } from "./dynamic-border.js";
 import { editorKey, keyHint } from "./keybinding-hints.js";
@@ -23,17 +24,31 @@ export class BashExecutionComponent extends Container {
 	private outputLines: string[] = [];
 	private status: "running" | "complete" | "cancelled" | "error" = "running";
 	private exitCode: number | undefined = undefined;
-	private loader: Loader;
 	private truncationResult?: TruncationResult;
 	private fullOutputPath?: string;
 	private expanded = false;
 	private contentContainer: Container;
 	private ui: TUI;
+	private activity: ActivityHandle | undefined;
+	private runningMessage: string;
+	private spinnerFrame = 0;
+	private readonly spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+	private spinnerUnsubscribe: (() => void) | undefined;
+	private readonly spinnerClock: ActivityClock;
 
-	constructor(command: string, ui: TUI, excludeFromContext = false) {
+	constructor(
+		command: string,
+		ui: TUI,
+		spinnerClock: ActivityClock,
+		excludeFromContext = false,
+		activity?: ActivityHandle,
+	) {
 		super();
 		this.command = command;
 		this.ui = ui;
+		this.spinnerClock = spinnerClock;
+		this.activity = activity;
+		this.runningMessage = `Running... (${editorKey("selectCancel")} to cancel)`;
 
 		// Use dim border for excluded-from-context commands (!! prefix)
 		const colorKey = excludeFromContext ? "dim" : "bashMode";
@@ -52,15 +67,8 @@ export class BashExecutionComponent extends Container {
 		// Command header
 		const header = new Text(theme.fg(colorKey, theme.bold(`$ ${command}`)), 1, 0);
 		this.contentContainer.addChild(header);
-
-		// Loader
-		this.loader = new Loader(
-			ui,
-			(spinner) => theme.fg(colorKey, spinner),
-			(text) => theme.fg("muted", text),
-			`Running... (${editorKey("selectCancel")} to cancel)`, // Plain text for loader
-		);
-		this.contentContainer.addChild(this.loader);
+		this.startSpinner();
+		this.updateDisplay();
 
 		// Bottom border
 		this.addChild(new DynamicBorder(borderColor));
@@ -112,8 +120,16 @@ export class BashExecutionComponent extends Container {
 		this.truncationResult = truncationResult;
 		this.fullOutputPath = fullOutputPath;
 
-		// Stop loader
-		this.loader.stop();
+		this.stopSpinner();
+		if (this.activity?.isActive()) {
+			if (cancelled) {
+				this.activity.stop();
+			} else if (this.status === "error") {
+				this.activity.fail(exitCode !== undefined ? `Exit ${exitCode}` : "Command failed");
+			} else {
+				this.activity.succeed();
+			}
+		}
 
 		this.updateDisplay();
 	}
@@ -159,9 +175,10 @@ export class BashExecutionComponent extends Container {
 			}
 		}
 
-		// Loader or status
+		// Running indicator or status
 		if (this.status === "running") {
-			this.contentContainer.addChild(this.loader);
+			const frame = this.spinnerFrames[this.spinnerFrame];
+			this.contentContainer.addChild(new Text(`\n${theme.fg("bashMode", frame)} ${theme.fg("muted", this.runningMessage)}`, 1, 0));
 		} else {
 			const statusParts: string[] = [];
 
@@ -206,5 +223,36 @@ export class BashExecutionComponent extends Container {
 	 */
 	getCommand(): string {
 		return this.command;
+	}
+
+	setRunningMessage(message: string): void {
+		this.runningMessage = message;
+		if (this.activity?.isActive()) {
+			this.activity.setMessage(message);
+		}
+		this.updateDisplay();
+	}
+
+	dispose(): void {
+		this.stopSpinner();
+		if (this.activity?.isActive()) {
+			this.activity.stop();
+		}
+	}
+
+	private startSpinner(): void {
+		if (this.spinnerUnsubscribe) return;
+		this.spinnerUnsubscribe = this.spinnerClock.subscribe((tick) => {
+			this.spinnerFrame = tick % this.spinnerFrames.length;
+			this.updateDisplay();
+			this.ui.requestRender();
+		});
+	}
+
+	private stopSpinner(): void {
+		if (this.spinnerUnsubscribe) {
+			this.spinnerUnsubscribe();
+			this.spinnerUnsubscribe = undefined;
+		}
 	}
 }

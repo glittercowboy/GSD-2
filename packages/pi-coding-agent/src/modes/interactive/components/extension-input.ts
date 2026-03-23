@@ -2,15 +2,13 @@
  * Simple text input component for extensions.
  */
 
-import { Container, type Focusable, getEditorKeybindings, Input, Spacer, Text, type TUI } from "@gsd/pi-tui";
+import { Container, type Focusable, getEditorKeybindings, Input, Spacer, Text } from "@gsd/pi-tui";
 import { theme } from "../theme/theme.js";
-import { CountdownTimer } from "./countdown-timer.js";
 import { DynamicBorder } from "./dynamic-border.js";
 import { keyHint } from "./keybinding-hints.js";
 
 export interface ExtensionInputOptions {
-	tui?: TUI;
-	timeout?: number;
+	countdownSeconds?: number;
 }
 
 export class ExtensionInputComponent extends Container implements Focusable {
@@ -19,7 +17,7 @@ export class ExtensionInputComponent extends Container implements Focusable {
 	private onCancelCallback: () => void;
 	private titleText: Text;
 	private baseTitle: string;
-	private countdown: CountdownTimer | undefined;
+	private countdownSeconds: number | undefined;
 
 	// Focusable implementation - propagate to input for IME cursor positioning
 	private _focused = false;
@@ -51,14 +49,8 @@ export class ExtensionInputComponent extends Container implements Focusable {
 		this.addChild(this.titleText);
 		this.addChild(new Spacer(1));
 
-		if (opts?.timeout && opts.timeout > 0 && opts.tui) {
-			this.countdown = new CountdownTimer(
-				opts.timeout,
-				opts.tui,
-				(s) => this.titleText.setText(theme.fg("accent", `${this.baseTitle} (${s}s)`)),
-				() => this.onCancelCallback(),
-			);
-		}
+		this.countdownSeconds = opts?.countdownSeconds;
+		this.updateTitle();
 
 		this.input = new Input();
 		if (placeholder) {
@@ -83,6 +75,16 @@ export class ExtensionInputComponent extends Container implements Focusable {
 	}
 
 	dispose(): void {
-		this.countdown?.dispose();
+		// no-op
+	}
+
+	setCountdownSeconds(seconds: number | undefined): void {
+		this.countdownSeconds = seconds;
+		this.updateTitle();
+	}
+
+	private updateTitle(): void {
+		const suffix = this.countdownSeconds !== undefined ? ` (${Math.max(0, this.countdownSeconds)}s)` : "";
+		this.titleText.setText(theme.fg("accent", `${this.baseTitle}${suffix}`));
 	}
 }

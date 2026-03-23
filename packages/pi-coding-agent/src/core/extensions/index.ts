@@ -67,7 +67,10 @@ export type {
 	// Runtime
 	ExtensionRuntime,
 	ExtensionShortcut,
+	ExtensionUIActivityApi,
 	ExtensionUIActivityHandle,
+	ExtensionUIActivityLane,
+	ExtensionUIActivityOptions,
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
 	ExtensionWidgetOptions,

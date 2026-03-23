@@ -20,7 +20,8 @@ ctx.ui.setStatus("my-ext", "Active");     // Footer status
 ctx.ui.setWidget("my-id", ["Line 1"]);    // Widget above/below editor
 ctx.ui.setTitle("pi - my project");       // Terminal title
 ctx.ui.setEditorText("Prefill text");     // Set editor content
-ctx.ui.setWorkingMessage("Thinking...");  // Working message during streaming
+const activity = ctx.ui.activity.start({ owner: "my-ext.thinking", lane: "status", message: "Thinking..." });
+activity.stop();
 ```
 
 ### ctx.hasUI

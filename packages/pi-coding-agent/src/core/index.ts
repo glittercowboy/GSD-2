@@ -11,6 +11,17 @@ export {
 	type PromptOptions,
 	type SessionStats,
 } from "./agent-session.js";
+export {
+	ActivityManager,
+	type ActivityClock,
+	type ActivityClockTick,
+	type ActivityChangeEvent,
+	type ActivityHandle,
+	type ActivityLane,
+	type ActivitySnapshot,
+	type ActivityStartOptions,
+	type ActivityState,
+} from "./activity-manager.js";
 export { type BashExecutorOptions, type BashResult, executeBash, executeBashWithOperations } from "./bash-executor.js";
 export { FallbackResolver, type FallbackResult } from "./fallback-resolver.js";
 export type { CompactionResult } from "./compaction/index.js";
@@ -38,7 +49,10 @@ export {
 	type ExtensionHandler,
 	ExtensionRunner,
 	type ExtensionShortcut,
+	type ExtensionUIActivityApi,
 	type ExtensionUIActivityHandle,
+	type ExtensionUIActivityLane,
+	type ExtensionUIActivityOptions,
 	type ExtensionUIContext,
 	type LoadExtensionsResult,
 	type MessageRenderer,

@@ -69,16 +69,14 @@ class SnakeComponent {
 From `qna.ts`:
 
 ```typescript
-const result = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
-  const loader = new BorderedLoader(tui, theme, "Processing...");
-  loader.onAbort = () => done(null);
-
-  doAsyncWork(loader.signal)
-    .then(data => done(data))
-    .catch(() => done(null));
-
-  return loader;
-});
+const result = await ctx.ui.activity.run(
+  () => doAsyncWork(),
+  {
+    owner: "my-ext.qna",
+    lane: "status",
+    message: "Processing...",
+  },
+);
 ```
 
 ### Pattern: Persistent Widget with Live Updates

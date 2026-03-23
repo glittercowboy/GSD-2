@@ -1,36 +1,27 @@
-import { CancellableLoader, Container, Loader, Spacer, Text, type TUI } from "@gsd/pi-tui";
+import { Container, Spacer, Text, getEditorKeybindings, type TUI } from "@gsd/pi-tui";
 import type { Theme } from "../theme/theme.js";
 import { DynamicBorder } from "./dynamic-border.js";
 import { keyHint } from "./keybinding-hints.js";
 
-/** Loader wrapped with borders for extension UI */
+/**
+ * Bordered activity placeholder view (no internal spinner/timer ownership).
+ * Any animation cadence must be provided by external activity updates.
+ */
 export class BorderedLoader extends Container {
-	private loader: CancellableLoader | Loader;
+	private readonly messageText: Text;
 	private cancellable: boolean;
-	private signalController?: AbortController;
+	private readonly signalController: AbortController;
+	private onAbortHandler: (() => void) | undefined;
 
-	constructor(tui: TUI, theme: Theme, message: string, options?: { cancellable?: boolean }) {
+	constructor(_tui: TUI, theme: Theme, message: string, options?: { cancellable?: boolean }) {
 		super();
 		this.cancellable = options?.cancellable ?? true;
+		this.signalController = new AbortController();
 		const borderColor = (s: string) => theme.fg("border", s);
 		this.addChild(new DynamicBorder(borderColor));
-		if (this.cancellable) {
-			this.loader = new CancellableLoader(
-				tui,
-				(s) => theme.fg("accent", s),
-				(s) => theme.fg("muted", s),
-				message,
-			);
-		} else {
-			this.signalController = new AbortController();
-			this.loader = new Loader(
-				tui,
-				(s) => theme.fg("accent", s),
-				(s) => theme.fg("muted", s),
-				message,
-			);
-		}
-		this.addChild(this.loader);
+		this.addChild(new Spacer(1));
+		this.messageText = new Text(`${theme.fg("accent", "⠋")} ${theme.fg("muted", message)}`, 1, 0);
+		this.addChild(this.messageText);
 		if (this.cancellable) {
 			this.addChild(new Spacer(1));
 			this.addChild(new Text(keyHint("selectCancel", "cancel"), 1, 0));
@@ -40,27 +31,32 @@ export class BorderedLoader extends Container {
 	}
 
 	get signal(): AbortSignal {
-		if (this.cancellable) {
-			return (this.loader as CancellableLoader).signal;
-		}
-		return this.signalController?.signal ?? new AbortController().signal;
+		return this.signalController.signal;
 	}
 
 	set onAbort(fn: (() => void) | undefined) {
-		if (this.cancellable) {
-			(this.loader as CancellableLoader).onAbort = fn;
-		}
+		this.onAbortHandler = fn;
 	}
 
 	handleInput(data: string): void {
-		if (this.cancellable) {
-			(this.loader as CancellableLoader).handleInput(data);
+		if (!this.cancellable) return;
+		const kb = getEditorKeybindings();
+		if (kb.matches(data, "selectCancel")) {
+			if (!this.signalController.signal.aborted) {
+				this.signalController.abort();
+			}
+			this.onAbortHandler?.();
 		}
 	}
 
+	setMessage(message: string): void {
+		this.messageText.setText(message);
+	}
+
 	dispose(): void {
-		if ("dispose" in this.loader && typeof this.loader.dispose === "function") {
-			this.loader.dispose();
+		if (!this.signalController.signal.aborted) {
+			this.signalController.abort();
 		}
+		this.onAbortHandler = undefined;
 	}
 }

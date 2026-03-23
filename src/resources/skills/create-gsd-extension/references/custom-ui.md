@@ -104,9 +104,13 @@ ctx.ui.setWidget("my-id", (_tui, theme) => ({                          // Themed
 }));
 ctx.ui.setWidget("my-id", undefined);  // Clear
 
-// Working message during streaming
-ctx.ui.setWorkingMessage("Analyzing code...");
-ctx.ui.setWorkingMessage();  // Restore default
+// Activity API
+const activity = ctx.ui.activity.start({
+  owner: "my-ext.analysis",
+  lane: "status",
+  message: "Analyzing code...",
+});
+activity.stop();
 
 // Custom footer (full replacement)
 ctx.ui.setFooter((tui, theme, footerData) => ({
@@ -357,7 +361,7 @@ const settings = new SettingsList(items, 15, getSettingsListTheme(),
 | Component | Constructor | Purpose |
 |-----------|-------------|---------|
 | `DynamicBorder` | `new DynamicBorder((s: string) => theme.fg("accent", s))` | Border line |
-| `BorderedLoader` | — | Spinner with cancel support |
+| `ctx.ui.activity.*` | `ctx.ui.activity.start(...)` / `ctx.ui.activity.run(...)` | Lane-based progress and animation ownership |
 | `CustomEditor` | `new CustomEditor(theme, keybindings)` | Base class for custom editors |
 </built_in_components>
 
@@ -436,7 +440,7 @@ class CachedComponent {
 
 **Update cycle:** State changes → `invalidate()` → `tui.requestRender()` → `render(width)` called
 
-**Game loop pattern** (real-time updates):
+**Game loop pattern** (real-time updates for fully custom visuals):
 ```typescript
 this.interval = setInterval(() => {
   this.tick();
@@ -447,6 +451,8 @@ this.interval = setInterval(() => {
 // Clean up in dispose()
 clearInterval(this.interval);
 ```
+
+For operational progress/loading surfaces, prefer `ctx.ui.activity` lanes over ad-hoc timers.
 </performance_caching>
 
 <theme_colors>

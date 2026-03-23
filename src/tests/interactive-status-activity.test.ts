@@ -22,30 +22,28 @@ const rpcMode = readFileSync(
 	"utf-8",
 );
 
-describe("status activity integration", () => {
-	it("extension UI context exposes startActivity/runActivity and setWorkingMessage hooks", () => {
-		assert.ok(
-			extensionUiController.includes("startActivity: (message) => host.startStatusActivity({ message })"),
-		);
-		assert.ok(
-			extensionUiController.includes("runActivity: (operation, message) => host.runStatusActivity(operation, { message })"),
-		);
-		assert.ok(extensionUiController.includes("setWorkingMessage: (message) => host.statusActivity.setWorkingMessage(message)"));
+describe("activity integration", () => {
+	it("extension UI context exposes activity.start/run hooks", () => {
+		assert.ok(extensionUiController.includes("activity: {"));
+		assert.ok(extensionUiController.includes("start: (options) => host.startActivity(options)"));
+		assert.ok(extensionUiController.includes("run: (operation, options) => host.runActivity(operation, options)"));
 	});
 
-	it("agent lifecycle uses status activity helpers in chat controller", () => {
-		assert.ok(chatController.includes("host.agentStatusActivity = host.startStatusActivity()"));
+	it("agent lifecycle uses startActivity/stop handles in chat controller", () => {
+		assert.ok(chatController.includes("host.agentStatusActivity = host.startActivity({"));
 		assert.ok(chatController.includes("host.agentStatusActivity?.stop()"));
 	});
 
-	it("interactive mode routes prompts through promptWithStatusActivity", () => {
+	it("interactive mode routes extension commands through promptWithStatusActivity", () => {
 		assert.ok(interactiveMode.includes("private async promptWithStatusActivity(text: string, options?: PromptOptions): Promise<void>"));
 		assert.ok(interactiveMode.includes("await this.promptWithStatusActivity(userInput);"));
 		assert.ok(interactiveMode.includes("await this.promptWithStatusActivity(text, { streamingBehavior: \"followUp\" });"));
 	});
 
-	it("RPC mode provides no-op activity helpers", () => {
-		assert.ok(rpcMode.includes("startActivity(): { update: () => void; stop: () => void; isActive: () => boolean }"));
-		assert.ok(rpcMode.includes("runActivity<T>(operation: () => Promise<T>): Promise<T>"));
+	it("RPC mode emits real activity lifecycle events", () => {
+		assert.ok(rpcMode.includes("method: \"activity_start\""));
+		assert.ok(rpcMode.includes("method: \"activity_update\""));
+		assert.ok(rpcMode.includes("method: \"activity_stop\""));
+		assert.ok(rpcMode.includes("method: \"activity_result\""));
 	});
 });

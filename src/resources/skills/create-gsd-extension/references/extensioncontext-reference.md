@@ -23,7 +23,8 @@ ctx.ui.setWidget("my-id", ["Line 1", "Line 2"]);   // Widget above editor
 ctx.ui.setWidget("my-id", ["Below!"], { placement: "belowEditor" });
 ctx.ui.setTitle("gsd - my project");                 // Terminal title
 ctx.ui.setEditorText("Prefill");                    // Set editor content
-ctx.ui.setWorkingMessage("Analyzing...");           // Working message during streaming
+const activity = ctx.ui.activity.start({ owner: "my-ext.analysis", lane: "status", message: "Analyzing..." });
+activity.stop();
 ctx.ui.setToolsExpanded(true);                      // Expand tool output
 ```
 </ui_methods>

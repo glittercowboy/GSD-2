@@ -32,7 +32,7 @@ description: Create, debug, and iterate on GSD extensions (TypeScript modules th
 
 | Package | Purpose |
 |---------|---------|
-| `@mariozechner/pi-coding-agent` | `ExtensionAPI`, `ExtensionContext`, `Theme`, event types, tool utilities, `DynamicBorder`, `BorderedLoader`, `CustomEditor`, `highlightCode` |
+| `@mariozechner/pi-coding-agent` | `ExtensionAPI`, `ExtensionContext`, `Theme`, event types, tool utilities, `DynamicBorder`, `CustomEditor`, `highlightCode`, `ctx.ui.activity` |
 | `@sinclair/typebox` | `Type.Object`, `Type.String`, `Type.Number`, `Type.Optional`, `Type.Boolean`, `Type.Array` |
 | `@mariozechner/pi-ai` | `StringEnum` (required for string enums), `Type` re-export |
 | `@mariozechner/pi-tui` | `Text`, `Box`, `Container`, `Spacer`, `Markdown`, `SelectList`, `Input`, `matchesKey`, `Key`, `truncateToWidth`, `visibleWidth` |

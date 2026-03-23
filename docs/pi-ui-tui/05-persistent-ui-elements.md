@@ -41,11 +41,15 @@ ctx.ui.setWidget("my-widget", (_tui, theme) => {
 ctx.ui.setWidget("my-widget", undefined);
 ```
 
-### Working Message (During Streaming)
+### Activity API (During Streaming or Commands)
 
 ```typescript
-ctx.ui.setWorkingMessage("Analyzing code structure...");
-ctx.ui.setWorkingMessage();  // Restore default
+const activity = ctx.ui.activity.start({
+  owner: "my-ext.analysis",
+  lane: "status",
+  message: "Analyzing code structure...",
+});
+activity.stop();
 ```
 
 ### Custom Footer (Full Replacement)

@@ -3,6 +3,17 @@
 // Config paths
 export { getAgentDir, VERSION } from "./config.js";
 export {
+	ActivityManager,
+	type ActivityClock,
+	type ActivityClockTick,
+	type ActivityChangeEvent,
+	type ActivityHandle,
+	type ActivityLane,
+	type ActivitySnapshot,
+	type ActivityStartOptions,
+	type ActivityState,
+} from "./core/activity-manager.js";
+export {
 	AgentSession,
 	type AgentSessionConfig,
 	type AgentSessionEvent,
@@ -79,7 +90,10 @@ export type {
 	ExtensionHandler,
 	ExtensionRuntime,
 	ExtensionShortcut,
+	ExtensionUIActivityApi,
 	ExtensionUIActivityHandle,
+	ExtensionUIActivityLane,
+	ExtensionUIActivityOptions,
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
 	ExtensionWidgetOptions,

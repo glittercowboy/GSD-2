@@ -46,9 +46,13 @@ ctx.ui.setWidget("my-widget", (_tui, theme) => ({
   invalidate: () => {},
 }));
 
-// Working message during streaming
-ctx.ui.setWorkingMessage("Analyzing code...");
-ctx.ui.setWorkingMessage();  // Restore default
+// Activity lane (spinner/status ownership with explicit lane + owner)
+const activity = ctx.ui.activity.start({
+  owner: "my-ext.analysis",
+  lane: "status",
+  message: "Analyzing code...",
+});
+activity.stop();
 
 // Custom footer (replaces built-in entirely)
 ctx.ui.setFooter((tui, theme, footerData) => ({
@@ -164,7 +168,7 @@ Import from `@mariozechner/pi-coding-agent`:
 | Component | Purpose |
 |-----------|---------|
 | `DynamicBorder` | Border line with theming |
-| `BorderedLoader` | Spinner with cancel support |
+| `ctx.ui.activity.*` | Lane-based activity lifecycle for progress/animation surfaces |
 
 ### 12.7 Keyboard Input
 

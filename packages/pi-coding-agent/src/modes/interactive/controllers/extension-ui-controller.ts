@@ -10,9 +10,10 @@ export function createExtensionUIContext(host: any): ExtensionUIContext {
 		notify: (message, type) => host.showExtensionNotify(message, type),
 		onTerminalInput: (handler) => host.addExtensionTerminalInputListener(handler),
 		setStatus: (key, text) => host.setExtensionStatus(key, text),
-		startActivity: (message) => host.startStatusActivity({ message }),
-		runActivity: (operation, message) => host.runStatusActivity(operation, { message }),
-		setWorkingMessage: (message) => host.statusActivity.setWorkingMessage(message),
+		activity: {
+			start: (options) => host.startActivity(options),
+			run: (operation, options) => host.runActivity(operation, options),
+		},
 		setWidget: (key, content, options) => host.setExtensionWidget(key, content, options),
 		setFooter: (factory) => host.setExtensionFooter(factory),
 		setHeader: (factory) => host.setExtensionHeader(factory),

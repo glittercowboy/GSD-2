@@ -11,24 +11,25 @@ import { DynamicBorder } from "@mariozechner/pi-coding-agent";
 const border = new DynamicBorder((s: string) => theme.fg("accent", s));
 ```
 
-### BorderedLoader
+### Activity API
 
-Spinner with cancel support. Shows a message and an animated spinner while async work runs.
+Lane-based activity lifecycle for status/modals/inline work. This is the canonical way to show operational progress.
 
 ```typescript
-import { BorderedLoader } from "@mariozechner/pi-coding-agent";
-
-const result = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
-  const loader = new BorderedLoader(tui, theme, "Fetching data...");
-  loader.onAbort = () => done(null);  // Escape pressed
-
-  // Do async work with the loader's AbortSignal
-  fetchData(loader.signal)
-    .then(data => done(data))
-    .catch(() => done(null));
-
-  return loader;
+const activity = ctx.ui.activity.start({
+  owner: "my-ext.fetch",
+  lane: "status",
+  message: "Fetching data...",
+  progress: 0,
 });
+activity.setProgress(50);
+activity.setMessage("Parsing response...");
+activity.succeed("Fetch complete");
+
+const result = await ctx.ui.activity.run(
+  () => fetchData(),
+  { owner: "my-ext.fetch.run", lane: "modal", message: "Fetching data..." },
+);
 ```
 
 ### CustomEditor

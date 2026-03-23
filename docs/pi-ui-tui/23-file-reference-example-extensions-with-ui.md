@@ -53,7 +53,7 @@ All paths relative to:
 ### Async Operations
 | File | What It Demonstrates |
 |------|---------------------|
-| `qna.ts` | `BorderedLoader` for async LLM calls with cancel |
+| `qna.ts` | `ctx.ui.activity.run(...)` for async LLM calls with lane-owned progress |
 | `summarize.ts` | Summarize conversation with transient UI |
 
 ### Notifications and Status

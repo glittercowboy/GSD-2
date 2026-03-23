@@ -2,12 +2,12 @@ import type { TUI } from "../tui.js";
 import { Text } from "./text.js";
 
 /**
- * Loader component that updates every 80ms with spinning animation
+ * Loader component with externally-driven frame updates.
+ * It does not own timers; callers must invoke `setFrame` to animate.
  */
 export class Loader extends Text {
 	private frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 	private currentFrame = 0;
-	private intervalId: NodeJS.Timeout | null = null;
 	private ui: TUI | null = null;
 
 	constructor(
@@ -26,30 +26,24 @@ export class Loader extends Text {
 	}
 
 	start() {
-		if (this.intervalId) {
-			clearInterval(this.intervalId);
-		}
 		this.updateDisplay();
-		this.intervalId = setInterval(() => {
-			this.currentFrame = (this.currentFrame + 1) % this.frames.length;
-			this.updateDisplay();
-		}, 80);
 	}
 
-	stop() {
-		if (this.intervalId) {
-			clearInterval(this.intervalId);
-			this.intervalId = null;
-		}
-	}
+	stop() {}
 
 	dispose() {
-		this.stop();
 		this.ui = null;
 	}
 
 	setMessage(message: string) {
 		this.message = message;
+		this.updateDisplay();
+	}
+
+	setFrame(frame: number) {
+		if (!Number.isFinite(frame)) return;
+		const normalized = Math.max(0, Math.floor(frame));
+		this.currentFrame = normalized % this.frames.length;
 		this.updateDisplay();
 	}
 

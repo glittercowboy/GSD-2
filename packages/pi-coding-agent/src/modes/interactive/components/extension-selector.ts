@@ -4,9 +4,8 @@
  * Options starting with SEPARATOR_PREFIX are rendered as non-selectable group headers.
  */
 
-import { Container, getEditorKeybindings, Spacer, Text, type TUI } from "@gsd/pi-tui";
+import { Container, getEditorKeybindings, Spacer, Text } from "@gsd/pi-tui";
 import { theme } from "../theme/theme.js";
-import { CountdownTimer } from "./countdown-timer.js";
 import { DynamicBorder } from "./dynamic-border.js";
 import { keyHint, rawKeyHint } from "./keybinding-hints.js";
 
@@ -14,8 +13,7 @@ import { keyHint, rawKeyHint } from "./keybinding-hints.js";
 export const SEPARATOR_PREFIX = "───";
 
 export interface ExtensionSelectorOptions {
-	tui?: TUI;
-	timeout?: number;
+	countdownSeconds?: number;
 }
 
 export class ExtensionSelectorComponent extends Container {
@@ -26,7 +24,7 @@ export class ExtensionSelectorComponent extends Container {
 	private onCancelCallback: () => void;
 	private titleText: Text;
 	private baseTitle: string;
-	private countdown: CountdownTimer | undefined;
+	private countdownSeconds: number | undefined;
 
 	constructor(
 		title: string,
@@ -49,14 +47,8 @@ export class ExtensionSelectorComponent extends Container {
 		this.addChild(this.titleText);
 		this.addChild(new Spacer(1));
 
-		if (opts?.timeout && opts.timeout > 0 && opts.tui) {
-			this.countdown = new CountdownTimer(
-				opts.timeout,
-				opts.tui,
-				(s) => this.titleText.setText(theme.fg("accent", `${this.baseTitle} (${s}s)`)),
-				() => this.onCancelCallback(),
-			);
-		}
+		this.countdownSeconds = opts?.countdownSeconds;
+		this.updateTitle();
 
 		this.listContainer = new Container();
 		this.addChild(this.listContainer);
@@ -78,6 +70,11 @@ export class ExtensionSelectorComponent extends Container {
 		// Start on the first selectable (non-separator) item
 		this.selectedIndex = this.nextSelectable(0, 1);
 		this.updateList();
+	}
+
+	setCountdownSeconds(seconds: number | undefined): void {
+		this.countdownSeconds = seconds;
+		this.updateTitle();
 	}
 
 	private isSeparator(index: number): boolean {
@@ -146,6 +143,11 @@ export class ExtensionSelectorComponent extends Container {
 	}
 
 	dispose(): void {
-		this.countdown?.dispose();
+		// no-op
+	}
+
+	private updateTitle(): void {
+		const suffix = this.countdownSeconds !== undefined ? ` (${Math.max(0, this.countdownSeconds)}s)` : "";
+		this.titleText.setText(theme.fg("accent", `${this.baseTitle}${suffix}`));
 	}
 }

@@ -5,6 +5,7 @@
  */
 
 import type { Component, TUI } from "@gsd/pi-tui";
+import type { ActivityClock, ActivityHandle } from "../../../core/activity-manager.js";
 import { theme } from "../theme/theme.js";
 
 // 32x32 RGB image of dax, hex encoded (3 bytes per pixel)
@@ -56,16 +57,20 @@ function buildImage(): string[] {
 
 export class DaxnutsComponent implements Component {
 	private ui: TUI;
+	private activity: ActivityHandle | undefined;
 	private image: string[];
-	private interval: ReturnType<typeof setInterval> | null = null;
+	private unsubscribeTick: (() => void) | null = null;
 	private tick = 0;
 	private maxTicks = 25; // ~2 seconds at 80ms
 	private cachedLines: string[] = [];
 	private cachedWidth = 0;
 	private cachedTick = -1;
+	private readonly clock: ActivityClock;
 
-	constructor(ui: TUI) {
+	constructor(ui: TUI, clock: ActivityClock, activity?: ActivityHandle) {
 		this.ui = ui;
+		this.clock = clock;
+		this.activity = activity;
 		this.image = buildImage();
 		this.startAnimation();
 	}
@@ -75,20 +80,23 @@ export class DaxnutsComponent implements Component {
 	}
 
 	private startAnimation(): void {
-		this.interval = setInterval(() => {
+		this.unsubscribeTick = this.clock.subscribe(() => {
 			this.tick++;
 			if (this.tick >= this.maxTicks) {
 				this.stopAnimation();
 			}
 			this.cachedWidth = 0;
 			this.ui.requestRender();
-		}, 80);
+		});
 	}
 
 	private stopAnimation(): void {
-		if (this.interval) {
-			clearInterval(this.interval);
-			this.interval = null;
+		if (this.unsubscribeTick) {
+			this.unsubscribeTick();
+			this.unsubscribeTick = null;
+		}
+		if (this.activity?.isActive()) {
+			this.activity.succeed();
 		}
 	}
 
@@ -160,5 +168,8 @@ export class DaxnutsComponent implements Component {
 
 	dispose(): void {
 		this.stopAnimation();
+		if (this.activity?.isActive()) {
+			this.activity.stop();
+		}
 	}
 }

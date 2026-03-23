@@ -39,6 +39,7 @@ import type {
 } from "@gsd/pi-tui";
 import type { Static, TSchema } from "@sinclair/typebox";
 import type { Theme } from "../../modes/interactive/theme/theme.js";
+import type { ActivityLane } from "../activity-manager.js";
 import type { BashResult } from "../bash-executor.js";
 import type { CompactionPreparation, CompactionResult } from "../compaction/index.js";
 import type { EventBus } from "../event-bus.js";
@@ -102,14 +103,37 @@ export interface ExtensionWidgetOptions {
 /** Raw terminal input listener for extensions. */
 export type TerminalInputHandler = (data: string) => { consume?: boolean; data?: string } | undefined;
 
-/** Handle for a running status activity (spinner/message lane). */
+export type ExtensionUIActivityLane = ActivityLane;
+
+export interface ExtensionUIActivityOptions {
+	owner: string;
+	lane: ExtensionUIActivityLane;
+	key?: string;
+	message?: string;
+	progress?: number;
+}
+
+/** Handle for a running activity. */
 export interface ExtensionUIActivityHandle {
-	/** Update the displayed activity message. Pass undefined to restore the default message. */
-	update(message?: string): void;
+	/** Update the displayed activity message. */
+	setMessage(message?: string): void;
+	/** Update progress percent (0-100). */
+	setProgress(percent?: number): void;
 	/** Stop this activity. */
 	stop(): void;
+	/** Mark this activity succeeded and stop it. */
+	succeed(message?: string): void;
+	/** Mark this activity failed and stop it. */
+	fail(message?: string): void;
 	/** Whether this handle still represents an active activity. */
 	isActive(): boolean;
+}
+
+export interface ExtensionUIActivityApi {
+	/** Start a lane activity and return a handle to update/stop it. */
+	start(options: ExtensionUIActivityOptions): ExtensionUIActivityHandle;
+	/** Run an async operation inside an activity and close it automatically. */
+	run<T>(operation: () => Promise<T>, options: ExtensionUIActivityOptions): Promise<T>;
 }
 
 /**
@@ -135,14 +159,8 @@ export interface ExtensionUIContext {
 	/** Set status text in the footer/status bar. Pass undefined to clear. */
 	setStatus(key: string, text: string | undefined): void;
 
-	/** Start a status activity spinner and return a handle to update/stop it. */
-	startActivity(message?: string): ExtensionUIActivityHandle;
-
-	/** Run an async operation inside a status activity spinner. */
-	runActivity<T>(operation: () => Promise<T>, message?: string): Promise<T>;
-
-	/** Set the working/loading message shown during active work. Call with no argument to restore default. */
-	setWorkingMessage(message?: string): void;
+	/** Activity/animation API with explicit ownership and lanes. */
+	readonly activity: ExtensionUIActivityApi;
 
 	/** Set a widget to display above or below the editor. Accepts string array or component factory. */
 	setWidget(key: string, content: string[] | undefined, options?: ExtensionWidgetOptions): void;

@@ -3,6 +3,7 @@
  */
 
 import type { Component, TUI } from "@gsd/pi-tui";
+import type { ActivityClock, ActivityHandle } from "../../../core/activity-manager.js";
 import { theme } from "../theme/theme.js";
 
 // XBM image: 31x36 pixels, LSB first, 1=background, 0=foreground
@@ -59,7 +60,8 @@ function buildFinalGrid(): string[][] {
 
 export class ArminComponent implements Component {
 	private ui: TUI;
-	private interval: ReturnType<typeof setInterval> | null = null;
+	private activity: ActivityHandle | undefined;
+	private unsubscribeTick: (() => void) | null = null;
 	private effect: Effect;
 	private finalGrid: string[][];
 	private currentGrid: string[][];
@@ -68,14 +70,19 @@ export class ArminComponent implements Component {
 	private cachedWidth = 0;
 	private gridVersion = 0;
 	private cachedVersion = -1;
+	private animationIntervalMs: number;
+	private readonly getClock: (intervalMs: number) => ActivityClock;
 
-	constructor(ui: TUI) {
+	constructor(ui: TUI, getClock: (intervalMs: number) => ActivityClock, activity?: ActivityHandle) {
 		this.ui = ui;
+		this.getClock = getClock;
+		this.activity = activity;
 		this.effect = EFFECTS[Math.floor(Math.random() * EFFECTS.length)];
 		this.finalGrid = buildFinalGrid();
 		this.currentGrid = this.createEmptyGrid();
 
 		this.initEffect();
+		this.animationIntervalMs = this.effect === "glitch" ? 16 : 33;
 		this.startAnimation();
 	}
 
@@ -178,21 +185,24 @@ export class ArminComponent implements Component {
 	}
 
 	private startAnimation(): void {
-		const fps = this.effect === "glitch" ? 60 : 30;
-		this.interval = setInterval(() => {
+		const clock = this.getClock(this.animationIntervalMs);
+		this.unsubscribeTick = clock.subscribe(() => {
 			const done = this.tickEffect();
 			this.updateDisplay();
 			this.ui.requestRender();
 			if (done) {
 				this.stopAnimation();
 			}
-		}, 1000 / fps);
+		});
 	}
 
 	private stopAnimation(): void {
-		if (this.interval) {
-			clearInterval(this.interval);
-			this.interval = null;
+		if (this.unsubscribeTick) {
+			this.unsubscribeTick();
+			this.unsubscribeTick = null;
+		}
+		if (this.activity?.isActive()) {
+			this.activity.succeed();
 		}
 	}
 
@@ -378,5 +388,8 @@ export class ArminComponent implements Component {
 
 	dispose(): void {
 		this.stopAnimation();
+		if (this.activity?.isActive()) {
+			this.activity.stop();
+		}
 	}
 }

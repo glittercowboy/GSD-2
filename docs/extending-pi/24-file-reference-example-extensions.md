@@ -32,7 +32,7 @@ All paths relative to:
 | `commands.ts` | Basic command registration |
 | `preset.ts` | Named presets (model, thinking, tools) with flag and command |
 | `plan-mode/` | Full plan mode — commands, shortcuts, flags, widgets, status, tool management |
-| `qna.ts` | Extract questions + `BorderedLoader` + `setEditorText` |
+| `qna.ts` | Extract questions + `ctx.ui.activity.run(...)` + `setEditorText` |
 | `send-user-message.ts` | `pi.sendUserMessage()` for injecting user messages |
 | `modal-editor.ts` | Vim-like modal editor via `CustomEditor` |
 | `snake.ts` | Full game with custom UI, keyboard handling, persistence |

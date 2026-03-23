@@ -1,4 +1,4 @@
-import { Loader, Spacer, Text } from "@gsd/pi-tui";
+import { Spacer, Text } from "@gsd/pi-tui";
 
 import type { InteractiveModeEvent, InteractiveModeStateHost } from "../interactive-mode-state.js";
 import { theme } from "../theme/theme.js";
@@ -68,7 +68,10 @@ export async function handleAgentEvent(host: InteractiveModeStateHost & {
 				host.retryLoader = undefined;
 			}
 			host.agentStatusActivity?.stop();
-			host.agentStatusActivity = host.startStatusActivity();
+			host.agentStatusActivity = host.startActivity({
+				owner: "interactive.agent",
+				lane: "status",
+			});
 			break;
 
 		case "message_start":
@@ -226,15 +229,12 @@ export async function handleAgentEvent(host: InteractiveModeStateHost & {
 		case "auto_compaction_start":
 			host.autoCompactionEscapeHandler = host.defaultEditor.onEscape;
 			host.defaultEditor.onEscape = () => host.session.abortCompaction();
-			host.stopStatusActivity();
-			host.statusContainer.clear();
-			host.autoCompactionLoader = new Loader(
-				host.ui,
-				(spinner) => theme.fg("accent", spinner),
-				(text) => theme.fg("muted", text),
-				`${event.reason === "overflow" ? "Context overflow detected, " : ""}Auto-compacting... (${appKey(host.keybindings, "interrupt")} to cancel)`,
-			);
-			host.statusContainer.addChild(host.autoCompactionLoader);
+			host.stopActivity();
+			host.autoCompactionLoader = host.startActivity({
+				owner: "interactive.auto_compaction",
+				lane: "status",
+				message: `${event.reason === "overflow" ? "Context overflow detected, " : ""}Auto-compacting... (${appKey(host.keybindings, "interrupt")} to cancel)`,
+			});
 			host.ui.requestRender();
 			break;
 
@@ -246,7 +246,6 @@ export async function handleAgentEvent(host: InteractiveModeStateHost & {
 			if (host.autoCompactionLoader) {
 				host.autoCompactionLoader.stop();
 				host.autoCompactionLoader = undefined;
-				host.statusContainer.clear();
 			}
 			if (event.aborted) {
 				host.showStatus("Auto-compaction cancelled");
@@ -271,15 +270,12 @@ export async function handleAgentEvent(host: InteractiveModeStateHost & {
 		case "auto_retry_start":
 			host.retryEscapeHandler = host.defaultEditor.onEscape;
 			host.defaultEditor.onEscape = () => host.session.abortRetry();
-			host.stopStatusActivity();
-			host.statusContainer.clear();
-			host.retryLoader = new Loader(
-				host.ui,
-				(spinner) => theme.fg("warning", spinner),
-				(text) => theme.fg("muted", text),
-				`Retrying (${event.attempt}/${event.maxAttempts}) in ${Math.round(event.delayMs / 1000)}s... (${appKey(host.keybindings, "interrupt")} to cancel)`,
-			);
-			host.statusContainer.addChild(host.retryLoader);
+			host.stopActivity();
+			host.retryLoader = host.startActivity({
+				owner: "interactive.auto_retry",
+				lane: "status",
+				message: `Retrying (${event.attempt}/${event.maxAttempts}) in ${Math.round(event.delayMs / 1000)}s... (${appKey(host.keybindings, "interrupt")} to cancel)`,
+			});
 			host.ui.requestRender();
 			break;
 
@@ -291,7 +287,6 @@ export async function handleAgentEvent(host: InteractiveModeStateHost & {
 			if (host.retryLoader) {
 				host.retryLoader.stop();
 				host.retryLoader = undefined;
-				host.statusContainer.clear();
 			}
 			if (!event.success) {
 				host.showError(`Retry failed after ${event.attempt} attempts: ${event.finalError || "Unknown error"}`);

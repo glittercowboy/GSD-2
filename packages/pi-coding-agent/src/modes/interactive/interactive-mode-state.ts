@@ -1,5 +1,5 @@
 import type { AgentSessionEvent } from "../../core/agent-session.js";
-import type { StatusActivityHandle, StatusActivityManager } from "./status-activity-manager.js";
+import type { ActivityHandle, ActivityManager, ActivityStartOptions } from "../../core/activity-manager.js";
 
 export interface InteractiveModeStateHost {
 	defaultEditor: any;
@@ -17,17 +17,16 @@ export interface InteractiveModeStateHost {
 	isBashMode: boolean;
 	onInputCallback?: (text: string) => void;
 	isInitialized: boolean;
-	loadingAnimation?: any;
-	statusActivity: StatusActivityManager;
-	agentStatusActivity?: StatusActivityHandle;
-	startStatusActivity(options?: { message?: string }): StatusActivityHandle;
-	runStatusActivity<T>(operation: () => Promise<T>, options?: { message?: string }): Promise<T>;
-	stopStatusActivity(handle?: StatusActivityHandle): void;
+	activityManager: ActivityManager;
+	agentStatusActivity?: ActivityHandle;
+	startActivity(options: ActivityStartOptions): ActivityHandle;
+	runActivity<T>(operation: () => Promise<T>, options: ActivityStartOptions): Promise<T>;
+	stopActivity(handle?: ActivityHandle): void;
 	streamingComponent?: any;
 	streamingMessage?: any;
 	retryEscapeHandler?: () => void;
-	retryLoader?: any;
-	autoCompactionLoader?: any;
+	retryLoader?: ActivityHandle;
+	autoCompactionLoader?: ActivityHandle;
 	autoCompactionEscapeHandler?: () => void;
 	compactionQueuedMessages: Array<{ text: string; mode: "steer" | "followUp" }>;
 	extensionSelector?: any;

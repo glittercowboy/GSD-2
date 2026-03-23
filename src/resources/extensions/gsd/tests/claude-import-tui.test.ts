@@ -68,7 +68,17 @@ function createMockContext(selections: string[]): {
 			input: async () => undefined,
 			onTerminalInput: () => () => {},
 			setStatus: () => {},
-			setWorkingMessage: () => {},
+			activity: {
+				start: () => ({
+					setMessage: () => {},
+					setProgress: () => {},
+					stop: () => {},
+					succeed: () => {},
+					fail: () => {},
+					isActive: () => false,
+				}),
+				run: async <T>(operation: () => Promise<T>, _options: { owner: string; lane: string }) => operation(),
+			},
 			setWidget: () => {},
 			setFooter: () => {},
 			setHeader: () => {},

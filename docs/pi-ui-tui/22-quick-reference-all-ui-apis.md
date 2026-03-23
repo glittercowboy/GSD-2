@@ -16,7 +16,8 @@
 | `notify(message, level)` | Toast notification (`"info"`, `"warning"`, `"error"`) |
 | `setStatus(id, text?)` | Footer status (clear with `undefined`) |
 | `setWidget(id, content?, opts?)` | Widget above/below editor |
-| `setWorkingMessage(text?)` | Working message during streaming |
+| `activity.start({ owner, lane, ... })` | Start lane-based activity and get handle |
+| `activity.run(operation, { owner, lane, ... })` | Run async operation inside activity |
 | `setFooter(factory?)` | Replace footer (restore with `undefined`) |
 | `setHeader(factory?)` | Replace header (restore with `undefined`) |
 | `setTitle(title)` | Terminal title |
@@ -57,7 +58,7 @@ import {
 
 // From @mariozechner/pi-coding-agent
 import {
-  DynamicBorder, BorderedLoader, CustomEditor,
+  DynamicBorder, CustomEditor,
   getMarkdownTheme, getSettingsListTheme,
   highlightCode, getLanguageFromPath,
   keyHint, appKeyHint, editorKey, rawKeyHint,

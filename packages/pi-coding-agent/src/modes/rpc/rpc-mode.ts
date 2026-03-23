@@ -87,9 +87,10 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 	const startupNotifications: Array<{ message: string; type?: "info" | "warning" | "error" | "success" }> = [];
 	const statusState = new Map<string, string | undefined>();
 	const widgetState = new Map<string, { content: unknown; options?: ExtensionWidgetOptions }>();
+	const activityState = new Map<string, { owner: string; lane: "status" | "modal" | "inline" | "countdown" | "decorative" | "cli"; key?: string; message?: string; progress?: number }>();
+	const embeddedActivityHandles = new Map<string, ReturnType<ExtensionUIContext["activity"]["start"]>>();
 	let footerFactory: Parameters<ExtensionUIContext["setFooter"]>[0] | undefined;
 	let headerFactory: Parameters<ExtensionUIContext["setHeader"]>[0] | undefined;
-	let workingMessageState: string | undefined;
 	let titleState: string | undefined;
 	let editorTextState: string | undefined;
 
@@ -102,6 +103,7 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 
 	const replayEmbeddedUiState = async (interactiveMode: InteractiveMode): Promise<void> => {
 		const ui = interactiveMode.getExtensionUIContext();
+		embeddedActivityHandles.clear();
 		ui.setHeader(headerFactory);
 		ui.setFooter(footerFactory);
 		for (const [key, text] of statusState.entries()) {
@@ -110,7 +112,18 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 		for (const [key, widget] of widgetState.entries()) {
 			ui.setWidget(key, widget.content as any, widget.options);
 		}
-		ui.setWorkingMessage(workingMessageState);
+		for (const [activityId, activity] of activityState.entries()) {
+			const handle = ui.activity.start({
+				owner: activity.owner,
+				lane: activity.lane,
+				key: activity.key,
+				message: activity.message,
+			});
+			if (activity.progress !== undefined) {
+				handle.setProgress(activity.progress);
+			}
+			embeddedActivityHandles.set(activityId, handle);
+		}
 		if (titleState) {
 			ui.setTitle(titleState);
 		}
@@ -252,25 +265,138 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 			});
 		},
 
-		startActivity(): { update: () => void; stop: () => void; isActive: () => boolean } {
-			// Working activity spinner is not supported in RPC mode
-			return {
-				update: () => {},
-				stop: () => {},
-				isActive: () => false,
-			};
-		},
+		activity: {
+			start(options) {
+				const activityId = crypto.randomUUID();
+				let active = true;
+				activityState.set(activityId, {
+					owner: options.owner,
+					lane: options.lane,
+					key: options.key,
+					message: options.message,
+					progress: options.progress,
+				});
 
-		runActivity<T>(operation: () => Promise<T>): Promise<T> {
-			// Execute operation without spinner in RPC mode
-			return operation();
-		},
+				output({
+					type: "extension_ui_request",
+					id: crypto.randomUUID(),
+					method: "activity_start",
+					activityId,
+					owner: options.owner,
+					lane: options.lane,
+					key: options.key,
+					message: options.message,
+					progress: options.progress,
+				} as RpcExtensionUIRequest);
 
-		setWorkingMessage(message?: string): void {
-			workingMessageState = message;
-			void withEmbeddedUiContext((ui) => {
-				ui.setWorkingMessage(message);
-			});
+				void withEmbeddedUiContext((ui) => {
+					const handle = ui.activity.start(options);
+					embeddedActivityHandles.set(activityId, handle);
+				});
+
+				return {
+					setMessage(message?: string) {
+						if (!active) return;
+						const current = activityState.get(activityId);
+						if (!current) return;
+						current.message = message;
+						output({
+							type: "extension_ui_request",
+							id: crypto.randomUUID(),
+							method: "activity_update",
+							activityId,
+							message,
+							progress: current.progress,
+						} as RpcExtensionUIRequest);
+						const embedded = embeddedActivityHandles.get(activityId);
+						embedded?.setMessage(message);
+					},
+					setProgress(progress?: number) {
+						if (!active) return;
+						const current = activityState.get(activityId);
+						if (!current) return;
+						current.progress = progress;
+						output({
+							type: "extension_ui_request",
+							id: crypto.randomUUID(),
+							method: "activity_update",
+							activityId,
+							message: current.message,
+							progress,
+						} as RpcExtensionUIRequest);
+						const embedded = embeddedActivityHandles.get(activityId);
+						embedded?.setProgress(progress);
+					},
+					stop() {
+						if (!active) return;
+						active = false;
+						activityState.delete(activityId);
+						output({
+							type: "extension_ui_request",
+							id: crypto.randomUUID(),
+							method: "activity_stop",
+							activityId,
+						} as RpcExtensionUIRequest);
+						const embedded = embeddedActivityHandles.get(activityId);
+						embedded?.stop();
+						embeddedActivityHandles.delete(activityId);
+					},
+					succeed(message?: string) {
+						if (!active) return;
+						if (message !== undefined) {
+							const current = activityState.get(activityId);
+							if (current) current.message = message;
+						}
+						output({
+							type: "extension_ui_request",
+							id: crypto.randomUUID(),
+							method: "activity_result",
+							activityId,
+							result: "succeeded",
+							message,
+						} as RpcExtensionUIRequest);
+						const embedded = embeddedActivityHandles.get(activityId);
+						embedded?.succeed(message);
+						this.stop();
+					},
+					fail(message?: string) {
+						if (!active) return;
+						if (message !== undefined) {
+							const current = activityState.get(activityId);
+							if (current) current.message = message;
+						}
+						output({
+							type: "extension_ui_request",
+							id: crypto.randomUUID(),
+							method: "activity_result",
+							activityId,
+							result: "failed",
+							message,
+						} as RpcExtensionUIRequest);
+						const embedded = embeddedActivityHandles.get(activityId);
+						embedded?.fail(message);
+						this.stop();
+					},
+					isActive() {
+						return active;
+					},
+				};
+			},
+
+			async run<T>(
+				operation: () => Promise<T>,
+				options: Parameters<ExtensionUIContext["activity"]["run"]>[1],
+			): Promise<T> {
+				const handle = this.start(options);
+				try {
+					const result = await operation();
+					handle.succeed();
+					return result;
+				} catch (error) {
+					handle.fail(error instanceof Error ? error.message : String(error));
+					throw error;
+				}
+			},
 		},
 
 		setWidget(key: string, content: unknown, options?: ExtensionWidgetOptions): void {
