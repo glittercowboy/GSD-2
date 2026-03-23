@@ -12,7 +12,7 @@
 import type { GSDState } from "./types.js";
 import type { GSDPreferences } from "./preferences.js";
 import type { UatType } from "./files.js";
-import { loadFile, extractUatType, loadActiveOverrides, parseRoadmap } from "./files.js";
+import { loadFile, extractUatType, loadActiveOverrides, parseRoadmap, parseResearchDepth } from "./files.js";
 import {
   resolveMilestoneFile,
   resolveMilestonePath,
@@ -243,8 +243,17 @@ export const DISPATCH_RULES: DispatchRule[] = [
     name: "pre-planning (no research) → research-milestone",
     match: async ({ state, mid, midTitle, basePath, prefs }) => {
       if (state.phase !== "pre-planning") return null;
-      // Phase skip: skip research when preference or profile says so
-      if (prefs?.phases?.skip_research) return null;
+      // D071: CONTEXT.md research_depth frontmatter overrides profile skip_research
+      const contextFileForDepth = resolveMilestoneFile(basePath, mid, "CONTEXT");
+      const contextContentForDepth = contextFileForDepth ? await loadFile(contextFileForDepth) : null;
+      const { depth: researchDepth } = parseResearchDepth(contextContentForDepth);
+      // Explicit "skip" in frontmatter → skip research regardless of profile
+      if (researchDepth === "skip") return null;
+      // Non-null depth (light/standard/deep) → bypass skip_research profile check
+      if (!researchDepth) {
+        // No frontmatter → respect profile as before
+        if (prefs?.phases?.skip_research) return null;
+      }
       const researchFile = resolveMilestoneFile(basePath, mid, "RESEARCH");
       if (researchFile) return null; // has research, fall through
       return {
@@ -271,9 +280,18 @@ export const DISPATCH_RULES: DispatchRule[] = [
     name: "planning (no research, not S01) → research-slice",
     match: async ({ state, mid, midTitle, basePath, prefs }) => {
       if (state.phase !== "planning") return null;
-      // Phase skip: skip research when preference or profile says so
-      if (prefs?.phases?.skip_research || prefs?.phases?.skip_slice_research)
-        return null;
+      // D071: CONTEXT.md research_depth frontmatter overrides profile skip settings
+      const contextFileForDepth = resolveMilestoneFile(basePath, mid, "CONTEXT");
+      const contextContentForDepth = contextFileForDepth ? await loadFile(contextFileForDepth) : null;
+      const { depth: researchDepth } = parseResearchDepth(contextContentForDepth);
+      // Explicit "skip" in frontmatter → skip research regardless of profile
+      if (researchDepth === "skip") return null;
+      // Non-null depth (light/standard/deep) → bypass skip_research + skip_slice_research
+      if (!researchDepth) {
+        // No frontmatter → respect profile as before
+        if (prefs?.phases?.skip_research || prefs?.phases?.skip_slice_research)
+          return null;
+      }
       if (!state.activeSlice) return missingSliceStop(mid, state.phase);
       const sid = state.activeSlice!.id;
       const sTitle = state.activeSlice!.title;
