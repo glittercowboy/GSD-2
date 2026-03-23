@@ -24,6 +24,7 @@ import {
 import { detectStuck } from "./detect-stuck.js";
 import { runUnit } from "./run-unit.js";
 import { debugLog } from "../debug-logger.js";
+import { drainLogs, summarizeLogs, formatForNotification } from "../workflow-logger.js";
 import { PROJECT_FILES } from "../detection.js";
 import { join } from "node:path";
 
@@ -569,19 +570,25 @@ export async function runDispatch(
         deps.invalidateAllCaches();
       } else {
         // Level 2: hard stop — genuinely stuck
+        const logSummary = summarizeLogs();
+        const stuckReason = logSummary
+          ? `${stuckSignal.reason}. Root cause: ${logSummary}`
+          : stuckSignal.reason;
+        drainLogs();
+
         debugLog("autoLoop", {
           phase: "stuck-detected",
           unitType,
           unitId,
-          reason: stuckSignal.reason,
+          reason: stuckReason,
         });
         await deps.stopAuto(
           ctx,
           pi,
-          `Stuck: ${stuckSignal.reason}`,
+          `Stuck: ${stuckReason}`,
         );
         ctx.ui.notify(
-          `Stuck on ${unitType} ${unitId} — ${stuckSignal.reason}. The expected artifact was not written.`,
+          `Stuck on ${unitType} ${unitId} — ${stuckReason}`,
           "error",
         );
         return { action: "break", reason: "stuck-detected" };
@@ -838,7 +845,10 @@ export async function runUnitPhase(
     }
     const hasProjectFile = PROJECT_FILES.some((f) => deps.existsSync(join(s.basePath, f)));
     const hasSrcDir = deps.existsSync(join(s.basePath, "src"));
-    if (!hasProjectFile && !hasSrcDir) {
+    // A .gsd directory (or symlink) counts as a valid project — greenfield
+    // projects won't have package.json/src yet; the first task creates them.
+    const hasGsdDir = deps.existsSync(join(s.basePath, ".gsd"));
+    if (!hasProjectFile && !hasSrcDir && !hasGsdDir) {
       const msg = `Worktree health check failed: ${s.basePath} has no recognized project files — refusing to dispatch ${unitType} ${unitId}`;
       debugLog("runUnitPhase", { phase: "worktree-health-fail", basePath: s.basePath, hasProjectFile, hasSrcDir });
       ctx.ui.notify(msg, "error");
@@ -1057,6 +1067,20 @@ export async function runUnitPhase(
         lastEntry.error = msgStr.slice(0, 200);
       }
     }
+  }
+
+  // ── Workflow logger drain ──────────────────────────────────────────
+  const logEntries = drainLogs();
+  if (logEntries.length > 0) {
+    const hasLogErrors = logEntries.some(e => e.severity === "error");
+    const lastEntry = loopState.recentUnits[loopState.recentUnits.length - 1];
+    if (lastEntry && !lastEntry.error && hasLogErrors) {
+      lastEntry.error = formatForNotification(logEntries.filter(e => e.severity === "error")).slice(0, 200);
+    }
+    ctx.ui.notify(
+      `Engine: ${formatForNotification(logEntries)}`,
+      hasLogErrors ? "error" : "warning",
+    );
   }
 
   if (unitResult.status === "cancelled") {

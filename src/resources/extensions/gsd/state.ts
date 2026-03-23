@@ -182,8 +182,8 @@ export async function deriveState(basePath: string): Promise<GSDState> {
   }
 
   // Engine bridge (Phase 3 — MIG-03)
-  // When WorkflowEngine is available AND has populated data, use engine.
-  // Falls through to legacy markdown parse if engine tables are empty.
+  // When WorkflowEngine is available, use engine exclusively.
+  // Auto-migrate from markdown if tables are empty (D-11).
   try {
     const { isEngineAvailable, getEngine } = await import('./workflow-engine.js');
     if (isEngineAvailable(basePath)) {
@@ -197,26 +197,39 @@ export async function deriveState(basePath: string): Promise<GSDState> {
           // D-14: validate migration output, log discrepancies
           const { discrepancies } = validateMigration(basePath);
           if (discrepancies.length > 0) {
-            process.stderr.write(`workflow-migration: ${discrepancies.length} discrepancy(ies) after migration (engine state is authoritative)\n`);
+            const { logWarning } = await import('./workflow-logger.js');
+            logWarning("migration", `${discrepancies.length} discrepancy(ies) after migration`, { discrepancies: discrepancies.join("; ") });
           }
         }
       } catch (migErr) {
-        process.stderr.write(`workflow-migration: auto-migration failed: ${(migErr as Error).message}\n`);
+        const { logError } = await import('./workflow-logger.js');
+        logError("migration", `auto-migration failed: ${(migErr as Error).message}`);
         // Continue — engine may still have valid state from prior migration
       }
 
       const engineState = engine.deriveState();
-      // Only use engine result if it has actual data (registry populated).
-      // If the milestones table exists but is empty (schema created, no migration yet),
-      // fall through to legacy markdown parse which reads from disk.
-      if (engineState.registry && engineState.registry.length > 0) {
-        _stateCache = { basePath, result: engineState, timestamp: Date.now() };
-        _telemetry.engineDeriveCount++;
-        return engineState;
-      }
+      // Cache the engine result with the same TTL as the markdown path
+      _stateCache = { basePath, result: engineState, timestamp: Date.now() };
+      _telemetry.engineDeriveCount++;
+      return engineState;
     }
-  } catch {
-    // Fall through to legacy markdown parse — engine not yet initialized or import failed
+    // isEngineAvailable returned false — DB not yet opened. This is normal
+    // during early init (hooks fire before any tool calls ensureDbOpen).
+    // Fall through silently to legacy markdown parse.
+  } catch (engineErr) {
+    // "database is not open" / "no database connection" are expected during
+    // early init before ensureDbOpen runs — fall through silently like
+    // isEngineAvailable() returning false.
+    const errMsg = (engineErr as Error).message ?? "";
+    const isExpectedStartup =
+      errMsg.includes("database is not open") ||
+      errMsg.includes("no database connection");
+    if (!isExpectedStartup) {
+      try {
+        const { logWarning } = await import('./workflow-logger.js');
+        logWarning("state", `engine error, falling back to markdown parsing: ${errMsg}`);
+      } catch { /* logger itself not available — truly early init */ }
+    }
   }
 
   const stopTimer = debugTime("derive-state-impl");
