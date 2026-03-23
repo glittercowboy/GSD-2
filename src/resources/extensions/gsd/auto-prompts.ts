@@ -6,7 +6,7 @@
  * utility.
  */
 
-import { loadFile, parseContinue, parsePlan, parseRoadmap, parseSummary, extractUatType, loadActiveOverrides, formatOverridesSection, parseTaskPlanFile } from "./files.js";
+import { loadFile, parseContinue, parsePlan, parseRoadmap, parseSummary, extractUatType, loadActiveOverrides, formatOverridesSection, parseTaskPlanFile, parseResearchDepth } from "./files.js";
 import type { Override, UatType } from "./files.js";
 import { loadPrompt, inlineTemplate } from "./prompt-loader.js";
 import {
@@ -791,6 +791,10 @@ export async function buildResearchMilestonePrompt(mid: string, midTitle: string
   const contextPath = resolveMilestoneFile(base, mid, "CONTEXT");
   const contextRel = relMilestoneFile(base, mid, "CONTEXT");
 
+  // Parse research depth/focus from CONTEXT.md frontmatter for prompt injection
+  const contextContent = contextPath ? await loadFile(contextPath) : null;
+  const { depth: researchDepth, focus: researchFocus } = parseResearchDepth(contextContent);
+
   const inlined: string[] = [];
   inlined.push(await inlineFile(contextPath, contextRel, "Milestone Context"));
   const projectInline = await inlineProjectFromDb(base);
@@ -813,6 +817,8 @@ export async function buildResearchMilestonePrompt(mid: string, midTitle: string
     contextPath: contextRel,
     outputPath: join(base, outputRelPath),
     inlinedContext,
+    researchDepth: researchDepth ?? "",
+    researchFocus: researchFocus ?? "",
     skillActivation: buildSkillActivationBlock({
       base,
       milestoneId: mid,

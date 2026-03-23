@@ -15,6 +15,31 @@ After the user describes their idea, **do not ask questions yet**. First, prove 
 
 This prevents runaway questioning by forcing comprehension proof before anything else. Do not skip this step. Do not combine it with the first question round.
 
+## Deep Abstraction Pass
+
+This section handles dense, information-rich inputs. Check the `deep_abstraction` preference before proceeding:
+
+- If `deep_abstraction` is `off`, skip this section entirely and proceed to Vision Mapping.
+- If `deep_abstraction` is `always`, activate regardless of input length.
+- If `deep_abstraction` is `auto` (default), count the approximate word count of the user's input. If it exceeds the `deep_abstraction_threshold` preference (default: ~300 words), activate. If below the threshold, skip to Vision Mapping.
+
+When activated, follow these steps in order:
+
+1. **Structured item extraction.** Break the user's dense input into atomic items — each item is one distinct idea, request, constraint, or requirement they expressed. Do not merge related items; keep them granular. Tag each item with a confidence level:
+   - **CLEAR** — the user explicitly stated this. Direct quote or unambiguous intent.
+   - **INTERPRETED** — a reasonable inference from what they said. Logically follows but not verbatim.
+   - **UNCERTAIN** — implied but ambiguous. Could mean multiple things or may be a misread.
+
+2. **Batched confirmations.** Present extracted items in batches of ~3 per `ask_user_questions` call. For each batch:
+   - Show the items with their confidence tags (e.g., "[CLEAR] Build a REST API for user management")
+   - Ask the user to confirm, correct, or reject each item
+   - For UNCERTAIN items, ask specifically: "What did you mean by X?"
+   - Continue batches until all items are confirmed or corrected
+
+3. **Gap surfacing.** After all items are confirmed, identify gaps — things the user probably needs but did not mention. Common gaps: error handling strategy, authentication model, deployment target, data persistence, observability needs. Present gaps as a final question round before proceeding. Do not silently assume gaps are in scope; confirm each one.
+
+After the Deep Abstraction Pass completes (or is skipped), proceed to Vision Mapping.
+
 ## Vision Mapping
 
 After reflection is confirmed, decide the approach based on the actual scope — not a label:
@@ -146,6 +171,24 @@ Research is advisory, not auto-binding. Use the discussion output to identify:
 If the research suggests requirements the user did not explicitly ask for, present them as candidate requirements to confirm, defer, or reject. Do not silently turn research into scope.
 
 For multi-milestone visions, research should cover the full landscape, not just the first milestone. Research findings may affect milestone sequencing, not just slice ordering within M001.
+
+## Research Calibration
+
+After the focused research pass completes, assess the overall research need for this project based on everything discussed so far. Recommend a `research_depth` tier:
+
+- **skip** — well-understood work with no technical unknowns. The team has built similar things before. No external APIs, no unfamiliar domains.
+- **light** — quick validation needed. Mostly familiar territory, but one or two areas need a brief doc check or API confirmation.
+- **standard** — normal research depth. Multiple unknowns that need investigation: library capabilities, API shapes, integration patterns, domain conventions.
+- **deep** — significant unknowns or unfamiliar domain. New technology stack, complex third-party integrations, compliance requirements, or areas where getting it wrong is expensive to fix.
+
+Provide a brief argument for your recommendation (e.g., "This involves an unfamiliar GraphQL schema with real-time subscriptions — recommending `deep` to investigate patterns and connection lifecycle"). Present the recommendation to the user via `ask_user_questions` for confirmation or override.
+
+After confirmation, write the following values into the CONTEXT.md frontmatter:
+- `research_depth` — the confirmed tier (skip/light/standard/deep)
+- `research_signals` — a list of what triggered the assessment (e.g., ["unfamiliar API", "compliance requirements", "no prior art in codebase"])
+- `research_focus` — the primary area needing investigation (e.g., "GraphQL subscription lifecycle and error recovery")
+
+These frontmatter fields are consumed by the auto-dispatch system to calibrate research agent behavior downstream. If the user overrides your recommendation, use their chosen tier.
 
 ## Capability Contract
 

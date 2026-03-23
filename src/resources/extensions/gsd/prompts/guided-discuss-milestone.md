@@ -70,32 +70,45 @@ After each round of answers, decide whether you already have enough depth to wri
 
 ---
 
+## Deep Abstraction + Research Calibration
+
+For dense inputs (>300 words or when `deep_abstraction` is `always`), perform structured extraction before questioning:
+
+1. **Item extraction:** Break the input into atomic items. Tag each: **CLEAR** (explicitly stated), **INTERPRETED** (reasonable inference), **UNCERTAIN** (ambiguous). Present in batches of ~3 via `ask_user_questions` for confirmation.
+2. **Gap surfacing:** After items are confirmed, identify likely gaps (error handling, auth, deployment, observability) and confirm with the user.
+3. **Research calibration:** After the discussion's focused research pass, recommend a `research_depth` tier — `skip`, `light`, `standard`, or `deep` — with a brief argument. Confirm via `ask_user_questions`. Write confirmed values into CONTEXT.md frontmatter: `research_depth`, `research_signals`, `research_focus`.
+
+Skip item extraction when `deep_abstraction` is `off` or input is below `deep_abstraction_threshold` (~300 words). Research calibration always runs.
+
+---
+
 ## Depth Verification
 
-Before moving to the wrap-up gate, verify you have covered:
+Before writing context, verify understanding across three dimensions in sequence. Each gets its own summary + confirmation.
 
-- [ ] What they're building — concrete enough to explain to a stranger
-- [ ] Why it needs to exist
-- [ ] Who it's for
-- [ ] What "done" looks like
-- [ ] The biggest technical unknowns / risks
-- [ ] What external systems/services this touches
+### Dimension 1: What (`depth_verification_what`)
 
-**Print a structured depth summary in chat first** — using the user's own terminology. Cover what you understood, what shaped your understanding, and any areas of remaining uncertainty.
+Print a concise summary (3–5 bullets) of what they're building, why it exists, who it's for, and what "done" looks like — using their terminology.
 
-**Then confirm:**
+**If `{{structuredQuestionsAvailable}}` is `true`:** use `ask_user_questions` with header "What Check", question "Did I capture the what correctly?", options "Yes, you got it (Recommended)" / "Not quite — let me clarify", ID containing `depth_verification_what`.
 
-**If `{{structuredQuestionsAvailable}}` is `true`:** use `ask_user_questions` with:
-- header: "Depth Check"
-- question: "Did I capture the depth right?"
-- options: "Yes, you got it (Recommended)", "Not quite — let me clarify"
-- **The question ID must contain `depth_verification`** (e.g. `depth_verification_confirm`) — this enables the write-gate downstream.
+**If `{{structuredQuestionsAvailable}}` is `false`:** ask in plain text and wait for confirmation.
 
-**If `{{structuredQuestionsAvailable}}` is `false`:** ask in plain text: "Did I capture that correctly? If not, tell me what I missed." Wait for confirmation before proceeding.
+### Dimension 2: Risks (`depth_verification_risks`)
 
-If they clarify, absorb the correction and re-verify.
+Print a concise summary (3–5 bullets) of technical unknowns, risks, unproven assumptions, and failure modes.
 
-The depth verification is the only required confirmation gate. Do not add a second "ready to proceed?" gate after it.
+**If `{{structuredQuestionsAvailable}}` is `true`:** use `ask_user_questions` with header "Risks Check", question "Did I identify the key risks?", options "Yes, you got it (Recommended)" / "Not quite — let me clarify", ID containing `depth_verification_risks`.
+
+### Dimension 3: Dependencies (`depth_verification_dependencies`)
+
+Print a concise summary (3–5 bullets) of external systems, APIs, services, integration points, and deployment constraints.
+
+**If `{{structuredQuestionsAvailable}}` is `true`:** use `ask_user_questions` with header "Deps Check", question "Did I capture the dependencies correctly?", options "Yes, you got it (Recommended)" / "Not quite — let me clarify", ID containing `depth_verification_dependencies`.
+
+### Re-verification
+
+If the user says "not quite" on any dimension, absorb the correction and re-verify **that dimension only**. All three must pass before CONTEXT.md can be written.
 
 ---
 
