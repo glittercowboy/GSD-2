@@ -4,7 +4,7 @@ import { StringDecoder } from "node:string_decoder";
 import type { Readable } from "node:stream";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { resolveTypeStrippingFlag } from "./ts-subprocess-flags.ts";
+import { resolveTypeStrippingFlag, resolveSubprocessModule, buildSubprocessPrefixArgs } from "./ts-subprocess-flags.ts";
 
 import type { AgentSessionEvent, SessionStateChangeReason } from "../../packages/pi-coding-agent/src/core/agent-session.ts";
 import type {
@@ -905,11 +905,19 @@ async function loadCachedWorkspaceIndex(
 
 async function loadWorkspaceIndexViaChildProcess(basePath: string, packageRoot: string): Promise<GSDWorkspaceIndex> {
   const deps = getBridgeDeps();
-  const resolveTsLoader = join(packageRoot, "src", "resources", "extensions", "gsd", "tests", "resolve-ts.mjs");
-  const workspaceModulePath = join(packageRoot, "src", "resources", "extensions", "gsd", "workspace-index.ts");
   const checkExists = deps.existsSync ?? existsSync;
-  if (!checkExists(resolveTsLoader) || !checkExists(workspaceModulePath)) {
+  const resolveTsLoader = join(packageRoot, "src", "resources", "extensions", "gsd", "tests", "resolve-ts.mjs");
+  const moduleResolution = resolveSubprocessModule(
+    packageRoot,
+    "resources/extensions/gsd/workspace-index.ts",
+    checkExists,
+  );
+  const workspaceModulePath = moduleResolution.modulePath;
+  if (!moduleResolution.useCompiledJs && (!checkExists(resolveTsLoader) || !checkExists(workspaceModulePath))) {
     throw new Error(`workspace index loader not found; checked=${resolveTsLoader},${workspaceModulePath}`);
+  }
+  if (moduleResolution.useCompiledJs && !checkExists(workspaceModulePath)) {
+    throw new Error(`workspace index module not found; checked=${workspaceModulePath}`);
   }
 
   const script = [
@@ -919,14 +927,17 @@ async function loadWorkspaceIndexViaChildProcess(basePath: string, packageRoot: 
     'process.stdout.write(JSON.stringify(result));',
   ].join(' ');
 
+  const prefixArgs = buildSubprocessPrefixArgs(
+    packageRoot,
+    moduleResolution,
+    pathToFileURL(resolveTsLoader).href,
+  );
+
   return await new Promise<GSDWorkspaceIndex>((resolveResult, reject) => {
     execFile(
       deps.execPath ?? process.execPath,
       [
-        "--import",
-        pathToFileURL(resolveTsLoader).href,
-        resolveTypeStrippingFlag(packageRoot),
-        "--input-type=module",
+        ...prefixArgs,
         "--eval",
         script,
       ],
