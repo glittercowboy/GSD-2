@@ -53,6 +53,7 @@ export function showHelp(ctx: ExtensionCommandContext): void {
     "  /gsd hooks          Show post-unit hook configuration",
     "  /gsd extensions     Manage extensions  [list|enable|disable|info]",
     "  /gsd fast           Toggle OpenAI service tier  [on|off|flex|status]",
+    "  /gsd mcp            MCP server status and connectivity  [status|check <server>]",
     "",
     "MAINTENANCE",
     "  /gsd doctor         Diagnose and repair .gsd/ state  [audit|fix|heal] [scope]",

@@ -191,6 +191,11 @@ Examples:
     await handleFast(trimmed.replace(/^fast\s*/, "").trim(), ctx);
     return true;
   }
+  if (trimmed === "mcp" || trimmed.startsWith("mcp ")) {
+    const { handleMcpStatus } = await import("../../commands-mcp-status.js");
+    await handleMcpStatus(trimmed.replace(/^mcp\s*/, "").trim(), ctx);
+    return true;
+  }
   if (trimmed === "extensions" || trimmed.startsWith("extensions ")) {
     const { handleExtensions } = await import("../../commands-extensions.js");
     await handleExtensions(trimmed.replace(/^extensions\s*/, "").trim(), ctx);
