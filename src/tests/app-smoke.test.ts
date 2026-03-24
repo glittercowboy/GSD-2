@@ -76,6 +76,7 @@ test("loader sets all 4 GSD_ env vars and PI_PACKAGE_DIR", async () => {
   writeFileSync(scriptPath, script);
 
   t.after(() => rmSync(tmp, { recursive: true, force: true }));
+  try {
   const output = execSync(
     `node --experimental-strip-types -e "
       process.chdir('${projectRoot}');
@@ -137,7 +138,6 @@ test("initResources syncs extensions, agents, and skills to target dir", async (
   const tmp = mkdtempSync(join(tmpdir(), "gsd-resources-test-"));
   const fakeAgentDir = join(tmp, "agent");
 
-  try {
   initResources(fakeAgentDir);
 
   // Extensions synced
