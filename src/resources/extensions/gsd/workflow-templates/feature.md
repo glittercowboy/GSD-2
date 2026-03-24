@@ -19,8 +19,8 @@ Typical scope: a new command, endpoint, component, integration, or user-facing c
 2. scope      — Define what to build, key design decisions, confirm boundaries
 3. plan       — Break into 2-5 implementable tasks with file-level detail
 4. implement  — Execute the plan with atomic commits per task
-5. verify     — Run tests, build, lint, and smoke check
-6. pr         — Create a well-documented PR targeting the correct upstream base
+5. verify     — Run tests, build, lint, smoke check, and CI preflight (advisory)
+6. pr         — Create a well-documented PR and report post-PR CI status (advisory)
 </phases>
 
 <process>
@@ -126,17 +126,33 @@ Typical scope: a new command, endpoint, component, integration, or user-facing c
 
 ## Phase 5: Verify
 
-**Goal:** Ensure everything works together and CI will pass.
+**Goal:** Ensure everything works locally and surface any likely CI failures before pushing.
 
 1. Run the full test suite (e.g., `npm test`, `pytest`, `go test ./...`)
 2. Run the build (e.g., `npm run build`, `make build`)
 3. Run the linter (e.g., `npm run lint`, `ruff check`, `golangci-lint`)
 4. Manual smoke check: exercise the new feature end-to-end if applicable
 5. Fix any failures before proceeding — do not skip to PR with red tests
-6. **Produce:** Write `SUMMARY.md` in the artifact directory:
+
+6. **CI preflight (advisory):**
+   - Check for CI config: `ls .github/workflows/` (or `.circleci/`, `Makefile` CI targets, etc.)
+   - Scan workflow files to identify what jobs run on pull_request (test, lint, build, typecheck, etc.)
+   - For each job that can be run locally, run it and note the result
+   - Report a preflight summary:
+     ```
+     CI Preflight
+     ✓ tests       — npm test passed
+     ✓ build       — npm run build passed
+     ✓ lint        — npm run lint passed
+     ~ typecheck   — skipped (requires local tsconfig setup)
+     ```
+   - This is advisory — surface issues, but do not block progression to the PR phase
+
+7. **Produce:** Write `SUMMARY.md` in the artifact directory:
    - What was built
    - Files changed (with brief description of each change)
    - How to test / use the feature
+   - CI preflight results
    - Known limitations or follow-up items
 
 ## Phase 6: PR
@@ -182,6 +198,21 @@ Typical scope: a new command, endpoint, component, integration, or user-facing c
    )" [--repo <upstream-org>/<repo>] [--base main] [--head <fork>:<branch>]
    ```
 
-6. **Return the PR URL** so the user can track review status
+6. **Post-PR CI check (advisory):**
+   - After the PR is created, wait ~10 seconds for checks to register, then run:
+     `gh pr checks <pr-number> --repo <repo>`
+   - Report the check results to the user
+   - If any checks are failing or pending, note them — do not re-run or auto-fix
+   - Example output to surface:
+     ```
+     CI Status (advisory)
+     ✓ test / ubuntu       passed
+     ✓ lint                passed
+     ✗ typecheck           failed — review at <url>
+     ● deploy-preview      pending
+     ```
+   - This is informational only: the workflow is complete regardless of CI result
+
+7. **Return the PR URL** so the user can track review status
 
 </process>

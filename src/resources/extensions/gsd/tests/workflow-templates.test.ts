@@ -176,6 +176,8 @@ console.log('\n── Load Workflow Template ──');
   assert.ok(featureContent!.includes('Phase 1: Setup'), 'Should contain setup phase');
   assert.ok(featureContent!.includes('Phase 6: PR'), 'Should contain pr phase');
   assert.ok(featureContent!.includes('upstream'), 'Should reference upstream remote management');
+  assert.ok(featureContent!.includes('CI preflight'), 'Should include CI preflight step in verify phase');
+  assert.ok(featureContent!.includes('gh pr checks'), 'Should include post-PR CI check step');
 
   const missingContent = loadWorkflowTemplate('nonexistent');
   assert.ok(missingContent === null, 'Should return null for unknown template');
