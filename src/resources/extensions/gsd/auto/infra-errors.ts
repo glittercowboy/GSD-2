@@ -18,6 +18,7 @@ export const INFRA_ERROR_CODES: ReadonlySet<string> = new Set([
   "EDQUOT",   // disk quota exceeded
   "EMFILE",   // too many open files (process)
   "ENFILE",   // too many open files (system)
+  "EAGAIN",   // resource temporarily unavailable (resource exhaustion)
 ]);
 
 /**

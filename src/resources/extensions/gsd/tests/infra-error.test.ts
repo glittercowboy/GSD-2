@@ -7,10 +7,10 @@ import { isInfrastructureError, INFRA_ERROR_CODES } from "../auto/infra-errors.j
 // ── INFRA_ERROR_CODES constant ───────────────────────────────────────────────
 
 test("INFRA_ERROR_CODES contains the expected codes", () => {
-  for (const code of ["ENOSPC", "ENOMEM", "EROFS", "EDQUOT", "EMFILE", "ENFILE"]) {
+  for (const code of ["ENOSPC", "ENOMEM", "EROFS", "EDQUOT", "EMFILE", "ENFILE", "EAGAIN"]) {
     assert.ok(INFRA_ERROR_CODES.has(code), `missing ${code}`);
   }
-  assert.equal(INFRA_ERROR_CODES.size, 6, "unexpected extra codes");
+  assert.equal(INFRA_ERROR_CODES.size, 7, "unexpected extra codes");
 });
 
 // ── isInfrastructureError: code property detection ───────────────────────────
@@ -43,6 +43,16 @@ test("detects EMFILE via code property", () => {
 test("detects ENFILE via code property", () => {
   const err = Object.assign(new Error("file table overflow"), { code: "ENFILE" });
   assert.equal(isInfrastructureError(err), "ENFILE");
+});
+
+test("detects EAGAIN via code property", () => {
+  const err = Object.assign(new Error("resource temporarily unavailable"), { code: "EAGAIN" });
+  assert.equal(isInfrastructureError(err), "EAGAIN");
+});
+
+test("detects EAGAIN in error message fallback", () => {
+  const err = new Error("spawn failed: EAGAIN resource temporarily unavailable");
+  assert.equal(isInfrastructureError(err), "EAGAIN");
 });
 
 // ── isInfrastructureError: message fallback ──────────────────────────────────
