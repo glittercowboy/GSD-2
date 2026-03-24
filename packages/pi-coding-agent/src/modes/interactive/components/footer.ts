@@ -136,7 +136,7 @@ export class FooterComponent implements Component {
 		if (process.env.GSD_SHOW_TOKEN_COST === "1") {
 			const lastTurnCost = this.session.getLastTurnCost();
 			if (lastTurnCost > 0) {
-				statsParts.push(`(last: ${formatPromptCost(lastTurnCost)})`);
+				costGroup.push(`(last: ${formatPromptCost(lastTurnCost)})`);
 			}
 		}
 
