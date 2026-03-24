@@ -1,4 +1,4 @@
-import { describe, test } from 'node:test';
+import { describe, test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync, existsSync, lstatSync, realpathSync, mkdirSync, symlinkSync, renameSync } from "node:fs";
 import { join } from "node:path";
@@ -21,10 +21,15 @@ function run(command: string, cwd: string): string {
   return execSync(command, { cwd, stdio: ["ignore", "pipe", "pipe"], encoding: "utf-8" }).trim();
 }
 
-  const base = realpathSync(mkdtempSync(join(tmpdir(), "gsd-repo-identity-")));
-  const stateDir = realpathSync(mkdtempSync(join(tmpdir(), "gsd-state-")));
+describe('repo-identity-worktree', () => {
+  let base: string;
+  let stateDir: string;
+  let worktreePath: string;
+  let expectedExternalState: string;
 
-  try {
+  before(() => {
+    base = realpathSync(mkdtempSync(join(tmpdir(), "gsd-repo-identity-")));
+    stateDir = realpathSync(mkdtempSync(join(tmpdir(), "gsd-state-")));
     process.env.GSD_STATE_DIR = stateDir;
 
     run("git init -b main", base);
@@ -35,15 +40,20 @@ function run(command: string, cwd: string): string {
     run("git add README.md", base);
     run('git commit -m "chore: init"', base);
 
-    const worktreePath = join(base, ".gsd", "worktrees", "M001");
+    worktreePath = join(base, ".gsd", "worktrees", "M001");
     run(`git worktree add -b milestone/M001 ${worktreePath}`, base);
 
+    expectedExternalState = externalGsdRoot(base);
+  });
 
-describe('repo-identity-worktree', () => {
+  after(() => {
+    delete process.env.GSD_PROJECT_ID;
+    delete process.env.GSD_STATE_DIR;
+    rmSync(base, { recursive: true, force: true });
+    rmSync(stateDir, { recursive: true, force: true });
+  });
+
 test('ensureGsdSymlink points worktree at main repo external state dir', () => {
-    const expectedExternalState = externalGsdRoot(base);
-});
-
     const mainState = ensureGsdSymlink(base);
     assert.deepStrictEqual(mainState, realpathSync(join(base, ".gsd")), "ensureGsdSymlink(base) returns the current main repo .gsd target");
     const worktreeState = ensureGsdSymlink(worktreePath);
@@ -51,38 +61,40 @@ test('ensureGsdSymlink points worktree at main repo external state dir', () => {
     assert.ok(existsSync(join(worktreePath, ".gsd")), "worktree .gsd exists");
     assert.ok(lstatSync(join(worktreePath, ".gsd")).isSymbolicLink(), "worktree .gsd is a symlink");
     assert.deepStrictEqual(realpathSync(join(worktreePath, ".gsd")), realpathSync(expectedExternalState), "worktree .gsd symlink resolves to main repo external state dir");
-test('ensureGsdSymlink heals stale worktree symlinks', () => {
-    const staleState = join(stateDir, "projects", "stale-worktree-state");
 });
 
+test('ensureGsdSymlink heals stale worktree symlinks', () => {
+    const staleState = join(stateDir, "projects", "stale-worktree-state");
     mkdirSync(staleState, { recursive: true });
     rmSync(join(worktreePath, ".gsd"), { recursive: true, force: true });
     symlinkSync(staleState, join(worktreePath, ".gsd"), "junction");
     const healedState = ensureGsdSymlink(worktreePath);
     assert.deepStrictEqual(healedState, expectedExternalState, "stale worktree symlink is repaired to canonical external state dir");
     assert.deepStrictEqual(realpathSync(join(worktreePath, ".gsd")), realpathSync(expectedExternalState), "healed worktree symlink resolves to canonical external state dir");
-test('ensureGsdSymlink preserves worktree .gsd directories', () => {
-    rmSync(join(worktreePath, ".gsd"), { recursive: true, force: true });
 });
 
+test('ensureGsdSymlink preserves worktree .gsd directories', () => {
+    rmSync(join(worktreePath, ".gsd"), { recursive: true, force: true });
     mkdirSync(join(worktreePath, ".gsd", "milestones"), { recursive: true });
     writeFileSync(join(worktreePath, ".gsd", "milestones", "stale.txt"), "stale\n", "utf-8");
     const preservedDirState = ensureGsdSymlink(worktreePath);
     assert.deepStrictEqual(preservedDirState, join(worktreePath, ".gsd"), "worktree .gsd directory is left in place for sync-based refresh");
     assert.ok(lstatSync(join(worktreePath, ".gsd")).isDirectory(), "worktree .gsd directory remains a directory");
     assert.ok(existsSync(join(worktreePath, ".gsd", "milestones", "stale.txt")), "existing worktree .gsd directory contents remain available for sync logic");
-test('GSD_PROJECT_ID overrides computed repo hash', () => {
-    process.env.GSD_PROJECT_ID = "my-project";
 });
 
+test('GSD_PROJECT_ID overrides computed repo hash', () => {
+    process.env.GSD_PROJECT_ID = "my-project";
     assert.deepStrictEqual(repoIdentity(base), "my-project", "repoIdentity returns GSD_PROJECT_ID when set");
     assert.deepStrictEqual(externalGsdRoot(base), join(stateDir, "projects", "my-project"), "externalGsdRoot uses GSD_PROJECT_ID");
     delete process.env.GSD_PROJECT_ID;
-test('GSD_PROJECT_ID falls back to hash when unset', () => {
-    const hashIdentity = repoIdentity(base);
 });
 
+test('GSD_PROJECT_ID falls back to hash when unset', () => {
+    const hashIdentity = repoIdentity(base);
     assert.ok(/^[0-9a-f]{12}$/.test(hashIdentity), "repoIdentity returns 12-char hex hash when GSD_PROJECT_ID is unset");
+});
+
 test('readRepoMeta returns null for malformed metadata', () => {
       const malformedPath = join(stateDir, "projects", "malformed");
       mkdirSync(malformedPath, { recursive: true });
@@ -129,19 +141,15 @@ test('isInheritedRepo detects subdirectory of parent repo without .gsd (#1639)',
       run("git add README.md", parentRepo);
       run('git commit -m "init"', parentRepo);
 
-      // Create a subdirectory — no .gsd at parent
       const subdir = join(parentRepo, "newproject");
       mkdirSync(subdir, { recursive: true });
       assert.ok(isInheritedRepo(subdir), "subdirectory of parent repo without .gsd is inherited");
 
-      // After adding .gsd at parent, subdirectory is a legitimate child
       mkdirSync(join(parentRepo, ".gsd"), { recursive: true });
       assert.ok(!isInheritedRepo(subdir), "subdirectory of parent repo WITH .gsd is NOT inherited");
 
-      // The git root itself is never inherited
       assert.ok(!isInheritedRepo(parentRepo), "git root is not inherited");
 
-      // A standalone repo (not a subdir) is not inherited
       const standaloneRepo = realpathSync(mkdtempSync(join(tmpdir(), "gsd-inherited-standalone-")));
       run("git init -b main", standaloneRepo);
       run('git config user.name "Pi Test"', standaloneRepo);
@@ -165,12 +173,10 @@ test('subdirectory of parent repo gets unique identity after git init (#1639)', 
       const subdir = join(parentRepo, "childproject");
       mkdirSync(subdir, { recursive: true });
 
-      // Before git init, subdirectory shares parent's identity
       const parentIdentity = repoIdentity(parentRepo);
       const subdirIdentityBefore = repoIdentity(subdir);
       assert.deepStrictEqual(subdirIdentityBefore, parentIdentity, "subdirectory shares parent identity before its own git init");
 
-      // After git init, subdirectory gets its own identity
       run("git init -b main", subdir);
       const subdirIdentityAfter = repoIdentity(subdir);
       assert.ok(subdirIdentityAfter !== parentIdentity, "subdirectory gets unique identity after git init");
@@ -180,20 +186,14 @@ test('subdirectory of parent repo gets unique identity after git init (#1639)', 
 
 test('validateProjectId rejects invalid values', () => {
     for (const invalid of ["has spaces", "path/traversal", "dot..dot", "back\\slash"]) {
-});
-
       assert.ok(!validateProjectId(invalid), `validateProjectId rejects invalid value: "${invalid}"`);
     }
-test('validateProjectId accepts valid values', () => {
-    for (const valid of ["my-project", "foo_bar", "abc123", "A-Z_0-9"]) {
 });
 
+test('validateProjectId accepts valid values', () => {
+    for (const valid of ["my-project", "foo_bar", "abc123", "A-Z_0-9"]) {
       assert.ok(validateProjectId(valid), `validateProjectId accepts valid value: "${valid}"`);
     }
-  } finally {
-    delete process.env.GSD_PROJECT_ID;
-    delete process.env.GSD_STATE_DIR;
-    rmSync(base, { recursive: true, force: true });
-    rmSync(stateDir, { recursive: true, force: true });
-  }
+});
+
 });

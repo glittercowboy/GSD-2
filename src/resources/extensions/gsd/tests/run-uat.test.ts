@@ -1,14 +1,3 @@
-// Tests for extractUatType — the core UAT classification primitive — plus
-// prompt template loading and dispatch precondition assertions (via
-// resolveSliceFile / extractUatType on real fixture files).
-//
-// Sections:
-//   (a)–(j)  extractUatType classification (17 assertions from T01)
-//   (k)      run-uat prompt template loading and content integrity (8 assertions)
-//   (l)      dispatch precondition assertions via resolveSliceFile (4 assertions)
-//   (m)      non-artifact UAT skip: human-experience UATs are not dispatched (1 assertion)
-//   (n)      stale replay guard: existing UAT-RESULT never re-dispatches (1 assertion)
-
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -19,9 +8,6 @@ import { fileURLToPath } from 'node:url';
 import { extractUatType } from '../files.ts';
 import { resolveSliceFile } from '../paths.ts';
 import { checkNeedsRunUat } from '../auto-prompts.ts';
-// ─── Worktree-aware prompt loader ──────────────────────────────────────────
-// Resolves prompts relative to this test file so the worktree copy is used
-// instead of the main checkout copy (matches complete-milestone.test.ts pattern).
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const worktreePromptsDir = join(__dirname, '..', 'prompts');
@@ -38,9 +24,6 @@ function loadPromptFromWorktree(name: string, vars: Record<string, string> = {})
   }
   return content.trim();
 }
-
-
-// ─── Fixture helpers ───────────────────────────────────────────────────────
 
 function createFixtureBase(): string {
   const base = mkdtempSync(join(tmpdir(), 'gsd-run-uat-test-'));
@@ -68,17 +51,9 @@ function makeUatContent(mode: string): string {
   return `# UAT File\n\n## UAT Type\n\n- UAT mode: ${mode}\n- Some other bullet: value\n`;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Tests
-// ═══════════════════════════════════════════════════════════════════════════
-
-  // ─── (a) artifact-driven ──────────────────────────────────────────────────
-
 describe('run-uat', () => {
 test('(a) artifact-driven', () => {
   assert.deepStrictEqual(
-});
-
     extractUatType(makeUatContent('artifact-driven')),
     'artifact-driven',
     'plain artifact-driven → artifact-driven',
@@ -88,38 +63,34 @@ test('(a) artifact-driven', () => {
     'artifact-driven',
     'minimal content, artifact-driven',
   );
-  // ─── (b) live-runtime ─────────────────────────────────────────────────────
-test('(b) live-runtime', () => {
-  assert.deepStrictEqual(
 });
 
+test('(b) live-runtime', () => {
+  assert.deepStrictEqual(
     extractUatType(makeUatContent('live-runtime')),
     'live-runtime',
     'plain live-runtime → live-runtime',
   );
-  // ─── (c) human-experience ─────────────────────────────────────────────────
-test('(c) human-experience', () => {
-  assert.deepStrictEqual(
 });
 
+test('(c) human-experience', () => {
+  assert.deepStrictEqual(
     extractUatType(makeUatContent('human-experience')),
     'human-experience',
     'plain human-experience → human-experience',
   );
-  // ─── (d) mixed standalone ─────────────────────────────────────────────────
-test('(d) mixed standalone', () => {
-  assert.deepStrictEqual(
 });
 
+test('(d) mixed standalone', () => {
+  assert.deepStrictEqual(
     extractUatType(makeUatContent('mixed')),
     'mixed',
     'plain mixed → mixed',
   );
-  // ─── (e) mixed with parenthetical ─────────────────────────────────────────
-test('(e) mixed parenthetical', () => {
-  assert.deepStrictEqual(
 });
 
+test('(e) mixed parenthetical', () => {
+  assert.deepStrictEqual(
     extractUatType(makeUatContent('mixed (artifact-driven + live-runtime)')),
     'mixed',
     'mixed (artifact-driven + live-runtime) → mixed (leading keyword only)',
@@ -129,11 +100,10 @@ test('(e) mixed parenthetical', () => {
     'mixed',
     'mixed with arbitrary parenthetical → mixed',
   );
-  // ─── (f) missing ## UAT Type section ──────────────────────────────────────
-test('(f) missing UAT Type section', () => {
-  assert.deepStrictEqual(
 });
 
+test('(f) missing UAT Type section', () => {
+  assert.deepStrictEqual(
     extractUatType('# UAT File\n\n## Overview\n\nSome content.\n'),
     undefined,
     'no ## UAT Type section → undefined',
@@ -143,11 +113,10 @@ test('(f) missing UAT Type section', () => {
     undefined,
     'empty content → undefined',
   );
-  // ─── (g) ## UAT Type present but no UAT mode: bullet ─────────────────────
-test('(g) UAT Type section present, no UAT mode: bullet', () => {
-  assert.deepStrictEqual(
 });
 
+test('(g) UAT Type section present, no UAT mode: bullet', () => {
+  assert.deepStrictEqual(
     extractUatType('## UAT Type\n\n- Some other bullet: value\n- Another bullet\n'),
     undefined,
     'section present but no UAT mode: bullet → undefined',
@@ -157,11 +126,10 @@ test('(g) UAT Type section present, no UAT mode: bullet', () => {
     undefined,
     'section present but empty → undefined',
   );
-  // ─── (h) unknown keyword ──────────────────────────────────────────────────
-test('(h) unknown keyword', () => {
-  assert.deepStrictEqual(
 });
 
+test('(h) unknown keyword', () => {
+  assert.deepStrictEqual(
     extractUatType(makeUatContent('automated')),
     undefined,
     'unknown keyword automated → undefined',
@@ -171,11 +139,10 @@ test('(h) unknown keyword', () => {
     undefined,
     'unknown keyword fully-automated → undefined',
   );
-  // ─── (i) extra whitespace around value ────────────────────────────────────
-test('(i) extra whitespace', () => {
-  assert.deepStrictEqual(
 });
 
+test('(i) extra whitespace', () => {
+  assert.deepStrictEqual(
     extractUatType('## UAT Type\n\n- UAT mode:   artifact-driven   \n'),
     'artifact-driven',
     'leading/trailing whitespace around value → still classified correctly',
@@ -185,11 +152,10 @@ test('(i) extra whitespace', () => {
     'mixed',
     'whitespace around mixed parenthetical → mixed',
   );
-  // ─── (j) case sensitivity ─────────────────────────────────────────────────
-test('(j) case sensitivity', () => {
-  assert.deepStrictEqual(
 });
 
+test('(j) case sensitivity', () => {
+  assert.deepStrictEqual(
     extractUatType(makeUatContent('Artifact-Driven')),
     'artifact-driven',
     'Artifact-Driven (title case) → artifact-driven (function lowercases before matching)',
@@ -199,11 +165,10 @@ test('(j) case sensitivity', () => {
     'mixed',
     'MIXED (upper case) → mixed (function lowercases before matching)',
   );
-  // ─── (k) prompt template loading and content integrity ────────────────────
-test('(k) run-uat prompt template', () => {
-  const milestoneId = 'M001';
 });
 
+test('(k) run-uat prompt template', () => {
+  const milestoneId = 'M001';
   const sliceId = 'S01';
   const uatPath = '.gsd/milestones/M001/slices/S01/S01-UAT.md';
   const uatResultPath = '.gsd/milestones/M001/slices/S01/S01-UAT-RESULT.md';
@@ -261,9 +226,9 @@ test('(k) run-uat prompt template', () => {
     !/surfaced for human review/i.test(promptResult ?? ''),
     'prompt does not contain "surfaced for human review" (non-artifact UATs are skipped, not dispatched)',
   );
-  // ─── (l) dispatch precondition assertions via resolveSliceFile ────────────
+});
+
 test('(l) dispatch preconditions via resolveSliceFile', () => {
-  // State A: UAT file exists, UAT-RESULT file does NOT — triggers dispatch
     const base = createFixtureBase();
     const uatContent = makeUatContent('artifact-driven');
     try {
@@ -282,7 +247,6 @@ test('(l) dispatch preconditions via resolveSliceFile', () => {
         'resolveSliceFile(..., "UAT-RESULT") returns null when result file missing (dispatch trigger state)',
       );
 
-      // End-to-end: file content → parse → classify
       const rawContent = readFileSync(uatFilePath!, 'utf-8');
       assert.deepStrictEqual(
         extractUatType(rawContent),
@@ -294,7 +258,6 @@ test('(l) dispatch preconditions via resolveSliceFile', () => {
     }
 });
 
-  // State B: UAT-RESULT file exists — dispatch is skipped (idempotent)
 test('test block at line 307', () => {
     const base = createFixtureBase();
     try {
@@ -311,7 +274,6 @@ test('test block at line 307', () => {
     }
 });
 
-  // ─── (m) non-artifact UATs are skipped (not dispatched) ─────────────────
 test('(m) non-artifact UAT skip', async () => {
     const base = createFixtureBase();
     try {
@@ -332,7 +294,6 @@ test('(m) non-artifact UAT skip', async () => {
         ].join('\n'),
       );
 
-      // human-experience UAT still dispatches, but auto-mode later pauses for manual review
       writeSliceFile(base, 'M001', 'S01', 'UAT', makeUatContent('human-experience'));
 
       const state = {
@@ -357,7 +318,6 @@ test('(m) non-artifact UAT skip', async () => {
     }
 });
 
-  // ─── (n) existing UAT-RESULT never re-dispatches ──────────────────────
 test('(n) stale replay guard', async () => {
     const base = createFixtureBase();
     try {
