@@ -233,25 +233,8 @@ export async function handlePlanMilestone(
     roadmapPath = renderResult.roadmapPath;
   } catch (renderErr) {
     process.stderr.write(
-      `gsd-db: plan_milestone — render failed, rolling back DB rows: ${(renderErr as Error).message}\n`,
+      `gsd-db: plan_milestone — render failed (DB rows preserved for debugging): ${(renderErr as Error).message}\n`,
     );
-    const rollbackAdapter = _getAdapter();
-    if (rollbackAdapter) {
-      for (const slice of params.slices) {
-        rollbackAdapter.prepare(
-          `DELETE FROM slice_planning WHERE milestone_id = :mid AND slice_id = :sid`,
-        ).run({ ":mid": params.milestoneId, ":sid": slice.sliceId });
-        rollbackAdapter.prepare(
-          `DELETE FROM slices WHERE milestone_id = :mid AND id = :sid`,
-        ).run({ ":mid": params.milestoneId, ":sid": slice.sliceId });
-      }
-      rollbackAdapter.prepare(
-        `DELETE FROM milestone_planning WHERE milestone_id = :mid`,
-      ).run({ ":mid": params.milestoneId });
-      rollbackAdapter.prepare(
-        `DELETE FROM milestones WHERE id = :mid`,
-      ).run({ ":mid": params.milestoneId });
-    }
     invalidateStateCache();
     return { error: `render failed: ${(renderErr as Error).message}` };
   }
