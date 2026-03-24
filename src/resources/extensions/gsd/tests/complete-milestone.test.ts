@@ -1,8 +1,9 @@
+import { describe, test, afterEach } from "node:test";
+import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { createTestContext } from './test-helpers.ts';
 import { invalidateAllCaches } from '../cache.ts';
 
 // loadPrompt reads from ~/.gsd/agent/extensions/gsd/prompts/ (main checkout).
@@ -11,7 +12,6 @@ import { invalidateAllCaches } from '../cache.ts';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const worktreePromptsDir = join(__dirname, "..", "prompts");
 
-const { assertEq, assertTrue, report } = createTestContext();
 /**
  * Load a prompt template from the worktree prompts directory
  * and apply variable substitution (mirrors loadPrompt logic).
@@ -59,11 +59,9 @@ function cleanup(base: string): void {
 // Tests
 // ═══════════════════════════════════════════════════════════════════════════
 
-async function main(): Promise<void> {
+describe("complete-milestone", () => {
 
-  // ─── Prompt Template Loading ───────────────────────────────────────────
-  console.log("\n=== complete-milestone prompt template exists ===");
-  {
+  test("prompt template exists and loads", () => {
     let result: string;
     let threw = false;
     try {
@@ -77,16 +75,13 @@ async function main(): Promise<void> {
     } catch (err) {
       threw = true;
       result = "";
-      console.error(`  ERROR: loadPrompt threw: ${err}`);
     }
 
-    assertTrue(!threw, "loadPrompt does not throw for complete-milestone");
-    assertTrue(typeof result === "string" && result.length > 0, "loadPrompt returns a non-empty string");
-  }
+    assert.ok(!threw, "loadPrompt does not throw for complete-milestone");
+    assert.ok(typeof result === "string" && result.length > 0, "loadPrompt returns a non-empty string");
+  });
 
-  // ─── Variable Substitution ─────────────────────────────────────────────
-  console.log("\n=== prompt variable substitution ===");
-  {
+  test("prompt variable substitution", () => {
     const prompt = loadPromptFromWorktree("complete-milestone", {
       workingDirectory: "/tmp/test-project",
       milestoneId: "M001",
@@ -95,19 +90,17 @@ async function main(): Promise<void> {
       inlinedContext: "--- inlined slice summaries and context ---",
     });
 
-    assertTrue(prompt.includes("M001"), "prompt contains milestoneId 'M001'");
-    assertTrue(prompt.includes("Integration Feature"), "prompt contains milestoneTitle");
-    assertTrue(prompt.includes(".gsd/milestones/M001/M001-ROADMAP.md"), "prompt contains roadmapPath");
-    assertTrue(prompt.includes("--- inlined slice summaries and context ---"), "prompt contains inlinedContext");
-    assertTrue(!prompt.includes("{{milestoneId}}"), "no un-substituted {{milestoneId}}");
-    assertTrue(!prompt.includes("{{milestoneTitle}}"), "no un-substituted {{milestoneTitle}}");
-    assertTrue(!prompt.includes("{{roadmapPath}}"), "no un-substituted {{roadmapPath}}");
-    assertTrue(!prompt.includes("{{inlinedContext}}"), "no un-substituted {{inlinedContext}}");
-  }
+    assert.ok(prompt.includes("M001"), "prompt contains milestoneId 'M001'");
+    assert.ok(prompt.includes("Integration Feature"), "prompt contains milestoneTitle");
+    assert.ok(prompt.includes(".gsd/milestones/M001/M001-ROADMAP.md"), "prompt contains roadmapPath");
+    assert.ok(prompt.includes("--- inlined slice summaries and context ---"), "prompt contains inlinedContext");
+    assert.ok(!prompt.includes("{{milestoneId}}"), "no un-substituted {{milestoneId}}");
+    assert.ok(!prompt.includes("{{milestoneTitle}}"), "no un-substituted {{milestoneTitle}}");
+    assert.ok(!prompt.includes("{{roadmapPath}}"), "no un-substituted {{roadmapPath}}");
+    assert.ok(!prompt.includes("{{inlinedContext}}"), "no un-substituted {{inlinedContext}}");
+  });
 
-  // ─── Prompt Content Integrity ──────────────────────────────────────────
-  console.log("\n=== prompt content integrity ===");
-  {
+  test("prompt content integrity", () => {
     const prompt = loadPromptFromWorktree("complete-milestone", {
       workingDirectory: "/tmp/test-project",
       milestoneId: "M002",
@@ -116,18 +109,13 @@ async function main(): Promise<void> {
       inlinedContext: "context",
     });
 
-    assertTrue(prompt.includes("Complete Milestone"), "prompt contains 'Complete Milestone' heading");
-    assertTrue(prompt.includes("success criter") || prompt.includes("success criteria"), "prompt mentions success criteria verification");
-    assertTrue(prompt.includes("milestone-summary") || prompt.includes("milestoneSummary"), "prompt references milestone summary artifact");
-    assertTrue(prompt.includes("Milestone M002 complete"), "prompt contains completion sentinel for M002");
-  }
+    assert.ok(prompt.includes("Complete Milestone"), "prompt contains 'Complete Milestone' heading");
+    assert.ok(prompt.includes("success criter") || prompt.includes("success criteria"), "prompt mentions success criteria verification");
+    assert.ok(prompt.includes("milestone-summary") || prompt.includes("milestoneSummary"), "prompt references milestone summary artifact");
+    assert.ok(prompt.includes("Milestone M002 complete"), "prompt contains completion sentinel for M002");
+  });
 
-  // ─── diagnoseExpectedArtifact behavior ─────────────────────────────────
-  // Since diagnoseExpectedArtifact is not exported from auto.ts, we test
-  // the same logic by reimplementing the switch case for complete-milestone
-  // and verifying against known path patterns.
-  console.log("\n=== diagnoseExpectedArtifact logic for complete-milestone ===");
-  {
+  test("diagnoseExpectedArtifact logic for complete-milestone", async () => {
     // Import the path helpers used by diagnoseExpectedArtifact
     const { relMilestoneFile } = await import("../paths.ts");
 
@@ -144,18 +132,16 @@ async function main(): Promise<void> {
       // This is the exact logic from diagnoseExpectedArtifact for "complete-milestone"
       const result = `${relMilestoneFile(base, mid, "SUMMARY")} (milestone summary)`;
 
-      assertTrue(typeof result === "string", "diagnose returns a string");
-      assertTrue(result.includes("SUMMARY"), "diagnose result mentions SUMMARY");
-      assertTrue(result.includes("milestone"), "diagnose result mentions milestone");
-      assertTrue(result.includes("M001"), "diagnose result includes the milestone ID");
+      assert.ok(typeof result === "string", "diagnose returns a string");
+      assert.ok(result.includes("SUMMARY"), "diagnose result mentions SUMMARY");
+      assert.ok(result.includes("milestone"), "diagnose result mentions milestone");
+      assert.ok(result.includes("M001"), "diagnose result includes the milestone ID");
     } finally {
       cleanup(base);
     }
-  }
+  });
 
-  // ─── deriveState integration: completing-milestone dispatches correctly ─
-  console.log("\n=== deriveState completing-milestone integration ===");
-  {
+  test("deriveState completing-milestone integration", async () => {
     const { deriveState, isMilestoneComplete } = await import("../state.ts");
     const { invalidateAllCaches: invalidateAllCachesDynamic } = await import("../cache.ts");
     const { parseRoadmap } = await import("../parsers-legacy.ts");
@@ -180,30 +166,23 @@ async function main(): Promise<void> {
       const roadmapPath = join(base, ".gsd", "milestones", "M001", "M001-ROADMAP.md");
       const roadmapContent = await loadFile(roadmapPath);
       const roadmap = parseRoadmap(roadmapContent!);
-      assertTrue(isMilestoneComplete(roadmap), "isMilestoneComplete returns true when all slices are [x]");
+      assert.ok(isMilestoneComplete(roadmap), "isMilestoneComplete returns true when all slices are [x]");
 
       // Verify deriveState returns completing-milestone phase (with validation already done)
       writeMilestoneValidation(base, "M001");
       const state = await deriveState(base);
-      assertEq(state.phase, "completing-milestone", "deriveState returns completing-milestone when all slices done, no summary");
-      assertEq(state.activeMilestone?.id, "M001", "active milestone is M001");
-      assertEq(state.activeSlice, null, "no active slice in completing-milestone");
+      assert.strictEqual(state.phase, "completing-milestone", "deriveState returns completing-milestone when all slices done, no summary");
+      assert.strictEqual(state.activeMilestone?.id, "M001", "active milestone is M001");
+      assert.strictEqual(state.activeSlice, null, "no active slice in completing-milestone");
 
       // Now add the summary and verify it transitions to complete
       writeMilestoneSummary(base, "M001", "# M001 Summary\n\nDone.");
       invalidateAllCachesDynamic();
       const stateAfter = await deriveState(base);
-      assertEq(stateAfter.phase, "complete", "deriveState returns complete after summary exists");
-      assertEq(stateAfter.registry[0]?.status, "complete", "registry shows complete status");
+      assert.strictEqual(stateAfter.phase, "complete", "deriveState returns complete after summary exists");
+      assert.strictEqual(stateAfter.registry[0]?.status, "complete", "registry shows complete status");
     } finally {
       cleanup(base);
     }
-  }
-
-  report();
-}
-
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
+  });
 });
