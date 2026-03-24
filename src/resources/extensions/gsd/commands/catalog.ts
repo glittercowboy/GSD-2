@@ -163,6 +163,7 @@ const NESTED_COMPLETIONS: CompletionMap = {
   ],
   start: [
     { cmd: "bugfix", desc: "Triage, fix, test, and ship a bug fix" },
+    { cmd: "feature", desc: "Full-ceremony feature: worktree setup, implement, PR to upstream" },
     { cmd: "small-feature", desc: "Lightweight feature with optional discussion" },
     { cmd: "spike", desc: "Research, prototype, and document findings" },
     { cmd: "hotfix", desc: "Minimal: fix it, test it, ship it" },

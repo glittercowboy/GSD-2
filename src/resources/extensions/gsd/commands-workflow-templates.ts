@@ -315,6 +315,7 @@ export async function handleStart(
         "Usage: /gsd start <template> [description]\n\n" +
         "Templates:\n" +
         "  bugfix          Triage → fix → verify → ship\n" +
+        "  feature         Setup → scope → plan → implement → verify → pr\n" +
         "  small-feature   Scope → plan → implement → verify\n" +
         "  spike           Scope → research → synthesize\n" +
         "  hotfix          Fix → ship (minimal ceremony)\n" +

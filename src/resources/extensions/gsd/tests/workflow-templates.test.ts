@@ -24,10 +24,10 @@ console.log('\n── Registry Loading ──');
   const registry = loadRegistry();
   assert.ok(registry !== null, 'Registry should load');
   assert.deepStrictEqual(registry.version, 1, 'Registry version should be 1');
-  assert.ok(Object.keys(registry.templates).length >= 8, 'Should have at least 8 templates');
+  assert.ok(Object.keys(registry.templates).length >= 9, 'Should have at least 9 templates');
 
   // Verify required template keys exist
-  const expectedIds = ['full-project', 'bugfix', 'small-feature', 'refactor', 'spike', 'hotfix', 'security-audit', 'dep-upgrade'];
+  const expectedIds = ['full-project', 'bugfix', 'small-feature', 'feature', 'refactor', 'spike', 'hotfix', 'security-audit', 'dep-upgrade'];
   for (const id of expectedIds) {
     assert.ok(id in registry.templates, `Template "${id}" should exist in registry`);
   }
@@ -65,9 +65,15 @@ console.log('\n── Resolve by Name ──');
   assert.ok(bug !== null, 'Should resolve "bug" alias');
   assert.deepStrictEqual(bug!.id, 'bugfix', 'Alias "bug" should map to bugfix');
 
+  // "feature" alias now resolves to the feature template (not small-feature)
+  const featureAlias = resolveByName('feature');
+  assert.ok(featureAlias !== null, 'Should resolve "feature"');
+  assert.deepStrictEqual(featureAlias!.id, 'feature', '"feature" should map to feature template');
+
+  // "feat" prefix-matches "feature" (now that feature is a first-class template)
   const feat = resolveByName('feat');
-  assert.ok(feat !== null, 'Should resolve "feat" alias');
-  assert.deepStrictEqual(feat!.id, 'small-feature', 'Alias "feat" should map to small-feature');
+  assert.ok(feat !== null, 'Should resolve "feat"');
+  assert.deepStrictEqual(feat!.id, 'feature', '"feat" should prefix-match to feature template');
 
   const deps = resolveByName('deps');
   assert.ok(deps !== null, 'Should resolve "deps" alias');
@@ -163,6 +169,13 @@ console.log('\n── Load Workflow Template ──');
   const hotfixContent = loadWorkflowTemplate('hotfix');
   assert.ok(hotfixContent !== null, 'Should load hotfix template');
   assert.ok(hotfixContent!.includes('Hotfix Workflow'), 'Should contain hotfix title');
+
+  const featureContent = loadWorkflowTemplate('feature');
+  assert.ok(featureContent !== null, 'Should load feature template');
+  assert.ok(featureContent!.includes('Feature Workflow'), 'Should contain workflow title');
+  assert.ok(featureContent!.includes('Phase 1: Setup'), 'Should contain setup phase');
+  assert.ok(featureContent!.includes('Phase 6: PR'), 'Should contain pr phase');
+  assert.ok(featureContent!.includes('upstream'), 'Should reference upstream remote management');
 
   const missingContent = loadWorkflowTemplate('nonexistent');
   assert.ok(missingContent === null, 'Should return null for unknown template');

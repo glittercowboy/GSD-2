@@ -98,7 +98,7 @@ export function resolveByName(nameOrAlias: string): TemplateMatch | null {
   const aliases: Record<string, string> = {
     "bug": "bugfix",
     "fix": "bugfix",
-    "feature": "small-feature",
+    "feature": "feature",
     "feat": "small-feature",
     "research": "spike",
     "investigate": "spike",

@@ -31,6 +31,16 @@
       "estimated_complexity": "medium",
       "requires_project": false
     },
+    "feature": {
+      "name": "Feature",
+      "description": "Full-ceremony feature workflow with GitHub management: clean worktree, upstream branch, implementation, and PR",
+      "file": "feature.md",
+      "phases": ["setup", "scope", "plan", "implement", "verify", "pr"],
+      "triggers": ["new feature", "add feature", "implement feature", "feature workflow", "feature with pr", "feature with worktree"],
+      "artifact_dir": ".gsd/workflows/features/",
+      "estimated_complexity": "medium",
+      "requires_project": false
+    },
     "refactor": {
       "name": "Refactor / Migration",
       "description": "Systematic code transformation with inventory and wave-based execution",
