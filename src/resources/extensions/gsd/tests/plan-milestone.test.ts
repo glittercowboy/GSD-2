@@ -9,14 +9,10 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { fileURLToPath } from 'node:url';
 
 import { inlinePriorMilestoneSummary } from '../files.ts';
-// ─── Worktree-aware prompt loader ──────────────────────────────────────────
-const __dirname = dirname(fileURLToPath(import.meta.url));
-
 
 // ─── Fixture helpers ───────────────────────────────────────────────────────
 
@@ -26,19 +22,24 @@ function createFixtureBase(): string {
   return base;
 }
 
+function writeMilestoneDir(base: string, mid: string): void {
+  mkdirSync(join(base, '.gsd', 'milestones', mid), { recursive: true });
+}
+
+function writeMilestoneSummary(base: string, mid: string, content: string): void {
+  writeFileSync(join(base, '.gsd', 'milestones', mid, `${mid}-SUMMARY.md`), content, 'utf-8');
+}
+
 function cleanup(base: string): void {
-  try { closeDatabase(); } catch { /* noop */ }
-  try { rmSync(base, { recursive: true, force: true }); } catch { /* noop */ }
+  rmSync(base, { recursive: true, force: true });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Tests
 // ═══════════════════════════════════════════════════════════════════════════
 
-  // ─── (A) M002 with M001-SUMMARY.md present ────────────────────────────────
-
 describe('plan-milestone', () => {
-test('(A) M002 with M001-SUMMARY.md present → string containing "Prior Milestone Summary"', async () => {
+  test('(A) M002 with M001-SUMMARY.md present → string containing "Prior Milestone Summary"', async () => {
     const base = createFixtureBase();
     try {
       writeMilestoneDir(base, 'M001');
@@ -59,10 +60,9 @@ test('(A) M002 with M001-SUMMARY.md present → string containing "Prior Milesto
     } finally {
       cleanup(base);
     }
-});
+  });
 
-  // ─── (B) M001 (no prior milestone in dir) ─────────────────────────────────
-test('(B) M001 — first milestone, no prior → null', async () => {
+  test('(B) M001 — first milestone, no prior → null', async () => {
     const base = createFixtureBase();
     try {
       writeMilestoneDir(base, 'M001');
@@ -73,15 +73,13 @@ test('(B) M001 — first milestone, no prior → null', async () => {
     } finally {
       cleanup(base);
     }
-});
+  });
 
-  // ─── (C) M002 with no M001-SUMMARY.md ────────────────────────────────────
-test('(C) M002 with M001 dir but no M001-SUMMARY.md → null', async () => {
+  test('(C) M002 with M001 dir but no M001-SUMMARY.md → null', async () => {
     const base = createFixtureBase();
     try {
       writeMilestoneDir(base, 'M001');
       writeMilestoneDir(base, 'M002');
-      // Intentionally do NOT write M001-SUMMARY.md
 
       const result = await inlinePriorMilestoneSummary('M002', base);
 
@@ -89,18 +87,15 @@ test('(C) M002 with M001 dir but no M001-SUMMARY.md → null', async () => {
     } finally {
       cleanup(base);
     }
-});
+  });
 
-  // ─── (D) M003 with M002 dir but no M002-SUMMARY.md ───────────────────────
-test('(D) M003, M002 is immediately prior but has no SUMMARY → null', async () => {
+  test('(D) M003, M002 is immediately prior but has no SUMMARY → null', async () => {
     const base = createFixtureBase();
     try {
       writeMilestoneDir(base, 'M001');
       writeMilestoneDir(base, 'M002');
       writeMilestoneDir(base, 'M003');
-      // M001 has a summary — but M002 (the immediately prior to M003) does NOT
       writeMilestoneSummary(base, 'M001', '# M001 Summary\n\nOld context.\n');
-      // Intentionally do NOT write M002-SUMMARY.md
 
       const result = await inlinePriorMilestoneSummary('M003', base);
 
@@ -108,6 +103,5 @@ test('(D) M003, M002 is immediately prior but has no SUMMARY → null', async ()
     } finally {
       cleanup(base);
     }
-});
-
+  });
 });
