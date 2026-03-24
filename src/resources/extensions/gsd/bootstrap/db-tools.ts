@@ -725,6 +725,75 @@ export function registerDbTools(pi: ExtensionAPI): void {
   pi.registerTool(sliceCompleteTool);
   registerAlias(pi, sliceCompleteTool, "gsd_complete_slice", "gsd_slice_complete");
 
+  // ─── gsd_complete_milestone ────────────────────────────────────────────
+
+  const milestoneCompleteExecute = async (_toolCallId: string, params: any, _signal: AbortSignal | undefined, _onUpdate: unknown, _ctx: unknown) => {
+    const dbAvailable = await ensureDbOpen();
+    if (!dbAvailable) {
+      return {
+        content: [{ type: "text" as const, text: "Error: GSD database is not available. Cannot complete milestone." }],
+        details: { operation: "complete_milestone", error: "db_unavailable" } as any,
+      };
+    }
+    try {
+      const { handleCompleteMilestone } = await import("../tools/complete-milestone.js");
+      const result = await handleCompleteMilestone(params, process.cwd());
+      if ("error" in result) {
+        return {
+          content: [{ type: "text" as const, text: `Error completing milestone: ${result.error}` }],
+          details: { operation: "complete_milestone", error: result.error } as any,
+        };
+      }
+      return {
+        content: [{ type: "text" as const, text: `Completed milestone ${result.milestoneId}. Summary written to ${result.summaryPath}` }],
+        details: {
+          operation: "complete_milestone",
+          milestoneId: result.milestoneId,
+          summaryPath: result.summaryPath,
+        } as any,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`gsd-db: complete_milestone tool failed: ${msg}\n`);
+      return {
+        content: [{ type: "text" as const, text: `Error completing milestone: ${msg}` }],
+        details: { operation: "complete_milestone", error: msg } as any,
+      };
+    }
+  };
+
+  const milestoneCompleteTool = {
+    name: "gsd_complete_milestone",
+    label: "Complete Milestone",
+    description:
+      "Record a completed milestone to the GSD database, render MILESTONE-SUMMARY.md to disk — all in one atomic operation. " +
+      "Validates all slices are complete before proceeding.",
+    promptSnippet: "Complete a GSD milestone (DB write + summary render)",
+    promptGuidelines: [
+      "Use gsd_complete_milestone when all slices in a milestone are finished and the milestone needs to be recorded.",
+      "All slices in the milestone must have status 'complete' — the handler validates this before proceeding.",
+      "On success, returns summaryPath where the MILESTONE-SUMMARY.md was written.",
+    ],
+    parameters: Type.Object({
+      milestoneId: Type.String({ description: "Milestone ID (e.g. M001)" }),
+      title: Type.String({ description: "Milestone title" }),
+      oneLiner: Type.String({ description: "One-sentence summary of what the milestone achieved" }),
+      narrative: Type.String({ description: "Detailed narrative of what happened during the milestone" }),
+      successCriteriaResults: Type.String({ description: "Markdown detailing how each success criterion was met or not met" }),
+      definitionOfDoneResults: Type.String({ description: "Markdown detailing how each definition-of-done item was met" }),
+      requirementOutcomes: Type.String({ description: "Markdown detailing requirement status transitions with evidence" }),
+      keyDecisions: Type.Array(Type.String(), { description: "Key architectural/pattern decisions made during the milestone" }),
+      keyFiles: Type.Array(Type.String(), { description: "Key files created or modified during the milestone" }),
+      lessonsLearned: Type.Array(Type.String(), { description: "Lessons learned during the milestone" }),
+      followUps: Type.Optional(Type.String({ description: "Follow-up items for future milestones" })),
+      deviations: Type.Optional(Type.String({ description: "Deviations from the original plan" })),
+    }),
+    execute: milestoneCompleteExecute,
+  };
+
+  pi.registerTool(milestoneCompleteTool);
+  registerAlias(pi, milestoneCompleteTool, "gsd_milestone_complete", "gsd_complete_milestone");
+
   // ─── gsd_replan_slice (gsd_slice_replan alias) ─────────────────────────
 
   const replanSliceExecute = async (_toolCallId: string, params: any, _signal: AbortSignal | undefined, _onUpdate: unknown, _ctx: unknown) => {

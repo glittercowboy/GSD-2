@@ -38,7 +38,7 @@ import { writeUnitRuntimeRecord, clearUnitRuntimeRecord } from "./unit-runtime.j
 import { runGSDDoctor, rebuildState, summarizeDoctorIssues } from "./doctor.js";
 import { recordHealthSnapshot, checkHealEscalation } from "./doctor-proactive.js";
 import { syncStateToProjectRoot } from "./auto-worktree-sync.js";
-import { isDbAvailable, getTask, getSlice, getMilestone, updateTaskStatus } from "./gsd-db.js";
+import { isDbAvailable, getTask, getSlice, getMilestone, updateTaskStatus, _getAdapter } from "./gsd-db.js";
 import { renderPlanCheckboxes } from "./markdown-renderer.js";
 import { consumeSignal } from "./session-status-io.js";
 import {
@@ -146,6 +146,40 @@ export function detectRogueFileWrites(
 
     if (!hasPlanningState) {
       rogues.push({ path: planPath, unitType, unitId });
+    }
+
+    // Also check for rogue REPLAN.md
+    const replanPath = resolveSliceFile(basePath, mid, sid, "REPLAN");
+    if (replanPath && existsSync(replanPath) && !hasPlanningState) {
+      rogues.push({ path: replanPath, unitType, unitId });
+    }
+  } else if (unitType === "reassess-roadmap") {
+    const [mid, sid] = parts;
+    if (!mid || !sid) return [];
+
+    const assessPath = resolveSliceFile(basePath, mid, sid, "ASSESSMENT");
+    if (!assessPath || !existsSync(assessPath)) return [];
+
+    // Assessment file exists on disk — check if DB knows about it via the artifacts table
+    const adapter = _getAdapter();
+    if (adapter) {
+      const row = adapter.prepare(
+        `SELECT 1 FROM artifacts WHERE path LIKE :pattern AND artifact_type = 'ASSESSMENT' LIMIT 1`,
+      ).get({ ":pattern": `%${sid}-ASSESSMENT.md` });
+      if (!row) {
+        rogues.push({ path: assessPath, unitType, unitId });
+      }
+    }
+  } else if (unitType === "plan-task") {
+    const [mid, sid, tid] = parts;
+    if (!mid || !sid || !tid) return [];
+
+    const taskPlanPath = resolveTaskFile(basePath, mid, sid, tid, "PLAN");
+    if (!taskPlanPath || !existsSync(taskPlanPath)) return [];
+
+    const dbRow = getTask(mid, sid, tid);
+    if (!dbRow) {
+      rogues.push({ path: taskPlanPath, unitType, unitId });
     }
   }
 
@@ -571,25 +605,12 @@ export async function postUnitPostVerification(pctx: PostUnitContext): Promise<"
             try {
               updateTaskStatus(mid, sid, tid, "pending");
               await renderPlanCheckboxes(s.basePath, mid, sid);
-            } catch {
-              // DB may be unavailable — fall back to direct file-based uncheck
-              try {
-                const slicePath = resolveSlicePath(s.basePath, mid, sid);
-                if (slicePath) {
-                  const { readdirSync } = await import("node:fs");
-                  const planCandidates = readdirSync(slicePath)
-                    .filter((f: string) => f.includes("PLAN") && (f.startsWith(sid) || f.startsWith(`${sid}-`)));
-                  if (planCandidates.length > 0) {
-                    const planFile = join(slicePath, planCandidates[0]);
-                    let content = readFileSync(planFile, "utf-8");
-                    const regex = new RegExp(`^(\\s*-\\s*)\\[x\\](\\s*\\**${tid}\\**[:\\s])`, "mi");
-                    if (regex.test(content)) {
-                      content = content.replace(regex, "$1[ ]$2");
-                      writeFileSync(planFile, content, "utf-8");
-                    }
-                  }
-                }
-              } catch { /* non-fatal: file-based fallback failure */ }
+            } catch (dbErr) {
+              // DB unavailable — fail explicitly rather than silently reverting to markdown mutation.
+              // Use 'gsd recover' to rebuild DB state from disk if needed.
+              process.stderr.write(
+                `gsd: retry state-reset failed (DB unavailable): ${(dbErr as Error).message}. Run 'gsd recover' to reconcile.\n`,
+              );
             }
           }
 
