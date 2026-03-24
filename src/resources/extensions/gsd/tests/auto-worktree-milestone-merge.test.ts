@@ -764,67 +764,7 @@ async function main(): Promise<void> {
       assertTrue(existsSync(join(repo, "real-code.ts")), "real-code.ts merged to main");
     }
 
-    // ─── Test 20: #2151 Bug 1 — auto-stash allows merge with pre-existing dirty files ──
-    console.log("\n=== #2151 bug 1: auto-stash unblocks merge when unrelated files are dirty ===");
-    {
-      const repo = freshRepo();
-      const wtPath = createAutoWorktree(repo, "M200");
-
-      addSliceToMilestone(repo, wtPath, "M200", "S01", "Stash test", [
-        { file: "stash-test.ts", content: "export const stash = true;\n", message: "add stash test" },
-      ]);
-
-      // Dirty an unrelated tracked file in the project root — this previously
-      // blocked the squash merge with "local changes would be overwritten".
-      writeFileSync(join(repo, "README.md"), "# modified locally\n");
-
-      const roadmap = makeRoadmap("M200", "Auto-stash test", [
-        { id: "S01", title: "Stash test" },
-      ]);
-
-      // Should succeed — the dirty README.md is auto-stashed before merge.
-      const result = mergeMilestoneToMain(repo, "M200", roadmap);
-      assertTrue(result.commitMessage.includes("feat(M200)"), "#2151: merge succeeds with dirty unrelated file");
-      assertTrue(existsSync(join(repo, "stash-test.ts")), "#2151: milestone code merged to main");
-
-      // Verify the dirty file was restored (stash popped).
-      const readmeContent = readFileSync(join(repo, "README.md"), "utf-8");
-      assertEq(readmeContent, "# modified locally\n", "#2151: stash popped — dirty file restored after merge");
-    }
-
-    // ─── Test 21: #2151 Bug 2 — nativeMergeSquash returns dirty filenames ──
-    console.log("\n=== #2151 bug 2: nativeMergeSquash returns dirty filenames ===");
-    {
-      const { nativeMergeSquash } = await import("../native-git-bridge.ts");
-      const repo = freshRepo();
-
-      run("git checkout -b milestone/M210", repo);
-      writeFileSync(join(repo, "overlap.ts"), "export const overlap = true;\n");
-      run("git add .", repo);
-      run('git commit -m "add overlap"', repo);
-      run("git checkout main", repo);
-
-      // Create the same file as a dirty local change
-      writeFileSync(join(repo, "overlap.ts"), "// local dirty version\n");
-
-      const result = nativeMergeSquash(repo, "milestone/M210");
-      assertEq(result.success, false, "#2151: merge reports failure");
-      assertTrue(
-        result.conflicts.includes("__dirty_working_tree__"),
-        "#2151: conflicts include __dirty_working_tree__ sentinel",
-      );
-      assertTrue(
-        Array.isArray(result.dirtyFiles) && result.dirtyFiles.length > 0,
-        "#2151: dirtyFiles array is populated",
-      );
-      assertTrue(
-        result.dirtyFiles!.includes("overlap.ts"),
-        "#2151: dirtyFiles includes the actual dirty file name",
-      );
-
-      run("git checkout -- . 2>/dev/null || true", repo);
-      run("rm -f overlap.ts", repo);
-    }
+    // Tests 20 and 21 for #2151 are in auto-stash-merge.test.ts (node:test format).
 
   } finally {
     process.chdir(savedCwd);
