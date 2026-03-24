@@ -24,9 +24,33 @@ One command. Walk away. Come back to a built project with clean git history.
 
 ---
 
-## What's New in v2.42.0
+## What's New in v2.44.0
 
 ### New Features
+
+- **Non-API-key provider extensions** — support for provider extensions like Claude Code CLI that don't require traditional API keys. (#2382)
+- **Docker sandbox template** — official Docker template for running GSD auto mode in an isolated container. (#2360)
+- **Per-prompt token cost display** — opt-in `show_token_cost` preference shows per-prompt and cumulative session cost in the footer. (#2357)
+- **"Change project root" in web UI** — switch project directories from the web interface without restarting. (#2355)
+- **DB-backed planning tools** — write-side state transitions now use atomic SQLite tool calls instead of markdown mutation, improving reliability and enabling structured queries. (#2141)
+
+### Key Fixes
+
+- **Post-migration cleanup** — pragmas, rollbacks, tool gaps, and stale code cleaned up after DB migration. (#2410)
+- **Planning data loss prevention** — destructive upsert and post-unit re-import no longer overwrite planning data. (#2370)
+- **Memory and resource leaks** — fixes across TUI, LSP, DB, and automation subsystems. (#2314)
+- **DECISIONS.md preservation** — freeform content in DECISIONS.md is no longer overwritten on decision save. (#2319)
+- **Auto-stash before squash merge** — dirty files are automatically stashed before merge, with filenames surfaced in errors. (#2298)
+- **Extension TypeScript detection** — `.js` extension files containing TypeScript syntax are detected with a suggestion to rename. (#2386)
+
+### v2.43.0 Highlights
+
+- **Forensics dedup** — opt-in duplicate detection before issue creation. (#2105)
+- **Fast service tier outside auto-mode** — `/gsd fast` now applies in interactive sessions too. (#2126)
+- **Startup optimizations** — pre-compiled extensions, compile cache, and batch discovery for faster boot. (#2125)
+- **Stale process cleanup** — web server kills stale process before launch to prevent EADDRINUSE. (#2034)
+
+### v2.42.0 Highlights
 
 - **Declarative workflow engine** — define YAML workflows that execute through auto-loop, enabling repeatable multi-step automations without code. (#2024)
 - **Unified rule registry & event journal** — centralized rule registry, event journal with query tool, and standardized tool naming convention. (#1928)
@@ -34,16 +58,6 @@ One command. Walk away. Come back to a built project with clean git history.
 - **`/gsd fast`** — toggle service tier for supported models, enabling prioritized API routing for faster responses. (#1862)
 - **Web mode CLI flags** — `--host`, `--port`, and `--allowed-origins` flags give full control over the web server bind address and CORS policy. (#1873)
 - **ADR attribution** — architecture decision records now distinguish human, agent, and collaborative authorship. (#1830)
-
-### Key Fixes
-
-- **Node v24 web boot** — resolved `ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING` that prevented `gsd --web` from starting on Node v24. (#1864)
-- **Worktree health check for all ecosystems** — broadened from JS-only to 17+ ecosystems (Rust, Go, Python, Java, etc.). (#1860)
-- **Doctor roadmap atomicity** — roadmap checkbox gating now checks summary on disk, not issue detection, preventing false unchecks. (#1915)
-- **Windows path handling** — 8.3 short path resolution, backslash normalization in bash commands, PowerShell browser launch, and parenthesis escaping. (#1960, #1863, #1870, #1872)
-- **Auth token persistence** — web UI auth token survives page refreshes via sessionStorage. (#1877)
-- **German/non-English locale git errors** — git commands now force `LC_ALL=C` to prevent locale-dependent parse failures.
-- **Orphan web server process** — stale web server processes on port 3000 are now cleaned up automatically.
 
 ---
 
@@ -107,12 +121,14 @@ This release includes 7 fixes preventing silent data loss in auto-mode:
 
 See the full [Changelog](./CHANGELOG.md) for all 70+ fixes in this release.
 
-### Previous highlights (v2.39–v2.40)
+### Previous highlights (v2.39–v2.41)
 
+- **Browser-based web interface** — run GSD from the browser with `gsd --web`
 - **GitHub sync extension** — auto-sync milestones to GitHub Issues, PRs, and Milestones
 - **Skill tool resolution** — skills auto-activate in dispatched prompts
 - **Health check phase 2** — real-time doctor issues in dashboard and visualizer
 - **Forensics upgrade** — full-access GSD debugger with anomaly detection
+- **7 data-loss prevention fixes** — hallucination guard, merge anchor verification, dirty tree detection, and more
 - **Pipeline decomposition** — auto-loop rewritten as linear phase pipeline
 - **Sliding-window stuck detection** — pattern-aware, fewer false positives
 - **Data-loss recovery** — automatic detection and recovery from v2.30–v2.38 migration issues
@@ -141,7 +157,9 @@ Full documentation is available in the [`docs/`](./docs/) directory:
 - **[Visualizer](./docs/visualizer.md)** — workflow visualizer with stats and discussion status
 - **[Remote Questions](./docs/remote-questions.md)** — route decisions to Slack or Discord when human input is needed
 - **[Dynamic Model Routing](./docs/dynamic-model-routing.md)** — complexity-based model selection and budget pressure
+- **[Web Interface](./docs/web-interface.md)** — browser-based project management and real-time progress
 - **[Pipeline Simplification (ADR-003)](./docs/ADR-003-pipeline-simplification.md)** — merged research into planning, mechanical completion
+- **[Docker Sandbox](./docker/README.md)** — run GSD auto mode in an isolated Docker container
 - **[Migration from v1](./docs/migration.md)** — `.planning` → `.gsd` migration
 
 ---

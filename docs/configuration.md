@@ -648,6 +648,36 @@ dynamic_routing:
   cross_provider: true
 ```
 
+### `service_tier` (v2.42)
+
+OpenAI service tier preference for supported models. Toggle with `/gsd fast`.
+
+| Value | Behavior |
+|-------|----------|
+| `"priority"` | Priority tier — 2x cost, faster responses |
+| `"flex"` | Flex tier — 0.5x cost, slower responses |
+| (unset) | Default tier |
+
+```yaml
+service_tier: priority
+```
+
+### `forensics_dedup` (v2.43)
+
+Opt-in: search existing issues and PRs before filing from `/gsd forensics`. Uses additional AI tokens.
+
+```yaml
+forensics_dedup: true    # default: false
+```
+
+### `show_token_cost` (v2.44)
+
+Opt-in: show per-prompt and cumulative session token cost in the footer.
+
+```yaml
+show_token_cost: true    # default: false
+```
+
 ### `auto_visualize`
 
 Show the workflow visualizer automatically after milestone completion:
@@ -733,6 +763,13 @@ notifications:
 
 # Visualizer
 auto_visualize: true
+
+# Service tier
+service_tier: priority         # "priority" or "flex" (for /gsd fast)
+
+# Diagnostics
+forensics_dedup: true          # deduplicate before filing forensics issues
+show_token_cost: true          # show per-prompt cost in footer
 
 # Hooks
 post_unit_hooks:
