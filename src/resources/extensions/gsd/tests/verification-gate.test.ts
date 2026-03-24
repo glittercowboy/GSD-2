@@ -219,13 +219,61 @@ describe("verification-gate: discovery", () => {
 
 // ─── Execution Tests ─────────────────────────────────────────────────────────
 
-describe("verification-gate: execution", () => {
-  let tmp: string;
-  beforeEach(() => { tmp = makeTempDir("vg-exec"); });
-  afterEach(() => { rmSync(tmp, { recursive: true, force: true }); });
+test("verification-gate: async execution does not block the event loop (issue #2193)", async () => {
+  const tmp = makeTempDir("vg-async-nonblocking");
+  try {
+    // Run a command that sleeps for 200ms. If runVerificationGate used
+    // spawnSync, the setInterval callback below would never fire during
+    // the command's execution window — proving the event loop was blocked.
+    let timerFired = false;
+    const interval = setInterval(() => {
+      timerFired = true;
+    }, 50);
 
-  test("all commands pass → gate passes", () => {
+    const result = await runVerificationGate({
+      basePath: tmp,
+      unitId: "T-ASYNC",
+      cwd: tmp,
+      preferenceCommands: ["sleep 0.2"],
+    });
+
+    clearInterval(interval);
+
+    assert.equal(result.passed, true, "sleep command should exit 0");
+    assert.equal(result.checks.length, 1);
+    assert.ok(
+      timerFired,
+      "setInterval callback must fire during async command execution — " +
+      "if this fails, the event loop was blocked (spawnSync regression)",
+    );
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("verification-gate: runVerificationGate returns a Promise", () => {
+  const tmp = makeTempDir("vg-returns-promise");
+  try {
     const result = runVerificationGate({
+      basePath: tmp,
+      unitId: "T-PROMISE",
+      cwd: tmp,
+      preferenceCommands: ["echo check"],
+    });
+    // Verify the function returns a thenable (Promise), not a plain object
+    assert.ok(
+      result instanceof Promise,
+      "runVerificationGate must return a Promise (async execution)",
+    );
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("verification-gate: all commands pass → gate passes", async () => {
+  const tmp = makeTempDir("vg-pass");
+  try {
+    const result = await runVerificationGate({
       basePath: tmp,
       unitId: "T01",
       cwd: tmp,
@@ -239,10 +287,15 @@ describe("verification-gate: execution", () => {
     assert.ok(result.checks[0].stdout.includes("hello"));
     assert.ok(result.checks[1].stdout.includes("world"));
     assert.equal(typeof result.timestamp, "number");
-  });
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
 
-  test("one command fails → gate fails with exit code + stderr", () => {
-    const result = runVerificationGate({
+test("verification-gate: one command fails → gate fails with exit code + stderr", async () => {
+  const tmp = makeTempDir("vg-fail");
+  try {
+    const result = await runVerificationGate({
       basePath: tmp,
       unitId: "T01",
       cwd: tmp,
@@ -253,10 +306,15 @@ describe("verification-gate: execution", () => {
     assert.equal(result.checks[0].exitCode, 0);
     assert.equal(result.checks[1].exitCode, 1);
     assert.ok(result.checks[1].stderr.includes("err"));
-  });
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
 
-  test("no commands discovered → gate passes with 0 checks", () => {
-    const result = runVerificationGate({
+test("verification-gate: no commands discovered → gate passes with 0 checks", async () => {
+  const tmp = makeTempDir("vg-empty");
+  try {
+    const result = await runVerificationGate({
       basePath: tmp,
       unitId: "T01",
       cwd: tmp,
@@ -264,10 +322,15 @@ describe("verification-gate: execution", () => {
     assert.equal(result.passed, true);
     assert.equal(result.checks.length, 0);
     assert.equal(result.discoverySource, "none");
-  });
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
 
-  test("command not found → exit code 127", () => {
-    const result = runVerificationGate({
+test("verification-gate: command not found → exit code 127", async () => {
+  const tmp = makeTempDir("vg-notfound");
+  try {
+    const result = await runVerificationGate({
       basePath: tmp,
       unitId: "T01",
       cwd: tmp,
@@ -277,9 +340,14 @@ describe("verification-gate: execution", () => {
     assert.equal(result.checks.length, 1);
     assert.ok(result.checks[0].exitCode !== 0, "should have non-zero exit code");
     assert.ok(result.checks[0].durationMs >= 0);
-  });
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
 
-  test("no DEP0190 deprecation warning when running commands", () => {
+test("no DEP0190 deprecation warning when running commands", () => {
+  const tmp = makeTempDir("vg-dep0190");
+  try {
     // Run a subprocess with --throw-deprecation so any DeprecationWarning
     // becomes a thrown error (non-zero exit). The fix passes the command
     // string to sh -c explicitly instead of using spawnSync(cmd, {shell:true}).
@@ -288,7 +356,7 @@ describe("verification-gate: execution", () => {
     const resolverPath = join(thisDir, "resolve-ts.mjs");
     const script = [
       `import { runVerificationGate } from ${JSON.stringify(pathToFileURL(gatePath).href)};`,
-      `runVerificationGate({`,
+      `await runVerificationGate({`,
       `  basePath: ${JSON.stringify(tmp)},`,
       `  unitId: "T-DEP",`,
       `  cwd: ${JSON.stringify(tmp)},`,
@@ -313,10 +381,15 @@ describe("verification-gate: execution", () => {
       0,
       `Expected exit 0 (no deprecation) but got ${child.status}. stderr: ${child.stderr}`,
     );
-  });
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
 
-  test("each check has durationMs", () => {
-    const result = runVerificationGate({
+test("verification-gate: each check has durationMs", async () => {
+  const tmp = makeTempDir("vg-duration");
+  try {
+    const result = await runVerificationGate({
       basePath: tmp,
       unitId: "T01",
       cwd: tmp,
@@ -325,11 +398,16 @@ describe("verification-gate: execution", () => {
     assert.equal(result.checks.length, 1);
     assert.equal(typeof result.checks[0].durationMs, "number");
     assert.ok(result.checks[0].durationMs >= 0);
-  });
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
 
-  test("one command fails — remaining commands still run (non-short-circuit)", () => {
+test("one command fails — remaining commands still run (non-short-circuit)", async () => {
+  const tmp = makeTempDir("vg-nonshorty");
+  try {
     // First fails, second and third should still execute
-    const result = runVerificationGate({
+    const result = await runVerificationGate({
       basePath: tmp,
       unitId: "T02",
       cwd: tmp,
@@ -346,11 +424,16 @@ describe("verification-gate: execution", () => {
     assert.ok(result.checks[1].stdout.includes("second"));
     assert.equal(result.checks[2].exitCode, 0, "third command runs and passes");
     assert.ok(result.checks[2].stdout.includes("third"));
-  });
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
 
-  test("gate execution uses cwd for spawnSync", () => {
+test("gate execution uses cwd for spawnSync", async () => {
+  const tmp = makeTempDir("vg-cwd");
+  try {
     // pwd should report the temp dir
-    const result = runVerificationGate({
+    const result = await runVerificationGate({
       basePath: tmp,
       unitId: "T02",
       cwd: tmp,
@@ -360,7 +443,9 @@ describe("verification-gate: execution", () => {
     assert.equal(result.checks.length, 1);
     // The stdout should contain the tmp dir path (resolving symlinks)
     assert.ok(result.checks[0].stdout.trim().length > 0, "pwd should produce output");
-  });
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 // ─── Preference Validation Tests ─────────────────────────────────────────────
@@ -469,6 +554,116 @@ test("isLikelyCommand: empty or whitespace-only strings are rejected", () => {
 test("isLikelyCommand: short lowercase tokens without flags are accepted (could be custom scripts)", () => {
   assert.equal(isLikelyCommand("custom-verify"), true);
   assert.equal(isLikelyCommand("mycheck"), true);
+});
+
+test("verification-gate: prose taskPlanVerify is rejected, falls through to package.json", () => {
+  const tmp = makeTempDir("vg-prose-reject");
+  try {
+    writeFileSync(
+      join(tmp, "package.json"),
+      JSON.stringify({ scripts: { test: "vitest" } }),
+    );
+    const result = discoverCommands({
+      taskPlanVerify: "Document exists, contains all 5 scale names, all 14 semantic tokens",
+      cwd: tmp,
+    });
+    // Prose should be rejected, so it falls through to package.json
+    assert.equal(result.source, "package-json");
+    assert.deepStrictEqual(result.commands, ["npm run test"]);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("verification-gate: prose taskPlanVerify with no package.json → source none", () => {
+  const tmp = makeTempDir("vg-prose-none");
+  try {
+    const result = discoverCommands({
+      taskPlanVerify: "Verify the output matches expected format and all fields are present",
+      cwd: tmp,
+    });
+    assert.equal(result.source, "none");
+    assert.deepStrictEqual(result.commands, []);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("verification-gate: valid command in taskPlanVerify still works", () => {
+  const tmp = makeTempDir("vg-valid-cmd");
+  try {
+    const result = discoverCommands({
+      taskPlanVerify: "npm run lint && npm run test",
+      cwd: tmp,
+    });
+    assert.equal(result.source, "task-plan");
+    assert.deepStrictEqual(result.commands, ["npm run lint", "npm run test"]);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("verification-gate: mixed prose and commands in taskPlanVerify — only commands kept", () => {
+  const tmp = makeTempDir("vg-mixed");
+  try {
+    const result = discoverCommands({
+      taskPlanVerify: "Check that everything works && npm run test",
+      cwd: tmp,
+    });
+    // "Check that everything works" is prose (starts with capital, 4+ words)
+    // "npm run test" is a valid command
+    assert.equal(result.source, "task-plan");
+    assert.deepStrictEqual(result.commands, ["npm run test"]);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// ─── Additional Execution Tests (T02) ───────────────────────────────────────
+
+test("verification-gate: one command fails — remaining commands still run (non-short-circuit)", async () => {
+  const tmp = makeTempDir("vg-no-short-circuit");
+  try {
+    // First fails, second and third should still execute
+    const result = await runVerificationGate({
+      basePath: tmp,
+      unitId: "T02",
+      cwd: tmp,
+      preferenceCommands: [
+        "sh -c 'exit 1'",
+        "echo second",
+        "echo third",
+      ],
+    });
+    assert.equal(result.passed, false);
+    assert.equal(result.checks.length, 3, "all 3 commands should run");
+    assert.equal(result.checks[0].exitCode, 1, "first command fails");
+    assert.equal(result.checks[1].exitCode, 0, "second command runs and passes");
+    assert.ok(result.checks[1].stdout.includes("second"));
+    assert.equal(result.checks[2].exitCode, 0, "third command runs and passes");
+    assert.ok(result.checks[2].stdout.includes("third"));
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("verification-gate: gate execution uses cwd for spawn", async () => {
+  const tmp = makeTempDir("vg-cwd");
+  try {
+    // pwd should report the temp dir
+    const result = await runVerificationGate({
+      basePath: tmp,
+      unitId: "T02",
+      cwd: tmp,
+      preferenceCommands: ["pwd"],
+    });
+    assert.equal(result.passed, true);
+    assert.equal(result.checks.length, 1);
+    // The stdout should contain the tmp dir path (resolving symlinks)
+    assert.ok(result.checks[0].stdout.trim().length > 0, "pwd should produce output");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 // ─── Additional Preference Validation Tests (T02) ──────────────────────────
