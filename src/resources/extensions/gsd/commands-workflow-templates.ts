@@ -14,6 +14,7 @@ import {
   listTemplates,
   getTemplateInfo,
   loadWorkflowTemplate,
+  loadTemplateReference,
   loadRegistry,
   type TemplateMatch,
 } from "./workflow-templates.js";
@@ -474,6 +475,11 @@ export async function handleStart(
   infoLines.push(`Branch: ${actualBranch}`);
   ctx.ui.notify(infoLines.join("\n"), "info");
 
+  const rawReference = loadTemplateReference(templateId);
+  const contributingReference = rawReference
+    ? `\n## Contributing Reference\n\nRead the project's \`CONTRIBUTING.md\` first — it is the source of truth for commit and PR conventions. Fall back to the reference below only when the project has no contributing guide or it does not cover the relevant conventions.\n\n${rawReference}\n\n`
+    : "";
+
   const prompt = loadPrompt("workflow-start", {
     templateId,
     templateName: template.name,
@@ -486,6 +492,7 @@ export async function handleStart(
     issueRef: issueRef || "(none)",
     date,
     workflowContent,
+    contributingReference,
   });
 
   pi.sendMessage(

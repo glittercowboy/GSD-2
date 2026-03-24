@@ -250,3 +250,18 @@ export function loadWorkflowTemplate(templateId: string): string | null {
 
   return readFileSync(filePath, "utf-8");
 }
+
+/**
+ * Load an optional reference file for a workflow template.
+ * Convention: if `<template-id>-reference.md` exists alongside the template file,
+ * return its contents. Returns null if no reference file exists.
+ */
+export function loadTemplateReference(templateId: string): string | null {
+  const match = resolveByName(templateId);
+  if (!match) return null;
+
+  const refPath = join(__extensionDir, "workflow-templates", `${match.id}-reference.md`);
+  if (!existsSync(refPath)) return null;
+
+  return readFileSync(refPath, "utf-8");
+}

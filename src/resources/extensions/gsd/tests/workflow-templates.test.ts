@@ -11,6 +11,7 @@ import {
   listTemplates,
   getTemplateInfo,
   loadWorkflowTemplate,
+  loadTemplateReference,
 } from '../workflow-templates.ts';
 
 
@@ -184,3 +185,23 @@ console.log('\n── Load Workflow Template ──');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Load Template Reference
+// ═══════════════════════════════════════════════════════════════════════════
+
+console.log('\n── Load Template Reference ──');
+
+{
+  // feature template has a reference file
+  const featureRef = loadTemplateReference('feature');
+  assert.ok(featureRef !== null, 'feature should have a reference file');
+  assert.ok(featureRef!.includes('PR & Commit Best Practices'), 'Reference should include best practices title');
+  assert.ok(featureRef!.includes('CONTRIBUTING.md'), 'Reference should mention CONTRIBUTING.md as source of truth');
+  assert.ok(featureRef!.includes('Conventional Commits'), 'Reference should include commit format guidance');
+
+  // templates without a reference file should return null
+  const bugfixRef = loadTemplateReference('bugfix');
+  assert.ok(bugfixRef === null, 'bugfix should return null (no reference file)');
+
+  const missingRef = loadTemplateReference('nonexistent');
+  assert.ok(missingRef === null, 'nonexistent template should return null');
+}

@@ -17,7 +17,7 @@ You are executing a **{{templateName}}** workflow (template: `{{templateId}}`).
 Follow the workflow defined below. Execute each phase in order, completing one before moving to the next. For low and medium complexity workflows, keep moving by default — pause only at true decision gates (user must choose between materially different directions, outward-facing actions need approval, or the workflow explicitly requires a human checkpoint). For high complexity workflows, confirm at phase transitions unless the workflow explicitly marks a gate as skip-safe.
 
 {{workflowContent}}
-
+{{contributingReference}}
 ## Execution Rules
 
 1. **Follow the phases in order.** Do not skip phases unless the workflow explicitly allows it.
