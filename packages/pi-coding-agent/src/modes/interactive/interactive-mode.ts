@@ -2099,11 +2099,13 @@ export class InteractiveMode {
 							const userComponent = new UserMessageComponent(
 								skillBlock.userMessage,
 								this.getMarkdownThemeWithSettings(),
+								message.timestamp,
+								this.settingsManager.getTimestampFormat(),
 							);
 							this.chatContainer.addChild(userComponent);
 						}
 					} else {
-						const userComponent = new UserMessageComponent(textContent, this.getMarkdownThemeWithSettings());
+						const userComponent = new UserMessageComponent(textContent, this.getMarkdownThemeWithSettings(), message.timestamp, this.settingsManager.getTimestampFormat());
 						this.chatContainer.addChild(userComponent);
 					}
 					if (options?.populateHistory) {
@@ -2117,6 +2119,7 @@ export class InteractiveMode {
 					message,
 					this.hideThinkingBlock,
 					this.getMarkdownThemeWithSettings(),
+					this.settingsManager.getTimestampFormat(),
 				);
 				this.chatContainer.addChild(assistantComponent);
 				break;
@@ -2795,6 +2798,7 @@ export class InteractiveMode {
 					respectGitignoreInPicker: this.settingsManager.getRespectGitignoreInPicker(),
 					quietStartup: this.settingsManager.getQuietStartup(),
 					clearOnShrink: this.settingsManager.getClearOnShrink(),
+					timestampFormat: this.settingsManager.getTimestampFormat(),
 				},
 				{
 					onAutoCompactChange: (enabled) => {
@@ -2897,6 +2901,9 @@ export class InteractiveMode {
 					onRespectGitignoreInPickerChange: (enabled) => {
 						this.settingsManager.setRespectGitignoreInPicker(enabled);
 						this.autocompleteProvider?.setRespectGitignore(enabled);
+					},
+					onTimestampFormatChange: (format) => {
+						this.settingsManager.setTimestampFormat(format);
 					},
 					onCancel: () => {
 						done();
