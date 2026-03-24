@@ -251,8 +251,8 @@ async function main(): Promise<void> {
 
   assertEq(
     RUNTIME_EXCLUSION_PATHS.length,
-    9,
-    "exactly 9 runtime exclusion paths"
+    13,
+    "exactly 13 runtime exclusion paths"
   );
 
   const expectedPaths = [
@@ -264,6 +264,10 @@ async function main(): Promise<void> {
     ".gsd/completed-units.json",
     ".gsd/STATE.md",
     ".gsd/gsd.db",
+    ".gsd/gsd.db-shm",
+    ".gsd/gsd.db-wal",
+    ".gsd/journal/",
+    ".gsd/doctor-history.jsonl",
     ".gsd/DISCUSSION-MANIFEST.json",
   ];
 

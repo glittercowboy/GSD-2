@@ -196,6 +196,10 @@ export const RUNTIME_EXCLUSION_PATHS: readonly string[] = [
   ".gsd/completed-units.json",
   ".gsd/STATE.md",
   ".gsd/gsd.db",
+  ".gsd/gsd.db-shm",   // SQLite WAL sidecar — always created alongside gsd.db (#2296)
+  ".gsd/gsd.db-wal",   // SQLite WAL sidecar — always created alongside gsd.db (#2296)
+  ".gsd/journal/",     // daily-rotated JSONL event journal (#2296)
+  ".gsd/doctor-history.jsonl", // doctor run history (#2296)
   ".gsd/DISCUSSION-MANIFEST.json",
 ];
 

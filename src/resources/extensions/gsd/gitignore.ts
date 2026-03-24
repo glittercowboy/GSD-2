@@ -29,6 +29,10 @@ const GSD_RUNTIME_PATTERNS = [
   ".gsd/completed-units.json",
   ".gsd/STATE.md",
   ".gsd/gsd.db",
+  ".gsd/gsd.db-shm",   // SQLite WAL sidecar — always created alongside gsd.db (#2296)
+  ".gsd/gsd.db-wal",   // SQLite WAL sidecar — always created alongside gsd.db (#2296)
+  ".gsd/journal/",     // daily-rotated JSONL event journal (#2296)
+  ".gsd/doctor-history.jsonl", // doctor run history (#2296)
   ".gsd/DISCUSSION-MANIFEST.json",
   ".gsd/milestones/**/*-CONTINUE.md",
   ".gsd/milestones/**/continue.md",
