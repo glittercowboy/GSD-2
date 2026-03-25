@@ -233,7 +233,31 @@ async function runLoop(
 			hasMoreToolCalls = toolCalls.length > 0;
 
 			const toolResults: ToolResultMessage[] = [];
-			if (hasMoreToolCalls) {
+			if (hasMoreToolCalls && config.externalToolExecution) {
+				// External execution mode: tools were handled by the provider (e.g., Claude Code SDK).
+				// Emit synthetic tool events for TUI rendering but skip local dispatch.
+				for (const tc of toolCalls as AgentToolCall[]) {
+					stream.push({
+						type: "tool_execution_start",
+						toolCallId: tc.id,
+						toolName: tc.name,
+						args: tc.arguments,
+					});
+					stream.push({
+						type: "tool_execution_end",
+						toolCallId: tc.id,
+						toolName: tc.name,
+						result: {
+							content: [{ type: "text", text: "(executed by Claude Code)" }],
+							details: {},
+						},
+						isError: false,
+					});
+				}
+				// Don't add tool results to context or loop back — the streamSimple
+				// call already ran the full multi-turn agentic loop.
+				hasMoreToolCalls = false;
+			} else if (hasMoreToolCalls) {
 				const toolExecution = await executeToolCalls(
 					currentContext,
 					message,

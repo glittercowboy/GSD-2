@@ -326,6 +326,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		transport: settingsManager.getTransport(),
 		thinkingBudgets: settingsManager.getThinkingBudgets(),
 		maxRetryDelayMs: settingsManager.getRetrySettings().maxDelayMs,
+		externalToolExecution: (m) => modelRegistry.getProviderAuthMode(m.provider) === "externalCli",
 		getApiKey: async (provider) => {
 			// Use the provider argument from the in-flight request;
 			// agent.state.model may already be switched mid-turn.

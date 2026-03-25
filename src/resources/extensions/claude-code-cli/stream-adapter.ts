@@ -269,25 +269,21 @@ async function pumpSdkMessages(
 				case "result": {
 					const result = msg as SDKResultMessage;
 
-					// Build final message with text/thinking only (strip tool calls)
-					const finalContent: AssistantMessage["content"] = [];
+					// Build final message with all content from the last assistant turn.
+					// Tool calls are preserved — the agent loop's externalToolExecution
+					// mode handles them without local dispatch.
+					let finalContent: AssistantMessage["content"] = [];
 
-					// Use builder's accumulated content if available, falling back to captured text
-					if (builder) {
-						for (const block of builder.message.content) {
-							if (block.type === "text" && block.text) {
-								lastTextContent = block.text;
-							} else if (block.type === "thinking" && block.thinking) {
-								lastThinkingContent = block.thinking;
-							}
+					if (builder && builder.message.content.length > 0) {
+						finalContent = [...builder.message.content];
+					} else {
+						// Fall back to captured text from complete assistant messages
+						if (lastThinkingContent) {
+							finalContent.push({ type: "thinking", thinking: lastThinkingContent });
 						}
-					}
-
-					if (lastThinkingContent) {
-						finalContent.push({ type: "thinking", thinking: lastThinkingContent });
-					}
-					if (lastTextContent) {
-						finalContent.push({ type: "text", text: lastTextContent });
+						if (lastTextContent) {
+							finalContent.push({ type: "text", text: lastTextContent });
+						}
 					}
 
 					// Fallback: use the SDK's result text if we have no content
