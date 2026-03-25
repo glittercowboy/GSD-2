@@ -1,4 +1,4 @@
-import { describe, test } from 'node:test';
+import { describe, test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseRequirementCounts } from "../files.ts";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -95,5 +95,7 @@ describe('requirements', () => {
     assert.ok(report.issues.some(issue => issue.code === "active_requirement_missing_owner"), "doctor flags missing owner");
   });
 
-  rmSync(base, { recursive: true, force: true });
+  after(() => {
+    rmSync(base, { recursive: true, force: true });
+  });
 });
