@@ -322,7 +322,6 @@ export function getAutoDashboardData(): AutoDashboardData {
       ? (s.autoStartTime > 0 ? Date.now() - s.autoStartTime : 0)
       : 0,
     currentUnit: s.currentUnit ? { ...s.currentUnit } : null,
-    completedUnits: [],
     basePath: s.basePath,
     totalCost: totals?.cost ?? 0,
     totalTokens: totals?.tokens.total ?? 0,
@@ -1169,7 +1168,6 @@ export async function startAuto(
       lockBase(),
       "resuming",
       s.currentMilestoneId ?? "unknown",
-      0,
     );
     logCmuxEvent(loadEffectiveGSDPreferences()?.preferences, s.stepMode ? "Step-mode resumed." : "Auto-mode resumed.", "progress");
 
@@ -1391,7 +1389,6 @@ export async function dispatchHookUnit(
     lockBase(),
     hookUnitType,
     triggerUnitId,
-    0,
     sessionFile,
   );
 

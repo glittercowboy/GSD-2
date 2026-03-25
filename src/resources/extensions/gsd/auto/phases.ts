@@ -28,6 +28,10 @@ import { PROJECT_FILES } from "../detection.js";
 import { MergeConflictError } from "../git-service.js";
 import { join } from "node:path";
 import { existsSync, cpSync } from "node:fs";
+import { gsdRoot } from "../paths.js";
+import { atomicWriteSync } from "../atomic-write.js";
+import { verifyExpectedArtifact } from "../auto-recovery.js";
+import { writeUnitRuntimeRecord } from "../unit-runtime.js";
 
 // ─── generateMilestoneReport ──────────────────────────────────────────────────
 
@@ -273,11 +277,7 @@ export async function runPreDispatch(
       .map((m: { id: string }) => m.id);
     deps.pruneQueueOrder(s.basePath, pendingIds);
 
-    // Reset completed-units tracking for the new milestone — stale entries
-    // from the previous milestone cause the dispatch loop to skip units
-    // that haven't actually been completed in the new milestone's context.
     // Archive the old completed-units.json instead of wiping it (#2313).
-    s.completedUnits = [];
     try {
       const completedKeysPath = join(gsdRoot(s.basePath), "completed-units.json");
       if (existsSync(completedKeysPath) && s.currentMilestoneId) {
@@ -534,7 +534,7 @@ export async function runDispatch(
       if (loopState.stuckRecoveryAttempts === 0) {
         // Level 1: try verifying the artifact, then cache invalidation + retry
         loopState.stuckRecoveryAttempts++;
-        const artifactExists = deps.verifyExpectedArtifact(
+        const artifactExists = verifyExpectedArtifact(
           unitType,
           unitId,
           s.basePath,
@@ -843,7 +843,7 @@ export async function runUnitPhase(
   const unitStartSeq = ic.nextSeq();
   deps.emitJournalEvent({ ts: new Date().toISOString(), flowId: ic.flowId, seq: unitStartSeq, eventType: "unit-start", data: { unitType, unitId } });
   deps.captureAvailableSkills();
-  deps.writeUnitRuntimeRecord(
+  writeUnitRuntimeRecord(
     s.basePath,
     unitType,
     unitId,
@@ -1114,7 +1114,7 @@ export async function runUnitPhase(
   const skipArtifactVerification = unitType.startsWith("hook/") || unitType === "custom-step";
   const artifactVerified =
     skipArtifactVerification ||
-    deps.verifyExpectedArtifact(unitType, unitId, s.basePath);
+    verifyExpectedArtifact(unitType, unitId, s.basePath);
   if (artifactVerified) {
     s.unitDispatchCount.delete(`${unitType}/${unitId}`);
     s.unitRecoveryCount.delete(`${unitType}/${unitId}`);

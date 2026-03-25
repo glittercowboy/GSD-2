@@ -128,6 +128,7 @@ export function snapshotState(): StateManifest {
     inputs: JSON.parse((r["inputs"] as string) || "[]"),
     expected_output: JSON.parse((r["expected_output"] as string) || "[]"),
     observability_impact: (r["observability_impact"] as string) ?? "",
+    full_plan_md: (r["full_plan_md"] as string) ?? "",
     sequence: (r["sequence"] as number) ?? 0,
   }));
 
