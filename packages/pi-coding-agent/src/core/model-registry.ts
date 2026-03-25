@@ -623,7 +623,18 @@ export class ModelRegistry {
 			if (!config.api) {
 				throw new Error(`Provider ${providerName}: "api" is required when registering streamSimple.`);
 			}
-			const streamSimple = config.streamSimple;
+			const rawStreamSimple = config.streamSimple;
+			const authMode = config.authMode ?? "apiKey";
+
+			// Keyless providers never see apiKey in options — enforced at registration,
+			// not by convention. Prevents undefined from reaching any handler.
+			const streamSimple = (authMode === "externalCli" || authMode === "none")
+				? ((model: Model<Api>, context: Context, options?: SimpleStreamOptions) => {
+						const { apiKey: _, ...opts } = options ?? {};
+						return rawStreamSimple(model, context, opts as SimpleStreamOptions);
+					})
+				: rawStreamSimple;
+
 			registerApiProvider(
 				{
 					api: config.api,
@@ -649,7 +660,22 @@ export class ModelRegistry {
 			}
 			const authMode = config.authMode ?? (config.oauth ? "oauth" : config.apiKey ? "apiKey" : "apiKey");
 			if (authMode === "apiKey" && !config.apiKey && !config.oauth) {
-				throw new Error(`Provider ${providerName}: "apiKey" or "oauth" is required when defining models.`);
+				throw new Error(
+					`Provider ${providerName}: "apiKey" or "oauth" is required when authMode is "apiKey" (the default). ` +
+					`Set authMode to "externalCli" or "none" for keyless providers.`,
+				);
+			}
+			if ((authMode === "externalCli" || authMode === "none") && !config.streamSimple) {
+				throw new Error(
+					`Provider ${providerName}: "streamSimple" is required when authMode is "${authMode}". ` +
+					`Keyless providers must supply their own stream handler.`,
+				);
+			}
+			if ((authMode === "externalCli" || authMode === "none") && config.apiKey) {
+				throw new Error(
+					`Provider ${providerName}: "apiKey" cannot be set when authMode is "${authMode}". ` +
+					`Keyless providers should not provide API key credentials.`,
+				);
 			}
 
 			// Parse and add new models
@@ -834,7 +860,8 @@ export class ModelRegistry {
  */
 export interface ProviderConfigInput {
 	authMode?: ProviderAuthMode;
-	/** Optional readiness check. Called by isProviderRequestReady() before default auth checks. */
+	/** Optional readiness check. Called by isProviderRequestReady() before default auth checks.
+	 * Trusted at the same level as extension code — extensions already have arbitrary code execution. */
 	isReady?: () => boolean;
 	baseUrl?: string;
 	apiKey?: string;

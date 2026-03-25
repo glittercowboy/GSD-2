@@ -97,6 +97,7 @@ export class CompactionOrchestrator {
 			if (!this._deps.modelRegistry.isProviderRequestReady(model.provider)) {
 				throw new Error(`No API key for ${model.provider}`);
 			}
+			// undefined for externalCli/none providers — stripped at the streamSimple boundary (model-registry.ts)
 			const apiKey = await this._deps.modelRegistry.getApiKey(model, this._deps.getSessionId());
 
 			const pathEntries = this._deps.sessionManager.getBranch();
@@ -303,6 +304,7 @@ export class CompactionOrchestrator {
 				this._deps.emit({ type: "auto_compaction_end", result: undefined, aborted: false, willRetry: false });
 				return;
 			}
+			// undefined for externalCli/none providers — stripped at the streamSimple boundary (model-registry.ts)
 			const apiKey = await this._deps.modelRegistry.getApiKey(model, this._deps.getSessionId());
 
 			const pathEntries = this._deps.sessionManager.getBranch();

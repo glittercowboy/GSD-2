@@ -62,7 +62,7 @@ function toScope(local: boolean): LifecycleHookScope {
 	return local ? "project" : "user";
 }
 
-function readManifestRuntimeDeps(dir: string): string[] {
+export function readManifestRuntimeDeps(dir: string): string[] {
 	const manifestPath = join(dir, "extension-manifest.json");
 	if (!existsSync(manifestPath)) return [];
 	try {
@@ -73,7 +73,7 @@ function readManifestRuntimeDeps(dir: string): string[] {
 	}
 }
 
-function collectRuntimeDependencies(installedPath: string, entryPaths: string[]): string[] {
+export function collectRuntimeDependencies(installedPath: string, entryPaths: string[]): string[] {
 	const deps = new Set<string>();
 	const candidateDirs = new Set<string>([installedPath, ...entryPaths.map((entryPath) => dirname(entryPath))]);
 	for (const dir of candidateDirs) {
@@ -84,7 +84,7 @@ function collectRuntimeDependencies(installedPath: string, entryPaths: string[])
 	return Array.from(deps);
 }
 
-function verifyRuntimeDependencies(runtimeDeps: string[], source: string, appName: string): void {
+export function verifyRuntimeDependencies(runtimeDeps: string[], source: string, appName: string): void {
 	const missing: string[] = [];
 	for (const dep of runtimeDeps) {
 		const result = spawnSync(dep, ["--version"], { encoding: "utf-8", timeout: 5000 });
@@ -99,7 +99,7 @@ function verifyRuntimeDependencies(runtimeDeps: string[], source: string, appNam
 	);
 }
 
-function resolveLocalSourcePath(source: string, cwd: string): string | undefined {
+export function resolveLocalSourcePath(source: string, cwd: string): string | undefined {
 	const trimmed = source.trim();
 	if (!trimmed) return undefined;
 	if (trimmed.startsWith("npm:")) return undefined;
@@ -193,13 +193,19 @@ function getLegacyExportCandidates(phase: LifecycleHookPhase): string[] {
 	return [phase];
 }
 
+const _legacyModuleCache = new Map<string, Record<string, unknown>>();
+
 async function runLegacyExportHook(
 	entryPath: string,
 	phase: LifecycleHookPhase,
 	context: LifecycleHookContext,
 ): Promise<LifecycleHookHandler | null> {
 	try {
-		const module = await importExtensionModule<Record<string, unknown>>(import.meta.url, pathToFileURL(entryPath).href);
+		let module = _legacyModuleCache.get(entryPath);
+		if (!module) {
+			module = await importExtensionModule<Record<string, unknown>>(import.meta.url, pathToFileURL(entryPath).href);
+			_legacyModuleCache.set(entryPath, module);
+		}
 		for (const exportName of getLegacyExportCandidates(phase)) {
 			const candidate = module[exportName];
 			if (typeof candidate === "function") {

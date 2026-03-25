@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { Api, Model } from "@gsd/pi-ai";
+import type { Api, Model, SimpleStreamOptions, Context, AssistantMessageEventStream } from "@gsd/pi-ai";
+import { getApiProvider } from "@gsd/pi-ai";
 import type { AuthStorage } from "./auth-storage.js";
 import { ModelRegistry } from "./model-registry.js";
 
@@ -17,11 +18,11 @@ function createRegistry(hasAuthFn?: (provider: string) => boolean): ModelRegistr
 	return new ModelRegistry(authStorage, undefined);
 }
 
-function createProviderModel(id: string): NonNullable<Parameters<ModelRegistry["registerProvider"]>[1]["models"]>[number] {
+function createProviderModel(id: string, api?: string): NonNullable<Parameters<ModelRegistry["registerProvider"]>[1]["models"]>[number] {
 	return {
 		id,
 		name: id,
-		api: "openai-completions",
+		api: (api ?? "openai-completions") as Api,
 		reasoning: false,
 		input: ["text"],
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -34,34 +35,89 @@ function findModel(registry: ModelRegistry, provider: string, id: string): Model
 	return registry.getAvailable().find((m) => m.provider === provider && m.id === id);
 }
 
+function makeModel(provider: string, id: string, api: string): Model<Api> {
+	return {
+		id,
+		name: id,
+		api: api as Api,
+		provider,
+		baseUrl: `${provider}:`,
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 128000,
+		maxTokens: 16384,
+	};
+}
+
+function makeContext(): Context {
+	return {
+		systemPrompt: "test",
+		messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
+	};
+}
+
+/** No-op streamSimple for tests that need one to pass validation but don't inspect it. */
+const noopStreamSimple = (_model: Model<Api>, _context: Context, _options?: SimpleStreamOptions) => {
+	return {
+		[Symbol.asyncIterator]() { return { next: async () => ({ value: undefined, done: true as const }) }; },
+		result: () => Promise.resolve({ role: "assistant" as const, content: [], api: "test" as Api, provider: "test", model: "test", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop" as const, timestamp: Date.now() }),
+		push: () => {},
+		end: () => {},
+	} as unknown as AssistantMessageEventStream;
+};
+
+/** Create a spy streamSimple that captures the options it receives and returns a stub stream. */
+function createStreamSpy(): {
+	streamSimple: (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream;
+	getCapturedOptions: () => SimpleStreamOptions | undefined;
+} {
+	let capturedOptions: SimpleStreamOptions | undefined;
+	const streamSimple = (_model: Model<Api>, _context: Context, options?: SimpleStreamOptions) => {
+		capturedOptions = options;
+		// Return a minimal stub that satisfies AssistantMessageEventStream
+		return {
+			[Symbol.asyncIterator]() { return { next: async () => ({ value: undefined, done: true as const }) }; },
+			result: () => Promise.resolve({ role: "assistant" as const, content: [], api: "test" as Api, provider: "test", model: "test", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop" as const, timestamp: Date.now() }),
+			push: () => {},
+			end: () => {},
+		} as unknown as AssistantMessageEventStream;
+	};
+	return { streamSimple, getCapturedOptions: () => capturedOptions };
+}
+
 // ─── Registration ─────────────────────────────────────────────────────────────
 
 describe("ModelRegistry authMode — registration", () => {
-	it("registers externalCli provider without apiKey/oauth", () => {
+	it("registers externalCli provider with streamSimple and without apiKey/oauth", () => {
 		const registry = createRegistry();
+		const spy = createStreamSpy();
 		assert.doesNotThrow(() => {
 			registry.registerProvider("cli-provider", {
 				authMode: "externalCli",
 				baseUrl: "https://cli.local",
 				api: "openai-completions",
+				streamSimple: spy.streamSimple,
 				models: [createProviderModel("cli-model")],
 			});
 		});
 	});
 
-	it("registers none provider without apiKey/oauth", () => {
+	it("registers none provider with streamSimple and without apiKey/oauth", () => {
 		const registry = createRegistry();
+		const spy = createStreamSpy();
 		assert.doesNotThrow(() => {
 			registry.registerProvider("none-provider", {
 				authMode: "none",
 				baseUrl: "http://localhost:11434",
 				api: "openai-completions",
+				streamSimple: spy.streamSimple,
 				models: [createProviderModel("local-model")],
 			});
 		});
 	});
 
-	it("rejects apiKey provider without apiKey or oauth", () => {
+	it("rejects apiKey provider without apiKey or oauth — message mentions authMode", () => {
 		const registry = createRegistry();
 		assert.throws(() => {
 			registry.registerProvider("apikey-provider", {
@@ -70,6 +126,10 @@ describe("ModelRegistry authMode — registration", () => {
 				api: "openai-completions",
 				models: [createProviderModel("model")],
 			});
+		}, (err: Error) => {
+			assert.ok(err.message.includes("authMode"), "error message must mention authMode");
+			assert.ok(err.message.includes("externalCli"), "error message must suggest externalCli");
+			return true;
 		});
 	});
 
@@ -81,6 +141,79 @@ describe("ModelRegistry authMode — registration", () => {
 				api: "openai-completions",
 				models: [createProviderModel("model")],
 			});
+		}, (err: Error) => {
+			assert.ok(err.message.includes("authMode"), "error message must mention authMode");
+			return true;
+		});
+	});
+
+	it("rejects externalCli provider without streamSimple", () => {
+		const registry = createRegistry();
+		assert.throws(() => {
+			registry.registerProvider("cli-no-stream", {
+				authMode: "externalCli",
+				baseUrl: "https://cli.local",
+				api: "openai-completions",
+				models: [createProviderModel("model")],
+			});
+		}, (err: Error) => {
+			assert.ok(err.message.includes("streamSimple"), "error message must mention streamSimple");
+			assert.ok(err.message.includes("externalCli"), "error message must mention authMode");
+			return true;
+		});
+	});
+
+	it("rejects none provider without streamSimple", () => {
+		const registry = createRegistry();
+		assert.throws(() => {
+			registry.registerProvider("none-no-stream", {
+				authMode: "none",
+				baseUrl: "http://localhost:11434",
+				api: "openai-completions",
+				models: [createProviderModel("model")],
+			});
+		}, (err: Error) => {
+			assert.ok(err.message.includes("streamSimple"), "error message must mention streamSimple");
+			assert.ok(err.message.includes("none"), "error message must mention authMode");
+			return true;
+		});
+	});
+
+	it("rejects externalCli provider that also sets apiKey", () => {
+		const registry = createRegistry();
+		const spy = createStreamSpy();
+		assert.throws(() => {
+			registry.registerProvider("cli-with-key", {
+				authMode: "externalCli",
+				baseUrl: "https://cli.local",
+				api: "openai-completions",
+				apiKey: "SHOULD_NOT_EXIST",
+				streamSimple: spy.streamSimple,
+				models: [createProviderModel("model")],
+			});
+		}, (err: Error) => {
+			assert.ok(err.message.includes("apiKey"), "error message must mention apiKey");
+			assert.ok(err.message.includes("externalCli"), "error message must mention authMode");
+			return true;
+		});
+	});
+
+	it("rejects none provider that also sets apiKey", () => {
+		const registry = createRegistry();
+		const spy = createStreamSpy();
+		assert.throws(() => {
+			registry.registerProvider("none-with-key", {
+				authMode: "none",
+				baseUrl: "http://localhost:11434",
+				api: "openai-completions",
+				apiKey: "SHOULD_NOT_EXIST",
+				streamSimple: spy.streamSimple,
+				models: [createProviderModel("model")],
+			});
+		}, (err: Error) => {
+			assert.ok(err.message.includes("apiKey"), "error message must mention apiKey");
+			assert.ok(err.message.includes("none"), "error message must mention authMode");
+			return true;
 		});
 	});
 });
@@ -99,6 +232,7 @@ describe("ModelRegistry authMode — getProviderAuthMode", () => {
 			authMode: "externalCli",
 			baseUrl: "https://cli.local",
 			api: "openai-completions",
+			streamSimple: noopStreamSimple,
 			models: [createProviderModel("m")],
 		});
 		assert.equal(registry.getProviderAuthMode("cli"), "externalCli");
@@ -110,6 +244,7 @@ describe("ModelRegistry authMode — getProviderAuthMode", () => {
 			authMode: "none",
 			baseUrl: "http://localhost:11434",
 			api: "openai-completions",
+			streamSimple: noopStreamSimple,
 			models: [createProviderModel("m")],
 		});
 		assert.equal(registry.getProviderAuthMode("local"), "none");
@@ -125,6 +260,7 @@ describe("ModelRegistry authMode — isProviderRequestReady", () => {
 			authMode: "externalCli",
 			baseUrl: "https://cli.local",
 			api: "openai-completions",
+			streamSimple: noopStreamSimple,
 			models: [createProviderModel("m")],
 		});
 		assert.equal(registry.isProviderRequestReady("cli"), true);
@@ -136,6 +272,7 @@ describe("ModelRegistry authMode — isProviderRequestReady", () => {
 			authMode: "none",
 			baseUrl: "http://localhost:11434",
 			api: "openai-completions",
+			streamSimple: noopStreamSimple,
 			models: [createProviderModel("m")],
 		});
 		assert.equal(registry.isProviderRequestReady("local"), true);
@@ -161,6 +298,7 @@ describe("ModelRegistry authMode — isReady callback", () => {
 			authMode: "externalCli",
 			baseUrl: "https://cli.local",
 			api: "openai-completions",
+			streamSimple: noopStreamSimple,
 			isReady: () => false,
 			models: [createProviderModel("m")],
 		});
@@ -185,6 +323,7 @@ describe("ModelRegistry authMode — isReady callback", () => {
 			authMode: "externalCli",
 			baseUrl: "https://cli.local",
 			api: "openai-completions",
+			streamSimple: noopStreamSimple,
 			isReady: () => true,
 			models: [createProviderModel("m")],
 		});
@@ -197,6 +336,7 @@ describe("ModelRegistry authMode — isReady callback", () => {
 			authMode: "externalCli",
 			baseUrl: "https://cli.local",
 			api: "openai-completions",
+			streamSimple: noopStreamSimple,
 			models: [createProviderModel("m")],
 		});
 		// externalCli without isReady → true (default)
@@ -213,6 +353,7 @@ describe("ModelRegistry authMode — getAvailable", () => {
 			authMode: "externalCli",
 			baseUrl: "https://cli.local",
 			api: "openai-completions",
+			streamSimple: noopStreamSimple,
 			models: [createProviderModel("cli-model")],
 		});
 		assert.ok(findModel(registry, "cli", "cli-model"));
@@ -224,6 +365,7 @@ describe("ModelRegistry authMode — getAvailable", () => {
 			authMode: "none",
 			baseUrl: "http://localhost:11434",
 			api: "openai-completions",
+			streamSimple: noopStreamSimple,
 			models: [createProviderModel("local-model")],
 		});
 		assert.ok(findModel(registry, "local", "local-model"));
@@ -235,6 +377,7 @@ describe("ModelRegistry authMode — getAvailable", () => {
 			authMode: "externalCli",
 			baseUrl: "https://cli.local",
 			api: "openai-completions",
+			streamSimple: noopStreamSimple,
 			isReady: () => false,
 			models: [createProviderModel("m")],
 		});
@@ -243,10 +386,7 @@ describe("ModelRegistry authMode — getAvailable", () => {
 
 	it("excludes apiKey models without stored auth", () => {
 		const registry = createRegistry(() => false);
-		// Built-in providers have no registeredProviders entry, so authMode defaults to apiKey
-		// getAvailable filters by isProviderRequestReady → hasAuth → false
 		const available = registry.getAvailable();
-		// No models should be available since hasAuth returns false for everything
 		assert.equal(available.length, 0);
 	});
 });
@@ -260,6 +400,7 @@ describe("ModelRegistry authMode — getApiKey", () => {
 			authMode: "externalCli",
 			baseUrl: "https://cli.local",
 			api: "openai-completions",
+			streamSimple: noopStreamSimple,
 			models: [createProviderModel("m")],
 		});
 		const model = registry.getAll().find((m) => m.provider === "cli")!;
@@ -272,6 +413,7 @@ describe("ModelRegistry authMode — getApiKey", () => {
 			authMode: "none",
 			baseUrl: "http://localhost:11434",
 			api: "openai-completions",
+			streamSimple: noopStreamSimple,
 			models: [createProviderModel("m")],
 		});
 		const model = registry.getAll().find((m) => m.provider === "local")!;
@@ -280,9 +422,153 @@ describe("ModelRegistry authMode — getApiKey", () => {
 
 	it("delegates to authStorage for apiKey provider", async () => {
 		const registry = createRegistry();
-		// authStorage.getApiKey returns undefined (no key configured)
-		// For apiKey providers this is an expected "no key" response, not early exit
 		const key = await registry.getApiKeyForProvider("anthropic");
 		assert.equal(key, undefined);
+	});
+});
+
+// ─── streamSimple apiKey stripping ────────────────────────────────────────────
+
+describe("ModelRegistry authMode — streamSimple apiKey boundary", () => {
+	it("strips apiKey from options for externalCli provider", () => {
+		const registry = createRegistry();
+		const spy = createStreamSpy();
+		const apiType = `ext-cli-strip-${Date.now()}`;
+
+		registry.registerProvider("cli-strip", {
+			authMode: "externalCli",
+			baseUrl: "https://cli.local",
+			api: apiType as Api,
+			streamSimple: spy.streamSimple,
+			models: [createProviderModel("m", apiType)],
+		});
+
+		const provider = getApiProvider(apiType as Api);
+		assert.ok(provider, "provider must be registered in api registry");
+
+		provider.streamSimple(
+			makeModel("cli-strip", "m", apiType),
+			makeContext(),
+			{ apiKey: "should-be-stripped", maxTokens: 1024 } as SimpleStreamOptions,
+		);
+
+		const captured = spy.getCapturedOptions();
+		assert.ok(captured, "streamSimple must have been called");
+		assert.equal("apiKey" in captured, false, "apiKey must not exist in options for externalCli provider");
+		assert.equal(captured.maxTokens, 1024, "other options must pass through");
+	});
+
+	it("strips apiKey from options for none provider", () => {
+		const registry = createRegistry();
+		const spy = createStreamSpy();
+		const apiType = `none-strip-${Date.now()}`;
+
+		registry.registerProvider("none-strip", {
+			authMode: "none",
+			baseUrl: "http://localhost:11434",
+			api: apiType as Api,
+			streamSimple: spy.streamSimple,
+			models: [createProviderModel("m", apiType)],
+		});
+
+		const provider = getApiProvider(apiType as Api);
+		assert.ok(provider, "provider must be registered in api registry");
+
+		provider.streamSimple(
+			makeModel("none-strip", "m", apiType),
+			makeContext(),
+			{ apiKey: "should-be-stripped", maxTokens: 2048 } as SimpleStreamOptions,
+		);
+
+		const captured = spy.getCapturedOptions();
+		assert.ok(captured, "streamSimple must have been called");
+		assert.equal("apiKey" in captured, false, "apiKey must not exist in options for none provider");
+		assert.equal(captured.maxTokens, 2048, "other options must pass through");
+	});
+
+	it("preserves apiKey in options for apiKey provider", () => {
+		const registry = createRegistry();
+		const spy = createStreamSpy();
+		const apiType = `apikey-preserve-${Date.now()}`;
+
+		registry.registerProvider("apikey-preserve", {
+			apiKey: "MY_KEY",
+			baseUrl: "https://api.local",
+			api: apiType as Api,
+			streamSimple: spy.streamSimple,
+			models: [createProviderModel("m", apiType)],
+		});
+
+		const provider = getApiProvider(apiType as Api);
+		assert.ok(provider, "provider must be registered in api registry");
+
+		provider.streamSimple(
+			makeModel("apikey-preserve", "m", apiType),
+			makeContext(),
+			{ apiKey: "sk-real-key", maxTokens: 4096 } as SimpleStreamOptions,
+		);
+
+		const captured = spy.getCapturedOptions();
+		assert.ok(captured, "streamSimple must have been called");
+		assert.equal(captured.apiKey, "sk-real-key", "apiKey must be preserved for apiKey provider");
+		assert.equal(captured.maxTokens, 4096, "other options must pass through");
+	});
+
+	it("handles undefined options for externalCli provider", () => {
+		const registry = createRegistry();
+		const spy = createStreamSpy();
+		const apiType = `ext-cli-undef-${Date.now()}`;
+
+		registry.registerProvider("cli-undef", {
+			authMode: "externalCli",
+			baseUrl: "https://cli.local",
+			api: apiType as Api,
+			streamSimple: spy.streamSimple,
+			models: [createProviderModel("m", apiType)],
+		});
+
+		const provider = getApiProvider(apiType as Api);
+		assert.ok(provider, "provider must be registered in api registry");
+
+		provider.streamSimple(
+			makeModel("cli-undef", "m", apiType),
+			makeContext(),
+			undefined,
+		);
+
+		const captured = spy.getCapturedOptions();
+		assert.ok(captured !== undefined, "streamSimple must have been called");
+		assert.equal("apiKey" in captured, false, "apiKey must not exist even when options is undefined");
+	});
+
+	it("strips apiKey but preserves signal and other fields for externalCli", () => {
+		const registry = createRegistry();
+		const spy = createStreamSpy();
+		const apiType = `ext-cli-fields-${Date.now()}`;
+		const abortController = new AbortController();
+
+		registry.registerProvider("cli-fields", {
+			authMode: "externalCli",
+			baseUrl: "https://cli.local",
+			api: apiType as Api,
+			streamSimple: spy.streamSimple,
+			models: [createProviderModel("m", apiType)],
+		});
+
+		const provider = getApiProvider(apiType as Api);
+		assert.ok(provider, "provider must be registered in api registry");
+
+		provider.streamSimple(
+			makeModel("cli-fields", "m", apiType),
+			makeContext(),
+			{ apiKey: "strip-me", maxTokens: 8192, signal: abortController.signal, reasoning: "high" } as SimpleStreamOptions,
+		);
+
+		const captured = spy.getCapturedOptions();
+		assert.ok(captured, "streamSimple must have been called");
+		assert.equal("apiKey" in captured, false, "apiKey must be stripped");
+		assert.equal(captured.maxTokens, 8192, "maxTokens must pass through");
+		assert.equal(captured.signal, abortController.signal, "signal must pass through");
+		assert.equal((captured as Record<string, unknown>).reasoning, "high", "reasoning must pass through");
 	});
 });
