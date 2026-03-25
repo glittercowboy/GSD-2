@@ -1,0 +1,10 @@
+{
+  "$schema": "https://schema.tauri.app/config/2/capability",
+  "identifier": "secondary-window",
+  "description": "Capabilities for secondary windows (preview, code viewer). Excludes all credential and process management commands per B30/B31.",
+  "windows": ["window-*", "preview-*", "viewer-*"],
+  "permissions": [
+    "core:default",
+    "dialog:default"
+  ]
+}
