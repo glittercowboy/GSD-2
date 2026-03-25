@@ -94,6 +94,7 @@ export const KNOWN_PREFERENCE_KEYS = new Set<string>([
   "forensics_dedup",
   "show_token_cost",
   "experimental",
+  "slice_parallel",
 ]);
 
 /** Canonical list of all dispatch unit types. */
@@ -258,6 +259,8 @@ export interface GSDPreferences {
    * See the preferences reference for details on each feature.
    */
   experimental?: ExperimentalPreferences;
+  /** Slice-level parallelism within a milestone. Disabled by default. */
+  slice_parallel?: { enabled?: boolean; max_workers?: number };
 }
 
 export interface LoadedGSDPreferences {
