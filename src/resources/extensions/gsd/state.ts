@@ -48,6 +48,7 @@ import {
   getSliceTasks,
   getReplanHistory,
   getSlice,
+  insertMilestone,
   type MilestoneRow,
   type SliceRow,
   type TaskRow,
@@ -257,7 +258,24 @@ function isStatusDone(status: string): boolean {
 export async function deriveStateFromDb(basePath: string): Promise<GSDState> {
   const requirements = parseRequirementCounts(await loadFile(resolveGsdRootFile(basePath, "REQUIREMENTS")));
 
-  const allMilestones = getAllMilestones();
+  let allMilestones = getAllMilestones();
+
+  // Incremental disk→DB sync: milestone directories created outside the DB
+  // write path (via /gsd queue, manual mkdir, or complete-milestone writing the
+  // next CONTEXT.md) are never inserted by the initial migration guard in
+  // auto-start.ts because that guard only runs when gsd.db doesn't exist yet.
+  // Reconcile here so deriveStateFromDb never silently misses queued milestones.
+  // insertMilestone uses INSERT OR IGNORE, so this is safe to call every time.
+  const dbIdSet = new Set(allMilestones.map(m => m.id));
+  const diskIds = findMilestoneIds(basePath);
+  let synced = false;
+  for (const diskId of diskIds) {
+    if (!dbIdSet.has(diskId) && !isGhostMilestone(basePath, diskId)) {
+      insertMilestone({ id: diskId, status: 'active' });
+      synced = true;
+    }
+  }
+  if (synced) allMilestones = getAllMilestones();
 
   // Parallel worker isolation: when locked, filter to just the locked milestone
   const milestoneLock = process.env.GSD_MILESTONE_LOCK;
