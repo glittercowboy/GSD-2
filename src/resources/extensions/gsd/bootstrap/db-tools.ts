@@ -248,6 +248,7 @@ export function registerDbTools(pi: ExtensionAPI): void {
       // This guarantees the ID shown in the UI matches the one materialised on disk.
       const reserved = claimReservedId();
       if (reserved) {
+        await ensureMilestoneDbRow(reserved);
         return {
           content: [{ type: "text" as const, text: reserved }],
           details: { operation: "generate_milestone_id", id: reserved, source: "reserved" } as any,
@@ -259,6 +260,7 @@ export function registerDbTools(pi: ExtensionAPI): void {
       const uniqueEnabled = !!loadEffectiveGSDPreferences()?.preferences?.unique_milestone_ids;
       const allIds = [...new Set([...existingIds, ...getReservedMilestoneIds()])];
       const newId = nextMilestoneId(allIds, uniqueEnabled);
+      await ensureMilestoneDbRow(newId);
       return {
         content: [{ type: "text" as const, text: newId }],
         details: { operation: "generate_milestone_id", id: newId, existingCount: existingIds.length, uniqueEnabled } as any,
@@ -271,6 +273,23 @@ export function registerDbTools(pi: ExtensionAPI): void {
       };
     }
   };
+
+  /**
+   * Insert a minimal DB row for a milestone ID so it's visible to the state
+   * machine. Uses INSERT OR IGNORE — safe to call even if gsd_plan_milestone
+   * later writes the full row. Silently skips if the DB isn't available yet
+   * (pre-migration).
+   */
+  async function ensureMilestoneDbRow(milestoneId: string): Promise<void> {
+    const dbAvailable = await ensureDbOpen();
+    if (!dbAvailable) return;
+    try {
+      const { insertMilestone } = await import("../gsd-db.js");
+      insertMilestone({ id: milestoneId, status: "queued" });
+    } catch {
+      // Non-fatal — the safety-net in deriveStateFromDb will catch this
+    }
+  }
 
   const milestoneGenerateIdTool = {
     name: "gsd_milestone_generate_id",
