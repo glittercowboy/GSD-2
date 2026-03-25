@@ -145,8 +145,7 @@ jobs:
     timeout-minutes: 15
     needs: detect-changes
     if: >-
-      needs.detect-changes.outputs.docs-only != 'true' &&
-      github.event_name == 'push' && github.ref == 'refs/heads/main'
+      needs.detect-changes.outputs.docs-only != 'true'
     runs-on: blacksmith-4vcpu-windows-2025
 
     steps:
