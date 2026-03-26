@@ -1,6 +1,6 @@
 import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, existsSync, rmSync, chmodSync } from "node:fs";
+import { mkdirSync, existsSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -67,14 +67,14 @@ describe("handleValidateMilestone write ordering (#2725)", () => {
     openDatabase(dbPath);
     insertMilestone({ id: "M001" });
 
-    // Make the milestone directory read-only so saveFile fails
+    // Force disk write failure by replacing the milestone directory with a
+    // regular file. saveFile() will fail because it cannot write inside a
+    // non-directory. This works cross-platform (chmod is ignored on Windows).
     const milestoneDir = join(base, ".gsd", "milestones", "M001");
-    chmodSync(milestoneDir, 0o444);
+    rmSync(milestoneDir, { recursive: true, force: true });
+    writeFileSync(milestoneDir, "not-a-directory");
 
     const result = await handleValidateMilestone(VALID_PARAMS, base);
-
-    // Restore permissions for cleanup
-    chmodSync(milestoneDir, 0o755);
 
     // Should return error
     assert.ok("error" in result, "should return error when disk write fails");
