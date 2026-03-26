@@ -34,7 +34,8 @@ import {
   gsdRoot,
 } from './paths.js';
 
-import { milestoneIdSort, findMilestoneIds } from './milestone-ids.js';
+import { findMilestoneIds } from './milestone-ids.js';
+import { loadQueueOrder, sortByQueueOrder } from './queue-order.js';
 import { nativeBatchParseGsdFiles, type BatchParsedFile } from './native-parser-bridge.js';
 
 import { join, resolve } from 'path';
@@ -149,8 +150,14 @@ export async function getActiveMilestoneId(basePath: string): Promise<string | n
   if (isDbAvailable()) {
     const allMilestones = getAllMilestones();
     if (allMilestones.length > 0) {
-      const sorted = [...allMilestones].sort((a, b) => a.id.localeCompare(b.id));
-      for (const m of sorted) {
+      // Respect queue-order.json so /gsd queue reordering is honored (#2556).
+      // Without this, the DB path uses lexicographic sort while the dispatch
+      // guard uses queue order — causing a deadlock.
+      const customOrder = loadQueueOrder(basePath);
+      const sortedIds = sortByQueueOrder(allMilestones.map(m => m.id), customOrder);
+      const byId = new Map(allMilestones.map(m => [m.id, m]));
+      for (const id of sortedIds) {
+        const m = byId.get(id)!;
         if (m.status === "complete" || m.status === "done" || m.status === "parked") continue;
         return m.id;
       }
@@ -304,8 +311,12 @@ export async function deriveStateFromDb(basePath: string): Promise<GSDState> {
       } as MilestoneRow);
     }
   }
-  // Re-sort so milestones are in canonical order after injection
-  allMilestones.sort((a, b) => milestoneIdSort(a.id, b.id));
+  // Re-sort so milestones follow queue order (same as dispatch guard) (#2556)
+  const customOrder = loadQueueOrder(basePath);
+  const sortedIds = sortByQueueOrder(allMilestones.map(m => m.id), customOrder);
+  const byId = new Map(allMilestones.map(m => [m.id, m]));
+  allMilestones.length = 0;
+  for (const id of sortedIds) allMilestones.push(byId.get(id)!);
 
   // Parallel worker isolation: when locked, filter to just the locked milestone
   const milestoneLock = process.env.GSD_MILESTONE_LOCK;
