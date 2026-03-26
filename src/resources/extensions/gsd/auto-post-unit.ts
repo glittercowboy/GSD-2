@@ -331,6 +331,10 @@ export async function postUnitPreVerification(pctx: PostUnitContext, opts?: PreV
     if (s.currentUnit.type === "rewrite-docs") {
       await runSafely("postUnit", "rewrite-docs-resolve", async () => {
         await resolveAllOverrides(s.basePath);
+        // Reset both disk and in-memory counters. Disk counter is authoritative
+        // (survives restarts); in-memory is kept in sync for the current session.
+        const { setRewriteCount } = await import("./auto-dispatch.js");
+        setRewriteCount(s.basePath, 0);
         s.rewriteAttemptCount = 0;
         ctx.ui.notify("Override(s) resolved — rewrite-docs completed.", "info");
       });
