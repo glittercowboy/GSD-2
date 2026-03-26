@@ -55,7 +55,11 @@ export function parkMilestone(basePath: string, milestoneId: string, reason: str
   writeFileSync(parkedPath, content, "utf-8");
   // Sync DB status so deriveStateFromDb also skips this milestone (#2694)
   if (isDbAvailable()) {
-    try { updateMilestoneStatus(milestoneId, "parked"); } catch { /* non-fatal */ }
+    try {
+      updateMilestoneStatus(milestoneId, "parked");
+    } catch (err) {
+      process.stderr.write(`gsd: parkMilestone DB sync failed for ${milestoneId}: ${(err as Error).message}\n`);
+    }
   }
   invalidateAllCaches();
   return true;
@@ -77,7 +81,11 @@ export function unparkMilestone(basePath: string, milestoneId: string): boolean 
   unlinkSync(parkedPath);
   // Sync DB status so deriveStateFromDb picks up the unparked milestone (#2694)
   if (isDbAvailable()) {
-    try { updateMilestoneStatus(milestoneId, "active"); } catch { /* non-fatal */ }
+    try {
+      updateMilestoneStatus(milestoneId, "active");
+    } catch (err) {
+      process.stderr.write(`gsd: unparkMilestone DB sync failed for ${milestoneId}: ${(err as Error).message}\n`);
+    }
   }
   invalidateAllCaches();
   return true;
