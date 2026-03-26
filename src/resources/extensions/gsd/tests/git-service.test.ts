@@ -635,11 +635,11 @@ describe('git-service', async () => {
   // S05: Enhanced features — snapshots, pre-merge checks
   // ═══════════════════════════════════════════════════════════════════════
 
-  // ─── createSnapshot: prefs enabled ─────────────────────────────────────
+  // ─── createSnapshot: default (enabled) ─────────────────────────────────
 
-  test('createSnapshot: enabled', () => {
+  test('createSnapshot: enabled by default when prefs omitted', () => {
     const repo = initBranchTestRepo();
-    const svc = new GitServiceImpl(repo, { snapshots: true });
+    const svc = new GitServiceImpl(repo);
 
     // Create a branch with a commit
     run("git checkout -b gsd/M001/S01", repo);
@@ -671,6 +671,39 @@ describe('git-service', async () => {
 
     const refs = run("git for-each-ref refs/gsd/snapshots/", repo);
     assert.deepStrictEqual(refs, "", "no snapshot ref created when prefs.snapshots is false");
+
+    rmSync(repo, { recursive: true, force: true });
+  });
+
+  // ─── runPreMergeCheck: default (auto-detect) ──────────────────────────
+
+  test('runPreMergeCheck: auto-detects when prefs omitted', () => {
+    const repo = initBranchTestRepo();
+    createFile(repo, "package.json", JSON.stringify({
+      name: "test-default",
+      scripts: { test: 'node -e "process.exit(0)"' },
+    }));
+    run("git add -A", repo);
+    run('git commit -m "add package.json"', repo);
+
+    // No pre_merge_check pref set — should auto-detect and run
+    const svc = new GitServiceImpl(repo);
+    const result: PreMergeCheckResult = svc.runPreMergeCheck();
+
+    assert.deepStrictEqual(result.passed, true, "runPreMergeCheck auto-detects and passes when prefs omitted");
+    assert.ok(!result.skipped, "runPreMergeCheck is not skipped when prefs omitted and package.json exists");
+
+    rmSync(repo, { recursive: true, force: true });
+  });
+
+  test('runPreMergeCheck: gracefully skips when prefs omitted and no package.json', () => {
+    const repo = initBranchTestRepo();
+    // No package.json — auto-detect should skip gracefully
+    const svc = new GitServiceImpl(repo);
+    const result: PreMergeCheckResult = svc.runPreMergeCheck();
+
+    assert.deepStrictEqual(result.passed, true, "runPreMergeCheck passes when no package.json (skip)");
+    assert.deepStrictEqual(result.skipped, true, "runPreMergeCheck skips when no test runner detected");
 
     rmSync(repo, { recursive: true, force: true });
   });
