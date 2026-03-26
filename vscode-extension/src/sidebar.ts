@@ -2,6 +2,14 @@ import * as vscode from "vscode";
 import type { GsdClient, SessionStats, ThinkingLevel } from "./gsd-client.js";
 
 /**
+ * Send a message through VS Code's Chat panel so the user sees the response.
+ * Opens the Chat panel and pre-fills the @gsd participant with the message.
+ */
+async function sendViaChat(message: string): Promise<void> {
+	await vscode.commands.executeCommand("workbench.action.chat.open", { query: message });
+}
+
+/**
  * WebviewViewProvider that renders a compact, card-based sidebar panel.
  * Designed for information density without clutter — collapsible sections,
  * hidden empty data, and consolidated action buttons.
@@ -107,22 +115,18 @@ export class GsdSidebarProvider implements vscode.WebviewViewProvider {
 					await vscode.commands.executeCommand("gsd.copyLastResponse");
 					break;
 				case "autoMode":
-					if (this.client.isConnected) {
-						await this.client.sendPrompt("/gsd auto").catch(() => {});
-					}
+					await sendViaChat("@gsd /gsd auto");
 					break;
 				case "nextUnit":
-					if (this.client.isConnected) {
-						await this.client.sendPrompt("/gsd next").catch(() => {});
-					}
+					await sendViaChat("@gsd /gsd next");
 					break;
 				case "quickTask": {
 					const quickInput = await vscode.window.showInputBox({
 						prompt: "Describe the quick task",
 						placeHolder: "e.g. fix the typo in README",
 					});
-					if (quickInput && this.client.isConnected) {
-						await this.client.sendPrompt(`/gsd quick ${quickInput}`).catch(() => {});
+					if (quickInput) {
+						await sendViaChat(`@gsd /gsd quick ${quickInput}`);
 					}
 					break;
 				}
@@ -131,15 +135,13 @@ export class GsdSidebarProvider implements vscode.WebviewViewProvider {
 						prompt: "Capture a thought",
 						placeHolder: "e.g. we should also handle the edge case for...",
 					});
-					if (thought && this.client.isConnected) {
-						await this.client.sendPrompt(`/gsd capture ${thought}`).catch(() => {});
+					if (thought) {
+						await sendViaChat(`@gsd /gsd capture ${thought}`);
 					}
 					break;
 				}
 				case "status":
-					if (this.client.isConnected) {
-						await this.client.sendPrompt("/gsd status").catch(() => {});
-					}
+					await sendViaChat("@gsd /gsd status");
 					break;
 				case "forkSession":
 					await vscode.commands.executeCommand("gsd.forkSession");
