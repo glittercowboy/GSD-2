@@ -5,6 +5,9 @@ import { GsdSidebarProvider } from "./sidebar.js";
 import { GsdFileDecorationProvider } from "./file-decorations.js";
 import { GsdBashTerminal } from "./bash-terminal.js";
 import { GsdSessionTreeProvider } from "./session-tree.js";
+import { GsdConversationHistoryPanel } from "./conversation-history.js";
+import { GsdSlashCompletionProvider } from "./slash-completion.js";
+import { GsdCodeLensProvider } from "./code-lens.js";
 
 let client: GsdClient | undefined;
 let sidebarProvider: GsdSidebarProvider | undefined;
@@ -118,6 +121,48 @@ export function activate(context: vscode.ExtensionContext): void {
 	// -- Chat participant ---------------------------------------------------
 
 	context.subscriptions.push(registerChatParticipant(context, client));
+
+	// -- Conversation history panel ----------------------------------------
+
+	// (panel is created on demand via gsd.showHistory command)
+
+	// -- Slash command completion ------------------------------------------
+
+	const slashCompletion = new GsdSlashCompletionProvider(client);
+	context.subscriptions.push(
+		slashCompletion,
+		vscode.languages.registerCompletionItemProvider(
+			[
+				{ language: "markdown" },
+				{ language: "plaintext" },
+				{ language: "typescript" },
+				{ language: "typescriptreact" },
+				{ language: "javascript" },
+				{ language: "javascriptreact" },
+			],
+			slashCompletion,
+			"/",
+		),
+	);
+
+	// -- Code lens "Ask GSD" -----------------------------------------------
+
+	const codeLensProvider = new GsdCodeLensProvider(client);
+	context.subscriptions.push(
+		codeLensProvider,
+		vscode.languages.registerCodeLensProvider(
+			[
+				{ language: "typescript" },
+				{ language: "typescriptreact" },
+				{ language: "javascript" },
+				{ language: "javascriptreact" },
+				{ language: "python" },
+				{ language: "go" },
+				{ language: "rust" },
+			],
+			codeLensProvider,
+		),
+	);
 
 	// -- Commands -----------------------------------------------------------
 
@@ -437,6 +482,30 @@ export function activate(context: vscode.ExtensionContext): void {
 		vscode.commands.registerCommand("gsd.refreshSessions", () => {
 			sessionTreeProvider?.refresh();
 		}),
+	);
+
+	// Show Conversation History
+	context.subscriptions.push(
+		vscode.commands.registerCommand("gsd.showHistory", () => {
+			if (!requireConnected()) return;
+			GsdConversationHistoryPanel.createOrShow(context.extensionUri, client!);
+		}),
+	);
+
+	// Ask About Symbol (triggered by code lens)
+	context.subscriptions.push(
+		vscode.commands.registerCommand(
+			"gsd.askAboutSymbol",
+			async (symbolName: string, fileName: string, lineNumber: number) => {
+				if (!requireConnected()) return;
+				try {
+					const prompt = `Explain the \`${symbolName}\` function/class in ${fileName} (line ${lineNumber}). Be concise.`;
+					await client!.sendPrompt(prompt);
+				} catch (err) {
+					handleError(err, "Failed to send Ask GSD request");
+				}
+			},
+		),
 	);
 
 	// Clear File Decorations
