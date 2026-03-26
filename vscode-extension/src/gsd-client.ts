@@ -123,7 +123,7 @@ export class GsdClient implements vscode.Disposable {
 			return;
 		}
 
-		this.process = spawn(this.binaryPath, ["--mode", "rpc", "--no-session"], {
+		this.process = spawn(this.binaryPath, ["--mode", "rpc"], {
 			cwd: this.cwd,
 			stdio: ["pipe", "pipe", "pipe"],
 			env: { ...process.env },
