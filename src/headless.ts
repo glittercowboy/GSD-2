@@ -71,6 +71,7 @@ export interface HeadlessOptions {
   answers?: string       // path to answers JSON file
   eventFilter?: Set<string>  // filter JSONL output to specific event types
   resumeSession?: string // session ID to resume (--resume <id>)
+  bare?: boolean         // --bare: suppress CLAUDE.md/AGENTS.md, user skills, project preferences
 }
 
 interface TrackedEvent {
@@ -158,6 +159,8 @@ export function parseHeadlessArgs(argv: string[]): HeadlessOptions {
         }
       } else if (arg === '--resume' && i + 1 < args.length) {
         options.resumeSession = args[++i]
+      } else if (arg === '--bare') {
+        options.bare = true
       }
     } else if (!positionalStarted) {
       positionalStarted = true
@@ -305,6 +308,10 @@ async function runHeadlessOnce(options: HeadlessOptions, restartCount: number): 
   }
   if (injector) {
     clientOptions.env = injector.getSecretEnvVars()
+  }
+  // Propagate --bare to the child process
+  if (options.bare) {
+    clientOptions.args = [...((clientOptions.args as string[]) || []), '--bare']
   }
 
   const client = new RpcClient(clientOptions)

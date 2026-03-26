@@ -41,6 +41,7 @@ interface HeadlessOptions {
   answers?: string
   eventFilter?: Set<string>
   resumeSession?: string
+  bare?: boolean
 }
 
 function parseHeadlessArgs(argv: string[]): HeadlessOptions {
@@ -104,6 +105,8 @@ function parseHeadlessArgs(argv: string[]): HeadlessOptions {
         options.responseTimeout = parseInt(args[++i], 10)
       } else if (arg === '--resume' && i + 1 < args.length) {
         options.resumeSession = args[++i]
+      } else if (arg === '--bare') {
+        options.bare = true
       }
     } else if (!positionalStarted) {
       positionalStarted = true
@@ -334,5 +337,51 @@ test('combined flags parse correctly', () => {
   assert.equal(opts.timeout, 120000)
   assert.equal(opts.resumeSession, 'sess-xyz')
   assert.equal(opts.verbose, true)
+  assert.equal(opts.command, 'auto')
+})
+
+// ─── --bare flag ───────────────────────────────────────────────────────────
+
+test('--bare sets bare to true', () => {
+  const opts = parseHeadlessArgs(['node', 'gsd', 'headless', '--bare', 'auto'])
+  assert.equal(opts.bare, true)
+  assert.equal(opts.command, 'auto')
+})
+
+test('no --bare means bare is undefined', () => {
+  const opts = parseHeadlessArgs(['node', 'gsd', 'headless', 'auto'])
+  assert.equal(opts.bare, undefined)
+})
+
+test('--bare is a boolean flag (no value needed)', () => {
+  const opts = parseHeadlessArgs(['node', 'gsd', 'headless', '--bare', '--json', 'auto'])
+  assert.equal(opts.bare, true)
+  assert.equal(opts.json, true)
+})
+
+test('--bare combined with --output-format json', () => {
+  const opts = parseHeadlessArgs([
+    'node', 'gsd', 'headless',
+    '--bare',
+    '--output-format', 'json',
+    'auto',
+  ])
+  assert.equal(opts.bare, true)
+  assert.equal(opts.outputFormat, 'json')
+  assert.equal(opts.json, true)
+  assert.equal(opts.command, 'auto')
+})
+
+test('--bare does not affect other flags', () => {
+  const opts = parseHeadlessArgs([
+    'node', 'gsd', 'headless',
+    '--bare',
+    '--timeout', '60000',
+    '--resume', 'sess-abc',
+    'auto',
+  ])
+  assert.equal(opts.bare, true)
+  assert.equal(opts.timeout, 60000)
+  assert.equal(opts.resumeSession, 'sess-abc')
   assert.equal(opts.command, 'auto')
 })
