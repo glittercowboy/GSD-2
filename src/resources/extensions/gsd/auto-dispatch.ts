@@ -13,7 +13,7 @@ import type { GSDState } from "./types.js";
 import type { GSDPreferences } from "./preferences.js";
 import type { UatType } from "./files.js";
 import { loadFile, extractUatType, loadActiveOverrides } from "./files.js";
-import { isDbAvailable, getMilestoneSlices } from "./gsd-db.js";
+import { isDbAvailable, getMilestoneSlices, getMilestone } from "./gsd-db.js";
 
 import {
   resolveMilestoneFile,
@@ -616,6 +616,33 @@ export const DISPATCH_RULES: DispatchRule[] = [
           level: "error",
         };
       }
+
+      // Verification class compliance: if operational verification was planned,
+      // ensure the validation output documents it before allowing completion.
+      try {
+        if (isDbAvailable()) {
+          const milestone = getMilestone(mid);
+          if (milestone?.verification_operational &&
+              milestone.verification_operational.toLowerCase() !== "none") {
+            const validationPath = resolveMilestoneFile(basePath, mid, "VALIDATION");
+            if (validationPath) {
+              const validationContent = await loadFile(validationPath);
+              if (validationContent) {
+                const hasOperationalCheck =
+                  validationContent.includes("Operational") &&
+                  (validationContent.includes("MET") || validationContent.includes("N/A"));
+                if (!hasOperationalCheck) {
+                  return {
+                    action: "stop" as const,
+                    reason: `Milestone ${mid} has planned operational verification ("${milestone.verification_operational.substring(0, 100)}") but the validation output does not address it. Re-run validation with verification class awareness, or update the validation to document operational compliance.`,
+                    level: "warning" as const,
+                  };
+                }
+              }
+            }
+          }
+        }
+      } catch { /* fall through — don't block on DB errors */ }
 
       return {
         action: "dispatch",
