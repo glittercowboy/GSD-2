@@ -12,6 +12,7 @@ import { importExtensionModule, type ExtensionAPI, type ExtensionContext } from 
 import type { AutoSession, SidecarItem } from "./session.js";
 import type { LoopDeps } from "./loop-deps.js";
 import type { PostUnitContext, PreVerificationOpts } from "../auto-post-unit.js";
+import { getPendingCleanup } from "../auto-post-unit.js";
 import {
   MAX_RECOVERY_CHARS,
   BUDGET_THRESHOLDS,
@@ -149,25 +150,37 @@ export async function runPreDispatch(
   s.lastPromptCharCount = undefined;
   s.lastBaselineCharCount = undefined;
 
-  // Run health gate and worktree sync in parallel — they are independent.
-  // Worktree sync is synchronous so we wrap it in a resolved promise.
+  // Await any in-flight fire-and-forget cleanup from the previous post-unit.
+  // This prevents browser teardown from racing with the next unit's browser
+  // tool usage (#1733 follow-up for fire-and-forget safety).
+  const pendingCleanup = getPendingCleanup();
+  if (pendingCleanup) {
+    await pendingCleanup;
+  }
+
+  // Worktree sync must run before the health gate because it copies milestone
+  // artifacts and deletes gsd.db in the worktree directory. Running them in
+  // parallel would let the health gate read inconsistent state mid-copy.
   const needsWorktreeSync = s.originalBasePath &&
     s.basePath !== s.originalBasePath &&
     s.currentMilestoneId;
 
-  const [healthGateResult] = await Promise.all([
-    deps.preDispatchHealthGate(s.basePath).catch((e: unknown) => {
-      logWarning("engine", "Pre-dispatch health gate threw unexpectedly", { error: String(e) });
-      return { proceed: true, fixesApplied: [] as string[] } as const;
-    }),
-    needsWorktreeSync
-      ? Promise.resolve(deps.syncProjectRootToWorktree(
-          s.originalBasePath!,
-          s.basePath,
-          s.currentMilestoneId!,
-        ))
-      : Promise.resolve(),
-  ]);
+  if (needsWorktreeSync) {
+    deps.syncProjectRootToWorktree(
+      s.originalBasePath!,
+      s.basePath,
+      s.currentMilestoneId!,
+    );
+  }
+
+  // Health gate runs after worktree sync so it sees consistent state.
+  let healthGateResult: { proceed: boolean; fixesApplied: string[] };
+  try {
+    healthGateResult = await deps.preDispatchHealthGate(s.basePath);
+  } catch (e: unknown) {
+    logWarning("engine", "Pre-dispatch health gate threw unexpectedly", { error: String(e) });
+    healthGateResult = { proceed: true, fixesApplied: [] };
+  }
 
   if (healthGateResult.fixesApplied.length > 0) {
     ctx.ui.notify(

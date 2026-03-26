@@ -68,6 +68,22 @@ import { existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { _resetHasChangesCache } from "./native-git-bridge.js";
 
+// ─── Fire-and-forget cleanup tracking ──────────────────────────────────────
+// The post-unit fire-and-forget cleanup (GitHub sync, bg-shell prune, browser
+// teardown) runs without blocking dispatch. However, browser teardown can race
+// with the next unit if it needs browser tools. This promise lets the next
+// pre-dispatch await completion before proceeding.
+let _pendingCleanup: Promise<void> | null = null;
+
+/**
+ * Returns the pending fire-and-forget cleanup promise, or null if none is
+ * in flight. The caller should await this before dispatching a new unit that
+ * may use browser tools.
+ */
+export function getPendingCleanup(): Promise<void> | null {
+  return _pendingCleanup;
+}
+
 // ─── Rogue File Detection ──────────────────────────────────────────────────
 
 export interface RogueFileWrite {
@@ -296,9 +312,11 @@ export async function postUnitPreVerification(pctx: PostUnitContext, opts?: PreV
 
     // Fire-and-forget: GitHub sync, bg-shell prune, and browser teardown are
     // non-critical and independent — run in parallel without blocking dispatch.
+    // The cleanup promise is tracked so pre-dispatch can await it before the
+    // next unit (prevents browser teardown from racing with browser tool use).
     const unitType = s.currentUnit.type;
     const unitId = s.currentUnit.id;
-    void Promise.allSettled([
+    _pendingCleanup = Promise.allSettled([
       (async () => {
         try {
           const { runGitHubSync } = await import("../github-sync/sync.js");
@@ -327,7 +345,7 @@ export async function postUnitPreVerification(pctx: PostUnitContext, opts?: PreV
           debugLog("postUnit", { phase: "browser-teardown", error: String(e) });
         }
       })(),
-    ]);
+    ]).then(() => { _pendingCleanup = null; });
 
     // Sync worktree state back to project root (skipped for lightweight sidecars)
     if (!opts?.skipWorktreeSync && s.originalBasePath && s.originalBasePath !== s.basePath) {

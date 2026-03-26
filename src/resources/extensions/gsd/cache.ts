@@ -11,9 +11,17 @@
 //
 // Performance: The auto-loop pre-dispatch used to call invalidateAllCaches()
 // unconditionally every iteration, defeating the state cache TTL. Now it calls
-// invalidateAllCachesIfDirty(), which only clears when a write path has set
-// the dirty flag via markCachesDirty(). Error recovery still uses the
-// unconditional invalidateAllCaches() as a safety net.
+// invalidateAllCachesIfDirty(), which only clears when a write path has
+// previously called invalidateAllCaches() (setting _dirty = false would
+// mean "clean"), but starts dirty (true) so the first iteration derives fresh.
+//
+// Design: invalidateAllCaches() clears all caches and sets _dirty = false
+// (caches are now fresh/empty). The dirty flag starts as true and is set to
+// true by markCachesDirty() for any external write path that doesn't call
+// invalidateAllCaches() itself. Most write paths (post-unit, milestone
+// transitions, error recovery) call invalidateAllCaches() directly, which
+// is sufficient. Error recovery uses the unconditional invalidateAllCaches()
+// as a safety net.
 
 import { invalidateStateCache } from './state.js';
 import { clearPathCache } from './paths.js';

@@ -160,7 +160,12 @@ export function suggestMaxParallel(
   const ready = getReadyTasks(graph, completed, inFlight);
   if (ready.length <= 1) return 1;
 
-  // Check for linear chain: each incomplete node depends on exactly one other
+  // Check for linear chain: each incomplete node depends on exactly one other.
+  // In a truly linear graph (A→B→C), at most one task is ever ready, which
+  // was already caught above. This check handles the edge case where a near-
+  // linear graph with completed tasks exposes multiple ready nodes that should
+  // still be sequenced. The `ready.length <= 1` guard is redundant with the
+  // earlier check but kept for clarity.
   const incomplete = graph.filter(n => !n.done && !completed.has(n.id));
   const isLinear = incomplete.every(n => n.dependsOn.length <= 1);
   if (isLinear && ready.length <= 1) return 1;
