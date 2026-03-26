@@ -33,7 +33,12 @@ async function pauseTransientWithBackoff(
   if (!allowAutoResume) {
     ctx.ui.notify(`Transient provider errors persisted after ${MAX_TRANSIENT_AUTO_RESUMES} auto-resume attempts. Pausing for manual review.`, "warning");
   }
-  await pauseAutoForProviderError(ctx.ui, errorDetail, () => pauseAuto(ctx, pi), {
+  await pauseAutoForProviderError(ctx.ui, errorDetail, () => pauseAuto(ctx, pi, {
+    message: `Provider error: ${errorDetail}`,
+    category: "provider",
+    isTransient: allowAutoResume,
+    retryAfterMs,
+  }), {
     isRateLimit,
     isTransient: allowAutoResume,
     retryAfterMs,
@@ -161,7 +166,11 @@ export async function handleAgentEnd(
     }
 
     // --- Permanent / unknown: pause indefinitely ---
-    await pauseAutoForProviderError(ctx.ui, errorDetail, () => pauseAuto(ctx, pi), {
+    await pauseAutoForProviderError(ctx.ui, errorDetail, () => pauseAuto(ctx, pi, {
+      message: `Provider error: ${errorDetail}`,
+      category: "provider",
+      isTransient: false,
+    }), {
       isRateLimit: false,
       isTransient: false,
       retryAfterMs: 0,

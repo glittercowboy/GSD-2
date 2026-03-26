@@ -185,7 +185,7 @@ import {
   postUnitPostVerification,
 } from "./auto-post-unit.js";
 import { bootstrapAutoSession, type BootstrapDeps } from "./auto-start.js";
-import { autoLoop, resolveAgentEnd, resolveAgentEndCancelled, _resetPendingResolve, isSessionSwitchInFlight, type LoopDeps } from "./auto-loop.js";
+import { autoLoop, resolveAgentEnd, resolveAgentEndCancelled, _resetPendingResolve, isSessionSwitchInFlight, type LoopDeps, type ErrorContext } from "./auto-loop.js";
 import {
   WorktreeResolver,
   type WorktreeResolverDeps,
@@ -799,11 +799,14 @@ export async function stopAuto(
 export async function pauseAuto(
   ctx?: ExtensionContext,
   _pi?: ExtensionAPI,
+  _errorContext?: ErrorContext,
 ): Promise<void> {
   if (!s.active) return;
   clearUnitTimeout();
   // Unblock any pending unit promise so the auto-loop is not orphaned.
-  resolveAgentEndCancelled();
+  // Pass errorContext so runUnitPhase can distinguish user-initiated pause
+  // from provider-error pause and avoid hard-stopping (#2762).
+  resolveAgentEndCancelled(_errorContext);
 
   s.pausedSessionFile = ctx?.sessionManager?.getSessionFile() ?? null;
 

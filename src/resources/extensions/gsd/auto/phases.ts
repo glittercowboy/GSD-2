@@ -1069,6 +1069,12 @@ export async function runUnitPhase(
   }
 
   if (unitResult.status === "cancelled") {
+    // Provider-error pause: pauseAuto already handled cleanup and scheduled
+    // recovery. Don't hard-stop — just break out of the loop (#2762).
+    if (unitResult.errorContext?.category === "provider") {
+      debugLog("autoLoop", { phase: "exit", reason: "provider-pause", isTransient: unitResult.errorContext.isTransient });
+      return { action: "break", reason: "provider-pause" };
+    }
     ctx.ui.notify(
       `Session creation timed out or was cancelled for ${unitType} ${unitId}. Will retry.`,
       "warning",
