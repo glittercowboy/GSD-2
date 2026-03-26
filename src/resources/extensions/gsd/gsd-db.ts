@@ -1485,6 +1485,18 @@ export function getMilestone(id: string): MilestoneRow | null {
   return rowToMilestone(row);
 }
 
+/**
+ * Update a milestone's status in the database.
+ * Used by park/unpark to keep the DB in sync with the filesystem marker.
+ * See: https://github.com/gsd-build/gsd-2/issues/2694
+ */
+export function updateMilestoneStatus(milestoneId: string, status: string): void {
+  if (!currentDb) throw new GSDError(GSD_STALE_STATE, "gsd-db: No database open");
+  currentDb.prepare(
+    `UPDATE milestones SET status = :status WHERE id = :id`,
+  ).run({ ":status": status, ":id": milestoneId });
+}
+
 export function getActiveMilestoneFromDb(): MilestoneRow | null {
   if (!currentDb) return null;
   const row = currentDb.prepare(
