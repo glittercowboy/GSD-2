@@ -34,7 +34,6 @@ export interface PlanTaskResult {
   taskPlanPath: string;
 }
 
-
 function validateParams(params: PlanTaskParams): PlanTaskParams {
   if (!isNonEmptyString(params?.milestoneId)) throw new Error("milestoneId is required");
   if (!isNonEmptyString(params?.sliceId)) throw new Error("sliceId is required");

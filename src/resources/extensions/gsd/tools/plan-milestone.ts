@@ -57,7 +57,6 @@ export interface PlanMilestoneResult {
   roadmapPath: string;
 }
 
-
 function validateRiskEntries(value: unknown): Array<{ risk: string; whyItMatters: string }> {
   if (!Array.isArray(value)) {
     throw new Error("keyRisks must be an array");

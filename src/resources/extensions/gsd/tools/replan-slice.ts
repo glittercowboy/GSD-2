@@ -50,7 +50,6 @@ export interface ReplanSliceResult {
   planPath: string;
 }
 
-
 function validateParams(params: ReplanSliceParams): ReplanSliceParams {
   if (!isNonEmptyString(params?.milestoneId)) throw new Error("milestoneId is required");
   if (!isNonEmptyString(params?.sliceId)) throw new Error("sliceId is required");

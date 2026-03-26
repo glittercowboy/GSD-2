@@ -53,7 +53,6 @@ export interface PlanSliceResult {
   taskPlanPaths: string[];
 }
 
-
 function validateTasks(value: unknown): PlanSliceTaskInput[] {
   if (!Array.isArray(value) || value.length === 0) {
     throw new Error("tasks must be a non-empty array");

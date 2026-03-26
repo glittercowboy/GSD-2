@@ -1,4 +1,7 @@
+import { join } from "node:path";
 import { clearParseCache } from "../files.js";
+import { isClosedStatus } from "../status-guards.js";
+import { isNonEmptyString } from "../validation.js";
 import {
   transaction,
   getMilestone,
@@ -10,13 +13,10 @@ import {
   deleteSlice,
 } from "../gsd-db.js";
 import { invalidateStateCache } from "../state.js";
-import { isClosedStatus } from "../status-guards.js";
-import { isNonEmptyString } from "../validation.js";
 import { renderRoadmapFromDb, renderAssessmentFromDb } from "../markdown-renderer.js";
 import { renderAllProjections } from "../workflow-projections.js";
 import { writeManifest } from "../workflow-manifest.js";
 import { appendEvent } from "../workflow-events.js";
-import { join } from "node:path";
 
 export interface SliceChangeInput {
   sliceId: string;
