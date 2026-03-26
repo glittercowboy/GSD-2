@@ -50,6 +50,7 @@ import {
   getSlice,
   insertMilestone,
   updateTaskStatus,
+  getPendingSliceGateCount,
   type MilestoneRow,
   type SliceRow,
   type TaskRow,
@@ -709,6 +710,22 @@ export async function deriveStateFromDb(basePath: string): Promise<GSDState> {
         progress: { milestones: milestoneProgress, slices: sliceProgress, tasks: taskProgress },
       };
     }
+  }
+
+  // ── Quality gate evaluation check ──────────────────────────────────
+  // If slice-scoped gates (Q3/Q4) are still pending, pause before execution
+  // so the gate-evaluate dispatch rule can run parallel sub-agents.
+  // Slices with zero gate rows (pre-feature or simple) skip straight through.
+  const pendingGateCount = getPendingSliceGateCount(activeMilestone.id, activeSlice.id);
+  if (pendingGateCount > 0) {
+    return {
+      activeMilestone, activeSlice, activeTask: null,
+      phase: 'evaluating-gates',
+      recentDecisions: [], blockers: [],
+      nextAction: `Evaluate ${pendingGateCount} quality gate(s) for ${activeSlice.id} before execution.`,
+      registry, requirements,
+      progress: { milestones: milestoneProgress, slices: sliceProgress, tasks: taskProgress },
+    };
   }
 
   // ── Blocker detection: check completed tasks for blocker_discovered ──

@@ -33,7 +33,7 @@ import {
   resolveExpectedArtifactPath,
 } from "./auto-recovery.js";
 import { regenerateIfMissing } from "./workflow-projections.js";
-import { syncStateToProjectRoot } from "./auto-worktree-sync.js";
+import { syncStateToProjectRoot } from "./auto-worktree.js";
 import { isDbAvailable, getTask, getSlice, getMilestone, updateTaskStatus, _getAdapter } from "./gsd-db.js";
 import { renderPlanCheckboxes } from "./markdown-renderer.js";
 import { consumeSignal } from "./session-status-io.js";

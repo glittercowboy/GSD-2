@@ -118,6 +118,10 @@ export class AutoSession {
   // ── Sidecar queue ─────────────────────────────────────────────────────
   sidecarQueue: SidecarItem[] = [];
 
+  // ── Isolation degradation ────────────────────────────────────────────
+  /** Set to true when worktree creation fails; prevents merge of nonexistent branch. */
+  isolationDegraded = false;
+
   // ── Dispatch circuit breakers ──────────────────────────────────────
   rewriteAttemptCount = 0;
 
@@ -200,6 +204,7 @@ export class AutoSession {
     this.pendingQuickTasks = [];
     this.sidecarQueue = [];
     this.rewriteAttemptCount = 0;
+    this.isolationDegraded = false;
 
     // Signal handler
     this.sigtermHandler = null;

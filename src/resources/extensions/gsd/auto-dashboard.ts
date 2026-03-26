@@ -158,6 +158,8 @@ export function describeNextUnit(state: GSDState): { label: string; description:
       return { label: `Replan ${sid}: ${sTitle}`, description: "Blocker found — replan the slice." };
     case "completing-milestone":
       return { label: "Complete milestone", description: "Write milestone summary." };
+    case "evaluating-gates":
+      return { label: `Evaluate gates for ${sid}: ${sTitle}`, description: "Parallel quality gate assessment before execution." };
     default:
       return { label: "Continue", description: "Execute the next step." };
   }

@@ -53,7 +53,7 @@ export function resolveExpectedArtifactPath(
     }
     case "run-uat": {
       const dir = resolveSlicePath(base, mid, sid!);
-      return dir ? join(dir, buildSliceFileName(sid!, "UAT-RESULT")) : null;
+      return dir ? join(dir, buildSliceFileName(sid!, "UAT")) : null;
     }
     case "execute-task": {
       const tid = parts[2];
@@ -79,6 +79,9 @@ export function resolveExpectedArtifactPath(
       return dir ? join(dir, buildSliceFileName(sid!, "REPLAN")) : null;
     }
     case "rewrite-docs":
+      return null;
+    case "gate-evaluate":
+      // Gate evaluate writes to DB quality_gates table — verified via state derivation
       return null;
     case "reactive-execute":
       // Reactive execute produces multiple task summaries — verified separately
@@ -120,7 +123,7 @@ export function diagnoseExpectedArtifact(
     case "reassess-roadmap":
       return `${relSliceFile(base, mid!, sid!, "ASSESSMENT")} (roadmap reassessment)`;
     case "run-uat":
-      return `${relSliceFile(base, mid!, sid!, "UAT-RESULT")} (UAT result)`;
+      return `${relSliceFile(base, mid!, sid!, "UAT")} (UAT result)`;
     case "validate-milestone":
       return `${relMilestoneFile(base, mid!, "VALIDATION")} (milestone validation report)`;
     case "complete-milestone":

@@ -38,6 +38,7 @@ import { clearActivityLogState } from "./activity-log.js";
 import {
   synthesizeCrashRecovery,
   getDeepDiagnostic,
+  readActiveMilestoneId,
 } from "./session-forensics.js";
 import {
   writeLock,
@@ -76,13 +77,6 @@ import {
 import { closeoutUnit } from "./auto-unit-closeout.js";
 import { recoverTimedOutUnit } from "./auto-timeout-recovery.js";
 import { selectAndApplyModel, resolveModelId } from "./auto-model-selection.js";
-import {
-  syncProjectRootToWorktree,
-  syncStateToProjectRoot,
-  readResourceVersion,
-  checkResourcesStale,
-  escapeStaleWorktree,
-} from "./auto-worktree-sync.js";
 import { resetRoutingHistory, recordOutcome } from "./routing-history.js";
 import {
   checkPostUnitHooks,
@@ -144,6 +138,11 @@ import {
   mergeMilestoneToMain,
   autoWorktreeBranch,
   syncWorktreeStateBack,
+  syncProjectRootToWorktree,
+  syncStateToProjectRoot,
+  readResourceVersion,
+  checkResourcesStale,
+  escapeStaleWorktree,
 } from "./auto-worktree.js";
 import { pruneQueueOrder } from "./queue-order.js";
 
@@ -190,8 +189,6 @@ import {
   type WorktreeResolverDeps,
 } from "./worktree-resolver.js";
 import { reorderForCaching } from "./prompt-ordering.js";
-
-// Worktree sync, resource staleness, stale worktree escape → auto-worktree-sync.ts
 
 // ─── Session State ─────────────────────────────────────────────────────────
 
@@ -986,7 +983,11 @@ function buildLoopDeps(): LoopDeps {
     startUnitSupervision,
 
     // Prompt helpers
-    getDeepDiagnostic,
+    getDeepDiagnostic: (basePath: string) => {
+      const mid = readActiveMilestoneId(basePath);
+      const wtPath = mid ? getAutoWorktreePath(basePath, mid) : undefined;
+      return getDeepDiagnostic(basePath, wtPath ?? undefined);
+    },
     isDbAvailable,
     reorderForCaching,
 

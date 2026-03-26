@@ -71,8 +71,6 @@ export async function runPostUnitVerification(
     }
 
     const result = runVerificationGate({
-      basePath: s.basePath,
-      unitId: s.currentUnit.id,
       cwd: s.basePath,
       preferenceCommands: prefs?.verification_commands,
       taskPlanVerify,

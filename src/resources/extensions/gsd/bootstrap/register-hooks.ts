@@ -77,6 +77,11 @@ export function registerHooks(pi: ExtensionAPI): void {
 
   pi.on("session_fork", async (_event, ctx) => {
     startRtkStatusUpdates(ctx);
+    resetWriteGateState();
+    resetToolCallLoopGuard();
+    clearDiscussionFlowState();
+    await syncServiceTierStatus(ctx);
+    loadToolApiKeys();
   });
 
   pi.on("before_agent_start", async (event, ctx: ExtensionContext) => {

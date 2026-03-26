@@ -467,10 +467,9 @@
 | gsd/index.ts | GSD Workflow | Main GSD extension bootstrap and registration |
 | gsd/auto.ts | Auto Engine | Automatic workflow execution and loop management |
 | gsd/auto-dashboard.ts | Auto Engine, Web Mode | Real-time dashboard for auto-run progress |
-| gsd/auto-worktree.ts | Auto Engine, Worktree | Automatic worktree creation and branch management |
+| gsd/auto-worktree.ts | Auto Engine, Worktree | Worktree lifecycle, state sync, resource staleness, stale escape |
 | gsd/auto-recovery.ts | Auto Engine | Recovery for crashed/stalled workflows |
 | gsd/auto-start.ts | Auto Engine | Initialization sequence for automatic execution |
-| gsd/auto-worktree-sync.ts | Auto Engine, Worktree | State sync between worktrees and main |
 | gsd/auto-model-selection.ts | Auto Engine, Model System | Intelligent LLM model routing |
 | gsd/auto-direct-dispatch.ts | Auto Engine | Direct command dispatching without planning |
 | gsd/auto-dispatch.ts | Auto Engine | Task queueing and priority-based dispatch |

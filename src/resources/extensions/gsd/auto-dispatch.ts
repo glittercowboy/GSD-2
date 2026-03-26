@@ -13,7 +13,7 @@ import type { GSDState } from "./types.js";
 import type { GSDPreferences } from "./preferences.js";
 import type { UatType } from "./files.js";
 import { loadFile, extractUatType, loadActiveOverrides } from "./files.js";
-import { isDbAvailable, getMilestoneSlices } from "./gsd-db.js";
+import { isDbAvailable, getMilestoneSlices, getPendingGates, markAllGatesOmitted } from "./gsd-db.js";
 
 import {
   resolveMilestoneFile,
@@ -43,6 +43,7 @@ import {
   buildReassessRoadmapPrompt,
   buildRewriteDocsPrompt,
   buildReactiveExecutePrompt,
+  buildGateEvaluatePrompt,
   checkNeedsReassessment,
   checkNeedsRunUat,
 } from "./auto-prompts.js";
@@ -184,7 +185,7 @@ export const DISPATCH_RULES: DispatchRule[] = [
       }
 
       for (const sliceId of completedSliceIds) {
-        const resultFile = resolveSliceFile(basePath, mid, sliceId, "UAT-RESULT");
+        const resultFile = resolveSliceFile(basePath, mid, sliceId, "UAT");
         if (!resultFile) continue;
         const content = await loadFile(resultFile);
         if (!content) continue;
@@ -196,15 +197,9 @@ export const DISPATCH_RULES: DispatchRule[] = [
         // produce PARTIAL when all automatable checks pass but human-only
         // checks remain — this should not block progression.
         const acceptableVerdicts: string[] = ["pass", "passed"];
-        const uatFile = resolveSliceFile(basePath, mid, sliceId, "UAT");
-        if (uatFile) {
-          const uatContent = await loadFile(uatFile);
-          if (uatContent) {
-            const uatType = extractUatType(uatContent);
-            if (uatType === "mixed" || uatType === "human-experience" || uatType === "live-runtime") {
-              acceptableVerdicts.push("partial");
-            }
-          }
+        const uatType = extractUatType(content);
+        if (uatType === "mixed" || uatType === "human-experience" || uatType === "live-runtime") {
+          acceptableVerdicts.push("partial");
         }
 
         if (verdict && !acceptableVerdicts.includes(verdict)) {
@@ -339,6 +334,38 @@ export const DISPATCH_RULES: DispatchRule[] = [
         unitType: "plan-slice",
         unitId: `${mid}/${sid}`,
         prompt: await buildPlanSlicePrompt(
+          mid,
+          midTitle,
+          sid,
+          sTitle,
+          basePath,
+        ),
+      };
+    },
+  },
+  {
+    name: "evaluating-gates → gate-evaluate",
+    match: async ({ state, mid, midTitle, basePath, prefs }) => {
+      if (state.phase !== "evaluating-gates") return null;
+      if (!state.activeSlice) return missingSliceStop(mid, state.phase);
+      const sid = state.activeSlice.id;
+      const sTitle = state.activeSlice.title;
+
+      // Gate evaluation is opt-in via preferences
+      const gateConfig = prefs?.gate_evaluation;
+      if (!gateConfig?.enabled) {
+        markAllGatesOmitted(mid, sid);
+        return { action: "skip" };
+      }
+
+      const pending = getPendingGates(mid, sid, "slice");
+      if (pending.length === 0) return { action: "skip" };
+
+      return {
+        action: "dispatch",
+        unitType: "gate-evaluate",
+        unitId: `${mid}/${sid}/gates+${pending.map(g => g.gate_id).join(",")}`,
+        prompt: await buildGateEvaluatePrompt(
           mid,
           midTitle,
           sid,
