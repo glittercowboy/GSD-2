@@ -504,7 +504,17 @@ export async function runDispatch(
 
   if (dispatchResult.action === "stop") {
     deps.emitJournalEvent({ ts: new Date().toISOString(), flowId: ic.flowId, seq: ic.nextSeq(), eventType: "dispatch-stop", rule: dispatchResult.matchedRule, data: { reason: dispatchResult.reason } });
-    await closeoutAndStop(ctx, pi, s, deps, dispatchResult.reason);
+    // Warning-level stops are recoverable human checkpoints (e.g. UAT verdict
+    // gate) — pause instead of hard-stopping so the session is resumable with
+    // `/gsd auto`. Error/info-level stops remain hard stops for infrastructure
+    // failures and terminal conditions respectively.
+    // See: https://github.com/gsd-build/gsd-2/issues/2474
+    if (dispatchResult.level === "warning") {
+      ctx.ui.notify(dispatchResult.reason, "warning");
+      await deps.pauseAuto(ctx, pi);
+    } else {
+      await closeoutAndStop(ctx, pi, s, deps, dispatchResult.reason);
+    }
     debugLog("autoLoop", { phase: "exit", reason: "dispatch-stop" });
     return { action: "break", reason: "dispatch-stop" };
   }

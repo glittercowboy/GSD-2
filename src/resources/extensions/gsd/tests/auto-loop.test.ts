@@ -882,6 +882,74 @@ test("autoLoop handles dispatch stop action", async (t) => {
   );
 });
 
+// #2474: warning-level dispatch stop should pause (resumable), not hard-stop
+test("autoLoop pauses instead of stopping for warning-level dispatch stop", async (t) => {
+  _resetPendingResolve();
+
+  const ctx = makeMockCtx();
+  ctx.ui.setStatus = () => {};
+  const pi = makeMockPi();
+  const s = makeLoopSession();
+
+  const deps = makeMockDeps({
+    resolveDispatch: async () => {
+      deps.callLog.push("resolveDispatch");
+      return {
+        action: "stop" as const,
+        reason: 'UAT verdict for S01 is "partial" — blocking progression.',
+        level: "warning" as const,
+      };
+    },
+  });
+
+  await autoLoop(ctx, pi, s, deps);
+
+  assert.ok(
+    deps.callLog.includes("resolveDispatch"),
+    "should have called resolveDispatch",
+  );
+  assert.ok(
+    deps.callLog.includes("pauseAuto"),
+    "warning-level stop should call pauseAuto (resumable)",
+  );
+  assert.ok(
+    !deps.callLog.includes("stopAuto"),
+    "warning-level stop should NOT call stopAuto (hard stop)",
+  );
+});
+
+// #2474: error-level dispatch stop should still hard-stop
+test("autoLoop hard-stops for error-level dispatch stop", async (t) => {
+  _resetPendingResolve();
+
+  const ctx = makeMockCtx();
+  ctx.ui.setStatus = () => {};
+  const pi = makeMockPi();
+  const s = makeLoopSession();
+
+  const deps = makeMockDeps({
+    resolveDispatch: async () => {
+      deps.callLog.push("resolveDispatch");
+      return {
+        action: "stop" as const,
+        reason: "Cannot complete milestone: missing SUMMARY files.",
+        level: "error" as const,
+      };
+    },
+  });
+
+  await autoLoop(ctx, pi, s, deps);
+
+  assert.ok(
+    deps.callLog.includes("stopAuto"),
+    "error-level stop should call stopAuto (hard stop)",
+  );
+  assert.ok(
+    !deps.callLog.includes("pauseAuto"),
+    "error-level stop should NOT call pauseAuto",
+  );
+});
+
 test("autoLoop handles dispatch skip action by continuing", async (t) => {
   _resetPendingResolve();
 
