@@ -677,13 +677,13 @@ export const DISPATCH_RULES: DispatchRule[] = [
             if (validationPath) {
               const validationContent = await loadFile(validationPath);
               if (validationContent) {
-                // Accept either the structured template format (table with MET/N/A)
+                // Accept either the structured template format (table with MET/N/A/SATISFIED)
                 // or prose evidence patterns the validation agent may emit.
                 const structuredMatch =
                   validationContent.includes("Operational") &&
-                  (validationContent.includes("MET") || validationContent.includes("N/A"));
+                  (validationContent.includes("MET") || validationContent.includes("N/A") || validationContent.includes("SATISFIED"));
                 const proseMatch =
-                  /[Oo]perational[\s:][^\n]*(?:pass|verified|confirmed|met|complete|true|yes|addressed|covered|n\/a|not\s+applicable)/i.test(validationContent);
+                  /[Oo]perational[\s\S]{0,500}?(?:✅|pass|verified|confirmed|met|complete|true|yes|addressed|covered|satisfied|partially|n\/a|not[\s-]+applicable)/i.test(validationContent);
                 const hasOperationalCheck = structuredMatch || proseMatch;
                 if (!hasOperationalCheck) {
                   return {

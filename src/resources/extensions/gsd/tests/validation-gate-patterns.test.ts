@@ -23,9 +23,9 @@ import assert from "node:assert/strict";
 function hasOperationalEvidence(validationContent: string): boolean {
   const structuredMatch =
     validationContent.includes("Operational") &&
-    (validationContent.includes("MET") || validationContent.includes("N/A"));
+    (validationContent.includes("MET") || validationContent.includes("N/A") || validationContent.includes("SATISFIED"));
   const proseMatch =
-    /[Oo]perational[\s:][^\n]*(?:pass|verified|confirmed|met|complete|true|yes|addressed|covered|n\/a|not\s+applicable)/i.test(
+    /[Oo]perational[\s\S]{0,500}?(?:✅|pass|verified|confirmed|met|complete|true|yes|addressed|covered|satisfied|partially|n\/a|not[\s-]+applicable)/i.test(
       validationContent,
     );
   return structuredMatch || proseMatch;
@@ -101,6 +101,48 @@ test('prose: "Operational: n/a" passes', () => {
 
 test('prose: "Operational: complete" passes', () => {
   const content = `Operational: complete — all health checks green.`;
+  assert.ok(hasOperationalEvidence(content));
+});
+
+// ─── Issue #2862: checkmark emoji ────────────────────────────────────────────
+
+test('prose: "Operational: ✅" checkmark emoji passes (issue #2862)', () => {
+  const content = `- **Operational:** ✅ DECISIONS.md documents D009-D013`;
+  assert.ok(hasOperationalEvidence(content));
+});
+
+// ─── Issue #2866: multi-line, "satisfied", markdown bold ─────────────────────
+
+test('multi-line: verdict on next line after Operational heading passes (issue #2866)', () => {
+  const content = `### Operational Verification
+All endpoints responsive. Health checks pass.`;
+  assert.ok(hasOperationalEvidence(content));
+});
+
+test('prose: "PARTIALLY SATISFIED" passes (issue #2866)', () => {
+  const content = `Operational class: ⚠️ PARTIALLY SATISFIED`;
+  assert.ok(hasOperationalEvidence(content));
+});
+
+test('prose: "FULLY SATISFIED" passes (issue #2866)', () => {
+  const content = `**Operational**: FULLY SATISFIED — all monitoring in place.`;
+  assert.ok(hasOperationalEvidence(content));
+});
+
+test('structured: Operational + SATISFIED passes (issue #2866)', () => {
+  const content = `| Criteria       | Status    |
+| Operational    | SATISFIED |`;
+  assert.ok(hasOperationalEvidence(content));
+});
+
+test('table with markdown bold: **Operational** passes (issue #2866)', () => {
+  const content = `| **Operational** | ⚠️ Partially satisfied — monitoring gap noted |`;
+  assert.ok(hasOperationalEvidence(content));
+});
+
+test('multi-line: Operational label and "confirmed" separated by line break passes (issue #2866)', () => {
+  const content = `## Operational
+Smoke tests confirmed all services healthy after deploy.`;
   assert.ok(hasOperationalEvidence(content));
 });
 
