@@ -82,6 +82,7 @@ const ROOT_STATE_FILES = [
   "QUEUE.md",
   "completed-units.json",
   "metrics.json",
+  "mcp.json",
   // NOTE: preferences.md is intentionally NOT in ROOT_STATE_FILES.
   // Forward-sync (main → worktree) is handled explicitly in syncGsdStateToWorktree().
   // Back-sync (worktree → main) must NEVER overwrite the project root's copy
@@ -985,6 +986,7 @@ function copyPlanningArtifacts(srcBase: string, wtPath: string): void {
     "STATE.md",
     "KNOWLEDGE.md",
     "OVERRIDES.md",
+    "mcp.json",
     "preferences.md",
   ]) {
     safeCopy(join(srcGsd, file), join(dstGsd, file), { force: true });
