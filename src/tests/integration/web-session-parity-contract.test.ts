@@ -638,8 +638,8 @@ test("browser session, settings, and git surfaces keep inspectable browse/manage
   const rpcTypesSource = readFileSync(resolve(import.meta.dirname, "../../../packages/pi-coding-agent/src/modes/rpc/rpc-types.ts"), "utf8")
   const contractSource = readFileSync(resolve(import.meta.dirname, "../../../web/lib/command-surface-contract.ts"), "utf8")
   const storeSource = readFileSync(resolve(import.meta.dirname, "../../../web/lib/gsd-workspace-store.tsx"), "utf8")
-  const surfaceSource = readFileSync(resolve(import.meta.dirname, "../../web/components/gsd/command-surface.tsx"), "utf8")
-  const sidebarSource = readFileSync(resolve(import.meta.dirname, "../../web/components/gsd/sidebar.tsx"), "utf8")
+  const surfaceSource = readFileSync(resolve(import.meta.dirname, "../../../web/components/gsd/command-surface.tsx"), "utf8")
+  const sidebarSource = readFileSync(resolve(import.meta.dirname, "../../../web/components/gsd/sidebar.tsx"), "utf8")
   const gitRouteSource = readFileSync(resolve(import.meta.dirname, "../../../web/app/api/git/route.ts"), "utf8")
 
   assert.match(rpcTypesSource, /autoRetryEnabled: boolean/, "rpc-types.ts must expose retry-enabled state in get_state")
