@@ -157,6 +157,25 @@ function clearProjectRootStateFiles(basePath: string, milestoneId: string): void
   }
 }
 
+// ─── Build Artifact Auto-Resolve ─────────────────────────────────────────────
+
+/** Patterns for machine-generated build artifacts that can be safely
+ * auto-resolved by accepting --theirs during merge. These files are
+ * regenerable and never contain meaningful manual edits. */
+export const SAFE_AUTO_RESOLVE_PATTERNS: RegExp[] = [
+  /\.tsbuildinfo$/,
+  /\.pyc$/,
+  /\/__pycache__\//,
+  /\.DS_Store$/,
+  /\.map$/,
+];
+
+/** Returns true if the file path is safe to auto-resolve during merge.
+ * Covers `.gsd/` state files and common build artifacts. */
+export const isSafeToAutoResolve = (filePath: string): boolean =>
+  filePath.startsWith(".gsd/") ||
+  SAFE_AUTO_RESOLVE_PATTERNS.some((re) => re.test(filePath));
+
 // ─── Dispatch-Level Sync (project root ↔ worktree) ──────────────────────────
 
 /**
@@ -1408,21 +1427,6 @@ export function mergeMilestoneToMain(
         : nativeConflictFiles(originalBasePath_);
 
     if (conflictedFiles.length > 0) {
-      // Patterns for machine-generated build artifacts that can be safely
-      // auto-resolved by accepting --theirs. These files are regenerable
-      // and never contain meaningful manual edits.
-      const SAFE_AUTO_RESOLVE_PATTERNS: RegExp[] = [
-        /\.tsbuildinfo$/,
-        /\.pyc$/,
-        /\/__pycache__\//,
-        /\.DS_Store$/,
-        /\.map$/,
-      ];
-
-      const isSafeToAutoResolve = (filePath: string): boolean =>
-        filePath.startsWith(".gsd/") ||
-        SAFE_AUTO_RESOLVE_PATTERNS.some((re) => re.test(filePath));
-
       // Separate auto-resolvable conflicts (GSD state files + build artifacts)
       // from real code conflicts. GSD state files diverge between branches
       // during normal operation. Build artifacts are machine-generated and
