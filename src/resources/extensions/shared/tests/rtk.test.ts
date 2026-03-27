@@ -18,25 +18,22 @@ const makeSpawn = (status: number, stdout: string): SpawnSyncImpl =>
 
 describe("rewriteCommandWithRtk (shared extension)", () => {
   it("rewrites command when spawn returns exit 0", () => {
-    const spawnSyncImpl = makeSpawn(0, "rtk git status");
     assert.equal(
-      rewriteCommandWithRtk("git status", { binaryPath: "/fake/rtk", spawnSyncImpl }),
+      rewriteCommandWithRtk("git status", { binaryPath: "/fake/rtk", spawnSyncImpl: makeSpawn(0, "rtk git status") }),
       "rtk git status",
     );
   });
 
   it("rewrites command when spawn returns exit 3 (ask mode)", () => {
-    const spawnSyncImpl = makeSpawn(3, "rtk npm run test");
     assert.equal(
-      rewriteCommandWithRtk("npm run test", { binaryPath: "/fake/rtk", spawnSyncImpl }),
+      rewriteCommandWithRtk("npm run test", { binaryPath: "/fake/rtk", spawnSyncImpl: makeSpawn(3, "rtk npm run test") }),
       "rtk npm run test",
     );
   });
 
   it("passes command through when spawn returns non-zero non-3 status", () => {
-    const spawnSyncImpl = makeSpawn(1, "");
     assert.equal(
-      rewriteCommandWithRtk("echo hello", { binaryPath: "/fake/rtk", spawnSyncImpl }),
+      rewriteCommandWithRtk("echo hello", { binaryPath: "/fake/rtk", spawnSyncImpl: makeSpawn(1, "") }),
       "echo hello",
     );
   });
@@ -58,31 +55,36 @@ describe("rewriteCommandWithRtk (shared extension)", () => {
   });
 
   it("passes command through when RTK is disabled via env", () => {
-    const spawnSyncImpl = (() => {
-      throw new Error("should not be called");
-    }) as unknown as SpawnSyncImpl;
+    const shouldNotRun = (() => { throw new Error("should not be called"); }) as unknown as SpawnSyncImpl;
     assert.equal(
-      rewriteCommandWithRtk("git status", {
-        binaryPath: "/fake/rtk",
-        spawnSyncImpl,
-        env: { GSD_RTK_DISABLED: "1" },
-      }),
+      rewriteCommandWithRtk("git status", { binaryPath: "/fake/rtk", spawnSyncImpl: shouldNotRun, env: { GSD_RTK_DISABLED: "1" } }),
       "git status",
     );
   });
 
-  it("returns empty command unchanged", () => {
-    const spawnSyncImpl = makeSpawn(0, "rtk  ");
-    assert.equal(rewriteCommandWithRtk("  ", { binaryPath: "/fake/rtk", spawnSyncImpl }), "  ");
-  });
-
-  it("passes command through when no binary path resolves", () => {
+  it("passes command through when no binary resolves", () => {
     assert.equal(
-      rewriteCommandWithRtk("git status", {
-        env: {},
-        spawnSyncImpl: makeSpawn(0, "rtk git status"),
-      }),
+      rewriteCommandWithRtk("git status", { env: { GSD_HOME: "/nonexistent" }, spawnSyncImpl: makeSpawn(0, "rtk git status") }),
       "git status",
     );
+  });
+
+  it("trims trailing whitespace from rewritten command", () => {
+    assert.equal(
+      rewriteCommandWithRtk("git status", { binaryPath: "/fake/rtk", spawnSyncImpl: makeSpawn(0, "rtk git status  \n") }),
+      "rtk git status",
+    );
+  });
+
+  it("falls back to original when spawn returns empty stdout", () => {
+    assert.equal(
+      rewriteCommandWithRtk("git status", { binaryPath: "/fake/rtk", spawnSyncImpl: makeSpawn(0, "") }),
+      "git status",
+    );
+  });
+
+  it("returns whitespace-only command unchanged without spawning", () => {
+    const shouldNotRun = (() => { throw new Error("should not be called"); }) as unknown as SpawnSyncImpl;
+    assert.equal(rewriteCommandWithRtk("  ", { binaryPath: "/fake/rtk", spawnSyncImpl: shouldNotRun }), "  ");
   });
 });

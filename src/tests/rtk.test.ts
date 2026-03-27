@@ -48,6 +48,14 @@ test("resolveRtkBinaryPath returns explicit binaryPath without existsSync check"
   assert.equal(resolveRtkBinaryPath({ binaryPath: fakePath }), fakePath);
 });
 
+test("resolveRtkBinaryPath with empty string binaryPath falls through to normal resolution", () => {
+  // Empty string is falsy — should NOT bypass existsSync, should use normal lookup
+  // With empty env and no files present, resolves to null
+  // Use a non-existent GSD_HOME to prevent fallback to the managed dir on this machine
+  const result = resolveRtkBinaryPath({ binaryPath: "", env: { GSD_HOME: "/this/does/not/exist/gsd-home" }, platform: "linux" });
+  assert.equal(result, null);
+});
+
 test("rewriteCommandWithRtk rewrites when RTK returns exit 0 or 3", () => {
   const spawnSyncImpl = ((_binary: string, _args: string[]) => ({ status: 0, stdout: "rtk git status", error: undefined })) as typeof import("node:child_process").spawnSync;
   assert.equal(rewriteCommandWithRtk("git status", { binaryPath: "/tmp/rtk", spawnSyncImpl }), "rtk git status");
