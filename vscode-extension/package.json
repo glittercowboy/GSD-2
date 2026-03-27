@@ -1,9 +1,9 @@
 {
   "name": "gsd-2",
   "displayName": "GSD-2",
-  "description": "VS Code integration for the GSD-2 coding agent — sidebar dashboard, @gsd chat participant, conversation history, code lens, slash command completion, and 25 commands",
+  "description": "VS Code integration for the GSD-2 coding agent — sidebar dashboard, @gsd chat participant, activity feed, conversation history, code lens, session forking, slash command completion, workflow controls, and 33 commands",
   "publisher": "FluxLabs",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "icon": "logo.jpg",
   "license": "MIT",
   "repository": {
@@ -139,6 +139,96 @@
       {
         "command": "gsd.askAboutSymbol",
         "title": "GSD: Ask About Symbol"
+      },
+      {
+        "command": "gsd.clearActivity",
+        "title": "GSD: Clear Activity Feed",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "gsd.forkSession",
+        "title": "GSD: Fork Session"
+      },
+      {
+        "command": "gsd.toggleSteeringMode",
+        "title": "GSD: Toggle Steering Mode"
+      },
+      {
+        "command": "gsd.toggleFollowUpMode",
+        "title": "GSD: Toggle Follow-Up Mode"
+      },
+      {
+        "command": "gsd.refactorSymbol",
+        "title": "GSD: Refactor Symbol"
+      },
+      {
+        "command": "gsd.findBugsSymbol",
+        "title": "GSD: Find Bugs in Symbol"
+      },
+      {
+        "command": "gsd.generateTestsSymbol",
+        "title": "GSD: Generate Tests for Symbol"
+      },
+      {
+        "command": "gsd.acceptAllChanges",
+        "title": "GSD: Accept All Agent Changes",
+        "icon": "$(check-all)"
+      },
+      {
+        "command": "gsd.discardAllChanges",
+        "title": "GSD: Discard All Agent Changes",
+        "icon": "$(discard)"
+      },
+      {
+        "command": "gsd.acceptFileChanges",
+        "title": "Accept Changes",
+        "icon": "$(check)"
+      },
+      {
+        "command": "gsd.discardFileChanges",
+        "title": "Discard Changes",
+        "icon": "$(discard)"
+      },
+      {
+        "command": "gsd.restoreCheckpoint",
+        "title": "GSD: Restore Checkpoint"
+      },
+      {
+        "command": "gsd.fixProblemsInFile",
+        "title": "GSD: Fix Problems in File"
+      },
+      {
+        "command": "gsd.fixAllProblems",
+        "title": "GSD: Fix All Problems"
+      },
+      {
+        "command": "gsd.clearDiagnostics",
+        "title": "GSD: Clear Agent Diagnostics"
+      },
+      {
+        "command": "gsd.commitAgentChanges",
+        "title": "GSD: Commit Agent Changes"
+      },
+      {
+        "command": "gsd.createAgentBranch",
+        "title": "GSD: Create Branch for Agent Work"
+      },
+      {
+        "command": "gsd.showAgentDiff",
+        "title": "GSD: Show Agent Diff"
+      },
+      {
+        "command": "gsd.clearPlan",
+        "title": "GSD: Clear Plan View",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "gsd.cycleApprovalMode",
+        "title": "GSD: Cycle Approval Mode"
+      },
+      {
+        "command": "gsd.selectApprovalMode",
+        "title": "GSD: Select Approval Mode"
       }
     ],
     "keybindings": [
@@ -192,6 +282,10 @@
         {
           "id": "gsd-sessions",
           "name": "Sessions"
+        },
+        {
+          "id": "gsd-activity",
+          "name": "Activity"
         }
       ]
     },
@@ -201,6 +295,35 @@
           "command": "gsd.refreshSessions",
           "when": "view == gsd-sessions",
           "group": "navigation"
+        },
+        {
+          "command": "gsd.clearActivity",
+          "when": "view == gsd-activity",
+          "group": "navigation"
+        }
+      ],
+      "scm/title": [
+        {
+          "command": "gsd.acceptAllChanges",
+          "group": "navigation",
+          "when": "scmProvider == gsd"
+        },
+        {
+          "command": "gsd.discardAllChanges",
+          "group": "navigation",
+          "when": "scmProvider == gsd"
+        }
+      ],
+      "scm/resourceState/context": [
+        {
+          "command": "gsd.acceptFileChanges",
+          "group": "inline",
+          "when": "scmProvider == gsd"
+        },
+        {
+          "command": "gsd.discardFileChanges",
+          "group": "inline",
+          "when": "scmProvider == gsd"
         }
       ]
     },
@@ -235,6 +358,41 @@
           "type": "boolean",
           "default": true,
           "description": "Show 'Ask GSD' code lens above functions and classes"
+        },
+        "gsd.showProgressNotifications": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show progress notification while the agent is working"
+        },
+        "gsd.activityFeedMaxItems": {
+          "type": "number",
+          "default": 100,
+          "minimum": 10,
+          "maximum": 500,
+          "description": "Maximum number of items shown in the Activity feed"
+        },
+        "gsd.showContextWarning": {
+          "type": "boolean",
+          "default": true,
+          "description": "Warn when context window usage exceeds the threshold"
+        },
+        "gsd.contextWarningThreshold": {
+          "type": "number",
+          "default": 80,
+          "minimum": 50,
+          "maximum": 95,
+          "description": "Context window usage percentage that triggers a warning"
+        },
+        "gsd.approvalMode": {
+          "type": "string",
+          "default": "auto-approve",
+          "enum": ["auto-approve", "ask", "plan-only"],
+          "enumDescriptions": [
+            "Agent runs freely without prompts",
+            "Prompt before file changes and commands",
+            "Read-only mode — agent can analyze but not modify"
+          ],
+          "description": "Approval mode for agent actions"
         }
       }
     }
