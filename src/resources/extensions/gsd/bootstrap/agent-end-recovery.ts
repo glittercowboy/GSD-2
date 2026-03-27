@@ -7,6 +7,7 @@ import { pauseAutoForProviderError } from "../provider-error-pause.js";
 import { isSessionSwitchInFlight, resolveAgentEnd } from "../auto-loop.js";
 import { resolveModelId } from "../auto-model-selection.js";
 import { clearDiscussionFlowState } from "./write-gate.js";
+import { resumeAutoAfterProviderDelay } from "./provider-error-resume.js";
 import {
   classifyError,
   createRetryState,
@@ -44,10 +45,10 @@ async function pauseTransientWithBackoff(
     retryAfterMs,
     resume: allowAutoResume
       ? () => {
-        pi.sendMessage(
-          { customType: "gsd-auto-timeout-recovery", content: "Continue execution — provider error recovery delay elapsed.", display: false },
-          { triggerTurn: true },
-        );
+        void resumeAutoAfterProviderDelay(pi, ctx).catch((err) => {
+          const message = err instanceof Error ? err.message : String(err);
+          ctx.ui.notify(`Provider error recovery delay elapsed, but auto-mode failed to resume: ${message}`, "error");
+        });
       }
       : undefined,
   });

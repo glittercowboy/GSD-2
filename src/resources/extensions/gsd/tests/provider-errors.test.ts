@@ -12,6 +12,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { classifyError, isTransient, isTransientNetworkError } from "../error-classifier.ts";
 import { pauseAutoForProviderError } from "../provider-error-pause.ts";
+import { resumeAutoAfterProviderDelay } from "../bootstrap/provider-error-resume.ts";
 import { getNextFallbackModel } from "../preferences.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -268,6 +269,90 @@ test("pauseAutoForProviderError falls back to indefinite pause when not rate lim
   ]);
 });
 
+// ── resumeAutoAfterProviderDelay ────────────────────────────────────────────
+
+test("resumeAutoAfterProviderDelay restarts paused auto-mode from the recorded base path", async () => {
+  const startCalls: Array<{ base: string; verboseMode: boolean; step?: boolean }> = [];
+  const result = await resumeAutoAfterProviderDelay(
+    {} as any,
+    { ui: { notify() {} } } as any,
+    {
+      getSnapshot: () => ({
+        active: false,
+        paused: true,
+        stepMode: true,
+        basePath: "/tmp/project",
+      }),
+      startAuto: async (_ctx, _pi, base, verboseMode, options) => {
+        startCalls.push({ base, verboseMode, step: options?.step });
+      },
+    },
+  );
+
+  assert.equal(result, "resumed");
+  assert.deepEqual(startCalls, [
+    { base: "/tmp/project", verboseMode: false, step: true },
+  ]);
+});
+
+test("resumeAutoAfterProviderDelay does not double-start when auto-mode is already active", async () => {
+  let startCalls = 0;
+  const result = await resumeAutoAfterProviderDelay(
+    {} as any,
+    { ui: { notify() {} } } as any,
+    {
+      getSnapshot: () => ({
+        active: true,
+        paused: false,
+        stepMode: false,
+        basePath: "/tmp/project",
+      }),
+      startAuto: async () => {
+        startCalls += 1;
+      },
+    },
+  );
+
+  assert.equal(result, "already-active");
+  assert.equal(startCalls, 0);
+});
+
+test("resumeAutoAfterProviderDelay leaves auto paused when no base path is available", async () => {
+  const notifications: Array<{ message: string; level: string }> = [];
+  let startCalls = 0;
+
+  const result = await resumeAutoAfterProviderDelay(
+    {} as any,
+    {
+      ui: {
+        notify(message: string, level?: string) {
+          notifications.push({ message, level: level ?? "info" });
+        },
+      },
+    } as any,
+    {
+      getSnapshot: () => ({
+        active: false,
+        paused: true,
+        stepMode: false,
+        basePath: "",
+      }),
+      startAuto: async () => {
+        startCalls += 1;
+      },
+    },
+  );
+
+  assert.equal(result, "missing-base");
+  assert.equal(startCalls, 0);
+  assert.deepEqual(notifications, [
+    {
+      message: "Provider error recovery delay elapsed, but no paused auto-mode base path was available. Leaving auto-mode paused.",
+      level: "warning",
+    },
+  ]);
+});
+
 // ── Escalating backoff for transient errors (#1166) ─────────────────────────
 
 test("agent-end-recovery.ts tracks consecutive transient errors for escalating backoff", () => {
@@ -300,6 +385,19 @@ test("agent-end-recovery.ts applies escalating delay for repeated transient erro
   assert.ok(
     src.includes("2 ** Math.max(0, retryState.consecutiveTransientCount"),
     "agent-end-recovery.ts must escalate retryAfterMs exponentially for consecutive transient errors (#1166)",
+  );
+});
+
+test("agent-end-recovery.ts resumes transient provider pauses through startAuto instead of a hidden prompt", () => {
+  const src = readFileSync(join(__dirname, "..", "bootstrap", "agent-end-recovery.ts"), "utf-8");
+
+  assert.ok(
+    src.includes("resumeAutoAfterProviderDelay"),
+    "agent-end-recovery.ts must resume paused auto-mode through resumeAutoAfterProviderDelay (#2813)",
+  );
+  assert.ok(
+    !src.includes('Continue execution — provider error recovery delay elapsed.'),
+    "transient provider resume must not rely on a hidden continue prompt (#2813)",
   );
 });
 
