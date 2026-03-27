@@ -1,4 +1,4 @@
-import { RpcClient } from '@gsd/rpc-client';
+import { RpcClient } from '@gsd-build/rpc-client';
 
 const client = new RpcClient({ cwd: process.cwd() });
 await client.start();

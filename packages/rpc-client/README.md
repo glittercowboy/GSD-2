@@ -1,4 +1,4 @@
-# @gsd/rpc-client
+# @gsd-build/rpc-client
 
 Standalone RPC client SDK for GSD. Spawn the agent process, perform a v2 protocol handshake, send commands, and consume typed events via an async generator — all in a few lines of TypeScript.
 
@@ -7,13 +7,13 @@ Zero internal dependencies. Ships its own inlined types.
 ## Installation
 
 ```bash
-npm install @gsd/rpc-client
+npm install @gsd-build/rpc-client
 ```
 
 ## Quick Start
 
 ```typescript
-import { RpcClient } from '@gsd/rpc-client';
+import { RpcClient } from '@gsd-build/rpc-client';
 
 const client = new RpcClient({ cwd: process.cwd() });
 await client.start();
@@ -117,7 +117,7 @@ import type {
   SessionStats,
   SdkAgentEvent,
   RpcClientOptions,
-} from '@gsd/rpc-client';
+} from '@gsd-build/rpc-client';
 ```
 
 ## License

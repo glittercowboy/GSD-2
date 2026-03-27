@@ -1,4 +1,4 @@
-# @gsd/mcp-server
+# @gsd-build/mcp-server
 
 MCP server exposing GSD orchestration tools for Claude Code, Cursor, and other MCP-compatible clients.
 
@@ -7,7 +7,7 @@ Start GSD auto-mode sessions, poll progress, resolve blockers, and retrieve resu
 ## Installation
 
 ```bash
-npm install @gsd/mcp-server
+npm install @gsd-build/mcp-server
 ```
 
 Or with the monorepo workspace:
@@ -180,12 +180,12 @@ Resolve a pending blocker in a session by sending a response to the blocked UI r
 
 ```
 ┌─────────────────┐     stdio      ┌──────────────────┐
-│  MCP Client     │ ◄────────────► │  @gsd/mcp-server │
+│  MCP Client     │ ◄────────────► │  @gsd-build/mcp-server │
 │  (Claude Code,  │    JSON-RPC    │                  │
 │   Cursor, etc.) │                │  SessionManager  │
 └─────────────────┘                │       │          │
                                    │       ▼          │
-                                   │  @gsd/rpc-client │
+                                   │  @gsd-build/rpc-client │
                                    │       │          │
                                    │       ▼          │
                                    │  GSD CLI (child  │
@@ -193,9 +193,9 @@ Resolve a pending blocker in a session by sending a response to the blocked UI r
                                    └──────────────────┘
 ```
 
-- **@gsd/mcp-server** — MCP protocol adapter. Translates MCP tool calls into SessionManager operations.
+- **@gsd-build/mcp-server** — MCP protocol adapter. Translates MCP tool calls into SessionManager operations.
 - **SessionManager** — Manages RpcClient lifecycle. One session per project directory. Tracks events in a ring buffer (last 50), detects blockers, accumulates cost.
-- **@gsd/rpc-client** — Low-level RPC client that spawns and communicates with the GSD CLI process via JSON-RPC over stdio.
+- **@gsd-build/rpc-client** — Low-level RPC client that spawns and communicates with the GSD CLI process via JSON-RPC over stdio.
 
 ## License
 

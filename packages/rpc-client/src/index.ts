@@ -1,5 +1,5 @@
 /**
- * @gsd/rpc-client — standalone RPC client SDK for GSD.
+ * @gsd-build/rpc-client — standalone RPC client SDK for GSD.
  *
  * Re-exports all types, JSONL utilities, and the RpcClient class.
  */

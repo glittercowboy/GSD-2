@@ -10,7 +10,7 @@
     "noEmit": true,
     "types": ["node"],
     "paths": {
-      "@gsd/rpc-client": ["./src/index.ts"]
+      "@gsd-build/rpc-client": ["./src/index.ts"]
     }
   },
   "include": ["examples/**/*.ts"]

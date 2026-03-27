@@ -1,1 +1,1 @@
-export { serializeJsonLine, attachJsonlLineReader } from '@gsd/rpc-client';
+export { serializeJsonLine, attachJsonlLineReader } from '@gsd-build/rpc-client';

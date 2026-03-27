@@ -8,8 +8,8 @@
 
 import { execSync } from 'node:child_process';
 import { resolve } from 'node:path';
-import { RpcClient } from '@gsd/rpc-client';
-import type { SdkAgentEvent, RpcInitResult, RpcCostUpdateEvent, RpcExtensionUIRequest } from '@gsd/rpc-client';
+import { RpcClient } from '@gsd-build/rpc-client';
+import type { SdkAgentEvent, RpcInitResult, RpcCostUpdateEvent, RpcExtensionUIRequest } from '@gsd-build/rpc-client';
 import type {
   ManagedSession,
   ExecuteOptions,
