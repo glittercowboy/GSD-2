@@ -654,10 +654,22 @@ function detectMissingArtifacts(completedKeys: string[], basePath: string, activ
   const wtBasePath = activeMilestone ? getAutoWorktreePath(basePath, activeMilestone) : null;
 
   for (const key of completedKeys) {
-    const slashIdx = key.indexOf("/");
-    if (slashIdx === -1) continue;
-    const unitType = key.slice(0, slashIdx);
-    const unitId = key.slice(slashIdx + 1);
+    // Hook unit types are compound: "hook/<hookName>". Split on the *second*
+    // slash so unitType = "hook/telegram-progress" (not just "hook"), which
+    // lets verifyExpectedArtifact() match its startsWith("hook/") guard (#2826).
+    let unitType: string;
+    let unitId: string;
+    if (key.startsWith("hook/")) {
+      const secondSlash = key.indexOf("/", 5); // skip past "hook/"
+      if (secondSlash === -1) continue;         // malformed key — skip
+      unitType = key.slice(0, secondSlash);
+      unitId   = key.slice(secondSlash + 1);
+    } else {
+      const slashIdx = key.indexOf("/");
+      if (slashIdx === -1) continue;
+      unitType = key.slice(0, slashIdx);
+      unitId   = key.slice(slashIdx + 1);
+    }
 
     const rootHasArtifact = verifyExpectedArtifact(unitType, unitId, basePath);
     const wtHasArtifact = wtBasePath ? verifyExpectedArtifact(unitType, unitId, wtBasePath) : false;
