@@ -436,6 +436,22 @@ export function syncGsdStateToWorktree(
     }
   }
 
+  // Forward-sync mcp.json from project root to worktree (additive only, #2791).
+  // Project root's .mcp.json → worktree's .gsd/mcp.json.
+  // NOT in ROOT_STATE_FILES to prevent worktree from overwriting root (#2684, #2693).
+  {
+    const src = join(mainBasePath, ".mcp.json");
+    const dst = join(wtGsd, "mcp.json");
+    if (existsSync(src) && !existsSync(dst)) {
+      try {
+        cpSync(src, dst);
+        synced.push("mcp.json");
+      } catch {
+        /* non-fatal */
+      }
+    }
+  }
+
   // Sync milestones: copy entire milestone directories that are missing
   const mainMilestonesDir = join(mainGsd, "milestones");
   const wtMilestonesDir = join(wtGsd, "milestones");
@@ -969,6 +985,13 @@ function copyPlanningArtifacts(srcBase: string, wtPath: string): void {
     "preferences.md",
   ]) {
     safeCopy(join(srcGsd, file), join(dstGsd, file), { force: true });
+  }
+
+  // Copy MCP config if it exists in project root (#2791)
+  const mcpJsonSrc = join(srcBase, ".mcp.json");
+  const mcpJsonDst = join(wtPath, ".gsd", "mcp.json");
+  if (existsSync(mcpJsonSrc)) {
+    safeCopy(mcpJsonSrc, mcpJsonDst, { force: true });
   }
 
   // Shared WAL (R012): worktrees use the project root's DB directly.
