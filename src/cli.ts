@@ -439,6 +439,20 @@ if (isPrintMode) {
   await resourceLoader.reload()
   markStartup('resourceLoader.reload')
 
+  // Flush pending provider registrations so extension models are visible for
+  // validation BEFORE createAgentSession() reads the thinking level.
+  {
+    const { runtime } = resourceLoader.getExtensions()
+    for (const { name, config } of runtime.pendingProviderRegistrations) {
+      modelRegistry.registerProvider(name, config)
+    }
+    runtime.pendingProviderRegistrations = []
+  }
+
+  // Validate configured model before session creation so the thinking level
+  // reset takes effect before createAgentSession() reads it.
+  validateConfiguredModel(modelRegistry, settingsManager)
+
   const { session, extensionsResult } = await createAgentSession({
     authStorage,
     modelRegistry,
@@ -456,11 +470,6 @@ if (isPrintMode) {
       process.stderr.write(`[gsd] ${prefix}: ${err.error}\n`)
     }
   }
-
-  // Validate configured model now that extension providers are registered.
-  // Must run after createAgentSession() which flushes pendingProviderRegistrations
-  // so extension models (e.g. pi-claude-cli) are visible in the registry.
-  validateConfiguredModel(modelRegistry, settingsManager)
 
   // Apply --model override if specified
   if (cliFlags.model) {
@@ -568,6 +577,20 @@ const resourceLoader = buildResourceLoader(agentDir)
 await resourceLoader.reload()
 markStartup('resourceLoader.reload')
 
+// Flush pending provider registrations so extension models are visible for
+// validation BEFORE createAgentSession() reads the thinking level.
+{
+  const { runtime } = resourceLoader.getExtensions()
+  for (const { name, config } of runtime.pendingProviderRegistrations) {
+    modelRegistry.registerProvider(name, config)
+  }
+  runtime.pendingProviderRegistrations = []
+}
+
+// Validate configured model before session creation so the thinking level
+// reset takes effect before createAgentSession() reads it.
+validateConfiguredModel(modelRegistry, settingsManager)
+
 const { session, extensionsResult } = await createAgentSession({
   authStorage,
   modelRegistry,
@@ -584,11 +607,6 @@ if (extensionsResult.errors.length > 0) {
     process.stderr.write(`[gsd] ${prefix}: ${err.error}\n`)
   }
 }
-
-// Validate configured model now that extension providers are registered.
-// Must run after createAgentSession() which flushes pendingProviderRegistrations
-// so extension models (e.g. pi-claude-cli) are visible in the registry.
-validateConfiguredModel(modelRegistry, settingsManager)
 
 // Restore scoped models from settings on startup.
 // The upstream InteractiveMode reads enabledModels from settings when /scoped-models is opened,
