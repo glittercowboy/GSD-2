@@ -6,6 +6,7 @@
  * Falls back to simple text on narrow terminals (<70 cols) or non-TTY.
  */
 
+import { execFileSync } from 'node:child_process'
 import os from 'node:os'
 import chalk from 'chalk'
 import { GSD_LOGO } from './logo.js'
@@ -14,6 +15,7 @@ export interface WelcomeScreenOptions {
   version: string
   modelName?: string
   provider?: string
+  remoteChannel?: string
 }
 
 function getShortCwd(): string {
@@ -32,11 +34,25 @@ function rpad(s: string, w: number): string {
   return s + ' '.repeat(Math.max(0, w - visLen(s)))
 }
 
+/** Read the current git branch name. Returns undefined on failure. */
+function getGitBranch(): string | undefined {
+  try {
+    return execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+      encoding: 'utf-8',
+      timeout: 2000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim() || undefined
+  } catch {
+    return undefined
+  }
+}
+
 export function printWelcomeScreen(opts: WelcomeScreenOptions): void {
   if (!process.stderr.isTTY) return
 
-  const { version, modelName, provider } = opts
+  const { version, modelName, provider, remoteChannel } = opts
   const shortCwd = getShortCwd()
+  const branch = getGitBranch()
   const termWidth = Math.min((process.stderr.columns || 80) - 1, 200)
 
   // Narrow terminal fallback
@@ -69,6 +85,7 @@ export function printWelcomeScreen(opts: WelcomeScreenOptions): void {
   if (process.env.JINA_API_KEY)       toolParts.push('Jina ✓')
   if (process.env.TAVILY_API_KEY)     toolParts.push('Tavily ✓')
   if (process.env.CONTEXT7_API_KEY)   toolParts.push('Context7 ✓')
+  if (remoteChannel)                  toolParts.push(`${remoteChannel.charAt(0).toUpperCase() + remoteChannel.slice(1)} ✓`)
 
   // Tools left, hint right-aligned on the same row
   const toolsLeft  = toolParts.length > 0 ? chalk.dim('  ' + toolParts.join('  ·  ')) : ''
@@ -76,16 +93,26 @@ export function printWelcomeScreen(opts: WelcomeScreenOptions): void {
   const footerFill = RIGHT_INNER - visLen(toolsLeft) - visLen(hintRight)
   const footerRow  = toolsLeft + ' '.repeat(Math.max(1, footerFill)) + hintRight
 
+  // Combined session line: "provider / model" or just model or just provider
+  const sessionParts = [provider, modelName].filter(Boolean)
+  const sessionLine = sessionParts.length > 0
+    ? `  Session    ${chalk.dim(sessionParts.join(' / '))}`
+    : ''
+
+  // Combined project line: "~/path [branch]"
+  const branchSuffix = branch ? ` [${branch}]` : ''
+  const projectLine = `  Project    ${chalk.dim(shortCwd + branchSuffix)}`
+
   const DIVIDER = null
   const rightRows: (string | null)[] = [
     titleRow,
     DIVIDER,
-    modelName ? `  Model      ${chalk.dim(modelName)}`  : '',
-    provider  ? `  Provider   ${chalk.dim(provider)}`   : '',
-    `  Directory  ${chalk.dim(shortCwd)}`,
+    '',
+    sessionLine,
+    projectLine,
+    '',
     DIVIDER,
     footerRow,
-    '',
   ]
 
   // ── Render ──────────────────────────────────────────────────────────────────

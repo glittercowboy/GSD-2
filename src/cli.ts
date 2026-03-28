@@ -677,10 +677,17 @@ if (!process.stdin.isTTY) {
 // Skip when the first-run banner was already printed in loader.ts (prevents double banner).
 if (!process.env.GSD_FIRST_RUN_BANNER) {
   const { printWelcomeScreen } = await import('./welcome-screen.js')
+  let remoteChannel: string | undefined
+  try {
+    const { resolveRemoteConfig } = await import('./resources/extensions/remote-questions/config.js')
+    const rc = resolveRemoteConfig()
+    if (rc) remoteChannel = rc.channel
+  } catch { /* non-fatal */ }
   printWelcomeScreen({
     version: process.env.GSD_VERSION || '0.0.0',
     modelName: settingsManager.getDefaultModel() || undefined,
     provider: settingsManager.getDefaultProvider() || undefined,
+    remoteChannel,
   })
 }
 
