@@ -12,11 +12,7 @@
 
 import { existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { MergeConflictError } from "./git-service.js";
 import { nativeMergeAbort, nativeRebaseAbort, nativeResetHard } from "./native-git-bridge.js";
-
-// Re-export for consumers
-export { MergeConflictError };
 
 /** Result from abortAndReset describing what was cleaned up. */
 export interface AbortAndResetResult {

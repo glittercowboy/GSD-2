@@ -29,7 +29,7 @@ import {
   worktreeBranchName,
   worktreePath,
 } from "./worktree-manager.js";
-import { inferCommitType } from "./git-service.js";
+import { inferCommitType } from "./commit-utils.js";
 import type { FileLineStat } from "./worktree-manager.js";
 import { existsSync, realpathSync, readdirSync, rmSync, unlinkSync } from "node:fs";
 import { nativeMergeAbort } from "./native-git-bridge.js";

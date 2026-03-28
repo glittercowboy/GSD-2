@@ -19,8 +19,8 @@ import { homedir } from "node:os";
 import { GitServiceImpl, writeIntegrationBranch, type TaskCommitContext } from "./git-service.js";
 import { loadEffectiveGSDPreferences } from "./preferences.js";
 
-export { MergeConflictError } from "./git-service.js";
-export type { TaskCommitContext } from "./git-service.js";
+export { MergeConflictError } from "./errors.js";
+export type { TaskCommitContext } from "./commit-utils.js";
 
 // ─── Lazy GitServiceImpl Cache ─────────────────────────────────────────────
 
