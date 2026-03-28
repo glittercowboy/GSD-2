@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: verifying
-stopped_at: Completed 03-sse-cursor-based-event-replay plan 03
-last_updated: "2026-03-28T20:11:22.914Z"
+status: executing
+stopped_at: Completed 04-remote-access-settings-ui plan 00
+last_updated: "2026-03-28T20:22:38.414Z"
 last_activity: 2026-03-28
 progress:
   total_phases: 4
   completed_phases: 3
   total_plans: 12
-  completed_plans: 8
+  completed_plans: 9
   percent: 0
 ---
 
@@ -21,13 +21,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-28)
 
 **Core value:** Agent workflows run uninterrupted when the browser is closed — reconnect anytime from any device on the tailnet and pick up where you left off.
-**Current focus:** Phase 03 — sse-cursor-based-event-replay
+**Current focus:** Phase 04 — remote-access-settings-ui
 
 ## Current Position
 
-Phase: 03 (sse-cursor-based-event-replay) — EXECUTING
-Plan: 3 of 3
-Status: Phase complete — ready for verification
+Phase: 04 (remote-access-settings-ui) — EXECUTING
+Plan: 2 of 4
+Status: Ready to execute
 Last activity: 2026-03-28
 
 Progress: [░░░░░░░░░░] 0%
@@ -60,6 +60,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 03-sse-cursor-based-event-replay P01 | 15 | 2 tasks | 3 files |
 | Phase 03-sse-cursor-based-event-replay P02 | 2 | 1 tasks | 1 files |
 | Phase 03-sse-cursor-based-event-replay P03 | 15 | 2 tasks | 3 files |
+| Phase 04-remote-access-settings-ui P00 | 112 | 1 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -93,6 +94,7 @@ Recent decisions affecting current work:
 - [Phase 03-sse-cursor-based-event-replay]: lastAppliedSeq kept in-memory per tab to prevent multi-tab cursor interference without locking
 - [Phase 03-sse-cursor-based-event-replay]: REPLAY_UNSAFE_EVENT_TYPES filters live_state_invalidation and extension_ui_request during replay to prevent side effects
 - [Phase 03-sse-cursor-based-event-replay]: isCatchingUp set before EventSource creation so banner appears immediately on reconnect (D-01)
+- [Phase 04-remote-access-settings-ui]: Test stubs placed at src/web/ (not __tests__/) per plan frontmatter spec
 
 ### Pending Todos
 
@@ -106,6 +108,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-28T20:11:22.911Z
-Stopped at: Completed 03-sse-cursor-based-event-replay plan 03
+Last session: 2026-03-28T20:22:38.412Z
+Stopped at: Completed 04-remote-access-settings-ui plan 00
 Resume file: None

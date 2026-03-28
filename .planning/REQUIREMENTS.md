@@ -30,9 +30,9 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **TAIL-06**: Runs `tailscale serve reset` on startup (clean orphaned config from prior crashes)
 - [x] **TAIL-07**: Runs `tailscale serve reset` on graceful shutdown (SIGTERM/SIGINT)
 - [x] **TAIL-08**: `--tailscale` implies daemon mode (server stays alive when browser closes)
-- [ ] **TAIL-09**: Setup assistant detects Tailscale installation and guides install (brew on macOS, official script on Linux)
-- [ ] **TAIL-10**: Setup assistant runs `tailscale up` and surfaces auth URL if browser login required
-- [ ] **TAIL-11**: Setup assistant verifies connection and displays hostname/tailnet info
+- [x] **TAIL-09**: Setup assistant detects Tailscale installation and guides install (brew on macOS, official script on Linux)
+- [x] **TAIL-10**: Setup assistant runs `tailscale up` and surfaces auth URL if browser login required
+- [x] **TAIL-11**: Setup assistant verifies connection and displays hostname/tailnet info
 
 ### Session Persistence
 
@@ -48,10 +48,10 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Settings
 
-- [ ] **SETT-01**: "Remote Access" section in GSD settings with password set/change
-- [ ] **SETT-02**: Tailscale enable/disable toggle with connection status display
-- [ ] **SETT-03**: "Set up Tailscale" button launches guided setup assistant
-- [ ] **SETT-04**: Displays Tailscale URL (copyable) when connected
+- [x] **SETT-01**: "Remote Access" section in GSD settings with password set/change
+- [x] **SETT-02**: Tailscale enable/disable toggle with connection status display
+- [x] **SETT-03**: "Set up Tailscale" button launches guided setup assistant
+- [x] **SETT-04**: Displays Tailscale URL (copyable) when connected
 - [x] **SETT-05**: `gsd --web --tailscale` refuses to start without a password configured
 
 ## v2 Requirements
@@ -102,9 +102,9 @@ Deferred to future release. Tracked but not in current roadmap.
 | TAIL-06 | Phase 2 | Complete |
 | TAIL-07 | Phase 2 | Complete |
 | TAIL-08 | Phase 2 | Complete |
-| TAIL-09 | Phase 4 | Pending |
-| TAIL-10 | Phase 4 | Pending |
-| TAIL-11 | Phase 4 | Pending |
+| TAIL-09 | Phase 4 | Complete |
+| TAIL-10 | Phase 4 | Complete |
+| TAIL-11 | Phase 4 | Complete |
 | SESS-01 | Phase 3 | Complete |
 | SESS-02 | Phase 3 | Complete |
 | SESS-03 | Phase 3 | Complete |
@@ -114,10 +114,10 @@ Deferred to future release. Tracked but not in current roadmap.
 | SESS-07 | Phase 3 | Complete |
 | SESS-08 | Phase 3 | Complete |
 | SESS-09 | Phase 3 | Complete |
-| SETT-01 | Phase 4 | Pending |
-| SETT-02 | Phase 4 | Pending |
-| SETT-03 | Phase 4 | Pending |
-| SETT-04 | Phase 4 | Pending |
+| SETT-01 | Phase 4 | Complete |
+| SETT-02 | Phase 4 | Complete |
+| SETT-03 | Phase 4 | Complete |
+| SETT-04 | Phase 4 | Complete |
 | SETT-05 | Phase 2 | Complete |
 
 **Coverage:**
