@@ -24,7 +24,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Depends on**: Nothing (first phase)
 **Requirements**: AUTH-01, AUTH-02, AUTH-03, AUTH-04, AUTH-05, AUTH-06, AUTH-07, AUTH-08, AUTH-09, AUTH-10
 **Success Criteria** (what must be TRUE):
-  1. User can set a password via GSD settings and it is stored as a scrypt hash (never plaintext)
+  1. User can set a password via the set-password API endpoint and it is stored as a scrypt hash (never plaintext). The settings UI for password management is delivered in Phase 4.
   2. User visiting the web UI over HTTPS sees a login page with the GSD2 logo, enters the correct password, and is redirected to the main UI with an HttpOnly/Secure/SameSite=Strict cookie that persists across tab close and browser restart
   3. User submitting wrong passwords more than 5 times per minute receives a rate-limit error without triggering further verification overhead
   4. User can log out from the UI and immediately loses access (cookie cleared, subsequent requests redirected to login)
