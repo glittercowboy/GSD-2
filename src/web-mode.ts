@@ -626,7 +626,7 @@ export async function launchWebMode(
 
   // -- Tailscale Serve lifecycle -----------------------------------------------
   let tailscaleInfo: TailscaleInfo | undefined
-  let tailscaleCleanupFired = false
+  let cleanupFired = false
   let tailscaleServeStop: ((options?: { strict?: boolean }) => Promise<void>) | undefined
   let tailscaleServeStopSync: (() => void) | undefined
 
@@ -729,15 +729,15 @@ export async function launchWebMode(
 
     // Step 2: Register cleanup handlers early
     const asyncCleanup = async () => {
-      if (tailscaleCleanupFired) return
-      tailscaleCleanupFired = true
+      if (cleanupFired) return
+      cleanupFired = true
       try { await serveStop() } catch { /* best-effort */ }
       process.exit(0)
     }
     process.once('SIGINT', () => { asyncCleanup(); })
     process.once('SIGTERM', () => { asyncCleanup(); })
     process.once('exit', () => {
-      if (!tailscaleCleanupFired) {
+      if (!cleanupFired) {
         serveStopSync()
       }
     })
