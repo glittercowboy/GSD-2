@@ -41,6 +41,7 @@ export async function POST(request: Request): Promise<Response> {
     // The secret was rotated above, so we must read the new secret and
     // mint a fresh token so the current browser session remains valid.
     const newSecret = await getOrCreateSessionSecret();
+    process.env.GSD_WEB_SESSION_SECRET = newSecret;
     const token = createSessionToken(newSecret, 30);
     const cookieStore = await cookies();
     cookieStore.set("gsd-session", token, {
