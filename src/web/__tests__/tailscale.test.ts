@@ -102,7 +102,7 @@ test('buildServeCommand returns correct args array', () => {
     '--bg',
     '--https',
     '443',
-    'https+insecure://127.0.0.1:3456',
+    'http://127.0.0.1:3456',
   ]);
 });
 
@@ -274,7 +274,7 @@ test('startTailscaleServe calls execFile with buildServeCommand args', async () 
 
   await withDepsAsync({ execFile: fakeExecFile }, () => startTailscaleServe(3456));
   assert.ok(capturedArgs !== undefined);
-  assert.deepEqual(capturedArgs, ['serve', '--bg', '--https', '443', 'https+insecure://127.0.0.1:3456']);
+  assert.deepEqual(capturedArgs, ['serve', '--bg', '--https', '443', 'http://127.0.0.1:3456']);
 });
 
 test('startTailscaleServe throws TailscaleServeError on execFile failure', async () => {
