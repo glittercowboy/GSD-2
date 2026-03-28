@@ -94,11 +94,32 @@ export async function buildBeforeAgentStartResult(
     }
   }
 
+  let codebaseBlock = "";
+  const codebasePath = resolveGsdRootFile(process.cwd(), "CODEBASE");
+  if (existsSync(codebasePath)) {
+    try {
+      const rawContent = readFileSync(codebasePath, "utf-8").trim();
+      if (rawContent) {
+        // Cap injection size to ~2 000 tokens to avoid bloating every request.
+        // Full map is always available at .gsd/CODEBASE.md.
+        const MAX_CODEBASE_CHARS = 8_000;
+        const generatedMatch = rawContent.match(/Generated: (\S+)/);
+        const generatedAt = generatedMatch?.[1] ?? "unknown";
+        const content = rawContent.length > MAX_CODEBASE_CHARS
+          ? rawContent.slice(0, MAX_CODEBASE_CHARS) + "\n\n*(truncated — see .gsd/CODEBASE.md for full map)*"
+          : rawContent;
+        codebaseBlock = `\n\n[PROJECT CODEBASE — File structure and descriptions (generated ${generatedAt}, may be stale — run /gsd codebase update to refresh)]\n\n${content}`;
+      }
+    } catch {
+      // skip
+    }
+  }
+
   warnDeprecatedAgentInstructions();
 
   const injection = await buildGuidedExecuteContextInjection(event.prompt, process.cwd());
   const worktreeBlock = buildWorktreeContextBlock();
-  const fullSystem = `${event.systemPrompt}\n\n[SYSTEM CONTEXT — GSD]\n\n${systemContent}${preferenceBlock}${knowledgeBlock}${memoryBlock}${newSkillsBlock}${worktreeBlock}`;
+  const fullSystem = `${event.systemPrompt}\n\n[SYSTEM CONTEXT — GSD]\n\n${systemContent}${preferenceBlock}${knowledgeBlock}${codebaseBlock}${memoryBlock}${newSkillsBlock}${worktreeBlock}`;
 
   stopContextTimer({
     systemPromptSize: fullSystem.length,
