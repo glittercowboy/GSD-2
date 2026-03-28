@@ -390,7 +390,7 @@ async function configureGit(ctx: ExtensionCommandContext, prefs: Record<string, 
   const gitBooleanFields = [
     { key: "auto_push", label: "Auto-push commits after committing", defaultVal: false },
     { key: "push_branches", label: "Push milestone branches to remote", defaultVal: false },
-    { key: "snapshots", label: "Create WIP snapshot commits during long tasks", defaultVal: false },
+    { key: "snapshots", label: "Create WIP snapshot commits during long tasks", defaultVal: true },
   ] as const;
 
   for (const field of gitBooleanFields) {
@@ -423,7 +423,7 @@ async function configureGit(ctx: ExtensionCommandContext, prefs: Record<string, 
   // pre_merge_check
   const currentPreMerge = git.pre_merge_check !== undefined ? String(git.pre_merge_check) : "";
   const preMergeChoice = await ctx.ui.select(
-    `Pre-merge check${currentPreMerge ? ` (current: ${currentPreMerge})` : " (default: false)"}:`,
+    `Pre-merge check${currentPreMerge ? ` (current: ${currentPreMerge})` : " (default: auto)"}:`,
     ["true", "false", "auto", "(keep current)"],
   );
   if (preMergeChoice && preMergeChoice !== "(keep current)") {
@@ -588,7 +588,7 @@ export async function configureMode(ctx: ExtensionCommandContext, prefs: Record<
     if (modeStr.startsWith("solo")) {
       prefs.mode = "solo";
       ctx.ui.notify(
-        "Mode: solo — defaults: auto_push=true, push_branches=false, pre_merge_check=false, merge_strategy=squash, isolation=worktree, unique_milestone_ids=false",
+        "Mode: solo — defaults: auto_push=true, push_branches=false, pre_merge_check=auto, merge_strategy=squash, isolation=worktree, unique_milestone_ids=false",
         "info",
       );
     } else if (modeStr.startsWith("team")) {
@@ -771,7 +771,7 @@ export async function ensurePreferencesFile(
   scope: "global" | "project",
 ): Promise<void> {
   if (!existsSync(path)) {
-    const template = await loadFile(join(dirname(fileURLToPath(import.meta.url)), "templates", "preferences.md"));
+    const template = await loadFile(join(dirname(fileURLToPath(import.meta.url)), "templates", "PREFERENCES.md"));
     if (!template) {
       ctx.ui.notify("Could not load GSD preferences template.", "error");
       return;

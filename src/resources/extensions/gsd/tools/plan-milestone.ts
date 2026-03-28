@@ -1,4 +1,6 @@
 import { clearParseCache } from "../files.js";
+import { isClosedStatus } from "../status-guards.js";
+import { isNonEmptyString, validateStringArray } from "../validation.js";
 import {
   transaction,
   getMilestone,
@@ -6,7 +8,6 @@ import {
   insertSlice,
   upsertMilestonePlanning,
   upsertSlicePlanning,
-  _getAdapter,
 } from "../gsd-db.js";
 import { invalidateStateCache } from "../state.js";
 import { renderRoadmapFromDb } from "../markdown-renderer.js";
@@ -53,20 +54,6 @@ export interface PlanMilestoneParams {
 export interface PlanMilestoneResult {
   milestoneId: string;
   roadmapPath: string;
-}
-
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
-function validateStringArray(value: unknown, field: string): string[] {
-  if (!Array.isArray(value)) {
-    throw new Error(`${field} must be an array`);
-  }
-  if (value.some((item) => !isNonEmptyString(item))) {
-    throw new Error(`${field} must contain only non-empty strings`);
-  }
-  return value;
 }
 
 function validateRiskEntries(value: unknown): Array<{ risk: string; whyItMatters: string }> {
@@ -189,27 +176,34 @@ export async function handlePlanMilestone(
     return { error: `validation failed: ${(err as Error).message}` };
   }
 
-  // ── State machine preconditions ─────────────────────────────────────────
-  const existingMilestone = getMilestone(params.milestoneId);
-  if (existingMilestone && (existingMilestone.status === "complete" || existingMilestone.status === "done")) {
-    return { error: `cannot re-plan milestone ${params.milestoneId}: it is already complete` };
-  }
-
-  // Validate depends_on: all dependencies must exist and be complete
-  if (params.dependsOn && params.dependsOn.length > 0) {
-    for (const depId of params.dependsOn) {
-      const dep = getMilestone(depId);
-      if (!dep) {
-        return { error: `depends_on references unknown milestone: ${depId}` };
-      }
-      if (dep.status !== "complete" && dep.status !== "done") {
-        return { error: `depends_on milestone ${depId} is not yet complete (status: ${dep.status})` };
-      }
-    }
-  }
+  // ── Guards + DB writes inside a single transaction (prevents TOCTOU) ───
+  // Guards must be inside the transaction so the state they check cannot
+  // change between the read and the write (#2723).
+  let guardError: string | null = null;
 
   try {
     transaction(() => {
+      const existingMilestone = getMilestone(params.milestoneId);
+      if (existingMilestone && isClosedStatus(existingMilestone.status)) {
+        guardError = `cannot re-plan milestone ${params.milestoneId}: it is already complete`;
+        return;
+      }
+
+      // Validate depends_on: all dependencies must exist and be complete
+      if (params.dependsOn && params.dependsOn.length > 0) {
+        for (const depId of params.dependsOn) {
+          const dep = getMilestone(depId);
+          if (!dep) {
+            guardError = `depends_on references unknown milestone: ${depId}`;
+            return;
+          }
+          if (!isClosedStatus(dep.status)) {
+            guardError = `depends_on milestone ${depId} is not yet complete (status: ${dep.status})`;
+            return;
+          }
+        }
+      }
+
       insertMilestone({
         id: params.milestoneId,
         title: params.title,
@@ -252,6 +246,10 @@ export async function handlePlanMilestone(
     });
   } catch (err) {
     return { error: `db write failed: ${(err as Error).message}` };
+  }
+
+  if (guardError) {
+    return { error: guardError };
   }
 
   let roadmapPath: string;

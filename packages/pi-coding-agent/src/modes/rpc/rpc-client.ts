@@ -11,7 +11,7 @@ import type { SessionStats } from "../../core/agent-session.js";
 import type { BashResult } from "../../core/bash-executor.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
-import type { RpcCommand, RpcResponse, RpcSessionState, RpcSlashCommand } from "./rpc-types.js";
+import type { RpcCommand, RpcInitResult, RpcResponse, RpcSessionState, RpcSlashCommand } from "./rpc-types.js";
 
 // ============================================================================
 // Types
@@ -396,6 +396,59 @@ export class RpcClient {
 	async getCommands(): Promise<RpcSlashCommand[]> {
 		const response = await this.send({ type: "get_commands" });
 		return this.getData<{ commands: RpcSlashCommand[] }>(response).commands;
+	}
+
+	/**
+	 * Send a UI response to a pending extension_ui_request.
+	 * Fire-and-forget — no request/response correlation.
+	 */
+	sendUIResponse(id: string, response: { value?: string; values?: string[]; confirmed?: boolean; cancelled?: boolean }): void {
+		if (!this.process?.stdin) {
+			throw new Error("Client not started");
+		}
+		this.process.stdin.write(serializeJsonLine({
+			type: "extension_ui_response",
+			id,
+			...response,
+		}));
+	}
+
+	/**
+	 * Initialize a v2 protocol session. Must be sent as the first command.
+	 * Returns the negotiated protocol version, session ID, and server capabilities.
+	 */
+	async init(options?: { clientId?: string }): Promise<RpcInitResult> {
+		const response = await this.send({ type: "init", protocolVersion: 2, clientId: options?.clientId });
+		return this.getData<RpcInitResult>(response);
+	}
+
+	/**
+	 * Request a graceful shutdown of the agent process.
+	 * Waits for the response before the process exits.
+	 */
+	async shutdown(): Promise<void> {
+		await this.send({ type: "shutdown" });
+		// Wait for process to exit after shutdown acknowledgment
+		if (this.process) {
+			await new Promise<void>((resolve) => {
+				const timeout = setTimeout(() => {
+					this.process?.kill("SIGKILL");
+					resolve();
+				}, 5000);
+				this.process?.on("exit", () => {
+					clearTimeout(timeout);
+					resolve();
+				});
+			});
+		}
+	}
+
+	/**
+	 * Subscribe to specific event types (v2 only).
+	 * Pass ["*"] to receive all events, or a list of event type strings to filter.
+	 */
+	async subscribe(events: string[]): Promise<void> {
+		await this.send({ type: "subscribe", events });
 	}
 
 	// =========================================================================

@@ -75,13 +75,16 @@ export interface MetricsLedger {
 
 // ─── Phase classification ─────────────────────────────────────────────────────
 
-export type MetricsPhase = "research" | "planning" | "execution" | "completion" | "reassessment";
+export type MetricsPhase = "research" | "discussion" | "planning" | "execution" | "completion" | "reassessment";
 
 export function classifyUnitPhase(unitType: string): MetricsPhase {
   switch (unitType) {
     case "research-milestone":
     case "research-slice":
       return "research";
+    case "discuss-milestone":
+    case "discuss-slice":
+      return "discussion";
     case "plan-milestone":
     case "plan-slice":
       return "planning";
@@ -299,7 +302,7 @@ export function aggregateByPhase(units: UnitMetrics[]): PhaseAggregate[] {
     agg.duration += u.finishedAt - u.startedAt;
   }
   // Return in a stable order
-  const order: MetricsPhase[] = ["research", "planning", "execution", "completion", "reassessment"];
+  const order: MetricsPhase[] = ["research", "discussion", "planning", "execution", "completion", "reassessment"];
   return order.map(p => map.get(p)).filter((a): a is PhaseAggregate => !!a);
 }
 

@@ -87,8 +87,12 @@ export function executeBash(command: string, options?: BashExecutorOptions & { l
 		} else {
 			({ shell, args } = getShellConfig());
 		}
+		// On Windows, detached: true sets CREATE_NEW_PROCESS_GROUP which can
+		// cause EINVAL in VSCode/ConPTY terminal contexts.  The bg-shell
+		// extension already guards this (process-manager.ts); align here.
+		// Process-tree cleanup uses taskkill /F /T on Windows regardless.
 		const child: ChildProcess = spawn(shell, [...args, sanitizeCommand(command)], {
-			detached: true,
+			detached: process.platform !== "win32",
 			env: getShellEnv(),
 			stdio: ["ignore", "pipe", "pipe"],
 		});

@@ -33,23 +33,25 @@ assertTrue(dbLifecycleIdx > 0, "auto-start.ts has a DB lifecycle section");
 
 const afterDbLifecycle = src.slice(dbLifecycleIdx);
 
-// Find the second isDbAvailable check — the one AFTER the open attempts.
-// The first check at line ~543 tries to open the DB.
-// There must be a SECOND check that gates bootstrap if it's still unavailable.
-const firstCheck = afterDbLifecycle.indexOf("isDbAvailable()");
-assertTrue(firstCheck > 0, "DB lifecycle section has isDbAvailable() check");
-
-const afterFirstCheck = afterDbLifecycle.slice(firstCheck + "isDbAvailable()".length);
-const secondCheck = afterFirstCheck.indexOf("isDbAvailable()");
-
+// The DB lifecycle section may contain multiple isDbAvailable() checks now that
+// cold-start bootstrap can pre-open the DB earlier in the file. What matters
+// for #2419 is the explicit abort gate after the DB open attempts.
 assertTrue(
-  secondCheck > 0,
-  "auto-start.ts has a SECOND isDbAvailable() check after the open attempt — this is the gate (#2419)",
+  afterDbLifecycle.includes("!isDbAvailable()"),
+  "DB lifecycle section still checks for unavailable DB state (#2419)",
 );
 
-// The second check must lead to releaseLockAndReturn (abort bootstrap)
-if (secondCheck > 0) {
-  const gateRegion = afterFirstCheck.slice(secondCheck, secondCheck + 500);
+const gateMatch = afterDbLifecycle.match(
+  /if\s*\(existsSync\(gsdDbPath\)\s*&&\s*!isDbAvailable\(\)\)\s*\{[\s\S]*?releaseLockAndReturn\(\);[\s\S]*?\}/,
+);
+
+assertTrue(
+  !!gateMatch,
+  "auto-start.ts has a hard abort gate when gsd.db exists but SQLite is still unavailable (#2419)",
+);
+
+if (gateMatch) {
+  const gateRegion = gateMatch[0];
   assertTrue(
     gateRegion.includes("releaseLockAndReturn"),
     "The DB availability gate calls releaseLockAndReturn() to abort bootstrap (#2419)",

@@ -9,7 +9,8 @@ import { join } from "node:path";
 
 import {
   transaction,
-  _getAdapter,
+  insertAssessment,
+  deleteAssessmentByScope,
 } from "../gsd-db.js";
 import { resolveMilestonePath, clearPathCache } from "../paths.js";
 import { saveFile, clearParseCache } from "../files.js";
@@ -24,6 +25,7 @@ export interface ValidateMilestoneParams {
   sliceDeliveryAudit: string;
   crossSliceIntegration: string;
   requirementCoverage: string;
+  verificationClasses?: string;
   verdictRationale: string;
   remediationPlan?: string;
 }
@@ -54,6 +56,10 @@ ${params.crossSliceIntegration}
 ## Requirement Coverage
 ${params.requirementCoverage}
 
+${params.verificationClasses ? `## Verification Class Compliance
+${params.verificationClasses}
+
+` : ""}
 ## Verdict Rationale
 ${params.verdictRationale}
 `;
@@ -76,7 +82,7 @@ export async function handleValidateMilestone(
     return { error: `verdict must be one of: ${VALIDATION_VERDICTS.join(", ")}` };
   }
 
-  // ── Filesystem render ──────────────────────────────────────────────────
+  // ── Resolve paths and render markdown ────────────────────────────────
   const validationMd = renderValidationMarkdown(params);
 
   let validationPath: string;
@@ -89,31 +95,36 @@ export async function handleValidateMilestone(
     validationPath = join(manualDir, `${params.milestoneId}-VALIDATION.md`);
   }
 
+  // ── DB write first — matches complete-task/complete-slice pattern ───
+  // Write DB before disk so a crash between the two leaves a recoverable
+  // state: the DB row exists but the file is missing, which projection
+  // rendering can regenerate. The inverse (file exists, no DB row) is
+  // harder to detect and recover from (#2725).
+  const validatedAt = new Date().toISOString();
+
+  transaction(() => {
+    insertAssessment({
+      path: validationPath,
+      milestoneId: params.milestoneId,
+      sliceId: null,
+      taskId: null,
+      status: params.verdict,
+      scope: 'milestone-validation',
+      fullContent: validationMd,
+    });
+  });
+
+  // ── Filesystem render (outside transaction) ────────────────────────────
+  // If disk render fails, roll back the DB row so state stays consistent.
   try {
     await saveFile(validationPath, validationMd);
   } catch (renderErr) {
     process.stderr.write(
-      `gsd-db: validate_milestone — disk render failed: ${(renderErr as Error).message}\n`,
+      `gsd-db: validate_milestone — disk render failed, rolling back DB row: ${(renderErr as Error).message}\n`,
     );
+    deleteAssessmentByScope(params.milestoneId, 'milestone-validation');
     return { error: `disk render failed: ${(renderErr as Error).message}` };
   }
-
-  // ── DB write — store in assessments table ──────────────────────────────
-  const validatedAt = new Date().toISOString();
-
-  transaction(() => {
-    const adapter = _getAdapter()!;
-    adapter.prepare(
-      `INSERT OR REPLACE INTO assessments (path, milestone_id, slice_id, task_id, status, scope, full_content, created_at)
-       VALUES (:path, :mid, NULL, NULL, :verdict, 'milestone-validation', :content, :created_at)`,
-    ).run({
-      ":path": validationPath,
-      ":mid": params.milestoneId,
-      ":verdict": params.verdict,
-      ":content": validationMd,
-      ":created_at": validatedAt,
-    });
-  });
 
   invalidateStateCache();
   clearPathCache();

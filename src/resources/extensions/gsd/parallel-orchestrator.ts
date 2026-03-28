@@ -21,7 +21,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gsdRoot } from "./paths.js";
 import { createWorktree, worktreePath } from "./worktree-manager.js";
-import { autoWorktreeBranch, runWorktreePostCreateHook } from "./auto-worktree.js";
+import { autoWorktreeBranch, runWorktreePostCreateHook, syncGsdStateToWorktree } from "./auto-worktree.js";
 import { nativeBranchExists } from "./native-git-bridge.js";
 import { readIntegrationBranch } from "./git-service.js";
 import { resolveParallelConfig } from "./preferences.js";
@@ -196,7 +196,17 @@ function appendWorkerLog(basePath: string, milestoneId: string, chunk: string): 
 }
 
 function restoreRuntimeState(basePath: string): boolean {
-  if (state?.active) return true;
+  if (state?.active) {
+    // Verify at least one worker is alive — if all are in terminal states,
+    // the cached state is stale and we should fall through to cleanup.
+    const hasLiveWorker = [...state.workers.values()].some(
+      (w) => w.state !== "error" && w.state !== "stopped",
+    );
+    if (hasLiveWorker) return true;
+
+    // All workers dead — clear stale state so restoreState() can clean up.
+    state = null;
+  }
 
   const restored = restoreState(basePath);
   if (restored && restored.workers.length > 0) {
@@ -497,6 +507,11 @@ function createMilestoneWorktree(basePath: string, milestoneId: string): string 
   // Run post-create hook if configured
   runWorktreePostCreateHook(basePath, info.path);
 
+  // Copy .gsd/ planning artifacts (milestones, CONTEXT, ROADMAP, etc.) from the
+  // project root into the worktree. Without this, workers for newly-planned
+  // milestones can't find their roadmap and exit immediately (#2184 Bug 4).
+  syncGsdStateToWorktree(basePath, info.path);
+
   return info.path;
 }
 
@@ -504,8 +519,19 @@ function createMilestoneWorktree(basePath: string, milestoneId: string): string 
 
 /**
  * Spawn a worker process for a milestone.
- * The worker runs `gsd --print "/gsd auto"` in the milestone's worktree
+ * The worker runs `gsd headless --json auto` in the milestone's worktree
  * with GSD_MILESTONE_LOCK set to isolate state derivation.
+ *
+ * IMPORTANT: We use `headless --json auto` instead of `--print "/gsd auto"`.
+ * --print mode calls session.prompt() which returns immediately after the
+ * extension command handler fires, because auto-mode's ctx.newSession()
+ * resets the session and unblocks the outer prompt() await. This causes
+ * process.exit(0) to fire before any LLM work happens. See #2792.
+ *
+ * The headless subcommand uses an RPC client that keeps the process alive
+ * until auto-mode emits a terminal notification or the idle timer fires.
+ * It outputs NDJSON events to stdout (with --json), which our
+ * processWorkerLine() parser already understands.
  */
 export function spawnWorker(
   basePath: string,
@@ -522,7 +548,7 @@ export function spawnWorker(
 
   let child: ChildProcess;
   try {
-    child = spawn(process.execPath, [binPath, "--mode", "json", "--print", "/gsd auto"], {
+    child = spawn(process.execPath, [binPath, "headless", "--json", "auto"], {
       cwd: worker.worktreePath,
       env: {
         ...process.env,
@@ -562,9 +588,10 @@ export function spawnWorker(
   }
 
   // ── NDJSON stdout monitoring ────────────────────────────────────────
-  // Workers run with --mode json, emitting one JSON event per line.
-  // We parse message_end events to extract cost/token usage, keeping
-  // the coordinator's cost tracking in sync with actual API spend.
+  // Workers run via `headless --json`, which forwards all RPC events
+  // as NDJSON to stdout. We parse message_end events to extract
+  // cost/token usage, keeping the coordinator's cost tracking in sync
+  // with actual API spend.
   if (child.stdout) {
     let stdoutBuffer = "";
     child.stdout.on("data", (data: Buffer) => {
@@ -793,7 +820,12 @@ export async function stopParallel(
       } catch { /* process may already be dead */ }
     }
 
-    const exitedAfterTerm = await waitForWorkerExit(worker, 750);
+    // Wait for the headless process to cascade SIGTERM to its RPC child.
+    // The headless signal handler calls client.stop() which sends SIGTERM
+    // to the RPC child and waits up to 1000ms. The previous 750ms window
+    // was insufficient — the parent got SIGKILL before the child died,
+    // leaving orphaned RPC processes holding auto.lock. See #2798.
+    const exitedAfterTerm = await waitForWorkerExit(worker, 3000);
     if (!exitedAfterTerm && worker.pid > 0) {
       try {
         if (worker.process) {
@@ -930,6 +962,18 @@ export function refreshWorkerStatuses(
   state.totalCost = 0;
   for (const worker of state.workers.values()) {
     state.totalCost += worker.cost;
+  }
+
+  // If all workers are in a terminal state (error/stopped), the orchestration
+  // is finished — deactivate and clean up so zombie workers don't persist.
+  const allDead = [...state.workers.values()].every(
+    (w) => w.state === "error" || w.state === "stopped",
+  );
+  if (allDead) {
+    state.active = false;
+    removeStateFile(basePath);
+    state = null;
+    return;
   }
 
   // Persist updated state for crash recovery

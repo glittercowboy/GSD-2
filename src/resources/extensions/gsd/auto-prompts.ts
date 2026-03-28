@@ -87,6 +87,11 @@ function buildSourceFilePaths(
     paths.push(`- **Decisions**: \`${relGsdRootFile("DECISIONS")}\``);
   }
 
+  const queuePath = resolveGsdRootFile(base, "QUEUE");
+  if (existsSync(queuePath)) {
+    paths.push(`- **Queue**: \`${relGsdRootFile("QUEUE")}\``);
+  }
+
   const contextPath = resolveMilestoneFile(base, mid, "CONTEXT");
   if (contextPath) {
     paths.push(`- **Milestone Context**: \`${relMilestoneFile(base, mid, "CONTEXT")}\``);
@@ -914,6 +919,16 @@ export async function buildPlanMilestonePrompt(mid: string, midTitle: string, ba
     if (requirementsInline) inlined.push(requirementsInline);
     const decisionsInline = await inlineDecisionsFromDb(base, mid, undefined, inlineLevel);
     if (decisionsInline) inlined.push(decisionsInline);
+  }
+  const queuePath = resolveGsdRootFile(base, "QUEUE");
+  if (existsSync(queuePath)) {
+    const queueInline = await inlineFileSmart(
+      queuePath,
+      relGsdRootFile("QUEUE"),
+      "Project Queue",
+      `${mid} ${midTitle}`,
+    );
+    inlined.push(queueInline);
   }
   const knowledgeInlinePM = await inlineGsdRootFile(base, "knowledge.md", "Project Knowledge");
   if (knowledgeInlinePM) inlined.push(knowledgeInlinePM);

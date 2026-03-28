@@ -1,9 +1,9 @@
 {
   "name": "gsd-2",
   "displayName": "GSD-2",
-  "description": "VS Code integration for the GSD-2 coding agent — sidebar dashboard, @gsd chat participant, and 15 commands",
+  "description": "VS Code integration for the GSD-2 coding agent — sidebar dashboard, @gsd chat participant, activity feed, conversation history, code lens, session forking, slash command completion, workflow controls, and 33 commands",
   "publisher": "FluxLabs",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "icon": "logo.jpg",
   "license": "MIT",
   "repository": {
@@ -102,6 +102,72 @@
       {
         "command": "gsd.listCommands",
         "title": "GSD: List Available Commands"
+      },
+      {
+        "command": "gsd.toggleAutoRetry",
+        "title": "GSD: Toggle Auto-Retry"
+      },
+      {
+        "command": "gsd.abortRetry",
+        "title": "GSD: Abort Retry"
+      },
+      {
+        "command": "gsd.setSessionName",
+        "title": "GSD: Set Session Name"
+      },
+      {
+        "command": "gsd.copyLastResponse",
+        "title": "GSD: Copy Last Response"
+      },
+      {
+        "command": "gsd.switchSession",
+        "title": "GSD: Switch Session"
+      },
+      {
+        "command": "gsd.refreshSessions",
+        "title": "GSD: Refresh Sessions",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "gsd.clearFileDecorations",
+        "title": "GSD: Clear File Decorations"
+      },
+      {
+        "command": "gsd.showHistory",
+        "title": "GSD: Show Conversation History"
+      },
+      {
+        "command": "gsd.askAboutSymbol",
+        "title": "GSD: Ask About Symbol"
+      },
+      {
+        "command": "gsd.clearActivity",
+        "title": "GSD: Clear Activity Feed",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "gsd.forkSession",
+        "title": "GSD: Fork Session"
+      },
+      {
+        "command": "gsd.toggleSteeringMode",
+        "title": "GSD: Toggle Steering Mode"
+      },
+      {
+        "command": "gsd.toggleFollowUpMode",
+        "title": "GSD: Toggle Follow-Up Mode"
+      },
+      {
+        "command": "gsd.refactorSymbol",
+        "title": "GSD: Refactor Symbol"
+      },
+      {
+        "command": "gsd.findBugsSymbol",
+        "title": "GSD: Find Bugs in Symbol"
+      },
+      {
+        "command": "gsd.generateTestsSymbol",
+        "title": "GSD: Generate Tests for Symbol"
       }
     ],
     "keybindings": [
@@ -119,6 +185,21 @@
         "command": "gsd.cycleThinking",
         "key": "ctrl+shift+g ctrl+shift+t",
         "mac": "cmd+shift+g cmd+shift+t"
+      },
+      {
+        "command": "gsd.abort",
+        "key": "ctrl+shift+g ctrl+shift+a",
+        "mac": "cmd+shift+g cmd+shift+a"
+      },
+      {
+        "command": "gsd.steer",
+        "key": "ctrl+shift+g ctrl+shift+i",
+        "mac": "cmd+shift+g cmd+shift+i"
+      },
+      {
+        "command": "gsd.sendMessage",
+        "key": "ctrl+shift+g ctrl+shift+p",
+        "mac": "cmd+shift+g cmd+shift+p"
       }
     ],
     "viewsContainers": {
@@ -136,6 +217,28 @@
           "type": "webview",
           "id": "gsd-sidebar",
           "name": "GSD Agent"
+        },
+        {
+          "id": "gsd-sessions",
+          "name": "Sessions"
+        },
+        {
+          "id": "gsd-activity",
+          "name": "Activity"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "gsd.refreshSessions",
+          "when": "view == gsd-sessions",
+          "group": "navigation"
+        },
+        {
+          "command": "gsd.clearActivity",
+          "when": "view == gsd-activity",
+          "group": "navigation"
         }
       ]
     },
@@ -165,6 +268,35 @@
           "type": "boolean",
           "default": true,
           "description": "Enable automatic context compaction"
+        },
+        "gsd.codeLens": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show 'Ask GSD' code lens above functions and classes"
+        },
+        "gsd.showProgressNotifications": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show progress notification while the agent is working"
+        },
+        "gsd.activityFeedMaxItems": {
+          "type": "number",
+          "default": 100,
+          "minimum": 10,
+          "maximum": 500,
+          "description": "Maximum number of items shown in the Activity feed"
+        },
+        "gsd.showContextWarning": {
+          "type": "boolean",
+          "default": true,
+          "description": "Warn when context window usage exceeds the threshold"
+        },
+        "gsd.contextWarningThreshold": {
+          "type": "number",
+          "default": 80,
+          "minimum": 50,
+          "maximum": 95,
+          "description": "Context window usage percentage that triggers a warning"
         }
       }
     }

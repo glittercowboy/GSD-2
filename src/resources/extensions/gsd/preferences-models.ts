@@ -56,15 +56,27 @@ export function resolveModelWithFallbacksForUnit(unitType: string): ResolvedMode
     case "replan-slice":
       phaseConfig = m.planning;
       break;
+    case "discuss-milestone":
+    case "discuss-slice":
+      phaseConfig = m.discuss ?? m.planning;
+      break;
     case "execute-task":
+    case "reactive-execute":
       phaseConfig = m.execution;
       break;
     case "execute-task-simple":
       phaseConfig = m.execution_simple ?? m.execution;
       break;
     case "complete-slice":
+    case "complete-milestone":
     case "run-uat":
       phaseConfig = m.completion;
+      break;
+    case "reassess-roadmap":
+    case "rewrite-docs":
+    case "gate-evaluate":
+    case "validate-milestone":
+      phaseConfig = m.validation ?? m.planning;
       break;
     default:
       // Subagent unit types (e.g., "subagent", "subagent/scout")
@@ -123,18 +135,6 @@ export function getNextFallbackModel(
   if (!foundCurrent) {
     return modelsToTry[0];
   }
-}
-
-/**
- * Detect whether an error message indicates a transient network error
- * (worth retrying the same model) vs a permanent provider error
- * (auth failure, quota exceeded, etc. -- should fall back immediately).
- */
-export function isTransientNetworkError(errorMsg: string): boolean {
-  if (!errorMsg) return false;
-  const hasNetworkSignal = /network|ECONNRESET|ETIMEDOUT|ECONNREFUSED|socket hang up|fetch failed|connection.*reset|dns/i.test(errorMsg);
-  const hasPermanentSignal = /auth|unauthorized|forbidden|invalid.*key|quota|billing/i.test(errorMsg);
-  return hasNetworkSignal && !hasPermanentSignal;
 }
 
 /**
@@ -308,7 +308,7 @@ export function resolveContextSelection(): import("./types.js").ContextSelection
 }
 
 /**
- * Resolve the search provider preference from preferences.md.
+ * Resolve the search provider preference from PREFERENCES.md.
  * Returns undefined if not configured (caller falls back to existing behavior).
  */
 export function resolveSearchProviderFromPreferences(): GSDPreferences["search_provider"] | undefined {

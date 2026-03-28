@@ -71,6 +71,16 @@ export async function runUnit(
     return { status: "cancelled" };
   }
 
+  if (s.currentUnitModel && typeof pi.setModel === "function") {
+    const restored = await pi.setModel(s.currentUnitModel, { persist: false });
+    if (!restored) {
+      ctx.ui.notify(
+        `Failed to restore ${s.currentUnitModel.provider}/${s.currentUnitModel.id} after session creation. Using session default.`,
+        "warning",
+      );
+    }
+  }
+
   // ── Create the agent_end promise (per-unit one-shot) ──
   // This happens after newSession completes so session-switch agent_end events
   // from the previous session cannot resolve the new unit.

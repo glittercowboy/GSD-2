@@ -37,6 +37,7 @@ const UNIT_TYPE_TIERS: Record<string, ComplexityTier> = {
 
   // Tier 2 — Standard: research, routine planning, discussion
   "discuss-milestone": "standard",
+  "discuss-slice": "standard",
   "research-milestone": "standard",
   "research-slice": "standard",
   "plan-milestone": "standard",

@@ -13,7 +13,7 @@
  * research identified as critical for skill quality.
  */
 
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import type { UnitMetrics, MetricsLedger } from "./metrics.js";
@@ -210,7 +210,7 @@ export function formatSkillDetail(basePath: string, skillName: string): string {
   // Check for SKILL.md existence
   const skillPath = join(homedir(), ".agents", "skills", skillName, "SKILL.md");
   if (existsSync(skillPath)) {
-    const stat = require("node:fs").statSync(skillPath);
+    const stat = statSync(skillPath);
     lines.push("");
     lines.push(`SKILL.md: ${skillPath}`);
     lines.push(`Last modified: ${stat.mtime.toISOString().slice(0, 10)}`);

@@ -318,6 +318,32 @@ export interface VercelGatewayRouting {
 	order?: string[];
 }
 
+/**
+ * Provider-agnostic capability declarations for a model.
+ *
+ * These fields allow models to self-declare supported features so that call
+ * sites can read from metadata rather than pattern-matching on model IDs or
+ * provider names. Add fields here as new cross-provider capabilities emerge.
+ */
+export interface ModelCapabilities {
+	/** Whether the model supports xhigh thinking level. */
+	supportsXhigh?: boolean;
+	/**
+	 * Whether tool call IDs must be included and normalised in tool results for
+	 * this model. Relevant for models deployed cross-provider (e.g. Claude or
+	 * GPT variants via Google APIs) where the host API imposes stricter ID rules.
+	 */
+	requiresToolCallId?: boolean;
+	/** Whether OpenAI-style service tiers (priority/flex) apply to this model. */
+	supportsServiceTier?: boolean;
+	/**
+	 * Approximate characters per token for this model.
+	 * Used as a fallback when an accurate tokenizer is unavailable.
+	 * If omitted, the provider-level default is used.
+	 */
+	charsPerToken?: number;
+}
+
 // Model interface for the unified model system
 export interface Model<TApi extends Api> {
 	id: string;
@@ -342,4 +368,9 @@ export interface Model<TApi extends Api> {
 		: TApi extends "openai-responses"
 			? OpenAIResponsesCompat
 			: never;
+	/**
+	 * Provider-agnostic capability declarations for this model.
+	 * Read these fields instead of pattern-matching on model IDs or provider names.
+	 */
+	capabilities?: ModelCapabilities;
 }

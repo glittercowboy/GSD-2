@@ -74,7 +74,7 @@ function enqueueSidecar(
  *  Auto-commit is skipped for these — their state files are picked up by the
  *  next actual task commit via `smartStage()`. */
 const LIFECYCLE_ONLY_UNITS = new Set([
-  "research-milestone", "discuss-milestone", "plan-milestone",
+  "research-milestone", "discuss-milestone", "discuss-slice", "plan-milestone",
   "validate-milestone", "research-slice", "plan-slice",
   "replan-slice", "complete-slice", "run-uat",
   "reassess-roadmap", "rewrite-docs",

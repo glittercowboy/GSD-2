@@ -36,6 +36,7 @@ import {
 
 import { findMilestoneIds } from './milestone-ids.js';
 import { loadQueueOrder, sortByQueueOrder } from './queue-order.js';
+import { isClosedStatus } from './status-guards.js';
 import { nativeBatchParseGsdFiles, type BatchParsedFile } from './native-parser-bridge.js';
 
 import { join, resolve } from 'path';
@@ -89,18 +90,13 @@ export function isMilestoneComplete(roadmap: Roadmap): boolean {
 }
 
 /**
- * Check whether a VALIDATION file's verdict is terminal (pass or needs-attention).
- * A non-terminal verdict (needs-remediation) means validation must re-run
- * after remediation slices are executed.
+ * Check whether a VALIDATION file's verdict is terminal.
+ * Any successfully extracted verdict (pass, needs-attention, needs-remediation,
+ * fail, etc.) means validation completed. Only return false when no verdict
+ * could be parsed — i.e. extractVerdict() returns undefined (#2769).
  */
 export function isValidationTerminal(validationContent: string): boolean {
-  const v = extractVerdict(validationContent);
-  if (!v) return false;
-  // 'pass' and 'needs-attention' are always terminal.
-  // 'needs-remediation' is treated as terminal to prevent infinite loops
-  // when no remediation slices exist in the roadmap (#832). The validation
-  // report is preserved on disk for manual review.
-  return v === 'pass' || v === 'needs-attention' || v === 'needs-remediation';
+  return extractVerdict(validationContent) != null;
 }
 
 // ─── State Derivation ──────────────────────────────────────────────────────
@@ -211,7 +207,24 @@ export async function deriveState(basePath: string): Promise<GSDState> {
 
   // Dual-path: try DB-backed derivation first when hierarchy tables are populated
   if (isDbAvailable()) {
-    const dbMilestones = getAllMilestones();
+    let dbMilestones = getAllMilestones();
+
+    // Disk→DB reconciliation (#2631): when the milestones table is empty
+    // (e.g. failed initial migration per #2529), the reconciliation code
+    // inside deriveStateFromDb is unreachable. Populate from disk here so
+    // the DB path activates correctly.
+    if (dbMilestones.length === 0) {
+      const diskIds = findMilestoneIds(basePath);
+      let synced = false;
+      for (const diskId of diskIds) {
+        if (!isGhostMilestone(basePath, diskId)) {
+          insertMilestone({ id: diskId, status: 'active' });
+          synced = true;
+        }
+      }
+      if (synced) dbMilestones = getAllMilestones();
+    }
+
     if (dbMilestones.length > 0) {
       const stopDbTimer = debugTime("derive-state-db");
       result = await deriveStateFromDb(basePath);
@@ -254,13 +267,6 @@ function extractContextTitle(content: string | null, fallback: string): string {
 }
 
 // ─── DB-backed State Derivation ────────────────────────────────────────────
-
-/**
- * Helper: check if a DB status counts as "done" (handles K002 ambiguity).
- */
-function isStatusDone(status: string): boolean {
-  return status === 'complete' || status === 'done';
-}
 
 /**
  * Derive GSD state from the milestones/slices/tasks DB tables.
@@ -351,7 +357,7 @@ export async function deriveStateFromDb(basePath: string): Promise<GSDState> {
       continue;
     }
 
-    if (isStatusDone(m.status)) {
+    if (isClosedStatus(m.status)) {
       completeMilestoneIds.add(m.id);
       continue;
     }
@@ -365,7 +371,7 @@ export async function deriveStateFromDb(basePath: string): Promise<GSDState> {
 
     // Check roadmap: all slices done means milestone is complete
     const slices = getMilestoneSlices(m.id);
-    if (slices.length > 0 && slices.every(s => isStatusDone(s.status))) {
+    if (slices.length > 0 && slices.every(s => isClosedStatus(s.status))) {
       // All slices done but no summary — still counts as complete for dep resolution
       // if a summary file exists
       // Note: without summary file, the milestone is in validating/completing state, not complete
@@ -387,7 +393,7 @@ export async function deriveStateFromDb(basePath: string): Promise<GSDState> {
 
     // Ghost milestone check: no slices in DB AND no substantive files on disk
     const slices = getMilestoneSlices(m.id);
-    if (slices.length === 0 && !isStatusDone(m.status)) {
+    if (slices.length === 0 && !isClosedStatus(m.status)) {
       // Check disk for ghost detection
       if (isGhostMilestone(basePath, m.id)) continue;
     }
@@ -410,7 +416,7 @@ export async function deriveStateFromDb(basePath: string): Promise<GSDState> {
     }
 
     // Not complete — determine if it should be active
-    const allSlicesDone = slices.length > 0 && slices.every(s => isStatusDone(s.status));
+    const allSlicesDone = slices.length > 0 && slices.every(s => isClosedStatus(s.status));
 
     // Get title — prefer DB, fall back to context file extraction
     let title = stripMilestonePrefix(m.title) || m.id;
@@ -562,7 +568,10 @@ export async function deriveStateFromDb(basePath: string): Promise<GSDState> {
   }
 
   // ── All slices done → validating/completing ─────────────────────────
-  const allSlicesDone = activeMilestoneSlices.every(s => isStatusDone(s.status));
+  // Guard: [].every() === true (vacuous truth). Without the length check,
+  // an empty slice array causes a premature phase transition to
+  // validating-milestone. See: https://github.com/gsd-build/gsd-2/issues/2667
+  const allSlicesDone = activeMilestoneSlices.length > 0 && activeMilestoneSlices.every(s => isClosedStatus(s.status));
   if (allSlicesDone) {
     const validationFile = resolveMilestoneFile(basePath, activeMilestone.id, "VALIDATION");
     const validationContent = validationFile ? await loadFile(validationFile) : null;
@@ -595,19 +604,19 @@ export async function deriveStateFromDb(basePath: string): Promise<GSDState> {
 
   // ── Find active slice (first incomplete with deps satisfied) ─────────
   const sliceProgress = {
-    done: activeMilestoneSlices.filter(s => isStatusDone(s.status)).length,
+    done: activeMilestoneSlices.filter(s => isClosedStatus(s.status)).length,
     total: activeMilestoneSlices.length,
   };
 
   const doneSliceIds = new Set(
-    activeMilestoneSlices.filter(s => isStatusDone(s.status)).map(s => s.id)
+    activeMilestoneSlices.filter(s => isClosedStatus(s.status)).map(s => s.id)
   );
 
   let activeSlice: ActiveRef | null = null;
   let activeSliceRow: SliceRow | null = null;
 
   for (const s of activeMilestoneSlices) {
-    if (isStatusDone(s.status)) continue;
+    if (isClosedStatus(s.status)) continue;
     if (s.depends.every(dep => doneSliceIds.has(dep))) {
       activeSlice = { id: s.id, title: s.title };
       activeSliceRow = s;
@@ -650,7 +659,7 @@ export async function deriveStateFromDb(basePath: string): Promise<GSDState> {
   // causing the dispatcher to re-dispatch the same completed task forever.
   let reconciled = false;
   for (const t of tasks) {
-    if (isStatusDone(t.status)) continue;
+    if (isClosedStatus(t.status)) continue;
     const summaryPath = resolveTaskFile(basePath, activeMilestone.id, activeSlice.id, t.id, "SUMMARY");
     if (summaryPath && existsSync(summaryPath)) {
       try {
@@ -673,11 +682,11 @@ export async function deriveStateFromDb(basePath: string): Promise<GSDState> {
   }
 
   const taskProgress = {
-    done: tasks.filter(t => isStatusDone(t.status)).length,
+    done: tasks.filter(t => isClosedStatus(t.status)).length,
     total: tasks.length,
   };
 
-  const activeTaskRow = tasks.find(t => !isStatusDone(t.status));
+  const activeTaskRow = tasks.find(t => !isClosedStatus(t.status));
 
   if (!activeTaskRow && tasks.length > 0) {
     // All tasks done but slice not marked complete → summarizing
@@ -738,7 +747,7 @@ export async function deriveStateFromDb(basePath: string): Promise<GSDState> {
   }
 
   // ── Blocker detection: check completed tasks for blocker_discovered ──
-  const completedTasks = tasks.filter(t => isStatusDone(t.status));
+  const completedTasks = tasks.filter(t => isClosedStatus(t.status));
   let blockerTaskId: string | null = null;
   for (const ct of completedTasks) {
     if (ct.blocker_discovered) {

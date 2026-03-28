@@ -65,6 +65,8 @@ import {
 } from "./native-git-bridge.js";
 
 const gsdHome = process.env.GSD_HOME || join(homedir(), ".gsd");
+const PROJECT_PREFERENCES_FILE = "PREFERENCES.md";
+const LEGACY_PROJECT_PREFERENCES_FILE = "preferences.md";
 
 // ─── Shared Constants & Helpers ─────────────────────────────────────────────
 
@@ -82,6 +84,10 @@ const ROOT_STATE_FILES = [
   "QUEUE.md",
   "completed-units.json",
   "metrics.json",
+  // NOTE: project preferences are intentionally NOT in ROOT_STATE_FILES.
+  // Forward-sync (main → worktree) is handled explicitly in syncGsdStateToWorktree().
+  // Back-sync (worktree → main) must NEVER overwrite the project root's copy
+  // because the project root is authoritative for preferences (#2684).
 ] as const;
 
 /**
@@ -153,6 +159,25 @@ function clearProjectRootStateFiles(basePath: string, milestoneId: string): void
   }
 }
 
+// ─── Build Artifact Auto-Resolve ─────────────────────────────────────────────
+
+/** Patterns for machine-generated build artifacts that can be safely
+ * auto-resolved by accepting --theirs during merge. These files are
+ * regenerable and never contain meaningful manual edits. */
+export const SAFE_AUTO_RESOLVE_PATTERNS: RegExp[] = [
+  /\.tsbuildinfo$/,
+  /\.pyc$/,
+  /\/__pycache__\//,
+  /\.DS_Store$/,
+  /\.map$/,
+];
+
+/** Returns true if the file path is safe to auto-resolve during merge.
+ * Covers `.gsd/` state files and common build artifacts. */
+export const isSafeToAutoResolve = (filePath: string): boolean =>
+  filePath.startsWith(".gsd/") ||
+  SAFE_AUTO_RESOLVE_PATTERNS.some((re) => re.test(filePath));
+
 // ─── Dispatch-Level Sync (project root ↔ worktree) ──────────────────────────
 
 /**
@@ -172,6 +197,11 @@ export function syncProjectRootToWorktree(
 
   const prGsd = join(projectRoot, ".gsd");
   const wtGsd = join(worktreePath_, ".gsd");
+
+  // When .gsd is a symlink to the same external directory in both locations,
+  // cpSync rejects the copy because source === destination (ERR_FS_CP_EINVAL).
+  // Compare realpaths and skip when they resolve to the same physical path (#2184).
+  if (isSamePath(prGsd, wtGsd)) return;
 
   // Copy milestone directory from project root to worktree — additive only.
   // force:false prevents cpSync from overwriting existing worktree files.
@@ -221,6 +251,11 @@ export function syncStateToProjectRoot(
 
   const wtGsd = join(worktreePath_, ".gsd");
   const prGsd = join(projectRoot, ".gsd");
+
+  // When .gsd is a symlink to the same external directory in both locations,
+  // cpSync rejects the copy because source === destination (ERR_FS_CP_EINVAL).
+  // Compare realpaths and skip when they resolve to the same physical path (#2184).
+  if (isSamePath(wtGsd, prGsd)) return;
 
   // 1. STATE.md — the quick-glance status used by initial deriveState()
   safeCopy(join(wtGsd, "STATE.md"), join(prGsd, "STATE.md"), { force: true });
@@ -412,6 +447,29 @@ export function syncGsdStateToWorktree(
         synced.push(f);
       } catch {
         /* non-fatal */
+      }
+    }
+  }
+
+  // Forward-sync project preferences from project root to worktree (additive only).
+  // Prefer the canonical uppercase file name, but keep the legacy lowercase
+  // fallback so older repos still work on case-sensitive filesystems.
+  {
+    const worktreeHasPreferences = existsSync(join(wtGsd, PROJECT_PREFERENCES_FILE))
+      || existsSync(join(wtGsd, LEGACY_PROJECT_PREFERENCES_FILE));
+    if (!worktreeHasPreferences) {
+      for (const file of [PROJECT_PREFERENCES_FILE, LEGACY_PROJECT_PREFERENCES_FILE] as const) {
+        const src = join(mainGsd, file);
+        const dst = join(wtGsd, file);
+        if (existsSync(src)) {
+          try {
+            cpSync(src, dst);
+            synced.push(file);
+          } catch {
+            /* non-fatal */
+          }
+          break;
+        }
       }
     }
   }
@@ -950,6 +1008,21 @@ function copyPlanningArtifacts(srcBase: string, wtPath: string): void {
     safeCopy(join(srcGsd, file), join(dstGsd, file), { force: true });
   }
 
+  // Seed canonical PREFERENCES.md when available; fall back to legacy lowercase.
+  if (existsSync(join(srcGsd, PROJECT_PREFERENCES_FILE))) {
+    safeCopy(
+      join(srcGsd, PROJECT_PREFERENCES_FILE),
+      join(dstGsd, PROJECT_PREFERENCES_FILE),
+      { force: true },
+    );
+  } else if (existsSync(join(srcGsd, LEGACY_PROJECT_PREFERENCES_FILE))) {
+    safeCopy(
+      join(srcGsd, LEGACY_PROJECT_PREFERENCES_FILE),
+      join(dstGsd, LEGACY_PROJECT_PREFERENCES_FILE),
+      { force: true },
+    );
+  }
+
   // Shared WAL (R012): worktrees use the project root's DB directly.
   // No longer copy gsd.db into the worktree — the DB path resolver in
   // ensureDbOpen() detects the worktree location and opens the root DB.
@@ -1191,12 +1264,17 @@ export function mergeMilestoneToMain(
   // 1. Auto-commit dirty state in worktree before leaving
   autoCommitDirtyState(worktreeCwd);
 
-  // Reconcile worktree DB into main DB before leaving worktree context
+  // Reconcile worktree DB into main DB before leaving worktree context.
+  // Skip when both paths resolve to the same physical file (shared WAL /
+  // symlink layout) — ATTACHing a WAL-mode file to itself corrupts the
+  // database (#2823).
   if (isDbAvailable()) {
     try {
       const worktreeDbPath = join(worktreeCwd, ".gsd", "gsd.db");
       const mainDbPath = join(originalBasePath_, ".gsd", "gsd.db");
-      reconcileWorktreeDb(mainDbPath, worktreeDbPath);
+      if (!isSamePath(worktreeDbPath, mainDbPath)) {
+        reconcileWorktreeDb(mainDbPath, worktreeDbPath);
+      }
     } catch {
       /* non-fatal */
     }
@@ -1387,30 +1465,30 @@ export function mergeMilestoneToMain(
         : nativeConflictFiles(originalBasePath_);
 
     if (conflictedFiles.length > 0) {
-      // Separate .gsd/ state file conflicts from real code conflicts.
-      // GSD state files (STATE.md, auto.lock, etc.)
-      // diverge between branches during normal operation — always prefer the
-      // milestone branch version since it has the latest execution state.
-      const gsdConflicts = conflictedFiles.filter((f) => f.startsWith(".gsd/"));
+      // Separate auto-resolvable conflicts (GSD state files + build artifacts)
+      // from real code conflicts. GSD state files diverge between branches
+      // during normal operation. Build artifacts are machine-generated and
+      // regenerable. Both are safe to accept from the milestone branch.
+      const autoResolvable = conflictedFiles.filter(isSafeToAutoResolve);
       const codeConflicts = conflictedFiles.filter(
-        (f) => !f.startsWith(".gsd/"),
+        (f) => !isSafeToAutoResolve(f),
       );
 
-      // Auto-resolve .gsd/ conflicts by accepting the milestone branch version
-      if (gsdConflicts.length > 0) {
-        for (const gsdFile of gsdConflicts) {
+      // Auto-resolve safe conflicts by accepting the milestone branch version
+      if (autoResolvable.length > 0) {
+        for (const safeFile of autoResolvable) {
           try {
-            nativeCheckoutTheirs(originalBasePath_, [gsdFile]);
-            nativeAddPaths(originalBasePath_, [gsdFile]);
+            nativeCheckoutTheirs(originalBasePath_, [safeFile]);
+            nativeAddPaths(originalBasePath_, [safeFile]);
           } catch {
             // If checkout --theirs fails, try removing the file from the merge
             // (it's a runtime file that shouldn't be committed anyway)
-            nativeRmForce(originalBasePath_, [gsdFile]);
+            nativeRmForce(originalBasePath_, [safeFile]);
           }
         }
       }
 
-      // If there are still non-.gsd conflicts, escalate
+      // If there are still real code conflicts, escalate
       if (codeConflicts.length > 0) {
         // Pop stash before throwing so local work is not lost (#2151).
         if (stashed) {
@@ -1459,7 +1537,47 @@ export function mergeMilestoneToMain(
         encoding: "utf-8",
       });
     } catch {
-      // Stash pop conflict is non-fatal — stash entry persists for manual resolution.
+      // Stash pop after squash merge can conflict on .gsd/ state files that
+      // diverged between branches.  Left unresolved, these UU entries block
+      // every subsequent merge.  Auto-resolve them the same way we handle
+      // .gsd/ conflicts during the merge itself: accept HEAD (the just-committed
+      // version) and drop the now-applied stash.
+      const uu = nativeConflictFiles(originalBasePath_);
+      const gsdUU = uu.filter((f) => f.startsWith(".gsd/"));
+      const nonGsdUU = uu.filter((f) => !f.startsWith(".gsd/"));
+
+      if (gsdUU.length > 0) {
+        for (const f of gsdUU) {
+          try {
+            // Accept the committed (HEAD) version of the state file
+            execFileSync("git", ["checkout", "HEAD", "--", f], {
+              cwd: originalBasePath_,
+              stdio: ["ignore", "pipe", "pipe"],
+              encoding: "utf-8",
+            });
+            nativeAddPaths(originalBasePath_, [f]);
+          } catch {
+            // Last resort: remove the conflicted state file
+            nativeRmForce(originalBasePath_, [f]);
+          }
+        }
+      }
+
+      if (nonGsdUU.length === 0) {
+        // All conflicts were .gsd/ files — safe to drop the stash
+        try {
+          execFileSync("git", ["stash", "drop"], {
+            cwd: originalBasePath_,
+            stdio: ["ignore", "pipe", "pipe"],
+            encoding: "utf-8",
+          });
+        } catch { /* stash may already be consumed */ }
+      } else {
+        // Non-.gsd conflicts remain — leave stash for manual resolution
+        logWarning("reconcile", "Stash pop conflict on non-.gsd files after merge", {
+          files: nonGsdUU.join(", "),
+        });
+      }
     }
   }
 

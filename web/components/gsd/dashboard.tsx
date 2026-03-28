@@ -1,5 +1,6 @@
 "use client"
 
+import { useEffect, useState, useCallback } from "react"
 import {
   Activity,
   Clock,
@@ -16,6 +17,7 @@ import {
   useGSDWorkspaceState,
   useGSDWorkspaceActions,
   buildPromptCommand,
+  buildProjectUrl,
   formatDuration,
   formatCost,
   formatTokens,
@@ -37,6 +39,8 @@ import {
 } from "@/components/gsd/loading-skeletons"
 import { ScopeBadge } from "@/components/gsd/scope-badge"
 import { ProjectWelcome } from "@/components/gsd/project-welcome"
+import { authFetch } from "@/lib/auth"
+import { type ProjectTotals } from "@/lib/visualizer-types"
 
 /** Interpolate progress bar color from red (0%) through yellow (50%) to green (100%) using oklch. */
 function getProgressColor(percent: number): string {
@@ -82,11 +86,11 @@ function MetricCard({ label, value, subtext, icon }: MetricCardProps) {
 function taskStatusIcon(status: ItemStatus) {
   switch (status) {
     case "done":
-      return <CheckCircle2 className="h-4 w-4 text-foreground/70" />
+      return <CheckCircle2 className="h-4 w-4 text-muted-foreground" />
     case "in-progress":
       return <Play className="h-4 w-4 text-foreground" />
     case "pending":
-      return <Circle className="h-4 w-4 text-muted-foreground/50" />
+      return <Circle className="h-4 w-4 text-muted-foreground" />
   }
 }
 
@@ -114,10 +118,40 @@ export function Dashboard({ onSwitchView, onExpandTerminal }: DashboardProps = {
   const auto = getLiveAutoDashboard(state)
   const bridge = boot?.bridge ?? null
   const freshness = state.live.freshness
+  const projectCwd = boot?.project.cwd
 
-  const elapsed = auto?.elapsed ?? 0
-  const totalCost = auto?.totalCost ?? 0
-  const totalTokens = auto?.totalTokens ?? 0
+  // ── Project-level totals from visualizer API ──
+  // Provides fallback metrics when auto-mode is not active (#2709).
+  // Same polling pattern as status-bar.tsx.
+  const [projectTotals, setProjectTotals] = useState<ProjectTotals | null>(null)
+
+  const fetchProjectTotals = useCallback(async () => {
+    try {
+      const resp = await authFetch(buildProjectUrl("/api/visualizer", projectCwd))
+      if (!resp.ok) return
+      const json = await resp.json()
+      if (json.totals) setProjectTotals(json.totals)
+    } catch {
+      // Silently ignore — dashboard metrics are non-critical
+    }
+  }, [projectCwd])
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      void fetchProjectTotals()
+    }, 0)
+    const interval = window.setInterval(() => {
+      void fetchProjectTotals()
+    }, 30_000)
+    return () => {
+      window.clearTimeout(timeout)
+      window.clearInterval(interval)
+    }
+  }, [fetchProjectTotals])
+
+  const elapsed = projectTotals?.duration ?? auto?.elapsed ?? 0
+  const totalCost = projectTotals?.cost ?? auto?.totalCost ?? 0
+  const totalTokens = projectTotals?.tokens.total ?? auto?.totalTokens ?? 0
   const rtkSavings = auto?.rtkSavings ?? null
   const rtkEnabled = auto?.rtkEnabled === true
 
@@ -193,7 +227,7 @@ export function Dashboard({ onSwitchView, onExpandTerminal }: DashboardProps = {
           <h1 className="text-base md:text-lg font-semibold shrink-0">Dashboard</h1>
           {!isConnecting && scopeLabel && (
             <>
-              <span className="hidden sm:inline text-lg font-thin text-muted-foreground/40 select-none">/</span>
+              <span className="hidden sm:inline text-lg font-thin text-muted-foreground select-none">/</span>
               <span className="hidden sm:inline"><ScopeBadge label={scopeLabel} size="sm" /></span>
             </>
           )}
@@ -351,7 +385,7 @@ export function Dashboard({ onSwitchView, onExpandTerminal }: DashboardProps = {
                             {task.title}
                           </span>
                           {status === "in-progress" && (
-                            <span className="shrink-0 rounded-sm bg-foreground/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-foreground/70">
+                            <span className="shrink-0 rounded-sm bg-foreground/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                               active
                             </span>
                           )}

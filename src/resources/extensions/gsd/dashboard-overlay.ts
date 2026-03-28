@@ -29,6 +29,8 @@ import { runEnvironmentChecks, type EnvironmentCheckResult } from "./doctor-envi
 
 function unitLabel(type: string): string {
   switch (type) {
+    case "discuss-milestone":
+    case "discuss-slice": return "Discuss";
     case "research-milestone": return "Research";
     case "plan-milestone": return "Plan";
     case "research-slice": return "Research";

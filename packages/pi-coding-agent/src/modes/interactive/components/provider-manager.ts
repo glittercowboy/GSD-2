@@ -14,6 +14,7 @@ import {
 import type { AuthStorage } from "../../../core/auth-storage.js";
 import { getDiscoverableProviders } from "../../../core/model-discovery.js";
 import type { ModelRegistry } from "../../../core/model-registry.js";
+import { ModelsJsonWriter } from "../../../core/models-json-writer.js";
 import { theme } from "../theme/theme.js";
 import { rawKeyHint } from "./keybinding-hints.js";
 
@@ -39,6 +40,7 @@ export class ProviderManagerComponent extends Container implements Focusable {
 	private tui: TUI;
 	private authStorage: AuthStorage;
 	private modelRegistry: ModelRegistry;
+	private modelsJsonWriter: ModelsJsonWriter;
 	private onDone: () => void;
 	private onDiscover: (provider: string) => void;
 
@@ -54,6 +56,7 @@ export class ProviderManagerComponent extends Container implements Focusable {
 		this.tui = tui;
 		this.authStorage = authStorage;
 		this.modelRegistry = modelRegistry;
+		this.modelsJsonWriter = new ModelsJsonWriter(this.modelRegistry.modelsJsonPath);
 		this.onDone = onDone;
 		this.onDiscover = onDiscover;
 
@@ -64,7 +67,7 @@ export class ProviderManagerComponent extends Container implements Focusable {
 		// Hints
 		const hints = [
 			rawKeyHint("d", "discover"),
-			rawKeyHint("r", "remove auth"),
+			rawKeyHint("r", "remove"),
 			rawKeyHint("esc", "close"),
 		].join("  ");
 		this.addChild(new Text(hints, 0, 0));
@@ -102,6 +105,15 @@ export class ProviderManagerComponent extends Container implements Focusable {
 				supportsDiscovery: discoverableSet.has(name),
 				modelCount: providerModelCounts.get(name) ?? 0,
 			}));
+		this.clampSelectedIndex();
+	}
+
+	private clampSelectedIndex(): void {
+		if (this.providers.length === 0) {
+			this.selectedIndex = 0;
+			return;
+		}
+		this.selectedIndex = Math.min(this.selectedIndex, this.providers.length - 1);
 	}
 
 	private updateList(): void {
@@ -152,8 +164,10 @@ export class ProviderManagerComponent extends Container implements Focusable {
 			}
 		} else if (keyData === "r" || keyData === "R") {
 			const provider = this.providers[this.selectedIndex];
-			if (provider?.hasAuth) {
+			if (provider) {
 				this.authStorage.remove(provider.name);
+				this.modelsJsonWriter.removeProvider(provider.name);
+				this.modelRegistry.refresh();
 				this.loadProviders();
 				this.updateList();
 				this.tui.requestRender();

@@ -79,11 +79,17 @@ function makeMockCtx() {
  */
 function makeMockPi() {
   const calls: unknown[] = [];
+  const setModelCalls: unknown[] = [];
   return {
     sendMessage: (...args: unknown[]) => {
       calls.push(args);
     },
+    setModel: async (...args: unknown[]) => {
+      setModelCalls.push(args);
+      return true;
+    },
     calls,
+    setModelCalls,
   } as any;
 }
 
@@ -224,6 +230,38 @@ test("runUnit only arms resolve after newSession completes", async () => {
 
   const result = await resultPromise;
   assert.equal(result.status, "completed");
+  assert.equal(pi.calls.length, 1);
+});
+
+test("runUnit re-applies the selected unit model after newSession before dispatch", async () => {
+  _resetPendingResolve();
+
+  const callOrder: string[] = [];
+  const ctx = makeMockCtx();
+  const pi = makeMockPi();
+  pi.setModel = async (...args: unknown[]) => {
+    callOrder.push("setModel");
+    pi.setModelCalls.push(args);
+    return true;
+  };
+  pi.sendMessage = (...args: unknown[]) => {
+    callOrder.push("sendMessage");
+    pi.calls.push(args);
+  };
+
+  const s = makeMockSession();
+  s.currentUnitModel = { provider: "anthropic", id: "claude-opus-4-6" };
+
+  const resultPromise = runUnit(ctx, pi, s, "task", "T01", "prompt");
+
+  await new Promise((r) => setTimeout(r, 10));
+  resolveAgentEnd(makeEvent());
+
+  const result = await resultPromise;
+  assert.equal(result.status, "completed");
+  assert.deepEqual(callOrder, ["setModel", "sendMessage"]);
+  assert.equal(pi.setModelCalls.length, 1);
+  assert.deepEqual(pi.setModelCalls[0][0], s.currentUnitModel);
   assert.equal(pi.calls.length, 1);
 });
 
@@ -372,7 +410,7 @@ function makeMockDeps(
     captureAvailableSkills: () => {},
     ensurePreconditions: () => {},
     updateSliceProgressCache: () => {},
-    selectAndApplyModel: async () => ({ routing: null }),
+    selectAndApplyModel: async () => ({ routing: null, appliedModel: null }),
     startUnitSupervision: () => {},
     getDeepDiagnostic: () => null,
     isDbAvailable: () => false,
@@ -1192,6 +1230,24 @@ test("startAuto calls selfHealRuntimeRecords before autoLoop (#1727)", { skip: "
   assert.ok(
     secondLoopIdx === -1 || (secondHealIdx > -1 && secondHealIdx < secondLoopIdx),
     "if a second autoLoop call exists, it must also be preceded by selfHealRuntimeRecords",
+  );
+});
+
+test("startAuto guards against concurrent invocation (#2923)", () => {
+  const src = readFileSync(
+    resolve(import.meta.dirname, "..", "auto.ts"),
+    "utf-8",
+  );
+  const fnIdx = src.indexOf("export async function startAuto");
+  assert.ok(fnIdx > -1, "startAuto must exist in auto.ts");
+  // The guard must appear before any other logic in the function body
+  const fnBody = src.slice(fnIdx, fnIdx + 500);
+  const activeGuard = fnBody.indexOf("if (s.active)");
+  assert.ok(activeGuard > -1, "startAuto must check s.active to prevent concurrent auto-loops");
+  const returnIdx = fnBody.indexOf("return;", activeGuard);
+  assert.ok(
+    returnIdx > -1 && returnIdx < activeGuard + 120,
+    "s.active guard must early-return to prevent a second concurrent loop",
   );
 });
 

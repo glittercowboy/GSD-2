@@ -169,4 +169,29 @@ export const CUSTOM_MODELS = {
 			compat: { thinkingFormat: "zai", supportsDeveloperRole: false },
 		} satisfies Model<"openai-completions">,
 	},
+
+	// ─── Z.AI (GLM-5.1) ────────────────────────────────────────────────
+	// GLM-5.1 is the latest GLM model from Zhipu AI, not yet in models.dev.
+	// Uses the Z.AI Coding Plan endpoint (OpenAI-compatible).
+	// Ref: https://docs.z.ai/devpack/using5.1
+	"zai": {
+		"glm-5.1": {
+			id: "glm-5.1",
+			name: "GLM-5.1",
+			api: "openai-completions",
+			provider: "zai",
+			baseUrl: "https://api.z.ai/api/coding/paas/v4",
+			reasoning: true,
+			input: ["text"],
+			cost: {
+				input: 1,
+				output: 3.2,
+				cacheRead: 0.2,
+				cacheWrite: 0,
+			},
+			contextWindow: 204800,
+			maxTokens: 131072,
+			compat: { thinkingFormat: "zai", supportsDeveloperRole: false },
+		} satisfies Model<"openai-completions">,
+	},
 } as const;

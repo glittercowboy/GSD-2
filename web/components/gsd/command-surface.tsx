@@ -224,7 +224,7 @@ function SectionHeader({
   return (
     <div className="flex items-center justify-between gap-3 pb-4">
       <div className="flex items-center gap-2.5">
-        <h3 className="text-[13px] font-semibold uppercase tracking-[0.08em] text-foreground/70">{title}</h3>
+        <h3 className="text-[13px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">{title}</h3>
         {status}
       </div>
       {action}
@@ -290,7 +290,7 @@ function SegmentedControl<T extends string>({
   disabled?: boolean
 }) {
   return (
-    <div className="inline-flex rounded-lg border border-border/60 bg-card/30 p-0.5">
+    <div className="inline-flex rounded-lg border border-border bg-card/50 p-0.5">
       {options.map((opt) => (
         <button
           key={opt.value}
@@ -673,7 +673,7 @@ export function CommandSurface() {
         <div className="space-y-4">
           {Array.from(groupedModels.entries()).map(([provider, models]) => (
             <div key={provider}>
-              <div className="mb-1.5 px-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">
+              <div className="mb-1.5 px-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
                 {provider}
               </div>
               <div className="space-y-0.5">
@@ -720,10 +720,10 @@ export function CommandSurface() {
                       {/* Badges */}
                       <div className="flex shrink-0 items-center gap-1.5">
                         {model.isCurrent && (
-                          <span className="rounded bg-foreground/10 px-1.5 py-0.5 text-[10px] font-medium text-foreground/70">Active</span>
+                          <span className="rounded bg-foreground/10 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">Active</span>
                         )}
                         {model.reasoning && (
-                          <span className="rounded bg-foreground/10 px-1.5 py-0.5 text-[10px] font-medium text-foreground/70">Thinking</span>
+                          <span className="rounded bg-foreground/10 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">Thinking</span>
                         )}
                       </div>
                     </button>
@@ -738,7 +738,7 @@ export function CommandSurface() {
       )}
 
       {/* Apply */}
-      <div className="flex justify-end border-t border-border/40 pt-3">
+      <div className="flex justify-end border-t border-border/50 pt-3">
         <Button
           type="button"
           size="sm"
@@ -806,7 +806,7 @@ export function CommandSurface() {
         })}
       </div>
 
-      <div className="flex justify-end border-t border-border/40 pt-3">
+      <div className="flex justify-end border-t border-border/50 pt-3">
         <Button
           type="button"
           size="sm"
@@ -853,7 +853,7 @@ export function CommandSurface() {
         )}
       </div>
 
-      <div className="border-t border-border/30" />
+      <div className="border-t border-border/50" />
 
       {/* Follow-up mode */}
       <div className="space-y-3">
@@ -1029,7 +1029,7 @@ export function CommandSurface() {
               <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
               Loading diagnostics…
             </div>
-            <div className="flex flex-wrap gap-2 border-t border-border/30 pt-3" data-testid="command-surface-recovery-actions">
+            <div className="flex flex-wrap gap-2 border-t border-border/50 pt-3" data-testid="command-surface-recovery-actions">
               <Button
                 type="button"
                 variant="default"
@@ -1050,7 +1050,7 @@ export function CommandSurface() {
               <div className="text-sm font-medium text-foreground">{diag.summary.label}</div>
               <p className="text-xs text-muted-foreground">{diag.summary.detail}</p>
             </div>
-            <div className="flex flex-wrap gap-2 border-t border-border/30 pt-3" data-testid="command-surface-recovery-actions">
+            <div className="flex flex-wrap gap-2 border-t border-border/50 pt-3" data-testid="command-surface-recovery-actions">
               <Button
                 type="button"
                 variant="default"
@@ -1117,7 +1117,7 @@ export function CommandSurface() {
                       <Badge variant={issue.severity === "error" ? "destructive" : "outline"} className="text-[10px]">{issue.code}</Badge>
                     </div>
                     <p className="mt-1 text-xs text-muted-foreground">{issue.message}</p>
-                    {issue.suggestion && <p className="mt-0.5 text-[11px] text-muted-foreground/70">→ {issue.suggestion}</p>}
+                    {issue.suggestion && <p className="mt-0.5 text-[11px] text-muted-foreground">→ {issue.suggestion}</p>}
                   </div>
                 ))}
               </div>
@@ -1156,7 +1156,7 @@ export function CommandSurface() {
             )}
 
             {/* Actions */}
-            <div className="flex flex-wrap gap-2 border-t border-border/30 pt-3" data-testid="command-surface-recovery-actions">
+            <div className="flex flex-wrap gap-2 border-t border-border/50 pt-3" data-testid="command-surface-recovery-actions">
               {diag.actions.browser.length > 0 ? (
                 diag.actions.browser.map((action) => (
                   <Button
@@ -1179,7 +1179,7 @@ export function CommandSurface() {
             </div>
 
             {diag.actions.commands.length > 0 && (
-              <div className="space-y-2 border-t border-border/30 pt-3" data-testid="command-surface-recovery-commands">
+              <div className="space-y-2 border-t border-border/50 pt-3" data-testid="command-surface-recovery-commands">
                 <div className="text-xs font-medium text-muted-foreground">Suggested commands</div>
                 {diag.actions.commands.map((command) => (
                   <div key={command.command} className="rounded-lg border border-border/50 bg-card/50 px-3 py-2 text-xs">
@@ -1259,7 +1259,7 @@ export function CommandSurface() {
               <span className="font-mono">{shortenPath(result.project.repoRoot, 3)}</span>
               {result.project.repoRelativePath && (
                 <>
-                  <ChevronRight className="h-3 w-3 text-foreground/20" />
+                  <ChevronRight className="h-3 w-3 text-muted-foreground" />
                   <span className="font-mono">{result.project.repoRelativePath}</span>
                 </>
               )}
@@ -1275,15 +1275,15 @@ export function CommandSurface() {
               ].map(({ label, count, active, color }) => (
                 <div key={label} className={cn(
                   "rounded-md border px-2 py-2 text-center transition-colors",
-                  active ? "border-border/60 bg-card/80" : "border-border/30 bg-card/30",
+                  active ? "border-border bg-card" : "border-border/50 bg-card/50",
                 )}>
                   <div className={cn(
                     "text-base font-semibold tabular-nums leading-none",
-                    active ? color : "text-foreground/25",
+                    active ? color : "text-muted-foreground",
                   )}>{count}</div>
                   <div className={cn(
                     "mt-1.5 text-[10px] leading-none",
-                    active ? "text-muted-foreground" : "text-muted-foreground/50",
+                    active ? "text-muted-foreground" : "text-muted-foreground",
                   )}>{label}</div>
                 </div>
               ))}
@@ -1293,14 +1293,14 @@ export function CommandSurface() {
             {result.changedFiles.length > 0 && (
               <div data-testid="command-surface-git-files">
                 <div className="mb-2 flex items-center justify-between">
-                  <span className="text-[11px] font-medium uppercase tracking-[0.06em] text-muted-foreground/70">
+                  <span className="text-[11px] font-medium uppercase tracking-[0.06em] text-muted-foreground">
                     Changes
                   </span>
-                  <span className="text-[11px] tabular-nums text-muted-foreground/50">
+                  <span className="text-[11px] tabular-nums text-muted-foreground">
                     {result.changedFiles.length}{result.truncatedFileCount > 0 ? `+${result.truncatedFileCount}` : ""} files
                   </span>
                 </div>
-                <div className="space-y-px rounded-lg border border-border/40 bg-card/30 overflow-hidden">
+                <div className="space-y-px rounded-lg border border-border/50 bg-card/50 overflow-hidden">
                   {result.changedFiles.map((file) => (
                     <div
                       key={`${file.status}:${file.repoPath}`}
@@ -1324,7 +1324,7 @@ export function CommandSurface() {
                   ))}
                 </div>
                 {result.truncatedFileCount > 0 && (
-                  <p className="mt-1.5 text-center text-[11px] text-muted-foreground/50">
+                  <p className="mt-1.5 text-center text-[11px] text-muted-foreground">
                     +{result.truncatedFileCount} more files not shown
                   </p>
                 )}
@@ -1392,7 +1392,7 @@ export function CommandSurface() {
           <button
             type="button"
             className={cn(
-              "rounded-md border border-border/60 px-2.5 py-1.5 text-[11px] font-medium transition-colors",
+              "rounded-md border border-border px-2.5 py-1.5 text-[11px] font-medium transition-colors",
               sessionBrowser.nameFilter === "named" ? "bg-foreground/10 text-foreground" : "text-muted-foreground hover:text-foreground",
             )}
             onClick={() => {
@@ -1452,7 +1452,7 @@ export function CommandSurface() {
                     {session.name && session.firstMessage && (
                       <p className="mt-0.5 truncate text-xs text-muted-foreground">{session.firstMessage}</p>
                     )}
-                    <div className="mt-0.5 flex gap-3 text-[11px] text-muted-foreground/70">
+                    <div className="mt-0.5 flex gap-3 text-[11px] text-muted-foreground">
                       <span>{session.messageCount} msgs</span>
                       <span>{formatRelativeTime(session.modifiedAt)}</span>
                     </div>
@@ -1473,7 +1473,7 @@ export function CommandSurface() {
 
         {/* Rename controls */}
         {renameMode && (
-          <div className="space-y-3 border-t border-border/30 pt-3">
+          <div className="space-y-3 border-t border-border/50 pt-3">
             <div className="flex gap-2">
               <Input
                 value={selectedNameTarget?.name ?? ""}
@@ -1504,7 +1504,7 @@ export function CommandSurface() {
 
         {/* Resume controls */}
         {!renameMode && (
-          <div className="flex items-center justify-between border-t border-border/30 pt-3">
+          <div className="flex items-center justify-between border-t border-border/50 pt-3">
             <span className="text-xs text-muted-foreground" data-testid="command-surface-resume-state">
               {resumeBusy ? "Switching…" : commandSurface.resumeRequest.error ?? commandSurface.resumeRequest.result ?? "Select a session"}
             </span>
@@ -1563,7 +1563,7 @@ export function CommandSurface() {
                   {selected && <Check className="h-2.5 w-2.5 text-background" />}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <div className="font-mono text-[10px] text-muted-foreground/60">{message.entryId}</div>
+                  <div className="font-mono text-[10px] text-muted-foreground">{message.entryId}</div>
                   <p className="mt-0.5 text-sm text-foreground">{message.text}</p>
                 </div>
               </button>
@@ -1574,7 +1574,7 @@ export function CommandSurface() {
         <p className="py-4 text-center text-xs text-muted-foreground">No fork points available yet.</p>
       )}
 
-      <div className="flex justify-end border-t border-border/40 pt-3">
+      <div className="flex justify-end border-t border-border/50 pt-3">
         <Button
           type="button"
           size="sm"
@@ -1647,7 +1647,7 @@ export function CommandSurface() {
       )}
 
       {/* Export */}
-      <div className="space-y-3 border-t border-border/30 pt-3">
+      <div className="space-y-3 border-t border-border/50 pt-3">
         <div className="text-xs font-medium text-muted-foreground">Export</div>
         <div className="flex gap-2">
           <Input
@@ -1779,7 +1779,7 @@ export function CommandSurface() {
                   </span>
                 </div>
                 {provider.recommended && (
-                  <span className="rounded bg-foreground/10 px-1.5 py-0.5 text-[10px] font-medium text-foreground/70">Recommended</span>
+                  <span className="rounded bg-foreground/10 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">Recommended</span>
                 )}
               </button>
             )
@@ -1788,7 +1788,7 @@ export function CommandSurface() {
 
         {/* Selected provider details */}
         {selectedAuthProvider && (
-          <div className="space-y-4 border-t border-border/30 pt-3">
+          <div className="space-y-4 border-t border-border/50 pt-3">
             <div className="flex items-center justify-between">
               <div>
                 <div className="text-sm font-medium text-foreground">{selectedAuthProvider.label}</div>
@@ -1899,7 +1899,7 @@ export function CommandSurface() {
                 {activeFlow.progress.length > 0 && (
                   <div className="space-y-1">
                     {activeFlow.progress.map((message, index) => (
-                      <div key={`${activeFlow.flowId}-${index}`} className="rounded-md border border-border/40 bg-card/30 px-2.5 py-1.5 text-xs text-muted-foreground">
+                      <div key={`${activeFlow.flowId}-${index}`} className="rounded-md border border-border/50 bg-card/50 px-2.5 py-1.5 text-xs text-muted-foreground">
                         {message}
                       </div>
                     ))}
@@ -1987,7 +1987,7 @@ export function CommandSurface() {
 
       {/* Individual overrides — only visible when master is on */}
       {devOverrides.enabled && (
-        <div className="space-y-2 rounded-lg border border-border/50 bg-card/30 p-3">
+        <div className="space-y-2 rounded-lg border border-border/50 bg-card/50 p-3">
           <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
             Override shortcuts
           </div>
@@ -1999,7 +1999,7 @@ export function CommandSurface() {
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-medium text-foreground">{entry.label}</span>
-                  <Badge variant="outline" className="border-border/60 font-mono text-[10px] text-muted-foreground">
+                  <Badge variant="outline" className="border-border font-mono text-[10px] text-muted-foreground">
                     {entry.shortcutLabel}
                   </Badge>
                 </div>
@@ -2016,7 +2016,7 @@ export function CommandSurface() {
       )}
 
       {/* Onboarding — one-click launch */}
-      <div className="rounded-lg border border-border/50 bg-card/30 p-3 space-y-3">
+      <div className="rounded-lg border border-border/50 bg-card/50 p-3 space-y-3">
         <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
           Onboarding
         </div>
@@ -2046,7 +2046,7 @@ export function CommandSurface() {
         </div>
       </div>
 
-      <div className="rounded-lg border border-border/40 bg-card/30 px-3 py-2.5 text-xs text-muted-foreground">
+      <div className="rounded-lg border border-border/50 bg-card/50 px-3 py-2.5 text-xs text-muted-foreground">
         This tab is only visible when running via{" "}
         <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">npm run gsd:web</code>.
         Overrides reset on page refresh.
@@ -2061,7 +2061,7 @@ export function CommandSurface() {
       case "model": return (
         <div className="space-y-8">
           {renderModelSection()}
-          <div className="border-t border-border/30 pt-6">
+          <div className="border-t border-border/50 pt-6">
             {renderThinkingSection()}
           </div>
         </div>
@@ -2069,7 +2069,7 @@ export function CommandSurface() {
       case "thinking": return (
         <div className="space-y-8">
           {renderModelSection()}
-          <div className="border-t border-border/30 pt-6">
+          <div className="border-t border-border/50 pt-6">
             {renderThinkingSection()}
           </div>
         </div>
@@ -2077,10 +2077,10 @@ export function CommandSurface() {
       case "session-behavior": return (
         <div className="space-y-6">
           {renderQueueSection()}
-          <div className="border-t border-border/30 pt-4">
+          <div className="border-t border-border/50 pt-4">
             {renderCompactionSection()}
           </div>
-          <div className="border-t border-border/30 pt-4">
+          <div className="border-t border-border/50 pt-4">
             {renderRetrySection()}
           </div>
         </div>
@@ -2089,10 +2089,10 @@ export function CommandSurface() {
       case "queue": return (
         <div className="space-y-6">
           {renderQueueSection()}
-          <div className="border-t border-border/30 pt-4">
+          <div className="border-t border-border/50 pt-4">
             {renderCompactionSection()}
           </div>
-          <div className="border-t border-border/30 pt-4">
+          <div className="border-t border-border/50 pt-4">
             {renderRetrySection()}
           </div>
         </div>
@@ -2100,10 +2100,10 @@ export function CommandSurface() {
       case "compaction": return (
         <div className="space-y-6">
           {renderQueueSection()}
-          <div className="border-t border-border/30 pt-4">
+          <div className="border-t border-border/50 pt-4">
             {renderCompactionSection()}
           </div>
-          <div className="border-t border-border/30 pt-4">
+          <div className="border-t border-border/50 pt-4">
             {renderRetrySection()}
           </div>
         </div>
@@ -2111,10 +2111,10 @@ export function CommandSurface() {
       case "retry": return (
         <div className="space-y-6">
           {renderQueueSection()}
-          <div className="border-t border-border/30 pt-4">
+          <div className="border-t border-border/50 pt-4">
             {renderCompactionSection()}
           </div>
-          <div className="border-t border-border/30 pt-4">
+          <div className="border-t border-border/50 pt-4">
             {renderRetrySection()}
           </div>
         </div>
@@ -2188,7 +2188,7 @@ export function CommandSurface() {
     const isClean = gitResult?.kind === "repo" && !hasChanges
 
     return (
-      <div className="border-b border-border/40 px-5 py-4">
+      <div className="border-b border-border/50 px-5 py-4">
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-center gap-3">
             <div className={cn(
@@ -2206,7 +2206,7 @@ export function CommandSurface() {
                   {branchName ?? "Git"}
                 </h2>
                 {branchName && mainBranch && branchName !== mainBranch && (
-                  <span className="text-[11px] text-muted-foreground/50">from {mainBranch}</span>
+                  <span className="text-[11px] text-muted-foreground">from {mainBranch}</span>
                 )}
               </div>
               {gitResult?.kind === "repo" && (
@@ -2248,7 +2248,7 @@ export function CommandSurface() {
   }
 
   const renderDefaultHeader = () => (
-    <div className="flex items-center justify-between gap-3 border-b border-border/40 px-5 py-4">
+    <div className="flex items-center justify-between gap-3 border-b border-border/50 px-5 py-4">
       <div>
         <div className="text-xs uppercase tracking-wider text-muted-foreground">Command surface</div>
         <div className="text-lg font-semibold text-foreground" data-testid="command-surface-title">
@@ -2285,7 +2285,7 @@ export function CommandSurface() {
         <div className="flex h-full min-h-0">
           {/* ─── Left nav rail (hidden for single-section surfaces) ─── */}
           {!isSingleSection && (
-            <nav className="flex w-12 shrink-0 flex-col items-center gap-0.5 border-r border-border/40 bg-card/30 py-3" data-testid="command-surface-sections">
+            <nav className="flex w-12 shrink-0 flex-col items-center gap-0.5 border-r border-border/50 bg-card/50 py-3" data-testid="command-surface-sections">
               {surfaceSections.map((section) => {
                 const active = commandSurface.section === section
                 return (
@@ -2320,7 +2320,7 @@ export function CommandSurface() {
             {(commandSurface.lastResult || commandSurface.lastError) && (
               <div
                 className={cn(
-                  "border-b border-border/30 px-5 py-3 text-xs",
+                  "border-b border-border/50 px-5 py-3 text-xs",
                   commandSurface.lastError ? "bg-destructive/5 text-destructive" : "bg-success/5 text-success",
                 )}
                 data-testid="command-surface-result"

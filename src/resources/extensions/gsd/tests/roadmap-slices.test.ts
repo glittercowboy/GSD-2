@@ -116,6 +116,23 @@ test("parseRoadmapSlices: table with Status Done/Complete text (#1736)", () => {
   assert.equal(slices[2]?.done, true);
 });
 
+test("parseRoadmapSlices: table with glyph completion markers (#2841)", () => {
+  const tableContent = [
+    "# M003: Glyph Status", "", "## Slices", "",
+    "| Slice | Title | Risk | Status |", "|---|---|---|---|",
+    "| S01 | First | Low | ✅ |",
+    "| S02 | Second | High | Pending |",
+    "| S03 | Third | Medium | ☑ |",
+    "| S04 | Fourth | Medium | ✓ |", "",
+  ].join("\n");
+  const slices = parseRoadmapSlices(tableContent);
+  assert.equal(slices.length, 4);
+  assert.equal(slices[0]?.done, true);
+  assert.equal(slices[1]?.done, false);
+  assert.equal(slices[2]?.done, true);
+  assert.equal(slices[3]?.done, true);
+});
+
 test("parseRoadmapSlices: table with dependencies column (#1736)", () => {
   const tableContent = [
     "# M004: Deps", "", "## Slices", "",

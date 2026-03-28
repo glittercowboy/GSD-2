@@ -15,6 +15,8 @@ import { computeBudgets, resolveExecutorContextWindow } from "./context-budget.j
 import {
   getInFlightToolCount,
   getOldestInFlightToolStart,
+  clearInFlightTools,
+  hasInteractiveToolInFlight,
 } from "./auto-tool-tracking.js";
 import { detectWorkingTreeActivity } from "./auto-supervisor.js";
 import { closeoutUnit, type CloseoutOptions } from "./auto-unit-closeout.js";
@@ -146,7 +148,17 @@ export function startUnitSupervision(sctx: SupervisionContext): void {
 
       // Agent has tool calls currently executing — not idle, just waiting.
       // But only suppress recovery if the tool started recently.
+      let stalledToolDetected = false;
       if (getInFlightToolCount() > 0) {
+        // User-interactive tools (ask_user_questions, secure_env_collect) block
+        // waiting for human input by design — never treat them as stalled (#2676).
+        if (hasInteractiveToolInFlight()) {
+          writeUnitRuntimeRecord(s.basePath, unitType, unitId, s.currentUnit.startedAt, {
+            lastProgressAt: Date.now(),
+            lastProgressKind: "interactive-tool-waiting",
+          });
+          return;
+        }
         const oldestStart = getOldestInFlightToolStart()!;
         const toolAgeMs = Date.now() - oldestStart;
         if (toolAgeMs < idleTimeoutMs) {
@@ -156,6 +168,12 @@ export function startUnitSupervision(sctx: SupervisionContext): void {
           });
           return;
         }
+        // Tool has been in-flight longer than idle timeout — treat as hung.
+        // Clear the stale entries so subsequent ticks don't re-detect them,
+        // and set the flag so the filesystem-activity check below does not
+        // override the stall verdict (#2527).
+        stalledToolDetected = true;
+        clearInFlightTools();
         ctx.ui.notify(
           `Stalled tool detected: a tool has been in-flight for ${Math.round(toolAgeMs / 60000)}min. Treating as hung — attempting idle recovery.`,
           "warning",
@@ -163,7 +181,9 @@ export function startUnitSupervision(sctx: SupervisionContext): void {
       }
 
       // Check if the agent is producing work on disk.
-      if (detectWorkingTreeActivity(s.basePath)) {
+      // Skip this when a stalled tool was just detected — filesystem changes
+      // from earlier in the task should not override the stall verdict (#2527).
+      if (!stalledToolDetected && detectWorkingTreeActivity(s.basePath)) {
         writeUnitRuntimeRecord(s.basePath, unitType, unitId, s.currentUnit.startedAt, {
           lastProgressAt: Date.now(),
           lastProgressKind: "filesystem-activity",
@@ -179,6 +199,10 @@ export function startUnitSupervision(sctx: SupervisionContext): void {
 
       const recovery = await recoverTimedOutUnit(ctx, pi, unitType, unitId, "idle", buildRecoveryContext());
       if (recovery === "recovered") return;
+
+      // Guard: recoverTimedOutUnit is async — pauseAuto/stopAuto may have
+      // set s.currentUnit = null during the await (#2527).
+      if (!s.currentUnit) return;
 
       writeUnitRuntimeRecord(s.basePath, unitType, unitId, s.currentUnit.startedAt, {
         phase: "paused",
