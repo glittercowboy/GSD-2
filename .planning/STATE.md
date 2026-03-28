@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 03-sse-cursor-based-event-replay plan 01
-last_updated: "2026-03-28T20:02:25.806Z"
+stopped_at: Completed 03-sse-cursor-based-event-replay plan 02
+last_updated: "2026-03-28T20:05:43.698Z"
 last_activity: 2026-03-28
 progress:
   total_phases: 4
   completed_phases: 2
   total_plans: 12
-  completed_plans: 6
+  completed_plans: 7
   percent: 0
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-03-28)
 ## Current Position
 
 Phase: 03 (sse-cursor-based-event-replay) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 Status: Ready to execute
 Last activity: 2026-03-28
 
@@ -58,6 +58,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 02-tailscale-serve-integration P01 | 4 | 1 tasks | 2 files |
 | Phase 02-tailscale-serve-integration P02 | 10 | 3 tasks | 3 files |
 | Phase 03-sse-cursor-based-event-replay P01 | 15 | 2 tasks | 3 files |
+| Phase 03-sse-cursor-based-event-replay P02 | 2 | 1 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -84,6 +85,9 @@ Recent decisions affecting current work:
 - [Phase 03-sse-cursor-based-event-replay]: Sync appendFileSync in EventLog.append() guarantees seq ordering under concurrent emits
 - [Phase 03-sse-cursor-based-event-replay]: Inline rotation trigger every 100 appends plus hourly fallback setInterval for burst protection
 - [Phase 03-sse-cursor-based-event-replay]: Atomic POSIX rename for log rotation keeps active readline streams on old inode safe
+- [Phase 03-sse-cursor-based-event-replay]: Replay ceiling captures eventLog.currentSeq before readSince() starts — prevents duplicate delivery of events that arrive during file read
+- [Phase 03-sse-cursor-based-event-replay]: liveBuffer overflow sends snapshot event — prevents unbounded memory growth per SSE connection
+- [Phase 03-sse-cursor-based-event-replay]: No-cursor SSE path uses unnamed encodeSseData for backward compat with onmessage clients
 
 ### Pending Todos
 
@@ -97,6 +101,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-28T20:02:25.803Z
-Stopped at: Completed 03-sse-cursor-based-event-replay plan 01
+Last session: 2026-03-28T20:05:43.695Z
+Stopped at: Completed 03-sse-cursor-based-event-replay plan 02
 Resume file: None

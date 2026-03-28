@@ -62,7 +62,7 @@ Plans:
 **Plans**: 3 plans
 Plans:
 - [x] 03-01-PLAN.md — EventLog module + bridge-service _seq wrapping and event persistence
-- [ ] 03-02-PLAN.md — SSE endpoint cursor-based replay with live buffering and stale cursor handling
+- [x] 03-02-PLAN.md — SSE endpoint cursor-based replay with live buffering and stale cursor handling
 - [ ] 03-03-PLAN.md — Client cursor tracking in localStorage + catching-up banner UI
 
 ### Phase 4: Remote Access Settings UI
