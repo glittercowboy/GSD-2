@@ -28,7 +28,7 @@ import { deriveState } from "./state.js";
 import { isAutoActive } from "./auto.js";
 import { loadPrompt } from "./prompt-loader.js";
 import { gsdRoot } from "./paths.js";
-import type { JournalResource } from "./auto/journal-events.js";
+import { type JournalResource, isJournalResource } from "./auto/journal-events.js";
 import { formatDuration } from "../shared/format-utils.js";
 import { getAutoWorktreePath } from "./auto-worktree.js";
 import { loadEffectiveGSDPreferences, loadGlobalGSDPreferences, getGlobalGSDPreferencesPath } from "./preferences.js";
@@ -537,18 +537,8 @@ function scanJournalForForensics(basePath: string): JournalSummary | null {
                 errorTypes[et] = (errorTypes[et] ?? 0) + 1;
               }
             }
-            if (entry.eventType === "iteration-start" && entry.data?.resource) {
-              const r = entry.data.resource;
-              if (
-                r !== null &&
-                typeof r === "object" &&
-                !Array.isArray(r) &&
-                typeof (r as Record<string, unknown>).gsdVersion === "string" &&
-                typeof (r as Record<string, unknown>).model === "string" &&
-                typeof (r as Record<string, unknown>).cwd === "string"
-              ) {
-                latestResource = r as JournalResource;
-              }
+            if (entry.eventType === "iteration-start" && isJournalResource(entry.data?.resource)) {
+              latestResource = entry.data.resource;
             }
           } catch { /* skip malformed lines */ }
         }
