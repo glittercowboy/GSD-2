@@ -3,8 +3,15 @@
  *
  * The SDK runs the full agentic loop (multi-turn, tool execution, compaction)
  * in one call. This adapter translates the SDK's streaming output into
- * AssistantMessageEvents for TUI rendering, then strips tool-call blocks from
- * the final AssistantMessage so GSD's agent loop doesn't try to dispatch them.
+ * AssistantMessageEvents for TUI rendering.
+ *
+ * Key behaviors:
+ * - Session persistence enabled by default — subsequent calls resume the
+ *   previous session so Claude Code maintains conversational continuity.
+ * - Tool results are captured from SDK user messages and paired with their
+ *   corresponding tool calls for accurate TUI rendering.
+ * - Tool execution events are emitted in real-time as intermediate turns
+ *   complete, preserving chronological order (tools above final text).
  */
 
 import type {
@@ -14,6 +21,7 @@ import type {
 	Context,
 	Model,
 	SimpleStreamOptions,
+	ToolCall,
 } from "@gsd/pi-ai";
 import { EventStream } from "@gsd/pi-ai";
 import { execSync } from "node:child_process";
@@ -26,6 +34,8 @@ import type {
 	SDKSystemMessage,
 	SDKStatusMessage,
 	SDKUserMessage,
+	ToolResultBlock,
+	UserContentBlock,
 } from "./sdk-types.js";
 
 // ---------------------------------------------------------------------------
@@ -71,13 +81,20 @@ function getClaudePath(): string {
 }
 
 // ---------------------------------------------------------------------------
+// Session tracking
+// ---------------------------------------------------------------------------
+
+/** Per-model session IDs for cross-turn continuity. */
+const sessionMap = new Map<string, string>();
+
+// ---------------------------------------------------------------------------
 // Prompt extraction
 // ---------------------------------------------------------------------------
 
 /**
  * Extract the last user prompt text from GSD's context messages.
- * The SDK manages its own conversation history — we only send
- * the latest user message as the prompt.
+ * When resuming a session, the SDK already has conversation history —
+ * we only need to send the new user message.
  */
 function extractLastUserPrompt(context: Context): string {
 	for (let i = context.messages.length - 1; i >= 0; i--) {
@@ -93,6 +110,46 @@ function extractLastUserPrompt(context: Context): string {
 		}
 	}
 	return "";
+}
+
+// ---------------------------------------------------------------------------
+// Tool result extraction
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract tool results from an SDK user message. The user message contains
+ * `tool_result` content blocks with actual tool output (bash stdout, file
+ * contents, edit diffs, etc.) paired by `tool_use_id`.
+ */
+export function extractToolResults(
+	userMsg: SDKUserMessage,
+): Map<string, { content: Array<{ type: string; text?: string }>; isError: boolean }> {
+	const results = new Map<string, { content: Array<{ type: string; text?: string }>; isError: boolean }>();
+	const msgContent = userMsg.message?.content;
+	if (!msgContent || typeof msgContent === "string") return results;
+
+	for (const block of msgContent as UserContentBlock[]) {
+		if (block.type !== "tool_result") continue;
+		const toolResult = block as ToolResultBlock;
+
+		let content: Array<{ type: string; text?: string }>;
+		if (typeof toolResult.content === "string") {
+			content = [{ type: "text", text: toolResult.content }];
+		} else if (Array.isArray(toolResult.content)) {
+			content = toolResult.content.map((c) => {
+				if (c.type === "text") return { type: "text", text: c.text };
+				return { type: c.type };
+			});
+		} else {
+			content = [{ type: "text", text: "(no output)" }];
+		}
+
+		results.set(toolResult.tool_use_id, {
+			content,
+			isError: toolResult.is_error ?? false,
+		});
+	}
+	return results;
 }
 
 // ---------------------------------------------------------------------------
@@ -128,6 +185,15 @@ export function makeStreamExhaustedErrorMessage(model: string, lastTextContent: 
 }
 
 // ---------------------------------------------------------------------------
+// Intermediate tool call with paired result
+// ---------------------------------------------------------------------------
+
+interface ToolCallWithResult {
+	toolCall: ToolCall;
+	result: { content: Array<{ type: string; text?: string }>; isError: boolean } | null;
+}
+
+// ---------------------------------------------------------------------------
 // streamSimple implementation
 // ---------------------------------------------------------------------------
 
@@ -135,8 +201,9 @@ export function makeStreamExhaustedErrorMessage(model: string, lastTextContent: 
  * GSD streamSimple function that delegates to the Claude Agent SDK.
  *
  * Emits AssistantMessageEvent deltas for real-time TUI rendering
- * (thinking, text, tool calls). The final AssistantMessage has tool-call
- * blocks stripped so the agent loop ends the turn without local dispatch.
+ * (thinking, text, tool calls). Tool execution events are emitted
+ * as intermediate turns complete, with actual tool results from
+ * the SDK's user messages.
  */
 export function streamViaClaudeCode(
 	model: Model<any>,
@@ -161,8 +228,10 @@ async function pumpSdkMessages(
 	/** Track the last text content seen across all assistant turns for the final message. */
 	let lastTextContent = "";
 	let lastThinkingContent = "";
-	/** Collect tool calls from intermediate SDK turns for tool_execution events. */
-	const intermediateToolCalls: AssistantMessage["content"] = [];
+	/** Tool calls from the current intermediate assistant turn (reset on user message). */
+	let pendingToolCalls: ToolCall[] = [];
+	/** All intermediate tool calls with their paired results, for the final message. */
+	const intermediateToolCallsWithResults: ToolCallWithResult[] = [];
 
 	try {
 		// Dynamic import — the SDK is an optional dependency.
@@ -181,23 +250,28 @@ async function pumpSdkMessages(
 		}
 
 		const prompt = extractLastUserPrompt(context);
+		const existingSessionId = sessionMap.get(modelId);
 
-		const queryResult = sdk.query({
-			prompt,
-			options: {
-				pathToClaudeCodeExecutable: getClaudePath(),
-				model: modelId,
-				includePartialMessages: true,
-				persistSession: false,
-				abortController: controller,
-				cwd: process.cwd(),
-				permissionMode: "bypassPermissions",
-				allowDangerouslySkipPermissions: true,
-				settingSources: ["project"],
-				systemPrompt: { type: "preset", preset: "claude_code" },
-				betas: modelId.includes("sonnet") ? ["context-1m-2025-08-07"] : [],
-			},
-		});
+		const queryOptions: Record<string, unknown> = {
+			pathToClaudeCodeExecutable: getClaudePath(),
+			model: modelId,
+			includePartialMessages: true,
+			persistSession: true,
+			abortController: controller,
+			cwd: process.cwd(),
+			permissionMode: "bypassPermissions",
+			allowDangerouslySkipPermissions: true,
+			settingSources: ["project"],
+			systemPrompt: { type: "preset", preset: "claude_code" },
+			betas: modelId.includes("sonnet") ? ["context-1m-2025-08-07"] : [],
+		};
+
+		// Resume previous session for conversational continuity
+		if (existingSessionId) {
+			queryOptions.resume = existingSessionId;
+		}
+
+		const queryResult = sdk.query({ prompt, options: queryOptions });
 
 		// Emit start with an empty partial
 		const initialPartial: AssistantMessage = {
@@ -218,7 +292,11 @@ async function pumpSdkMessages(
 			switch (msg.type) {
 				// -- Init --
 				case "system": {
-					// Nothing to emit — the stream is already started.
+					// Track session ID for future resumption
+					const sysMsg = msg as SDKSystemMessage;
+					if (sysMsg.session_id) {
+						sessionMap.set(modelId, sysMsg.session_id as string);
+					}
 					break;
 				}
 
@@ -226,6 +304,11 @@ async function pumpSdkMessages(
 				case "stream_event": {
 					const partial = msg as SDKPartialAssistantMessage;
 					if (partial.parent_tool_use_id !== null) break; // skip subagent
+
+					// Track session ID from any message
+					if (partial.session_id) {
+						sessionMap.set(modelId, partial.session_id);
+					}
 
 					const event = partial.event;
 
@@ -241,14 +324,11 @@ async function pumpSdkMessages(
 
 					const assistantEvent = builder.handleEvent(event);
 					if (assistantEvent) {
-						// Skip toolcall events — the agent loop's externalToolExecution
-						// path emits tool_execution_start/end events after streamSimple
-						// returns. Streaming toolcall events would render tool calls
-						// out of order in the TUI's accumulated message content.
-						const t = assistantEvent.type;
-						if (t !== "toolcall_start" && t !== "toolcall_delta" && t !== "toolcall_end") {
-							stream.push(assistantEvent);
-						}
+						// Stream text and thinking events for real-time TUI rendering.
+						// Tool call events are also streamed — they render in the
+						// correct chronological position (during the turn, before
+						// final text from a later turn).
+						stream.push(assistantEvent);
 					}
 					break;
 				}
@@ -258,12 +338,23 @@ async function pumpSdkMessages(
 					const sdkAssistant = msg as SDKAssistantMessage;
 					if (sdkAssistant.parent_tool_use_id !== null) break;
 
-					// Capture text content from complete messages
+					if (sdkAssistant.session_id) {
+						sessionMap.set(modelId, sdkAssistant.session_id);
+					}
+
+					// Capture text content and tool calls from complete messages
 					for (const block of sdkAssistant.message.content) {
 						if (block.type === "text") {
 							lastTextContent = block.text;
 						} else if (block.type === "thinking") {
 							lastThinkingContent = block.thinking;
+						} else if (block.type === "tool_use") {
+							pendingToolCalls.push({
+								type: "toolCall",
+								id: block.id,
+								name: block.name,
+								arguments: block.input,
+							});
 						}
 					}
 					break;
@@ -274,7 +365,14 @@ async function pumpSdkMessages(
 					const userMsg = msg as SDKUserMessage;
 					if (userMsg.parent_tool_use_id !== null) break;
 
-					// Capture content from the completed turn before resetting
+					if (userMsg.session_id) {
+						sessionMap.set(modelId, userMsg.session_id);
+					}
+
+					// Extract tool results from the user message
+					const toolResults = extractToolResults(userMsg);
+
+					// Capture content from the completed assistant turn
 					if (builder) {
 						for (const block of builder.message.content) {
 							if (block.type === "text" && block.text) {
@@ -282,11 +380,18 @@ async function pumpSdkMessages(
 							} else if (block.type === "thinking" && block.thinking) {
 								lastThinkingContent = block.thinking;
 							} else if (block.type === "toolCall") {
-								// Collect tool calls for externalToolExecution rendering
-								intermediateToolCalls.push(block);
+								pendingToolCalls.push(block);
 							}
 						}
 					}
+
+					// Pair tool calls with their results and store for final message
+					for (const tc of pendingToolCalls) {
+						const result = toolResults.get(tc.id) ?? null;
+						intermediateToolCallsWithResults.push({ toolCall: tc, result });
+					}
+
+					pendingToolCalls = [];
 					builder = null;
 					break;
 				}
@@ -295,13 +400,19 @@ async function pumpSdkMessages(
 				case "result": {
 					const result = msg as SDKResultMessage;
 
+					if (result.session_id) {
+						sessionMap.set(modelId, result.session_id);
+					}
+
 					// Build final message. Include intermediate tool calls so the
 					// agent loop's externalToolExecution path emits tool_execution
-					// events for proper TUI rendering, followed by the text response.
+					// events with actual results for proper TUI rendering.
 					const finalContent: AssistantMessage["content"] = [];
 
 					// Add tool calls from intermediate turns first (renders above text)
-					finalContent.push(...intermediateToolCalls);
+					for (const { toolCall } of intermediateToolCallsWithResults) {
+						finalContent.push(toolCall);
+					}
 
 					// Add text/thinking from the last turn
 					if (builder && builder.message.content.length > 0) {
@@ -333,7 +444,15 @@ async function pumpSdkMessages(
 						usage: mapUsage(result.usage, result.total_cost_usd),
 						stopReason: result.is_error ? "error" : "stop",
 						timestamp: Date.now(),
-					};
+						// Attach tool results for the agent loop's externalToolExecution path
+						_externalToolResults: intermediateToolCallsWithResults.length > 0
+							? Object.fromEntries(
+								intermediateToolCallsWithResults
+									.filter((t) => t.result !== null)
+									.map((t) => [t.toolCall.id, t.result]),
+							)
+							: undefined,
+					} as AssistantMessage & { _externalToolResults?: Record<string, unknown> };
 
 					if (result.is_error) {
 						const errText =
