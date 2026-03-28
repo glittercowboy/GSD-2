@@ -15,7 +15,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: Password Auth and Cookie Sessions** - Complete password-protected login flow with HMAC-signed session cookies (completed 2026-03-28)
 - [ ] **Phase 2: Tailscale Serve Integration** - `gsd --web --tailscale` exposes the app via HTTPS within the tailnet
 - [x] **Phase 3: SSE Cursor-Based Event Replay** - Reconnecting browsers recover all missed agent output from a persistent log (completed 2026-03-28)
-- [ ] **Phase 4: Remote Access Settings UI** - In-app Remote Access section with password management and Tailscale setup assistant
+- [x] **Phase 4: Remote Access Settings UI** - In-app Remote Access section with password management and Tailscale setup assistant (completed 2026-03-28)
 
 ## Phase Details
 
@@ -79,7 +79,7 @@ Plans:
 - [x] 04-00-PLAN.md — Wave 0 test stub files for Phase 4 validation targets
 - [x] 04-01-PLAN.md — Password change API endpoint + Tailscale status API endpoint
 - [x] 04-02-PLAN.md — Tailscale setup assistant streaming API endpoint
-- [ ] 04-03-PLAN.md — RemoteAccessPanel UI component + settings section registration
+- [x] 04-03-PLAN.md — RemoteAccessPanel UI component + settings section registration
 **UI hint**: yes
 
 ## Progress
@@ -92,4 +92,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 | 1. Password Auth and Cookie Sessions | 3/3 | Complete   | 2026-03-28 |
 | 2. Tailscale Serve Integration | 1/2 | In Progress|  |
 | 3. SSE Cursor-Based Event Replay | 3/3 | Complete   | 2026-03-28 |
-| 4. Remote Access Settings UI | 3/4 | In Progress|  |
+| 4. Remote Access Settings UI | 4/4 | Complete   | 2026-03-28 |

@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Completed 04-remote-access-settings-ui plan 02
-last_updated: "2026-03-28T20:23:34.711Z"
+status: verifying
+stopped_at: Completed 04-remote-access-settings-ui plan 03 (awaiting checkpoint human-verify)
+last_updated: "2026-03-28T20:28:35.917Z"
 last_activity: 2026-03-28
 progress:
   total_phases: 4
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 12
-  completed_plans: 11
+  completed_plans: 12
   percent: 0
 ---
 
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-03-28)
 
 Phase: 04 (remote-access-settings-ui) — EXECUTING
 Plan: 4 of 4
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-03-28
 
 Progress: [░░░░░░░░░░] 0%
@@ -63,6 +63,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 04-remote-access-settings-ui P00 | 112 | 1 tasks | 4 files |
 | Phase 04-remote-access-settings-ui P01 | 8 | 2 tasks | 2 files |
 | Phase 04-remote-access-settings-ui P02 | 5 | 1 tasks | 1 files |
+| Phase 04-remote-access-settings-ui P03 | 5 | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -101,6 +102,8 @@ Recent decisions affecting current work:
 - [Phase 04-remote-access-settings-ui]: Tailscale route maps fqdn->dnsName and url->tailnetUrl to bridge Phase 2 field names to Phase 4 UI contract
 - [Phase 04-remote-access-settings-ui]: getInstallCommand returns display string not array — split on space at call site for spawn
 - [Phase 04-remote-access-settings-ui]: getTailscaleStatus returns discriminated union { ok, info } — verify step checks result.ok
+- [Phase 04-remote-access-settings-ui]: Shield icon (not ShieldCheck) used for remote-access section to distinguish from auth section
+- [Phase 04-remote-access-settings-ui]: Set up Tailscale button hidden when connected or no password configured — prevents setup confusion
 
 ### Pending Todos
 
@@ -114,6 +117,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-28T20:23:34.707Z
-Stopped at: Completed 04-remote-access-settings-ui plan 02
+Last session: 2026-03-28T20:28:35.914Z
+Stopped at: Completed 04-remote-access-settings-ui plan 03 (awaiting checkpoint human-verify)
 Resume file: None
