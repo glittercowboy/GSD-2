@@ -1,5 +1,7 @@
 import {
   buildMemoryCallOptions,
+  extractMemoriesFromUnit,
+  extractTranscriptFromActivity,
   parseMemoryResponse,
   resolveMemoryExtractionApiKey,
   _resetExtractionState,
@@ -9,9 +11,17 @@ import {
   closeDatabase,
 } from '../gsd-db.ts';
 import {
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import {
   getActiveMemories,
   applyMemoryActions,
   getActiveMemoriesRanked,
+  isUnitProcessed,
 } from '../memory-store.ts';
 import type { MemoryAction } from '../memory-store.ts';
 import { describe, test, beforeEach, afterEach } from 'node:test';
@@ -69,6 +79,36 @@ test('memory-extractor: malformed responses', () => {
   assert.deepStrictEqual(parseMemoryResponse('{"action": "CREATE"}'), [], 'non-array should return []');
   assert.deepStrictEqual(parseMemoryResponse(''), [], 'empty string should return []');
   assert.deepStrictEqual(parseMemoryResponse('```\nbroken\n```'), [], 'fenced non-JSON should return []');
+});
+
+test('memory-extractor: extractTranscriptFromActivity handles wrapped session entries', () => {
+  const raw = [
+    JSON.stringify({ type: 'message', message: { role: 'user', content: 'ignore me' } }),
+    JSON.stringify({
+      type: 'message',
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'first block' },
+          { type: 'text', text: 'second block' },
+        ],
+      },
+    }),
+    JSON.stringify({ type: 'message', message: { role: 'assistant', content: 'third block' } }),
+  ].join('\n');
+
+  assert.equal(
+    extractTranscriptFromActivity(raw),
+    'first block\n\nsecond block\n\nthird block',
+  );
+});
+
+test('memory-extractor: extractTranscriptFromActivity still supports raw assistant entries', () => {
+  const raw = [
+    JSON.stringify({ role: 'assistant', content: 'legacy format works' }),
+  ].join('\n');
+
+  assert.equal(extractTranscriptFromActivity(raw), 'legacy format works');
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -210,4 +250,52 @@ test('memory-extractor: resolveMemoryExtractionApiKey uses modelRegistry credent
     },
   } as any, model);
   assert.equal(failed, undefined);
+});
+
+test('memory-extractor: extractMemoriesFromUnit processes wrapped activity-log entries end to end', async () => {
+  _resetExtractionState();
+  openDatabase(':memory:');
+
+  const dir = mkdtempSync(join(tmpdir(), 'gsd-memory-extractor-'));
+  const activityFile = join(dir, '001-execute-task-M001-S01-T01.jsonl');
+  const repeated = 'Wrapped assistant transcript proves extraction works. '.repeat(30);
+  writeFileSync(
+    activityFile,
+    [
+      JSON.stringify({ type: 'message', message: { role: 'user', content: 'ignored user content' } }),
+      JSON.stringify({
+        type: 'message',
+        message: {
+          role: 'assistant',
+          content: [
+            { type: 'text', text: repeated },
+          ],
+        },
+      }),
+    ].join('\n'),
+    'utf-8',
+  );
+
+  try {
+    let llmPrompt = '';
+    await extractMemoriesFromUnit(
+      activityFile,
+      'execute-task',
+      'M001/S01/T01',
+      async (_system, user) => {
+        llmPrompt = user;
+        return JSON.stringify([
+          { action: 'CREATE', category: 'gotcha', content: 'wrapped logs are parsed', confidence: 0.9 },
+        ]);
+      },
+    );
+
+    assert.match(llmPrompt, /Wrapped assistant transcript proves extraction works\./);
+    assert.equal(isUnitProcessed('execute-task/M001/S01/T01'), true);
+    assert.ok(getActiveMemories().some((m) => m.content === 'wrapped logs are parsed'));
+  } finally {
+    closeDatabase();
+    rmSync(dir, { recursive: true, force: true });
+    _resetExtractionState();
+  }
 });
