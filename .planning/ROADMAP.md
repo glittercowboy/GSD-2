@@ -61,7 +61,7 @@ Plans:
   4. The JSONL event log on disk never exceeds ~60 MB in steady state — log rotation keeps the most recent 10 MB after exceeding 50 MB
 **Plans**: 3 plans
 Plans:
-- [ ] 03-01-PLAN.md — EventLog module + bridge-service _seq wrapping and event persistence
+- [x] 03-01-PLAN.md — EventLog module + bridge-service _seq wrapping and event persistence
 - [ ] 03-02-PLAN.md — SSE endpoint cursor-based replay with live buffering and stale cursor handling
 - [ ] 03-03-PLAN.md — Client cursor tracking in localStorage + catching-up banner UI
 
@@ -91,5 +91,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 |-------|----------------|--------|-----------|
 | 1. Password Auth and Cookie Sessions | 3/3 | Complete   | 2026-03-28 |
 | 2. Tailscale Serve Integration | 1/2 | In Progress|  |
-| 3. SSE Cursor-Based Event Replay | 0/3 | Planning complete | - |
+| 3. SSE Cursor-Based Event Replay | 1/3 | In Progress|  |
 | 4. Remote Access Settings UI | 0/4 | Planning complete | - |

@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: verifying
-stopped_at: Completed 02-tailscale-serve-integration plan 02
-last_updated: "2026-03-28T19:52:24.402Z"
+status: executing
+stopped_at: Completed 03-sse-cursor-based-event-replay plan 01
+last_updated: "2026-03-28T20:02:25.806Z"
 last_activity: 2026-03-28
 progress:
   total_phases: 4
   completed_phases: 2
   total_plans: 12
-  completed_plans: 5
+  completed_plans: 6
   percent: 0
 ---
 
@@ -21,13 +21,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-28)
 
 **Core value:** Agent workflows run uninterrupted when the browser is closed — reconnect anytime from any device on the tailnet and pick up where you left off.
-**Current focus:** Phase 02 — tailscale-serve-integration
+**Current focus:** Phase 03 — sse-cursor-based-event-replay
 
 ## Current Position
 
-Phase: 02 (tailscale-serve-integration) — EXECUTING
-Plan: 2 of 2
-Status: Phase complete — ready for verification
+Phase: 03 (sse-cursor-based-event-replay) — EXECUTING
+Plan: 2 of 3
+Status: Ready to execute
 Last activity: 2026-03-28
 
 Progress: [░░░░░░░░░░] 0%
@@ -57,6 +57,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 01-password-auth-and-cookie-sessions P03 | 2 | 2 tasks | 3 files |
 | Phase 02-tailscale-serve-integration P01 | 4 | 1 tasks | 2 files |
 | Phase 02-tailscale-serve-integration P02 | 10 | 3 tasks | 3 files |
+| Phase 03-sse-cursor-based-event-replay P01 | 15 | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -80,6 +81,9 @@ Recent decisions affecting current work:
 - [Phase 02-tailscale-serve-integration]: stopTailscaleServe split into strict/lenient modes — startup reset throws, shutdown cleanup swallows
 - [Phase 02-tailscale-serve-integration]: cleanupFired guard uses local variable name (not tailscaleCleanupFired) for idempotent SIGINT/SIGTERM handler
 - [Phase 02-tailscale-serve-integration]: Tailscale lifecycle vars hoisted before if(options.tailscale) block so resolution fields are available for failure objects
+- [Phase 03-sse-cursor-based-event-replay]: Sync appendFileSync in EventLog.append() guarantees seq ordering under concurrent emits
+- [Phase 03-sse-cursor-based-event-replay]: Inline rotation trigger every 100 appends plus hourly fallback setInterval for burst protection
+- [Phase 03-sse-cursor-based-event-replay]: Atomic POSIX rename for log rotation keeps active readline streams on old inode safe
 
 ### Pending Todos
 
@@ -93,6 +97,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-28T19:52:24.399Z
-Stopped at: Completed 02-tailscale-serve-integration plan 02
+Last session: 2026-03-28T20:02:25.803Z
+Stopped at: Completed 03-sse-cursor-based-event-replay plan 01
 Resume file: None

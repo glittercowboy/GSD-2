@@ -36,13 +36,13 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Session Persistence
 
-- [ ] **SESS-01**: Bridge service appends each BridgeEvent to a JSONL event log with monotonic sequence numbers
-- [ ] **SESS-02**: Event logging runs regardless of whether a browser is connected
+- [x] **SESS-01**: Bridge service appends each BridgeEvent to a JSONL event log with monotonic sequence numbers
+- [x] **SESS-02**: Event logging runs regardless of whether a browser is connected
 - [ ] **SESS-03**: SSE endpoint accepts optional `since` query parameter for cursor-based replay
 - [ ] **SESS-04**: On reconnect, browser sends last-seen sequence number and receives missed events
-- [ ] **SESS-05**: Live events include sequence number (`_seq`) for client-side cursor tracking
+- [x] **SESS-05**: Live events include sequence number (`_seq`) for client-side cursor tracking
 - [ ] **SESS-06**: Client stores last-seen sequence number in localStorage
-- [ ] **SESS-07**: Event log rotates when exceeding 50MB (keeps most recent 10MB)
+- [x] **SESS-07**: Event log rotates when exceeding 50MB (keeps most recent 10MB)
 - [ ] **SESS-08**: Clients with expired cursors (older than oldest log entry) get full state refresh
 - [ ] **SESS-09**: UI shows "Catching up..." indicator during replay, transitions to live when done
 
@@ -105,13 +105,13 @@ Deferred to future release. Tracked but not in current roadmap.
 | TAIL-09 | Phase 4 | Pending |
 | TAIL-10 | Phase 4 | Pending |
 | TAIL-11 | Phase 4 | Pending |
-| SESS-01 | Phase 3 | Pending |
-| SESS-02 | Phase 3 | Pending |
+| SESS-01 | Phase 3 | Complete |
+| SESS-02 | Phase 3 | Complete |
 | SESS-03 | Phase 3 | Pending |
 | SESS-04 | Phase 3 | Pending |
-| SESS-05 | Phase 3 | Pending |
+| SESS-05 | Phase 3 | Complete |
 | SESS-06 | Phase 3 | Pending |
-| SESS-07 | Phase 3 | Pending |
+| SESS-07 | Phase 3 | Complete |
 | SESS-08 | Phase 3 | Pending |
 | SESS-09 | Phase 3 | Pending |
 | SETT-01 | Phase 4 | Pending |
