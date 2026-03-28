@@ -200,7 +200,7 @@ function makeMockDeps(overrides?: Partial<LoopDeps>): LoopDeps & { callLog: stri
     captureAvailableSkills: () => {},
     ensurePreconditions: () => {},
     updateSliceProgressCache: () => {},
-    selectAndApplyModel: async () => ({ routing: null }),
+    selectAndApplyModel: async () => ({ routing: null, appliedModel: null }),
     resolveModelId: () => undefined,
     startUnitSupervision: () => {},
     getDeepDiagnostic: () => null,

@@ -46,6 +46,17 @@ export function _resolveReportBasePath(s: Pick<AutoSession, "originalBasePath" |
 }
 
 /**
+ * Resolve the authoritative project base for dispatch guards.
+ * Prior-milestone completion lives at the project root, even when the active
+ * unit is running inside an auto worktree.
+ */
+export function _resolveDispatchGuardBasePath(
+  s: Pick<AutoSession, "originalBasePath" | "basePath">,
+): string {
+  return s.originalBasePath || s.basePath;
+}
+
+/**
  * Generate and write an HTML milestone report snapshot.
  * Extracted from the milestone-transition block in autoLoop.
  */
@@ -261,8 +272,14 @@ export async function runPreDispatch(
         await deps.stopAuto(ctx, pi, `Merge conflict on milestone ${s.currentMilestoneId}`);
         return { action: "break", reason: "merge-conflict" };
       }
-      // Non-conflict merge errors — log and continue
-      logWarning("engine", "Milestone merge failed with non-conflict error", { milestone: s.currentMilestoneId!, error: String(mergeErr) });
+      // Non-conflict merge errors — stop auto to avoid advancing with unmerged work
+      logError("engine", "Milestone merge failed with non-conflict error", { milestone: s.currentMilestoneId!, error: String(mergeErr) });
+      ctx.ui.notify(
+        `Merge failed: ${mergeErr instanceof Error ? mergeErr.message : String(mergeErr)}. Resolve and run /gsd auto to resume.`,
+        "error",
+      );
+      await deps.stopAuto(ctx, pi, `Merge error on milestone ${s.currentMilestoneId}: ${String(mergeErr)}`);
+      return { action: "break", reason: "merge-failed" };
     }
 
     // PR creation (auto_pr) is handled inside mergeMilestoneToMain (#2302)
@@ -355,6 +372,13 @@ export async function runPreDispatch(
             await deps.stopAuto(ctx, pi, `Merge conflict on milestone ${s.currentMilestoneId}`);
             return { action: "break", reason: "merge-conflict" };
           }
+          logError("engine", "Milestone merge failed with non-conflict error", { milestone: s.currentMilestoneId!, error: String(mergeErr) });
+          ctx.ui.notify(
+            `Merge failed: ${mergeErr instanceof Error ? mergeErr.message : String(mergeErr)}. Resolve and run /gsd auto to resume.`,
+            "error",
+          );
+          await deps.stopAuto(ctx, pi, `Merge error on milestone ${s.currentMilestoneId}: ${String(mergeErr)}`);
+          return { action: "break", reason: "merge-failed" };
         }
 
         // PR creation (auto_pr) is handled inside mergeMilestoneToMain (#2302)
@@ -452,6 +476,13 @@ export async function runPreDispatch(
           await deps.stopAuto(ctx, pi, `Merge conflict on milestone ${s.currentMilestoneId}`);
           return { action: "break", reason: "merge-conflict" };
         }
+        logError("engine", "Milestone merge failed with non-conflict error", { milestone: s.currentMilestoneId!, error: String(mergeErr) });
+        ctx.ui.notify(
+          `Merge failed: ${mergeErr instanceof Error ? mergeErr.message : String(mergeErr)}. Resolve and run /gsd auto to resume.`,
+          "error",
+        );
+        await deps.stopAuto(ctx, pi, `Merge error on milestone ${s.currentMilestoneId}: ${String(mergeErr)}`);
+        return { action: "break", reason: "merge-failed" };
       }
 
       // PR creation (auto_pr) is handled inside mergeMilestoneToMain (#2302)
@@ -647,9 +678,10 @@ export async function runDispatch(
     prompt = preDispatchResult.prompt;
   }
 
+  const guardBasePath = _resolveDispatchGuardBasePath(s);
   const priorSliceBlocker = deps.getPriorSliceCompletionBlocker(
-    s.basePath,
-    deps.getMainBranch(s.basePath),
+    guardBasePath,
+    deps.getMainBranch(guardBasePath),
     unitType,
     unitId,
   );
@@ -975,6 +1007,9 @@ export async function runUnitPhase(
   s.currentUnitRouting =
     modelResult.routing as AutoSession["currentUnitRouting"];
 
+  // ADR-005: Capture prior tools for restore after dispatch (prevents session drift).
+  const priorTools = modelResult.priorTools;
+
   // Apply sidecar/pre-dispatch hook model override (takes priority over standard model selection)
   const hookModelOverride = sidecarItem?.model ?? iterData.hookModelOverride;
   if (hookModelOverride) {
@@ -1032,14 +1067,23 @@ export async function runUnitPhase(
     unitType,
     unitId,
   });
-  const unitResult = await runUnit(
-    ctx,
-    pi,
-    s,
-    unitType,
-    unitId,
-    finalPrompt,
-  );
+  let unitResult;
+  try {
+    unitResult = await runUnit(
+      ctx,
+      pi,
+      s,
+      unitType,
+      unitId,
+      finalPrompt,
+    );
+  } finally {
+    // ADR-005: Restore prior tool set after dispatch to prevent session drift.
+    // Must be in finally to handle both success and error paths.
+    if (priorTools) {
+      pi.setActiveTools(priorTools);
+    }
+  }
   debugLog("autoLoop", {
     phase: "runUnit-end",
     iteration: ic.iteration,

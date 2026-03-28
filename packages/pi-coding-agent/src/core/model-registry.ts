@@ -235,7 +235,7 @@ export class ModelRegistry {
 
 	constructor(
 		readonly authStorage: AuthStorage,
-		private modelsJsonPath: string | undefined = join(getAgentDir(), "models.json"),
+		readonly modelsJsonPath: string | undefined = join(getAgentDir(), "models.json"),
 	) {
 		this.discoveryCache = new ModelDiscoveryCache();
 

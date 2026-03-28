@@ -1,5 +1,5 @@
 /**
- * @gsd/mcp-server — MCP server for GSD orchestration.
+ * @gsd-build/mcp-server — MCP server for GSD orchestration.
  */
 
 export { SessionManager } from './session-manager.js';

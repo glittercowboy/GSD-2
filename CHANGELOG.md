@@ -6,6 +6,35 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.54.0] - 2026-03-27
+
+### Added
+- Headless Integration Hardening & Release (M002) (#2811)
+- **parallel**: add real-time TUI monitor dashboard with self-healing (#2799)
+
+## [2.53.0] - 2026-03-27
+
+### Added
+- **vscode**: activity feed, workflow controls, session forking, enhanced code lens [2/3] (#2656)
+- **gsd**: enable safety mechanisms by default (snapshots, pre-merge checks) (#2678)
+
+### Fixed
+- hydrate collected secrets for current session (#2788)
+- resolve stash pop conflicts and stop swallowing merge errors (#2780)
+- treat any extracted verdict as terminal in isValidationTerminal (#2774)
+- use localStorage for auth token to enable multi-tab usage (#2785)
+- guard activeMilestone.id access in discuss and headless paths (#2776)
+- clean up zombie parallel workers stuck in error state (#2782)
+- relax milestone validation gate to accept prose evidence (#2779)
+- write milestone reports to project root instead of worktree (#2778)
+- auto-resolve build artifact conflicts in milestone merge (#2777)
+- let rate-limit errors attempt model fallback before pausing (#2775)
+- prevent gsd next from self-killing via stale crash lock (#2784)
+- add shell flag for Windows spawn in VSCode extension (#2781)
+
+### Changed
+- **gsd**: extract duplicated status guards and validation helpers (#2767)
+
 ## [2.52.0] - 2026-03-27
 
 ### Added
@@ -2050,7 +2079,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 - License updated to MIT
 
-[Unreleased]: https://github.com/gsd-build/gsd-2/compare/v2.52.0...HEAD
+[Unreleased]: https://github.com/gsd-build/gsd-2/compare/v2.54.0...HEAD
+[2.54.0]: https://github.com/gsd-build/gsd-2/compare/v2.53.0...v2.54.0
+[2.53.0]: https://github.com/gsd-build/gsd-2/compare/v2.52.0...v2.53.0
 [2.52.0]: https://github.com/gsd-build/gsd-2/compare/v2.51.0...v2.52.0
 [2.51.0]: https://github.com/gsd-build/gsd-2/compare/v2.50.0...v2.51.0
 [2.50.0]: https://github.com/gsd-build/gsd-2/compare/v2.49.0...v2.50.0

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * @gsd/mcp-server CLI — stdio transport entry point.
+ * @gsd-build/mcp-server CLI — stdio transport entry point.
  *
  * Connects the MCP server to stdin/stdout for use by Claude Code,
  * Cursor, and other MCP-compatible clients.

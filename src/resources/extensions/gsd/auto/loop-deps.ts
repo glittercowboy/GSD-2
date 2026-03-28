@@ -209,7 +209,11 @@ export interface LoopDeps {
     verbose: boolean,
     startModel: { provider: string; id: string } | null,
     retryContext?: { isRetry: boolean; previousTier?: string },
-  ) => Promise<{ routing: { tier: string; modelDowngraded: boolean } | null }>;
+  ) => Promise<{
+    routing: { tier: string; modelDowngraded: boolean } | null;
+    appliedModel: { provider: string; id: string } | null;
+    priorTools?: string[];
+  }>;
   resolveModelId: <T extends { id: string; provider: string }>(
     modelId: string,
     availableModels: T[],
