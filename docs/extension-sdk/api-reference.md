@@ -2,7 +2,7 @@
 
 // GSD-2 Extension SDK — Complete API surface reference
 
-This document covers every public method and type exposed by the Extension SDK. For usage patterns and examples, see the [Getting Started](./getting-started.md) guide.
+This document covers every public method and type exposed by the Extension SDK. For usage patterns and examples, see [Building Extensions](./building-extensions.md).
 
 ---
 

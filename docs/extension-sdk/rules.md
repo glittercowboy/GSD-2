@@ -14,7 +14,7 @@ Non-negotiable rules, common gotchas, and contribution requirements for GSD-2 ex
 
 ```typescript
 // CORRECT
-import { StringEnum } from "@gsd/pi-coding-agent";
+import { StringEnum } from "@gsd/pi-ai";
 const Status = StringEnum(["pending", "active", "done"] as const);
 
 // WRONG — breaks Google Gemini
@@ -37,7 +37,7 @@ Never import theme directly. Use the `theme` parameter provided by `ctx.ui.custo
 
 ```typescript
 // CORRECT
-ctx.ui.custom((theme) => { /* use theme here */ });
+ctx.ui.custom((tui, theme, kb, done) => { /* use theme here */ });
 
 // WRONG
 import { theme } from "@gsd/pi-tui";
@@ -96,7 +96,7 @@ for (const item of items) {
 
 ```typescript
 if (ctx.hasUI) {
-  await ctx.ui.dialog("Confirm?");
+  await ctx.ui.confirm("Confirm?", "This action cannot be undone");
 }
 ```
 
