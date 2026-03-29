@@ -1,20 +1,19 @@
-/**
- * reopen-slice handler — the core operation behind gsd_slice_reopen.
- *
- * Resets a completed slice back to "in_progress" and resets ALL of its
- * tasks back to "pending". This is intentional — if you're reopening a
- * slice, you're re-doing the work. Partial resets create ambiguous state.
- *
- * The parent milestone must still be open (not complete).
- */
+// GSD — reopen-milestone tool handler
 
-// GSD — reopen-slice tool handler
-// Copyright (c) 2026 Jeremy McSpadden <jeremy@fluxlabs.net>
+/**
+ * reopen-milestone handler — the core operation behind gsd_milestone_reopen.
+ *
+ * Resets a closed milestone back to "active", all of its slices to
+ * "in_progress", and all tasks to "pending". Cleans up stale filesystem
+ * artifacts so the DB-filesystem reconciler does not auto-correct
+ * entities back to "complete".
+ */
 
 import {
   getMilestone,
-  getSlice,
+  getMilestoneSlices,
   getSliceTasks,
+  updateMilestoneStatus,
   updateSliceStatus,
   updateTaskStatus,
   transaction,
@@ -26,11 +25,10 @@ import { writeManifest } from "../workflow-manifest.js";
 import { appendEvent } from "../workflow-events.js";
 import { existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { resolveTasksDir, resolveSlicePath, clearPathCache } from "../paths.js";
+import { resolveMilestonePath, resolveSlicePath, resolveTasksDir, clearPathCache } from "../paths.js";
 
-export interface ReopenSliceParams {
+export interface ReopenMilestoneParams {
   milestoneId: string;
-  sliceId: string;
   reason?: string;
   /** Optional caller-provided identity for audit trail */
   actorName?: string;
@@ -38,26 +36,24 @@ export interface ReopenSliceParams {
   triggerReason?: string;
 }
 
-export interface ReopenSliceResult {
+export interface ReopenMilestoneResult {
   milestoneId: string;
-  sliceId: string;
+  slicesReset: number;
   tasksReset: number;
 }
 
-export async function handleReopenSlice(
-  params: ReopenSliceParams,
+export async function handleReopenMilestone(
+  params: ReopenMilestoneParams,
   basePath: string,
-): Promise<ReopenSliceResult | { error: string }> {
+): Promise<ReopenMilestoneResult | { error: string }> {
   // ── Validate required fields ────────────────────────────────────────────
-  if (!params.sliceId || typeof params.sliceId !== "string" || params.sliceId.trim() === "") {
-    return { error: "sliceId is required and must be a non-empty string" };
-  }
   if (!params.milestoneId || typeof params.milestoneId !== "string" || params.milestoneId.trim() === "") {
     return { error: "milestoneId is required and must be a non-empty string" };
   }
 
   // ── Guards + DB writes inside a single transaction (prevents TOCTOU) ───
   let guardError: string | null = null;
+  let slicesResetCount = 0;
   let tasksResetCount = 0;
 
   transaction(() => {
@@ -66,28 +62,23 @@ export async function handleReopenSlice(
       guardError = `milestone not found: ${params.milestoneId}`;
       return;
     }
-    if (isClosedStatus(milestone.status)) {
-      guardError = `cannot reopen slice in a closed milestone: ${params.milestoneId} (status: ${milestone.status})`;
+    if (!isClosedStatus(milestone.status)) {
+      guardError = `milestone ${params.milestoneId} is not closed (status: ${milestone.status}) — nothing to reopen`;
       return;
     }
 
-    const slice = getSlice(params.milestoneId, params.sliceId);
-    if (!slice) {
-      guardError = `slice not found: ${params.milestoneId}/${params.sliceId}`;
-      return;
-    }
-    if (!isClosedStatus(slice.status)) {
-      guardError = `slice ${params.sliceId} is not complete (status: ${slice.status}) — nothing to reopen`;
-      return;
-    }
+    updateMilestoneStatus(params.milestoneId, "active", null);
 
-    // Fetch tasks inside txn so the list is consistent with the slice status check
-    const tasks = getSliceTasks(params.milestoneId, params.sliceId);
-    tasksResetCount = tasks.length;
+    const slices = getMilestoneSlices(params.milestoneId);
+    slicesResetCount = slices.length;
 
-    updateSliceStatus(params.milestoneId, params.sliceId, "in_progress");
-    for (const task of tasks) {
-      updateTaskStatus(params.milestoneId, params.sliceId, task.id, "pending");
+    for (const slice of slices) {
+      updateSliceStatus(params.milestoneId, slice.id, "in_progress");
+      const tasks = getSliceTasks(params.milestoneId, slice.id);
+      tasksResetCount += tasks.length;
+      for (const task of tasks) {
+        updateTaskStatus(params.milestoneId, slice.id, task.id, "pending");
+      }
     }
   });
 
@@ -100,22 +91,32 @@ export async function handleReopenSlice(
 
   // ── Clean up stale filesystem artifacts (M12 fix) ────────────────────────
   // Without this, the DB-filesystem reconciler sees SUMMARY.md files and
-  // auto-corrects tasks back to "complete", making reopen a no-op (#3161).
+  // auto-corrects entities back to "complete", making reopen a no-op (#3161).
   try {
-    const tasksDir = resolveTasksDir(basePath, params.milestoneId, params.sliceId);
-    if (tasksDir) {
-      const tasks = getSliceTasks(params.milestoneId, params.sliceId);
-      for (const task of tasks) {
-        const summaryPath = join(tasksDir, `${task.id}-SUMMARY.md`);
-        if (existsSync(summaryPath)) unlinkSync(summaryPath);
-      }
+    const milestoneDir = resolveMilestonePath(basePath, params.milestoneId);
+    if (milestoneDir) {
+      const milestoneSummary = join(milestoneDir, `${params.milestoneId}-SUMMARY.md`);
+      if (existsSync(milestoneSummary)) unlinkSync(milestoneSummary);
     }
-    const sliceDir = resolveSlicePath(basePath, params.milestoneId, params.sliceId);
-    if (sliceDir) {
-      const sliceSummary = join(sliceDir, `${params.sliceId}-SUMMARY.md`);
-      if (existsSync(sliceSummary)) unlinkSync(sliceSummary);
-      const sliceUat = join(sliceDir, `${params.sliceId}-UAT.md`);
-      if (existsSync(sliceUat)) unlinkSync(sliceUat);
+
+    const slices = getMilestoneSlices(params.milestoneId);
+    for (const slice of slices) {
+      const sliceDir = resolveSlicePath(basePath, params.milestoneId, slice.id);
+      if (sliceDir) {
+        const sliceSummary = join(sliceDir, `${slice.id}-SUMMARY.md`);
+        if (existsSync(sliceSummary)) unlinkSync(sliceSummary);
+        const sliceUat = join(sliceDir, `${slice.id}-UAT.md`);
+        if (existsSync(sliceUat)) unlinkSync(sliceUat);
+      }
+
+      const tasksDir = resolveTasksDir(basePath, params.milestoneId, slice.id);
+      if (tasksDir) {
+        const tasks = getSliceTasks(params.milestoneId, slice.id);
+        for (const task of tasks) {
+          const taskSummary = join(tasksDir, `${task.id}-SUMMARY.md`);
+          if (existsSync(taskSummary)) unlinkSync(taskSummary);
+        }
+      }
     }
   } catch {
     // Non-fatal
@@ -127,11 +128,11 @@ export async function handleReopenSlice(
     await renderAllProjections(basePath, params.milestoneId);
     writeManifest(basePath);
     appendEvent(basePath, {
-      cmd: "reopen-slice",
+      cmd: "reopen-milestone",
       params: {
         milestoneId: params.milestoneId,
-        sliceId: params.sliceId,
         reason: params.reason ?? null,
+        slicesReset: slicesResetCount,
         tasksReset: tasksResetCount,
       },
       ts: new Date().toISOString(),
@@ -141,13 +142,13 @@ export async function handleReopenSlice(
     });
   } catch (hookErr) {
     process.stderr.write(
-      `gsd: reopen-slice post-mutation hook warning: ${(hookErr as Error).message}\n`,
+      `gsd: reopen-milestone post-mutation hook warning: ${(hookErr as Error).message}\n`,
     );
   }
 
   return {
     milestoneId: params.milestoneId,
-    sliceId: params.sliceId,
+    slicesReset: slicesResetCount,
     tasksReset: tasksResetCount,
   };
 }
