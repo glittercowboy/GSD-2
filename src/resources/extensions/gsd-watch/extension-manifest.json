@@ -6,8 +6,7 @@
   "tier": "bundled",
   "requires": { "platform": ">=2.29.0" },
   "provides": {
-    "commands": ["watch"],
-    "hooks": ["session_start"]
+    "commands": ["watch"]
   },
   "dependencies": {
     "extensions": ["gsd"],
