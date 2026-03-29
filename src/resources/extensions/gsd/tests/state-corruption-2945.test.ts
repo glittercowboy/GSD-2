@@ -25,6 +25,7 @@ import {
 } from "../gsd-db.ts";
 import { renderRoadmapContent } from "../workflow-projections.ts";
 import type { MilestoneRow, SliceRow } from "../gsd-db.ts";
+import type { AutoSession } from "../auto/session.ts";
 
 // ─── Fixture helpers ────────────────────────────────────────────────────────
 
@@ -55,13 +56,19 @@ function makeMilestoneRow(overrides: Partial<MilestoneRow> = {}): MilestoneRow {
     title: "Test Milestone",
     vision: "Build a test milestone",
     status: "active",
-    sequence: 1,
-    success_criteria: ["SC1", "SC2"],
-    definition_of_done: [],
-    requirements: [],
-    boundary_map_markdown: "",
+    depends_on: [],
+    created_at: new Date().toISOString(),
     completed_at: null,
-    integration_branch: null,
+    success_criteria: ["SC1", "SC2"],
+    key_risks: [],
+    proof_strategy: [],
+    verification_contract: "",
+    verification_integration: "",
+    verification_operational: "",
+    verification_uat: "",
+    definition_of_done: [],
+    requirement_coverage: "",
+    boundary_map_markdown: "",
     ...overrides,
   };
 }
@@ -77,9 +84,15 @@ function makeSliceRow(id: string, overrides: Partial<SliceRow> = {}): SliceRow {
     status: "pending",
     sequence: parseInt(id.replace("S", ""), 10) || 0,
     depends: [],
+    created_at: new Date().toISOString(),
     completed_at: null,
     full_summary_md: "",
     full_uat_md: "",
+    success_criteria: "",
+    proof_level: "",
+    integration_closure: "",
+    observability_impact: "",
+    replan_triggered_at: null,
     ...overrides,
   };
 }
@@ -258,7 +271,7 @@ describe("#2945 Bug 3: mergeAndExit must teardown worktree after successful merg
       originalBasePath: "/mock/project",
       isolationDegraded: false,
       gitService: {} as unknown,
-    };
+    } as unknown as AutoSession;
 
     const mockDeps = {
       isInAutoWorktree: () => true,
