@@ -27,16 +27,18 @@ export async function sendRemoteNotification(title: string, message: string): Pr
   }
   if (!config) return;
 
+  const projectTag = config.projectLabel ? ` [${config.projectLabel}]` : "";
+
   try {
     switch (config.channel) {
       case "slack":
-        await sendSlackNotification(config, title, message);
+        await sendSlackNotification(config, title, message, projectTag);
         break;
       case "discord":
-        await sendDiscordNotification(config, title, message);
+        await sendDiscordNotification(config, title, message, projectTag);
         break;
       case "telegram":
-        await sendTelegramNotification(config, title, message);
+        await sendTelegramNotification(config, title, message, projectTag);
         break;
     }
   } catch {
@@ -44,7 +46,7 @@ export async function sendRemoteNotification(title: string, message: string): Pr
   }
 }
 
-async function sendSlackNotification(config: ResolvedConfig, title: string, message: string): Promise<void> {
+async function sendSlackNotification(config: ResolvedConfig, title: string, message: string, projectTag: string): Promise<void> {
   const response = await fetch(`https://slack.com/api/chat.postMessage`, {
     method: "POST",
     headers: {
@@ -53,14 +55,14 @@ async function sendSlackNotification(config: ResolvedConfig, title: string, mess
     },
     body: JSON.stringify({
       channel: config.channelId,
-      text: `⚠️ *${title}*\n${message}`,
+      text: `⚠️ *${title}${projectTag}*\n${message}`,
     }),
     signal: AbortSignal.timeout(PER_REQUEST_TIMEOUT_MS),
   });
   if (!response.ok) throw new Error(`Slack HTTP ${response.status}`);
 }
 
-async function sendDiscordNotification(config: ResolvedConfig, title: string, message: string): Promise<void> {
+async function sendDiscordNotification(config: ResolvedConfig, title: string, message: string, projectTag: string): Promise<void> {
   const response = await fetch(`https://discord.com/api/v10/channels/${config.channelId}/messages`, {
     method: "POST",
     headers: {
@@ -68,20 +70,20 @@ async function sendDiscordNotification(config: ResolvedConfig, title: string, me
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      content: `⚠️ **${title}**\n${message}`,
+      content: `⚠️ **${title}${projectTag}**\n${message}`,
     }),
     signal: AbortSignal.timeout(PER_REQUEST_TIMEOUT_MS),
   });
   if (!response.ok) throw new Error(`Discord HTTP ${response.status}`);
 }
 
-async function sendTelegramNotification(config: ResolvedConfig, title: string, message: string): Promise<void> {
+async function sendTelegramNotification(config: ResolvedConfig, title: string, message: string, projectTag: string): Promise<void> {
   const response = await fetch(`https://api.telegram.org/bot${config.token}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       chat_id: config.channelId,
-      text: `⚠️ *${title}*\n${message}`,
+      text: `⚠️ *${title}${projectTag}*\n${message}`,
       parse_mode: "Markdown",
     }),
     signal: AbortSignal.timeout(PER_REQUEST_TIMEOUT_MS),

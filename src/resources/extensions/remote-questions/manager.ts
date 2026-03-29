@@ -107,7 +107,7 @@ function createPrompt(questions: QuestionInput[], config: ResolvedConfig): Remot
     createdAt,
     timeoutAt: createdAt + config.timeoutMs,
     pollIntervalMs: config.pollIntervalMs,
-    context: { source: "ask_user_questions" },
+    context: { source: "ask_user_questions", projectLabel: config.projectLabel },
     questions: questions.map((q): RemoteQuestion => ({
       id: q.id,
       header: q.header,

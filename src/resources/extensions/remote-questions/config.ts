@@ -2,6 +2,7 @@
  * Remote Questions — configuration resolution and validation
  */
 
+import { basename } from "node:path";
 import { AuthStorage } from "@gsd/pi-coding-agent";
 import { loadEffectiveGSDPreferences, type RemoteQuestionsConfig } from "../gsd/preferences.js";
 import type { RemoteChannel } from "./types.js";
@@ -12,6 +13,8 @@ export interface ResolvedConfig {
   timeoutMs: number;
   pollIntervalMs: number;
   token: string;
+  /** Human-readable project label for message prefixes. Never empty. */
+  projectLabel: string;
 }
 
 const ENV_KEYS: Record<RemoteChannel, string> = {
@@ -74,6 +77,15 @@ function hydrateRemoteTokensFromAuth(): void {
   }
 }
 
+/**
+ * Resolve a human-readable project label for remote message prefixes.
+ * Priority: explicit preference > cwd basename.
+ */
+function resolveProjectLabel(explicit?: string): string {
+  if (explicit && explicit.trim()) return explicit.trim();
+  return basename(process.cwd());
+}
+
 export function resolveRemoteConfig(): ResolvedConfig | null {
   hydrateRemoteTokensFromAuth();
   const prefs = loadEffectiveGSDPreferences();
@@ -96,6 +108,7 @@ export function resolveRemoteConfig(): ResolvedConfig | null {
     timeoutMs: timeoutMinutes * 60 * 1000,
     pollIntervalMs: pollIntervalSeconds * 1000,
     token,
+    projectLabel: resolveProjectLabel(rq.project_label),
   };
 }
 

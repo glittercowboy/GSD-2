@@ -29,6 +29,8 @@ export interface RemotePrompt {
   questions: RemoteQuestion[];
   context?: {
     source: string;
+    /** Human-readable project label for message prefixes. */
+    projectLabel?: string;
   };
 }
 
@@ -62,6 +64,7 @@ interface RemotePromptRecordBase {
   lastError?: string;
   context?: {
     source: string;
+    projectLabel?: string;
   };
 }
 

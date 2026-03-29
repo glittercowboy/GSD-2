@@ -753,3 +753,131 @@ test("config source-level: removeProviderToken uses auth.remove not auth.set wit
   assert.ok(fnBody.includes("auth.remove("), "removeProviderToken should call auth.remove()");
   assert.ok(!fnBody.includes('key: ""'), "removeProviderToken should not set an empty key");
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Project Label Tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+test("formatForTelegram includes project label in header when present", () => {
+  const prompt = {
+    id: "tg-label-1",
+    channel: "telegram" as const,
+    createdAt: Date.now(),
+    timeoutAt: Date.now() + 60000,
+    pollIntervalMs: 5000,
+    context: { source: "ask_user_questions", projectLabel: "my-app" },
+    questions: [{
+      id: "q1",
+      header: "Confirm",
+      question: "Proceed?",
+      options: [
+        { label: "Yes", description: "Continue" },
+        { label: "No", description: "Stop" },
+      ],
+      allowMultiple: false,
+    }],
+  };
+
+  const msg = formatForTelegram(prompt);
+  assert.ok(msg.text.includes("[my-app]"), "Telegram header should include project label");
+  assert.ok(msg.text.includes("<b>GSD needs your input [my-app]</b>"), "project label should be inside the bold header");
+});
+
+test("formatForTelegram omits project label bracket when not present", () => {
+  const prompt = {
+    id: "tg-label-2",
+    channel: "telegram" as const,
+    createdAt: Date.now(),
+    timeoutAt: Date.now() + 60000,
+    pollIntervalMs: 5000,
+    questions: [{
+      id: "q1",
+      header: "Confirm",
+      question: "Proceed?",
+      options: [{ label: "Yes", description: "Continue" }],
+      allowMultiple: false,
+    }],
+  };
+
+  const msg = formatForTelegram(prompt);
+  assert.ok(msg.text.includes("<b>GSD needs your input</b>"), "header should not have brackets when no label");
+  assert.ok(!msg.text.includes("["), "should not contain stray brackets");
+});
+
+test("formatForSlack includes project label in header when present", () => {
+  const blocks = formatForSlack({
+    id: "slack-label-1",
+    channel: "slack",
+    createdAt: Date.now(),
+    timeoutAt: Date.now() + 60000,
+    pollIntervalMs: 5000,
+    context: { source: "ask_user_questions", projectLabel: "my-app" },
+    questions: [{
+      id: "q1",
+      header: "Confirm",
+      question: "Proceed?",
+      options: [{ label: "Yes", description: "Continue" }],
+      allowMultiple: false,
+    }],
+  });
+
+  const headerBlock = blocks.find((b) => b.type === "header");
+  assert.ok(headerBlock, "should have a header block");
+  assert.ok(headerBlock!.text!.text.includes("[my-app]"), "Slack header should include project label");
+});
+
+test("formatForDiscord includes project label in embed title and footer when present", () => {
+  const prompt = {
+    id: "discord-label-1",
+    channel: "discord" as const,
+    createdAt: Date.now(),
+    timeoutAt: Date.now() + 60000,
+    pollIntervalMs: 5000,
+    context: { source: "ask_user_questions", projectLabel: "my-app" },
+    questions: [{
+      id: "q1",
+      header: "Confirm",
+      question: "Proceed?",
+      options: [
+        { label: "Yes", description: "Continue" },
+        { label: "No", description: "Stop" },
+      ],
+      allowMultiple: false,
+    }],
+  };
+
+  const { embeds } = formatForDiscord(prompt);
+  assert.ok(embeds[0].title.includes("[my-app]"), "Discord embed title should include project label");
+  assert.ok(embeds[0].footer?.text.includes("Project: my-app"), "Discord embed footer should include project label");
+});
+
+test("formatForTelegram escapes HTML in project label", () => {
+  const prompt = {
+    id: "tg-label-3",
+    channel: "telegram" as const,
+    createdAt: Date.now(),
+    timeoutAt: Date.now() + 60000,
+    pollIntervalMs: 5000,
+    context: { source: "ask_user_questions", projectLabel: "<script>alert(1)</script>" },
+    questions: [{
+      id: "q1",
+      header: "Confirm",
+      question: "Proceed?",
+      options: [{ label: "Yes", description: "Continue" }],
+      allowMultiple: false,
+    }],
+  };
+
+  const msg = formatForTelegram(prompt);
+  assert.ok(!msg.text.includes("<script>"), "project label should be HTML-escaped");
+  assert.ok(msg.text.includes("&lt;script&gt;"), "should contain escaped version");
+});
+
+test("config source-level: resolveProjectLabel falls back to cwd basename", () => {
+  const configSrc = readFileSync(
+    join(__dirname, "..", "..", "remote-questions", "config.ts"),
+    "utf-8",
+  );
+  assert.ok(configSrc.includes("basename(process.cwd())"), "resolveProjectLabel should fall back to cwd basename");
+  assert.ok(configSrc.includes("project_label"), "resolveRemoteConfig should read project_label from preferences");
+});

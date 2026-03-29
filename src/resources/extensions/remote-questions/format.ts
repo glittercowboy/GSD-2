@@ -23,10 +23,11 @@ export const SLACK_NUMBER_REACTION_NAMES = ["one", "two", "three", "four", "five
 const MAX_USER_NOTE_LENGTH = 500;
 
 export function formatForSlack(prompt: RemotePrompt): SlackBlock[] {
+  const projectTag = prompt.context?.projectLabel ? ` [${prompt.context.projectLabel}]` : "";
   const blocks: SlackBlock[] = [
     {
       type: "header",
-      text: { type: "plain_text", text: "GSD needs your input" },
+      text: { type: "plain_text", text: `GSD needs your input${projectTag}` },
     },
   ];
 
@@ -90,6 +91,7 @@ export function formatForSlack(prompt: RemotePrompt): SlackBlock[] {
 }
 
 export function formatForDiscord(prompt: RemotePrompt): { embeds: DiscordEmbed[]; reactionEmojis: string[] } {
+  const projectTag = prompt.context?.projectLabel ? ` [${prompt.context.projectLabel}]` : "";
   const reactionEmojis: string[] = [];
   const embeds: DiscordEmbed[] = prompt.questions.map((q, questionIndex) => {
     const supportsReactions = prompt.questions.length === 1;
@@ -110,9 +112,12 @@ export function formatForDiscord(prompt: RemotePrompt): { embeds: DiscordEmbed[]
     if (prompt.context?.source) {
       footerParts.push(`Source: ${prompt.context.source}`);
     }
+    if (projectTag) {
+      footerParts.push(`Project: ${prompt.context?.projectLabel}`);
+    }
 
     return {
-      title: q.header,
+      title: `${q.header}${projectTag}`,
       description: q.question,
       color: 0x7c3aed,
       fields: [{ name: "Options", value: optionLines.join("\n") }],
@@ -216,7 +221,8 @@ function escapeHtml(s: string): string {
 }
 
 export function formatForTelegram(prompt: RemotePrompt): TelegramMessage {
-  const lines: string[] = ["<b>GSD needs your input</b>", ""];
+  const projectTag = prompt.context?.projectLabel ? ` [${escapeHtml(prompt.context.projectLabel)}]` : "";
+  const lines: string[] = [`<b>GSD needs your input${projectTag}</b>`, ""];
 
   for (let qi = 0; qi < prompt.questions.length; qi++) {
     const q = prompt.questions[qi];

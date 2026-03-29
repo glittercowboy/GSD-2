@@ -177,6 +177,8 @@ export interface RemoteQuestionsConfig {
   channel_id: string | number;
   timeout_minutes?: number;        // clamped to 1-30
   poll_interval_seconds?: number;  // clamped to 2-30
+  /** Optional label to identify this project in remote messages. Falls back to working directory name. */
+  project_label?: string;
 }
 
 export interface CmuxPreferences {
