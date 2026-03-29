@@ -8,7 +8,7 @@
 
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 
@@ -556,6 +556,8 @@ function ensureGsdSymlinkCore(projectPath: string): string {
 
   const replaceWithSymlink = (): string => {
     rmSync(localGsd, { recursive: true, force: true });
+    // Defensive: remove any residual entry (e.g. dangling symlink) before creating.
+    try { unlinkSync(localGsd); } catch { /* already gone */ }
     symlinkSync(externalPath, localGsd, "junction");
     return externalPath;
   };
@@ -573,7 +575,9 @@ function ensureGsdSymlinkCore(projectPath: string): string {
     } catch {
       // lstat also failed — nothing exists at this path
     }
-    // Nothing exists yet — create symlink
+    // Nothing exists yet — create symlink.
+    // Defensive: remove any residual entry to avoid EEXIST race (#2750).
+    try { unlinkSync(localGsd); } catch { /* nothing to remove */ }
     symlinkSync(externalPath, localGsd, "junction");
     return externalPath;
   }
