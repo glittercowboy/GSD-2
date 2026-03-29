@@ -7,12 +7,25 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const retryHandlerSrc = readFileSync(join(__dirname, "retry-handler.ts"), "utf-8");
+
+// Resolve retry-handler.ts from either the source tree (__dirname when running
+// via tsx) or the project root (when running from dist/ in CI).
+function findRetryHandlerSrc(): string {
+  // Direct sibling (tsx / source run)
+  const direct = join(__dirname, "retry-handler.ts");
+  if (existsSync(direct)) return readFileSync(direct, "utf-8");
+  // Walk up from cwd to find the source file
+  const fromCwd = join(process.cwd(), "packages", "pi-coding-agent", "src", "core", "retry-handler.ts");
+  if (existsSync(fromCwd)) return readFileSync(fromCwd, "utf-8");
+  throw new Error("retry-handler.ts not found for structural tests");
+}
+
+const retryHandlerSrc = findRetryHandlerSrc();
 
 // ─── Error classification ─────────────────────────────────────────────────
 
