@@ -688,10 +688,12 @@ export async function runGSDDoctor(basePath: string, options?: { fix?: boolean; 
               if (shouldFix("task_file_not_in_plan") && tasksDir) {
                 try {
                   const summaryAbs = join(tasksDir, f);
-                  if (existsSync(summaryAbs)) { rmSync(summaryAbs, { force: true }); fixesApplied.push(`removed orphan ${summaryAbs}`); }
                   const planAbs = join(tasksDir, `${diskTaskId}-PLAN.md`);
-                  if (existsSync(planAbs)) { rmSync(planAbs, { force: true }); fixesApplied.push(`removed orphan ${planAbs}`); }
-                  wasFixed = true;
+                  const summaryExists = existsSync(summaryAbs);
+                  const planExists = existsSync(planAbs);
+                  if (summaryExists) { rmSync(summaryAbs, { force: true }); fixesApplied.push(`removed orphan ${summaryAbs}`); }
+                  if (planExists) { rmSync(planAbs, { force: true }); fixesApplied.push(`removed orphan ${planAbs}`); }
+                  if (summaryExists || planExists) wasFixed = true;
                 } catch { /* non-fatal */ }
               }
               if (!wasFixed) {
