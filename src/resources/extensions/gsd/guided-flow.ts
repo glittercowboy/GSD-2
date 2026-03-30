@@ -620,6 +620,12 @@ export async function showDiscuss(
   const pendingSlices = normSlices.filter(s => !s.done);
 
   if (pendingSlices.length === 0) {
+    // All slices complete — but queued milestones may still need discussion (#3150)
+    const pendingMilestones = state.registry.filter(m => m.status === "pending");
+    if (pendingMilestones.length > 0) {
+      await showDiscussQueuedMilestone(ctx, pi, basePath, pendingMilestones);
+      return;
+    }
     ctx.ui.notify("All slices are complete — nothing to discuss.", "info");
     return;
   }
@@ -636,9 +642,14 @@ export async function showDiscuss(
       discussedMap.set(s.id, !!contextFile);
     }
 
-    // If all pending slices are discussed, notify and exit instead of looping
+    // If all pending slices are discussed, check for queued milestones before exiting (#3150)
     const allDiscussed = pendingSlices.every(s => discussedMap.get(s.id));
     if (allDiscussed) {
+      const pendingMilestones = state.registry.filter(m => m.status === "pending");
+      if (pendingMilestones.length > 0) {
+        await showDiscussQueuedMilestone(ctx, pi, basePath, pendingMilestones);
+        return;
+      }
       const lockData = readSessionLockData(basePath);
       const remoteAutoRunning = lockData && lockData.pid !== process.pid && isSessionLockProcessAlive(lockData);
       const nextStep = remoteAutoRunning
