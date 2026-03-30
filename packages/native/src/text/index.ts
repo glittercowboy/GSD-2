@@ -5,7 +5,7 @@
  * single-pass ANSI scanning, and proper Unicode grapheme cluster support.
  */
 
-import { native } from "../native.js";
+import { native, nativeLoadedSuccessfully } from "../native.js";
 import { eastAsianWidth } from "get-east-asian-width";
 import type { ExtractSegmentsResult, SliceResult } from "./types.js";
 
@@ -29,26 +29,6 @@ type WrapToken = {
   width: number;
   kind: "ansi" | "grapheme" | "whitespace";
 };
-
-function isNativeUnavailableError(err: unknown, fnName: string): boolean {
-  return (
-    err instanceof Error &&
-    err.message.includes(`Native function '${fnName}' is not available`)
-  );
-}
-
-function withNativeFallback<T>(
-  fnName: string,
-  invoke: () => T,
-  fallback: () => T,
-): T {
-  try {
-    return invoke();
-  } catch (err) {
-    if (!isNativeUnavailableError(err, fnName)) throw err;
-    return fallback();
-  }
-}
 
 function cloneActiveState(state: ActiveAnsiState): ActiveAnsiState {
   return {
@@ -288,6 +268,16 @@ function wrapTextWithAnsiFallback(
   return lines;
 }
 
+const nativeText = native as Record<string, Function>;
+const wrapTextWithAnsiImpl = nativeLoadedSuccessfully
+  ? ((text: string, width: number, tabWidth?: number) =>
+      nativeText.wrapTextWithAnsi(text, width, tabWidth) as string[])
+  : wrapTextWithAnsiFallback;
+const visibleWidthImpl = nativeLoadedSuccessfully
+  ? ((text: string, tabWidth?: number) =>
+      nativeText.visibleWidth(text, tabWidth) as number)
+  : visibleWidthFallback;
+
 /**
  * Word-wrap text to a visible width, preserving ANSI escape codes across
  * line breaks.
@@ -301,16 +291,7 @@ export function wrapTextWithAnsi(
   width: number,
   tabWidth?: number,
 ): string[] {
-  return withNativeFallback(
-    "wrapTextWithAnsi",
-    () =>
-      (native as Record<string, Function>).wrapTextWithAnsi(
-        text,
-        width,
-        tabWidth,
-      ) as string[],
-    () => wrapTextWithAnsiFallback(text, width, tabWidth),
-  );
+  return wrapTextWithAnsiImpl(text, width, tabWidth);
 }
 
 /**
@@ -329,6 +310,8 @@ export function truncateToWidth(
   pad: boolean,
   tabWidth?: number,
 ): string {
+  // The remaining text helpers stay native-only for now because JS parity here
+  // would risk subtle layout drift in truncation and overlay rendering.
   return (native as Record<string, Function>).truncateToWidth(
     text,
     maxWidth,
@@ -400,13 +383,5 @@ export function sanitizeText(text: string): string {
  * Tabs count as `tabWidth` cells (default 3).
  */
 export function visibleWidth(text: string, tabWidth?: number): number {
-  return withNativeFallback(
-    "visibleWidth",
-    () =>
-      (native as Record<string, Function>).visibleWidth(
-        text,
-        tabWidth,
-      ) as number,
-    () => visibleWidthFallback(text, tabWidth),
-  );
+  return visibleWidthImpl(text, tabWidth);
 }
