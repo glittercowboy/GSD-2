@@ -48,7 +48,7 @@ const NETWORK_RE = /network|ECONNRESET|ETIMEDOUT|ECONNREFUSED|socket hang up|fet
 const SERVER_RE = /internal server error|500|502|503|overloaded|server_error|api_error|service.?unavailable/i;
 // ECONNRESET/ECONNREFUSED are in NETWORK_RE (same-model retry first).
 const CONNECTION_RE = /terminated|connection.?refused|other side closed|EPIPE|network.?(?:is\s+)?unavailable|stream_exhausted(?:_without_result)?/i;
-const STREAM_RE = /Unexpected end of JSON|Unexpected token.*JSON|Expected double-quoted property name|SyntaxError.*JSON/i;
+const STREAM_RE = /Unexpected end of JSON|Unexpected token.*JSON|Expected.*in JSON|Unterminated.*in JSON|SyntaxError.*JSON/i;
 const RESET_DELAY_RE = /reset in (\d+)s/i;
 
 /**
@@ -58,9 +58,9 @@ const RESET_DELAY_RE = /reset in (\d+)s/i;
  *  1. Permanent (auth/billing/quota) — unless also rate-limited
  *  2. Rate limit (429, rate.?limit, too many requests)
  *  3. Network (ECONNRESET, ETIMEDOUT, socket hang up, fetch failed, dns)
- *  4. Server (500/502/503, overloaded, server_error)
- *  5. Connection (terminated, ECONNREFUSED, EPIPE, other side closed)
- *  6. Stream truncation (malformed JSON from mid-stream cut)
+ *  4. Stream truncation (malformed JSON from mid-stream cut)
+ *  5. Server (500/502/503, overloaded, server_error)
+ *  6. Connection (terminated, ECONNREFUSED, EPIPE, other side closed)
  *  7. Unknown
  */
 export function classifyError(errorMsg: string, retryAfterMs?: number): ErrorClass {
@@ -90,19 +90,22 @@ export function classifyError(errorMsg: string, retryAfterMs?: number): ErrorCla
     return { kind: "network", retryAfterMs: retryAfterMs ?? 3_000 };
   }
 
-  // 4. Server errors — try fallback model
+  // 4. Stream truncation — downstream symptom of connection drop
+  //    Checked before server/connection because JSON parse errors can contain
+  //    substrings like "position 500" (matches SERVER_RE) or "Unterminated"
+  //    (matches CONNECTION_RE's "terminated" pattern).
+  if (STREAM_RE.test(errorMsg)) {
+    return { kind: "stream", retryAfterMs: retryAfterMs ?? 15_000 };
+  }
+
+  // 5. Server errors — try fallback model
   if (SERVER_RE.test(errorMsg)) {
     return { kind: "server", retryAfterMs: retryAfterMs ?? 30_000 };
   }
 
-  // 5. Connection errors — try fallback model
+  // 6. Connection errors — try fallback model
   if (CONNECTION_RE.test(errorMsg)) {
     return { kind: "connection", retryAfterMs: retryAfterMs ?? 15_000 };
-  }
-
-  // 6. Stream truncation — downstream symptom of connection drop
-  if (STREAM_RE.test(errorMsg)) {
-    return { kind: "stream", retryAfterMs: retryAfterMs ?? 15_000 };
   }
 
   // 7. Unknown
