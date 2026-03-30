@@ -23,6 +23,7 @@ import { isClosedStatus } from "../status-guards.js";
 import { renderAllProjections } from "../workflow-projections.js";
 import { writeManifest } from "../workflow-manifest.js";
 import { appendEvent } from "../workflow-events.js";
+import { debugLog } from "../debug-logger.js";
 import { existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { resolveMilestonePath, resolveSlicePath, resolveTasksDir, clearPathCache } from "../paths.js";
@@ -118,9 +119,7 @@ export async function handleReopenMilestone(
         }
       }
     }
-  } catch {
-    // Non-fatal
-  }
+  } catch (err) { debugLog("reopen-milestone-cleanup-failed", { milestoneId: params.milestoneId, error: String(err) }); }
   clearPathCache();
 
   // ── Post-mutation hook ───────────────────────────────────────────────────
