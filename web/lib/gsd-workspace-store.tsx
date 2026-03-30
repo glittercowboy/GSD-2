@@ -504,6 +504,7 @@ export type WorkspaceOnboardingRequestState =
   | "idle"
   | "refreshing"
   | "saving_api_key"
+  | "saving_custom_provider"
   | "starting_provider_flow"
   | "submitting_provider_flow_input"
   | "cancelling_provider_flow"
@@ -1506,6 +1507,15 @@ export function getOnboardingPresentation(
       phase: "validating",
       label: "Validating credentials",
       detail: "Checking the provider key and saving it only if validation succeeds.",
+      tone: "info",
+    }
+  }
+
+  if (state.onboardingRequestState === "saving_custom_provider") {
+    return {
+      phase: "validating",
+      label: "Saving custom provider",
+      detail: "Persisting the endpoint, model, and API key before the bridge reloads onto the new provider.",
       tone: "info",
     }
   }
@@ -3777,6 +3787,68 @@ export class GSDWorkspaceStore {
     return onboarding
   }
 
+  saveCustomProviderFromSurface = async (
+    providerId: string,
+    baseUrl: string,
+    apiKey: string,
+    modelId: string,
+  ): Promise<WorkspaceOnboardingState | null> => {
+    const selectedTarget: CommandSurfaceTarget = { kind: "auth", providerId, intent: "manage" }
+    this.patchState({
+      commandSurface: setCommandSurfacePending(this.state.commandSurface, "save_custom_provider", selectedTarget),
+    })
+
+    const onboarding = await this.saveCustomProvider(providerId, baseUrl, apiKey, modelId)
+    const providerLabel = onboarding ? findOnboardingProviderLabel(onboarding, providerId) : providerId
+
+    if (!onboarding) {
+      this.patchState({
+        commandSurface: applyCommandSurfaceActionResult(this.state.commandSurface, {
+          action: "save_custom_provider",
+          success: false,
+          message: this.state.lastClientError ?? `${providerLabel} setup failed`,
+          selectedTarget,
+        }),
+      })
+      return null
+    }
+
+    if (onboarding.lastValidation?.status === "failed") {
+      this.patchState({
+        commandSurface: applyCommandSurfaceActionResult(this.state.commandSurface, {
+          action: "save_custom_provider",
+          success: false,
+          message: onboarding.lastValidation.message,
+          selectedTarget,
+        }),
+      })
+      return onboarding
+    }
+
+    if (onboarding.bridgeAuthRefresh.phase === "failed") {
+      this.patchState({
+        commandSurface: applyCommandSurfaceActionResult(this.state.commandSurface, {
+          action: "save_custom_provider",
+          success: false,
+          message: onboarding.bridgeAuthRefresh.error ?? `${providerLabel} saved but bridge auth refresh failed`,
+          selectedTarget,
+        }),
+      })
+      return onboarding
+    }
+
+    this.patchState({
+      commandSurface: applyCommandSurfaceActionResult(this.state.commandSurface, {
+        action: "save_custom_provider",
+        success: true,
+        message: `${providerLabel} saved and ready.`,
+        selectedTarget,
+      }),
+    })
+
+    return onboarding
+  }
+
   startProviderFlowFromSurface = async (providerId: string): Promise<WorkspaceOnboardingState | null> => {
     const selectedTarget: CommandSurfaceTarget = { kind: "auth", providerId, intent: "login" }
     this.patchState({
@@ -4492,6 +4564,43 @@ export class GSDWorkspaceStore {
       this.patchState({
         lastClientError: message,
         terminalLines: withTerminalLine(this.state.terminalLines, createTerminalLine("error", `Credential setup failed — ${message}`)),
+      })
+      return null
+    } finally {
+      this.patchState({
+        onboardingRequestState: "idle",
+        onboardingRequestProviderId: null,
+      })
+    }
+  }
+
+  saveCustomProvider = async (
+    providerId: string,
+    baseUrl: string,
+    apiKey: string,
+    modelId: string,
+  ): Promise<WorkspaceOnboardingState | null> => {
+    this.patchState({
+      onboardingRequestState: "saving_custom_provider",
+      onboardingRequestProviderId: providerId,
+      lastClientError: null,
+    })
+
+    try {
+      const onboarding = await this.postOnboardingAction({
+        action: "save_custom_provider",
+        providerId,
+        baseUrl,
+        apiKey,
+        modelId,
+      })
+      await this.syncAfterOnboardingMutation(onboarding)
+      return onboarding
+    } catch (error) {
+      const message = normalizeClientError(error)
+      this.patchState({
+        lastClientError: message,
+        terminalLines: withTerminalLine(this.state.terminalLines, createTerminalLine("error", `Custom provider setup failed — ${message}`)),
       })
       return null
     } finally {
@@ -5268,7 +5377,9 @@ export function useGSDWorkspaceActions(): Pick<
   | "forkSessionFromSurface"
   | "compactSessionFromSurface"
   | "saveApiKey"
+  | "saveCustomProvider"
   | "saveApiKeyFromSurface"
+  | "saveCustomProviderFromSurface"
   | "startProviderFlow"
   | "startProviderFlowFromSurface"
   | "submitProviderFlowInput"
@@ -5332,7 +5443,9 @@ export function useGSDWorkspaceActions(): Pick<
     forkSessionFromSurface: store.forkSessionFromSurface,
     compactSessionFromSurface: store.compactSessionFromSurface,
     saveApiKey: store.saveApiKey,
+    saveCustomProvider: store.saveCustomProvider,
     saveApiKeyFromSurface: store.saveApiKeyFromSurface,
+    saveCustomProviderFromSurface: store.saveCustomProviderFromSurface,
     startProviderFlow: store.startProviderFlow,
     startProviderFlowFromSurface: store.startProviderFlowFromSurface,
     submitProviderFlowInput: store.submitProviderFlowInput,
