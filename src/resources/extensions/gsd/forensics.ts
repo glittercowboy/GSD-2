@@ -106,13 +106,15 @@ interface ForensicReport {
 // ─── Duplicate Detection ──────────────────────────────────────────────────────
 
 const DEDUP_PROMPT_SECTION = `
-## Duplicate Detection (REQUIRED before issue creation)
+## Pre-Investigation: Duplicate Check (REQUIRED)
 
-Before offering to create a GitHub issue, you MUST search for existing issues and PRs that may already address this bug. This step uses the user's AI tokens for analysis.
+Before reading GSD source code or performing deep analysis, you MUST search for existing issues and PRs that may already address this bug. This avoids wasting tokens on already-fixed bugs.
 
 ### Search Steps
 
-1. **Search closed issues** for similar keywords from your diagnosis:
+Use keywords from the user's problem description and the anomaly summaries in the forensic report above.
+
+1. **Search closed issues** for similar keywords:
    \`\`\`
    gh issue list --repo gsd-build/gsd-2 --state closed --search "<keywords from root cause>" --limit 20
    \`\`\`
@@ -129,20 +131,16 @@ Before offering to create a GitHub issue, you MUST search for existing issues an
 
 ### Analysis
 
-For each result, compare it against your root-cause diagnosis:
+For each result, compare it against the user's reported symptoms and the forensic anomalies:
 - Does the issue describe the same code path or file?
-- Does the PR modify the same file:line you identified?
+- Does the PR modify the area related to the reported symptoms?
 - Is the symptom description semantically similar even if keywords differ?
 
-### Present Findings
+### Decision Gate
 
-If you find potential matches, present them to the user:
-
-1. **"Already fixed by PR #X — skip issue creation"** — when a merged PR or closed issue clearly addresses the same root cause. Explain why you believe it matches.
-2. **"Add my findings to existing issue #Y"** — when an open issue exists for the same bug. Use \`gh issue comment #Y --repo gsd-build/gsd-2\` to add forensic evidence.
-3. **"Create new issue anyway"** — when existing results do not cover this specific failure.
-
-Only proceed to issue creation if no matches were found OR the user explicitly chooses "Create new issue anyway".
+- **Merged PR clearly fixes the described symptom** → Report "Already fixed by PR #X" with brief explanation. Skip full investigation.
+- **Open issue matches** → Report "Existing issue #Y covers this." Offer to add forensic evidence. Skip full investigation unless user asks for deeper analysis.
+- **No matches** → Proceed to full investigation below.
 `;
 
 async function writeForensicsDedupPref(ctx: ExtensionCommandContext, enabled: boolean): Promise<void> {
