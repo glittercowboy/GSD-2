@@ -8,9 +8,30 @@
  *   3. native/addon/gsd_engine.dev.node (local debug build)
  */
 
+import { createRequire } from "node:module";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const addonDir = path.resolve(__dirname, "..", "..", "..", "native", "addon");
+// Dual CJS/ESM support.  When tsc compiles with module=NodeNext + type=commonjs,
+// the output is CJS where __dirname and require exist natively and the import.meta
+// branches are dead-code-eliminated.  When the CI test loader transpiles this file
+// to ESM (via ts.transpileModule with module=ESNext), __dirname/require are absent
+// and we fall back to import.meta.url.
+//
+// TS1470 fires because tsc sees import.meta in a CJS-targeted file.  The
+// ts-expect-error directives below silence it; the compiled CJS output never
+// reaches these branches at runtime because the typeof guards short-circuit.
+const _dirname = typeof __dirname !== "undefined"
+  ? __dirname
+  // @ts-expect-error TS1470: import.meta not allowed in CJS — unreachable in compiled output
+  : path.dirname(fileURLToPath(import.meta.url));
+
+const _require = typeof require !== "undefined"
+  ? require
+  // @ts-expect-error TS1470: import.meta not allowed in CJS — unreachable in compiled output
+  : createRequire(import.meta.url);
+
+const addonDir = path.resolve(_dirname, "..", "..", "..", "native", "addon");
 const platformTag = `${process.platform}-${process.arch}`;
 
 /** Map Node.js platform/arch to the npm package suffix */
@@ -31,7 +52,7 @@ function loadNative(): Record<string, unknown> {
   const packageSuffix = platformPackageMap[platformTag];
   if (packageSuffix) {
     try {
-      _loadedSuccessfully = true; return require(`@gsd-build/engine-${packageSuffix}`) as Record<string, unknown>;
+      _loadedSuccessfully = true; return _require(`@gsd-build/engine-${packageSuffix}`) as Record<string, unknown>;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       errors.push(`@gsd-build/engine-${packageSuffix}: ${message}`);
@@ -41,7 +62,7 @@ function loadNative(): Record<string, unknown> {
   // 2. Try local release build (native/addon/gsd_engine.{platform}.node)
   const releasePath = path.join(addonDir, `gsd_engine.${platformTag}.node`);
   try {
-    _loadedSuccessfully = true; return require(releasePath) as Record<string, unknown>;
+    _loadedSuccessfully = true; return _require(releasePath) as Record<string, unknown>;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     errors.push(`${releasePath}: ${message}`);
@@ -50,7 +71,7 @@ function loadNative(): Record<string, unknown> {
   // 3. Try local dev build (native/addon/gsd_engine.dev.node)
   const devPath = path.join(addonDir, "gsd_engine.dev.node");
   try {
-    _loadedSuccessfully = true; return require(devPath) as Record<string, unknown>;
+    _loadedSuccessfully = true; return _require(devPath) as Record<string, unknown>;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     errors.push(`${devPath}: ${message}`);
