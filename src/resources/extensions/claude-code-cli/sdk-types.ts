@@ -27,6 +27,19 @@ export type BetaContentBlock =
 	| { type: "server_tool_use"; id: string; name: string; input: unknown }
 	| { type: "web_search_tool_result"; tool_use_id: string; content: unknown };
 
+/** Tool result block from a user message (Anthropic API MessageParam format). */
+export interface ToolResultBlock {
+	type: "tool_result";
+	tool_use_id: string;
+	content?: string | Array<{ type: "text"; text: string } | { type: "image"; source: unknown }>;
+	is_error?: boolean;
+}
+
+/** Content block in a user message (MessageParam format). */
+export type UserContentBlock =
+	| { type: "text"; text: string }
+	| ToolResultBlock;
+
 /** Streaming event emitted when includePartialMessages is true. */
 export interface BetaRawMessageStreamEvent {
 	type: string;
@@ -48,7 +61,7 @@ export interface SDKUserMessage {
 	type: "user";
 	uuid?: UUID;
 	session_id: string;
-	message: unknown;
+	message: { role: "user"; content: string | UserContentBlock[] };
 	parent_tool_use_id: string | null;
 	isSynthetic?: boolean;
 	tool_use_result?: unknown;
