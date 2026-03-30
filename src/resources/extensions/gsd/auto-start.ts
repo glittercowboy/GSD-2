@@ -58,7 +58,7 @@ import { initRoutingHistory } from "./routing-history.js";
 import { restoreHookState, resetHookState } from "./post-unit-hooks.js";
 import { resetProactiveHealing, setLevelChangeCallback } from "./doctor-proactive.js";
 import { snapshotSkills } from "./skill-discovery.js";
-import { isDbAvailable, getMilestone } from "./gsd-db.js";
+import { isDbAvailable, getMilestone, openDatabase } from "./gsd-db.js";
 import { hideFooter } from "./auto-dashboard.js";
 import {
   debugLog,
@@ -97,32 +97,26 @@ export interface BootstrapDeps {
  * concurrent session detected). Returns true when ready to dispatch.
  */
 
-/**
- * Open the project-root DB before the first deriveState call (#2841).
- * When auto-mode starts cold (no prior DB handle), state derivation that
- * touches DB-backed helpers (queue-order, task status) silently falls back
- * to markdown-only data, producing stale or incomplete state.  Opening the
- * DB first ensures deriveState sees the full picture on its very first run.
- */
-async function openProjectDbIfPresent(basePath: string): Promise<void> {
-  const gsdDbPath = resolveProjectRootDbPath(basePath);
-  if (!existsSync(gsdDbPath)) return;
-  if (isDbAvailable()) return;
-
-  try {
-    const { openDatabase } = await import("./gsd-db.js");
-    openDatabase(gsdDbPath);
-  } catch {
-    /* non-fatal — DB lifecycle block below will retry */
-  }
-}
-
 /** Guard: tracks consecutive bootstrap attempts that found phase === "complete".
  *  Prevents the recursive dialog loop described in #1348 where
  *  bootstrapAutoSession → showSmartEntry → checkAutoStartAfterDiscuss → startAuto
  *  cycles indefinitely when the discuss workflow doesn't produce a milestone. */
 let _consecutiveCompleteBootstraps = 0;
 const MAX_CONSECUTIVE_COMPLETE_BOOTSTRAPS = 2;
+
+export async function openProjectDbIfPresent(basePath: string): Promise<void> {
+  const gsdDbPath = resolveProjectRootDbPath(basePath);
+  if (!existsSync(gsdDbPath) || isDbAvailable()) return;
+
+  try {
+    openDatabase(gsdDbPath);
+  } catch (err) {
+    process.stderr.write(
+      `gsd-db: failed to open existing database: ${(err as Error).message}\n`,
+    );
+  }
+}
+
 export async function bootstrapAutoSession(
   s: AutoSession,
   ctx: ExtensionCommandContext,
