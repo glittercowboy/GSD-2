@@ -526,7 +526,8 @@ export async function deriveStateFromDb(basePath: string): Promise<GSDState> {
       ? `All milestones complete. ${activeReqs} active requirement${activeReqs === 1 ? '' : 's'} in REQUIREMENTS.md ${activeReqs === 1 ? 'has' : 'have'} not been mapped to a milestone.`
       : 'All milestones complete.';
     return {
-      activeMilestone: lastEntry ? { id: lastEntry.id, title: lastEntry.title } : null,
+      activeMilestone: null,
+      lastCompletedMilestone: lastEntry ? { id: lastEntry.id, title: lastEntry.title } : null,
       activeSlice: null, activeTask: null,
       phase: 'complete',
       recentDecisions: [], blockers: [],

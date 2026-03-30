@@ -235,14 +235,18 @@ export function renderStateContent(state: GSDState): string {
   const lines: string[] = [];
   lines.push("# GSD State", "");
 
-  const activeMilestone = state.activeMilestone
-    ? `${state.activeMilestone.id}: ${state.activeMilestone.title}`
-    : "None";
   const activeSlice = state.activeSlice
     ? `${state.activeSlice.id}: ${state.activeSlice.title}`
     : "None";
 
-  lines.push(`**Active Milestone:** ${activeMilestone}`);
+  if (state.phase === 'complete' && state.lastCompletedMilestone) {
+    lines.push(`**Last Completed Milestone:** ${state.lastCompletedMilestone.id}: ${state.lastCompletedMilestone.title}`);
+  } else {
+    const activeMilestone = state.activeMilestone
+      ? `${state.activeMilestone.id}: ${state.activeMilestone.title}`
+      : "None";
+    lines.push(`**Active Milestone:** ${activeMilestone}`);
+  }
   lines.push(`**Active Slice:** ${activeSlice}`);
   lines.push(`**Phase:** ${state.phase}`);
   if (state.requirements) {

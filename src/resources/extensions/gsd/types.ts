@@ -249,6 +249,8 @@ export interface GSDState {
     slices?: { done: number; total: number };
     tasks?: { done: number; total: number };
   };
+  /** When phase=complete, holds the last completed milestone (instead of activeMilestone). */
+  lastCompletedMilestone?: ActiveRef | null;
 }
 
 // ─── Post-Unit Hook Types ─────────────────────────────────────────────────

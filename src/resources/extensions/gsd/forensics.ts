@@ -28,6 +28,8 @@ import { deriveState } from "./state.js";
 import { isAutoActive } from "./auto.js";
 import { loadPrompt } from "./prompt-loader.js";
 import { gsdRoot } from "./paths.js";
+import { isDbAvailable, getAllMilestones, getMilestoneSlices, getSliceTasks } from "./gsd-db.js";
+import { isClosedStatus } from "./status-guards.js";
 import { formatDuration } from "../shared/format-utils.js";
 import { getAutoWorktreePath } from "./auto-worktree.js";
 import { loadEffectiveGSDPreferences, loadGlobalGSDPreferences, getGlobalGSDPreferencesPath } from "./preferences.js";
@@ -85,6 +87,15 @@ interface JournalSummary {
   fileCount: number;
 }
 
+interface DbCompletionCounts {
+  milestones: number;
+  milestonesTotal: number;
+  slices: number;
+  slicesTotal: number;
+  tasks: number;
+  tasksTotal: number;
+}
+
 interface ForensicReport {
   gsdVersion: string;
   timestamp: string;
@@ -95,6 +106,7 @@ interface ForensicReport {
   unitTraces: UnitTrace[];
   metrics: MetricsLedger | null;
   completedKeys: string[];
+  dbCompletionCounts: DbCompletionCounts | null;
   crashLock: LockData | null;
   doctorIssues: DoctorIssue[];
   anomalies: ForensicAnomaly[];
@@ -275,8 +287,9 @@ export async function buildForensicReport(basePath: string): Promise<ForensicRep
   // 3. Load metrics
   const metrics = loadLedgerFromDisk(basePath);
 
-  // 4. Load completed keys
+  // 4. Load completed keys (legacy) and DB completion counts
   const completedKeys = loadCompletedKeys(basePath);
+  const dbCompletionCounts = getDbCompletionCounts();
 
   // 5. Check crash lock
   const crashLock = readCrashLock(basePath);
@@ -335,6 +348,7 @@ export async function buildForensicReport(basePath: string): Promise<ForensicRep
     unitTraces,
     metrics,
     completedKeys,
+    dbCompletionCounts,
     crashLock,
     doctorIssues,
     anomalies,
@@ -583,6 +597,44 @@ function loadCompletedKeys(basePath: string): string[] {
     }
   } catch { /* non-fatal */ }
   return [];
+}
+
+// ─── DB Completion Counts ────────────────────────────────────────────────────
+
+function getDbCompletionCounts(): DbCompletionCounts | null {
+  if (!isDbAvailable()) return null;
+
+  const milestones = getAllMilestones();
+  let completedMilestones = 0;
+  let totalSlices = 0;
+  let completedSlices = 0;
+  let totalTasks = 0;
+  let completedTasks = 0;
+
+  for (const m of milestones) {
+    if (isClosedStatus(m.status)) completedMilestones++;
+
+    const slices = getMilestoneSlices(m.id);
+    for (const s of slices) {
+      totalSlices++;
+      if (isClosedStatus(s.status)) completedSlices++;
+
+      const tasks = getSliceTasks(m.id, s.id);
+      for (const t of tasks) {
+        totalTasks++;
+        if (isClosedStatus(t.status)) completedTasks++;
+      }
+    }
+  }
+
+  return {
+    milestones: completedMilestones,
+    milestonesTotal: milestones.length,
+    slices: completedSlices,
+    slicesTotal: totalSlices,
+    tasks: completedTasks,
+    tasksTotal: totalTasks,
+  };
 }
 
 // ─── Anomaly Detectors ───────────────────────────────────────────────────────
@@ -1008,8 +1060,16 @@ function formatReportForPrompt(report: ForensicReport): string {
     sections.push("");
   }
 
-  // Completed keys count
-  sections.push(`### Completed Keys: ${report.completedKeys.length}`);
+  // Completion status — prefer DB counts, fall back to legacy completed-units.json
+  if (report.dbCompletionCounts) {
+    const c = report.dbCompletionCounts;
+    sections.push(`### Completion Status (from DB)`);
+    sections.push(`- ${c.milestones}/${c.milestonesTotal} milestones complete`);
+    sections.push(`- ${c.slices}/${c.slicesTotal} slices complete`);
+    sections.push(`- ${c.tasks}/${c.tasksTotal} tasks complete`);
+  } else {
+    sections.push(`### Completed Keys: ${report.completedKeys.length}`);
+  }
   sections.push(`### GSD Version: ${report.gsdVersion}`);
   sections.push(`### Active Milestone: ${report.activeMilestone ?? "none"}`);
   sections.push(`### Active Slice: ${report.activeSlice ?? "none"}`);
