@@ -475,7 +475,7 @@ export function extractDeferredSliceRef(
   fields: Pick<SaveDecisionFields, 'scope' | 'decision' | 'choice'>,
 ): { milestoneId: string; sliceId: string } | null {
   const isDeferral =
-    /\bdefer(?:ral|red)?\b/i.test(fields.scope) ||
+    /\bdefer(?:ral|red|ring|s)?\b/i.test(fields.scope) ||
     /\bdefer(?:ral|red|ring|s)?\b/i.test(fields.choice) ||
     /\bdefer(?:ral|red|ring|s)?\b/i.test(fields.decision);
 

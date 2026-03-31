@@ -24,6 +24,7 @@ import {
   saveDecisionToDb,
   updateRequirementInDb,
   saveArtifactToDb,
+  extractDeferredSliceRef,
 } from '../db-writer.ts';
 import type { Decision, Requirement } from '../types.ts';
 
@@ -652,5 +653,73 @@ describe('db-writer', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  //  extractDeferredSliceRef
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  describe('extractDeferredSliceRef', () => {
+    const fields = (scope: string, choice: string, decision: string) => ({
+      scope,
+      choice,
+      decision,
+    });
+
+    test('detects deferral in scope with M###/S## pattern in choice', () => {
+      const result = extractDeferredSliceRef(
+        fields('deferral of low-priority work', 'Move M001/S03 to backlog', ''),
+      );
+      assert.deepStrictEqual(result, { milestoneId: 'M001', sliceId: 'S03' });
+    });
+
+    test('detects deferral in choice field', () => {
+      const result = extractDeferredSliceRef(
+        fields('slice prioritization', 'defer M002/S01 until next sprint', ''),
+      );
+      assert.deepStrictEqual(result, { milestoneId: 'M002', sliceId: 'S01' });
+    });
+
+    test('detects deferral in decision field', () => {
+      const result = extractDeferredSliceRef(
+        fields('resource constraints', '', 'deferred M010/S12 pending review'),
+      );
+      assert.deepStrictEqual(result, { milestoneId: 'M010', sliceId: 'S12' });
+    });
+
+    test('returns null when no M###/S## pattern is present', () => {
+      const result = extractDeferredSliceRef(
+        fields('deferral of work', 'will revisit later', 'deferred indefinitely'),
+      );
+      assert.strictEqual(result, null);
+    });
+
+    test('recognises "deferring" variant', () => {
+      const result = extractDeferredSliceRef(
+        fields('deferring this slice', 'M005/S02 can wait', ''),
+      );
+      assert.deepStrictEqual(result, { milestoneId: 'M005', sliceId: 'S02' });
+    });
+
+    test('recognises "defers" variant', () => {
+      const result = extractDeferredSliceRef(
+        fields('team defers slice', 'M100/S10 not urgent', ''),
+      );
+      assert.deepStrictEqual(result, { milestoneId: 'M100', sliceId: 'S10' });
+    });
+
+    test('returns first M###/S## match when multiple patterns exist', () => {
+      const result = extractDeferredSliceRef(
+        fields('', 'defer M003/S01 and M003/S02', ''),
+      );
+      assert.deepStrictEqual(result, { milestoneId: 'M003', sliceId: 'S01' });
+    });
+
+    test('returns null when no deferral keyword is present', () => {
+      const result = extractDeferredSliceRef(
+        fields('approved work', 'M001/S01 is ready', 'proceed with M001/S01'),
+      );
+      assert.strictEqual(result, null);
+    });
+  });
 
 });
