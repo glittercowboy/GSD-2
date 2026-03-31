@@ -1192,17 +1192,17 @@ export function insertSlice(s: {
       :goal, :success_criteria, :proof_level, :integration_closure, :observability_impact, :sequence
     )
     ON CONFLICT (milestone_id, id) DO UPDATE SET
-      title = excluded.title,
+      title = CASE WHEN :raw_title IS NOT NULL THEN excluded.title ELSE slices.title END,
       status = CASE WHEN slices.status IN ('complete', 'done') THEN slices.status ELSE excluded.status END,
-      risk = excluded.risk,
+      risk = CASE WHEN :raw_risk IS NOT NULL THEN excluded.risk ELSE slices.risk END,
       depends = excluded.depends,
-      demo = excluded.demo,
-      goal = excluded.goal,
-      success_criteria = excluded.success_criteria,
-      proof_level = excluded.proof_level,
-      integration_closure = excluded.integration_closure,
-      observability_impact = excluded.observability_impact,
-      sequence = excluded.sequence`,
+      demo = CASE WHEN :raw_demo IS NOT NULL THEN excluded.demo ELSE slices.demo END,
+      goal = CASE WHEN :raw_goal IS NOT NULL THEN excluded.goal ELSE slices.goal END,
+      success_criteria = CASE WHEN :raw_success_criteria IS NOT NULL THEN excluded.success_criteria ELSE slices.success_criteria END,
+      proof_level = CASE WHEN :raw_proof_level IS NOT NULL THEN excluded.proof_level ELSE slices.proof_level END,
+      integration_closure = CASE WHEN :raw_integration_closure IS NOT NULL THEN excluded.integration_closure ELSE slices.integration_closure END,
+      observability_impact = CASE WHEN :raw_observability_impact IS NOT NULL THEN excluded.observability_impact ELSE slices.observability_impact END,
+      sequence = CASE WHEN :raw_sequence IS NOT NULL THEN excluded.sequence ELSE slices.sequence END`,
   ).run({
     ":milestone_id": s.milestoneId,
     ":id": s.id,
@@ -1218,6 +1218,16 @@ export function insertSlice(s: {
     ":integration_closure": s.planning?.integrationClosure ?? "",
     ":observability_impact": s.planning?.observabilityImpact ?? "",
     ":sequence": s.sequence ?? 0,
+    // Raw sentinel params: NULL when caller omitted the field, used in ON CONFLICT guards
+    ":raw_title": s.title ?? null,
+    ":raw_risk": s.risk ?? null,
+    ":raw_demo": s.demo ?? null,
+    ":raw_goal": s.planning?.goal ?? null,
+    ":raw_success_criteria": s.planning?.successCriteria ?? null,
+    ":raw_proof_level": s.planning?.proofLevel ?? null,
+    ":raw_integration_closure": s.planning?.integrationClosure ?? null,
+    ":raw_observability_impact": s.planning?.observabilityImpact ?? null,
+    ":raw_sequence": s.sequence ?? null,
   });
 }
 
