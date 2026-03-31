@@ -9,6 +9,7 @@ import {
   inferCommitType,
   buildTaskCommitMessage,
   formatSubjectLine,
+  wrapText,
   DEFAULT_SUBJECT_LINE_LIMIT,
   GitServiceImpl,
   MergeConflictError,
@@ -1453,11 +1454,119 @@ describe('git-service', async () => {
     assert.ok(subject.length <= 50, `subject should be <= 50 chars, got ${subject.length}`);
   });
 
-  test('buildTaskCommitMessage: default behavior unchanged without opts', () => {
-    const longDesc = "a".repeat(100);
+  test('buildTaskCommitMessage: default wraps multi-word descriptions without opts', () => {
+    const longDesc = "add comprehensive logging to the authentication middleware and session management layer for debugging";
     const msg = buildTaskCommitMessage({ taskId: "S01/T01", taskTitle: longDesc });
     const subject = msg.split("\n")[0];
-    assert.ok(subject.length <= DEFAULT_SUBJECT_LINE_LIMIT, "default limit applied");
+    assert.ok(subject.length <= DEFAULT_SUBJECT_LINE_LIMIT, "subject respects default limit");
+    assert.ok(!subject.includes("…"), "default is wrap, not truncate");
+    assert.ok(msg.includes("GSD-Task: S01/T01"), "trailer present");
+  });
+
+  // ─── wrapText ──────────────────────────────────────────────────────────
+
+  test('wrapText: wraps at word boundaries', () => {
+    const lines = wrapText("one two three four five six", 10);
+    for (const line of lines) {
+      // Each line should be <= 10 unless a single word exceeds the limit
+      assert.ok(line.length <= 10 || !line.includes(" "), `line "${line}" should be <= 10 chars or a single word`);
+    }
+    assert.strictEqual(lines.join(" "), "one two three four five six", "no content lost");
+  });
+
+  test('wrapText: keeps words longer than limit intact', () => {
+    const longWord = "a".repeat(80);
+    const lines = wrapText(`hello ${longWord} world`, 20);
+    assert.ok(lines.some(l => l === longWord), "long word preserved on its own line");
+    assert.ok(lines.some(l => l === "hello"), "short word before long word");
+    assert.ok(lines.some(l => l === "world"), "short word after long word");
+  });
+
+  test('wrapText: empty string returns single empty line', () => {
+    assert.deepStrictEqual(wrapText("", 72), [""]);
+  });
+
+  test('wrapText: single word returns it unchanged', () => {
+    assert.deepStrictEqual(wrapText("hello", 72), ["hello"]);
+  });
+
+  // ─── formatSubjectLine with wrap ──────────────────────────────────────
+
+  test('formatSubjectLine: wrap=true wraps instead of truncating', () => {
+    const desc = "implement the entire authentication subsystem with JWT refresh tokens and session management";
+    const result = formatSubjectLine("feat", desc, 72, true);
+    assert.ok(!result.includes("…"), "no ellipsis when wrapping");
+    assert.ok(result.includes("\n"), "wrapped result contains newline");
+    const firstLine = result.split("\n")[0];
+    assert.ok(firstLine.length <= 72, `first line <= 72, got ${firstLine.length}`);
+    assert.ok(firstLine.startsWith("feat: "), "first line has type prefix");
+  });
+
+  test('formatSubjectLine: wrap=false truncates with ellipsis', () => {
+    const desc = "implement the entire authentication subsystem with JWT refresh tokens and session management";
+    const result = formatSubjectLine("feat", desc, 72, false);
+    assert.ok(result.endsWith("…"), "truncated with ellipsis");
+    assert.ok(!result.includes("\n"), "no newline when truncating");
+    assert.ok(result.length <= 72, `result <= 72, got ${result.length}`);
+  });
+
+  test('formatSubjectLine: wrap=true short description has no newline', () => {
+    const result = formatSubjectLine("fix", "short fix", 72, true);
+    assert.strictEqual(result, "fix: short fix", "short desc passes through unchanged");
+    assert.ok(!result.includes("\n"), "no wrapping for short text");
+  });
+
+  test('formatSubjectLine: wrap=true all wrapped lines respect limit', () => {
+    const desc = "add comprehensive JWT-based auth with refresh token rotation session management and RBAC policies";
+    const result = formatSubjectLine("feat", desc, 50, true);
+    const lines = result.split("\n");
+    // First line has prefix, subsequent lines are continuation
+    assert.ok(lines[0].length <= 50, `first line <= 50, got ${lines[0].length}`);
+    for (let i = 1; i < lines.length; i++) {
+      // Continuation lines wrap to (limit - prefix.length), but a single word can exceed
+      const words = lines[i].split(" ");
+      if (words.length > 1) {
+        assert.ok(lines[i].length <= 50 - "feat: ".length, `continuation line ${i} should respect desc budget`);
+      }
+    }
+  });
+
+  // ─── buildTaskCommitMessage with wrapping ─────────────────────────────
+
+  test('buildTaskCommitMessage: default wraps (subject_line_wrap defaults to true)', () => {
+    const longDesc = "implement the entire authentication subsystem with JWT refresh tokens and session management";
+    const msg = buildTaskCommitMessage({ taskId: "S01/T01", taskTitle: "auth", oneLiner: longDesc });
+    const subject = msg.split("\n")[0];
+    assert.ok(subject.length <= DEFAULT_SUBJECT_LINE_LIMIT, "subject respects limit");
+    assert.ok(!subject.includes("…"), "default is wrap, not truncate");
+    // Continuation lines appear before trailers
+    assert.ok(msg.includes("GSD-Task: S01/T01"), "trailer still present");
+  });
+
+  test('buildTaskCommitMessage: wrap=false truncates', () => {
+    const longDesc = "implement the entire authentication subsystem with JWT refresh tokens and session management";
+    const msg = buildTaskCommitMessage(
+      { taskId: "S01/T01", taskTitle: "auth", oneLiner: longDesc },
+      { subjectLineWrap: false },
+    );
+    const subject = msg.split("\n")[0];
+    assert.ok(subject.endsWith("…"), "truncated with ellipsis");
+    assert.ok(subject.length <= DEFAULT_SUBJECT_LINE_LIMIT, "subject respects limit");
+  });
+
+  test('buildTaskCommitMessage: wrap continuation lines before key files', () => {
+    const longDesc = "implement the entire authentication subsystem with JWT refresh tokens and session management";
+    const msg = buildTaskCommitMessage(
+      { taskId: "S01/T01", taskTitle: "auth", oneLiner: longDesc, keyFiles: ["src/auth.ts"] },
+      { subjectLineWrap: true },
+    );
+    const keyFilesIdx = msg.indexOf("- src/auth.ts");
+    const trailerIdx = msg.indexOf("GSD-Task:");
+    // Wrap continuation should come before key files
+    const secondLine = msg.split("\n")[2]; // after subject + blank line
+    assert.ok(keyFilesIdx > 0, "key files present");
+    assert.ok(trailerIdx > keyFilesIdx, "trailer after key files");
+    assert.ok(secondLine.length > 0, "has continuation content after subject");
   });
 
   // ─── runPreMergeCheck: skips when no package.json ────────────────────────

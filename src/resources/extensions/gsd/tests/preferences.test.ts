@@ -63,6 +63,24 @@ test("git.subject_line_limit accepts valid values and rejects invalid", () => {
   }
 });
 
+test("git.subject_line_wrap accepts boolean and rejects non-boolean", () => {
+  {
+    const { errors, preferences } = validatePreferences({ git: { subject_line_wrap: true } } as any);
+    assert.equal(errors.length, 0, "true is valid");
+    assert.equal(preferences.git?.subject_line_wrap, true);
+  }
+  {
+    const { errors, preferences } = validatePreferences({ git: { subject_line_wrap: false } } as any);
+    assert.equal(errors.length, 0, "false is valid");
+    assert.equal(preferences.git?.subject_line_wrap, false);
+  }
+  {
+    const { errors } = validatePreferences({ git: { subject_line_wrap: "yes" } } as any);
+    assert.ok(errors.length > 0, "string rejected");
+    assert.ok(errors[0].includes("boolean"));
+  }
+});
+
 test("git.merge_to_main produces deprecation warning", () => {
   for (const val of ["milestone", "slice"]) {
     const { warnings } = validatePreferences({ git: { merge_to_main: val } } as any);
