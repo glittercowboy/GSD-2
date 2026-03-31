@@ -629,6 +629,16 @@ export function containsTypeScriptSyntax(source: string): boolean {
  */
 let _extensionLoaderJiti: ReturnType<typeof createJiti> | null = null;
 
+/**
+ * Reset the shared jiti singleton so the next call to getExtensionLoaderJiti()
+ * creates a fresh instance.  This prevents memory leaks in long-running daemon
+ * processes (every loaded module stays cached forever) and ensures stale modules
+ * are not returned when extension source changes on disk.
+ */
+export function resetExtensionLoaderCache(): void {
+	_extensionLoaderJiti = null;
+}
+
 function getExtensionLoaderJiti() {
 	if (!_extensionLoaderJiti) {
 		_extensionLoaderJiti = createJiti(import.meta.url, {
