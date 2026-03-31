@@ -271,11 +271,11 @@ export function startUnitSupervision(sctx: SupervisionContext): void {
       await pauseAuto(ctx, pi);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      console.error(`[supervision-tick] Unhandled error: ${message}`);
+      console.error(`[idle-watchdog] Unhandled error: ${message}`);
       // Unblock any pending unit promise so the auto-loop is not orphaned.
       resolveAgentEndCancelled({ message: `Idle watchdog error: ${message}`, category: "idle", isTransient: true });
       try {
-        ctx.ui.notify(`Supervision tick error: ${message}`, "warning");
+        ctx.ui.notify(`Idle watchdog error: ${message}`, "warning");
       } catch { /* best effort */ }
     }
   }, 15_000);
