@@ -41,6 +41,7 @@ import { nativeBatchParseGsdFiles, type BatchParsedFile } from './native-parser-
 import { join, resolve } from 'path';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { debugCount, debugTime } from './debug-logger.js';
+import { logWarning } from './workflow-logger.js';
 import { extractVerdict } from './verdict-parser.js';
 
 import {
@@ -655,12 +656,35 @@ export async function deriveStateFromDb(basePath: string): Promise<GSDState> {
   let activeSlice: ActiveRef | null = null;
   let activeSliceRow: SliceRow | null = null;
 
-  for (const s of activeMilestoneSlices) {
-    if (isStatusDone(s.status)) continue;
-    if (s.depends.every(dep => doneSliceIds.has(dep))) {
-      activeSlice = { id: s.id, title: s.title };
-      activeSliceRow = s;
-      break;
+  // ── Slice-level parallel worker isolation ─────────────────────────────
+  // When GSD_SLICE_LOCK is set, this process is a parallel worker scoped
+  // to a single slice. Override activeSlice to only the locked slice ID.
+  const sliceLock = process.env.GSD_SLICE_LOCK;
+  if (sliceLock) {
+    const lockedSlice = activeMilestoneSlices.find(s => s.id === sliceLock);
+    if (lockedSlice) {
+      activeSlice = { id: lockedSlice.id, title: lockedSlice.title };
+      activeSliceRow = lockedSlice;
+    } else {
+      logWarning("state", `GSD_SLICE_LOCK=${sliceLock} not found in active slices — worker has no assigned work`);
+      // Don't silently continue — this is a dispatch error
+      return {
+        activeMilestone, activeSlice: null, activeTask: null,
+        phase: 'blocked',
+        recentDecisions: [], blockers: [`GSD_SLICE_LOCK=${sliceLock} not found in active milestone slices`],
+        nextAction: 'Slice lock references a non-existent slice — check orchestrator dispatch.',
+        registry, requirements,
+        progress: { milestones: milestoneProgress, slices: sliceProgress },
+      };
+    }
+  } else {
+    for (const s of activeMilestoneSlices) {
+      if (isStatusDone(s.status)) continue;
+      if (s.depends.every(dep => doneSliceIds.has(dep))) {
+        activeSlice = { id: s.id, title: s.title };
+        activeSliceRow = s;
+        break;
+      }
     }
   }
 
@@ -1305,11 +1329,38 @@ export async function _deriveStateImpl(basePath: string): Promise<GSDState> {
   const doneSliceIds = new Set(activeRoadmap.slices.filter(s => s.done).map(s => s.id));
   let activeSlice: ActiveRef | null = null;
 
-  for (const s of activeRoadmap.slices) {
-    if (s.done) continue;
-    if (s.depends.every(dep => doneSliceIds.has(dep))) {
-      activeSlice = { id: s.id, title: s.title };
-      break;
+  // ── Slice-level parallel worker isolation ─────────────────────────────
+  // When GSD_SLICE_LOCK is set, override activeSlice to only the locked slice.
+  const sliceLockLegacy = process.env.GSD_SLICE_LOCK;
+  if (sliceLockLegacy) {
+    const lockedSlice = activeRoadmap.slices.find(s => s.id === sliceLockLegacy);
+    if (lockedSlice) {
+      activeSlice = { id: lockedSlice.id, title: lockedSlice.title };
+    } else {
+      logWarning("state", `GSD_SLICE_LOCK=${sliceLockLegacy} not found in active slices — worker has no assigned work`);
+      return {
+        activeMilestone,
+        activeSlice: null,
+        activeTask: null,
+        phase: 'blocked',
+        recentDecisions: [],
+        blockers: [`GSD_SLICE_LOCK=${sliceLockLegacy} not found in active milestone slices`],
+        nextAction: 'Slice lock references a non-existent slice — check orchestrator dispatch.',
+        registry,
+        requirements,
+        progress: {
+          milestones: milestoneProgress,
+          slices: sliceProgress,
+        },
+      };
+    }
+  } else {
+    for (const s of activeRoadmap.slices) {
+      if (s.done) continue;
+      if (s.depends.every(dep => doneSliceIds.has(dep))) {
+        activeSlice = { id: s.id, title: s.title };
+        break;
+      }
     }
   }
 
