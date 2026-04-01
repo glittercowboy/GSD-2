@@ -89,6 +89,7 @@ export function unitVerb(unitType: string): string {
     case "rewrite-docs": return "rewriting";
     case "reassess-roadmap": return "reassessing";
     case "run-uat": return "running UAT";
+    case "fix-manual-tests": return "fixing test failures";
     case "custom-step": return "executing workflow step";
     default: return unitType;
   }
@@ -109,6 +110,7 @@ export function unitPhaseLabel(unitType: string): string {
     case "rewrite-docs": return "REWRITE";
     case "reassess-roadmap": return "REASSESS";
     case "run-uat": return "UAT";
+    case "fix-manual-tests": return "FIX-TESTS";
     case "custom-step": return "WORKFLOW";
     default: return unitType.toUpperCase();
   }
@@ -136,6 +138,7 @@ function peekNext(unitType: string, state: GSDState): string {
     case "rewrite-docs": return "continue execution";
     case "reassess-roadmap": return "advance to next slice";
     case "run-uat": return "reassess roadmap";
+    case "fix-manual-tests": return "continue execution";
     default: return "";
   }
 }
