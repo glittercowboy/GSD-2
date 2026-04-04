@@ -769,7 +769,7 @@ export async function stopAuto(
           s.originalModelProvider,
           s.originalModelId,
         );
-        if (original) await pi.setModel(original);
+        if (original) await pi.setModel(original, { persist: false });
       }
     } catch (e) {
       debugLog("stop-cleanup-model", { error: e instanceof Error ? e.message : String(e) });
@@ -1414,7 +1414,7 @@ export async function dispatchHookUnit(
     const match = resolveModelId(hookModel, availableModels, ctx.model?.provider);
     if (match) {
       try {
-        await pi.setModel(match);
+        await pi.setModel(match, { persist: false });
       } catch {
         /* non-fatal */
       }

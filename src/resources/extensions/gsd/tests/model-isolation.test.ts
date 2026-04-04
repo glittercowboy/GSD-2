@@ -2,11 +2,14 @@
  * Tests for model config isolation between concurrent instances (#650, #1065).
  */
 
-import { describe, it, beforeEach, afterEach } from "node:test";
+import { describe, it, test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // ─── Test helpers ─────────────────────────────────────────────────────────────
 
@@ -154,4 +157,33 @@ describe("session model recovery on error (#1065)", () => {
     assert.ok(!shouldAttemptRecovery,
       "Recovery should be skipped when no session model was captured");
   });
+});
+
+// ─── Structural guard: no setModel calls in auto.ts should persist ────────────
+
+test("all setModel calls in auto.ts use persist: false", () => {
+  // Regression test: auto-mode's transient model switches must never persist
+  // to settings.json. If they do, the user's chosen default model is silently
+  // overwritten and every subsequent session starts with the wrong model.
+  // See #650 for the original model-bleed report.
+  const autoSrc = readFileSync(
+    join(__dirname, "..", "auto.ts"),
+    "utf-8",
+  );
+
+  // Find all setModel calls (pi.setModel or await pi.setModel)
+  const setModelCalls = autoSrc.match(/\.setModel\([^)]*\)/g) ?? [];
+  assert.ok(
+    setModelCalls.length > 0,
+    "Expected at least one setModel call in auto.ts",
+  );
+
+  for (const call of setModelCalls) {
+    assert.ok(
+      call.includes("persist: false"),
+      `setModel call in auto.ts is missing { persist: false }: ${call}\n` +
+      "Auto-mode model switches are transient — they must not overwrite " +
+      "the user's saved default in settings.json.",
+    );
+  }
 });
