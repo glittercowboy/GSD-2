@@ -3,21 +3,28 @@ import assert from "node:assert/strict";
 
 import { createObservationMask } from "../context-masker.js";
 
+// These helpers produce messages in the pi-ai LLM payload format
+// (post-convertToLlm, pre-provider), which is what before_provider_request sees.
+
 function userMsg(content: string) {
-  return { role: "user", content, type: "user" };
+  return { role: "user", content: [{ type: "text", text: content }] };
 }
 
 function assistantMsg(content: string) {
-  return { role: "assistant", content, type: "assistant" };
+  return { role: "assistant", content: [{ type: "text", text: content }] };
 }
 
-function toolResult(content: string) {
-  return { role: "user", content, type: "toolResult" };
+/** toolResult in pi-ai format: role "toolResult", content as TextContent[] */
+function toolResult(text: string) {
+  return { role: "toolResult", content: [{ type: "text", text }], toolCallId: "toolu_test", toolName: "Read", isError: false };
 }
 
-function bashExecution(content: string) {
-  return { role: "user", content, type: "bashExecution" };
+/** bashExecution after convertToLlm: becomes a user message with "Ran `cmd`" prefix */
+function bashResult(text: string) {
+  return { role: "user", content: [{ type: "text", text: `Ran \`echo test\`\n\`\`\`\n${text}\n\`\`\`` }] };
 }
+
+const MASK_TEXT = "[result masked — within summarized history]";
 
 test("masks nothing when message count is within keepRecentTurns", () => {
   const mask = createObservationMask(8);
@@ -28,7 +35,7 @@ test("masks nothing when message count is within keepRecentTurns", () => {
   ];
   const result = mask(messages as any);
   assert.equal(result.length, 3);
-  assert.equal(result[2].content, "file contents");
+  assert.deepEqual((result[2].content as any)[0].text, "file contents");
 });
 
 test("masks tool results older than keepRecentTurns", () => {
@@ -45,9 +52,11 @@ test("masks tool results older than keepRecentTurns", () => {
     assistantMsg("response 3"),
   ];
   const result = mask(messages as any);
-  assert.ok(result[1].content.includes("[result masked"));
-  assert.equal(result[4].content, "newer tool output");
-  assert.equal(result[7].content, "newest tool output");
+  // Old tool result (before boundary) should be masked
+  assert.equal((result[1].content as any)[0].text, MASK_TEXT);
+  // Recent tool results (within keep window) should be preserved
+  assert.equal((result[4].content as any)[0].text, "newer tool output");
+  assert.equal((result[7].content as any)[0].text, "newest tool output");
 });
 
 test("never masks assistant messages", () => {
@@ -59,8 +68,8 @@ test("never masks assistant messages", () => {
     assistantMsg("new reasoning"),
   ];
   const result = mask(messages as any);
-  assert.equal(result[1].content, "old reasoning");
-  assert.equal(result[3].content, "new reasoning");
+  assert.equal((result[1].content as any)[0].text, "old reasoning");
+  assert.equal((result[3].content as any)[0].text, "new reasoning");
 });
 
 test("never masks user messages", () => {
@@ -72,20 +81,20 @@ test("never masks user messages", () => {
     assistantMsg("response"),
   ];
   const result = mask(messages as any);
-  assert.equal(result[0].content, "old user message");
+  assert.equal((result[0].content as any)[0].text, "old user message");
 });
 
-test("masks bashExecution content", () => {
+test("masks bash result user messages", () => {
   const mask = createObservationMask(1);
   const messages = [
     userMsg("turn 1"),
-    bashExecution("huge log output"),
+    bashResult("huge log output"),
     assistantMsg("response 1"),
     userMsg("turn 2"),
     assistantMsg("response 2"),
   ];
   const result = mask(messages as any);
-  assert.ok(result[1].content.includes("[result masked"));
+  assert.equal((result[1].content as any)[0].text, MASK_TEXT);
 });
 
 test("returns same array length", () => {
@@ -96,4 +105,18 @@ test("returns same array length", () => {
   ];
   const result = mask(messages as any);
   assert.equal(result.length, messages.length);
+});
+
+test("masks toolResult by role, not by type field", () => {
+  const mask = createObservationMask(1);
+  const messages = [
+    userMsg("turn 1"),
+    // This is the actual pi-ai format: role "toolResult", no type field
+    { role: "toolResult", content: [{ type: "text", text: "old result" }], toolCallId: "t1", toolName: "Read", isError: false },
+    assistantMsg("response 1"),
+    userMsg("turn 2"),
+    assistantMsg("response 2"),
+  ];
+  const result = mask(messages as any);
+  assert.equal((result[1].content as any)[0].text, MASK_TEXT);
 });

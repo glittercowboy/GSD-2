@@ -286,14 +286,26 @@ export function registerHooks(pi: ExtensionAPI): void {
           }
         }
 
-        // Tool result truncation: cap individual tool result content length
+        // Tool result truncation: cap individual tool result content length.
+        // In pi-ai format, toolResult messages have role: "toolResult" and content: TextContent[].
         // Creates new objects to avoid mutating shared conversation state.
         const maxChars = cmConfig?.tool_result_max_chars ?? 800;
         const msgs = payload.messages;
         if (Array.isArray(msgs)) {
           payload.messages = msgs.map((msg: Record<string, unknown>) => {
-            if (typeof msg?.content === "string" && (msg.type === "toolResult" || msg.role === "tool") && msg.content.length > maxChars) {
-              return { ...msg, content: (msg.content as string).slice(0, maxChars) + "\n…[truncated]" };
+            // Match toolResult messages (role: "toolResult", content is array of content blocks)
+            if (msg?.role === "toolResult" && Array.isArray(msg.content)) {
+              const blocks = msg.content as Array<Record<string, unknown>>;
+              const totalLen = blocks.reduce((sum: number, b) => sum + (typeof b.text === "string" ? b.text.length : 0), 0);
+              if (totalLen > maxChars) {
+                const truncated = blocks.map(b => {
+                  if (typeof b.text === "string" && b.text.length > maxChars) {
+                    return { ...b, text: b.text.slice(0, maxChars) + "\n…[truncated]" };
+                  }
+                  return b;
+                });
+                return { ...msg, content: truncated };
+              }
             }
             return msg;
           });
