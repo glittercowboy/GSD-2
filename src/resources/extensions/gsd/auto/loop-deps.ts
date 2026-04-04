@@ -5,6 +5,7 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@gsd/pi-coding-agent";
+import type { ProviderSwitchReport } from "@gsd/pi-ai";
 
 import type { AutoSession } from "./session.js";
 import type { GSDPreferences } from "../preferences.js";
@@ -179,7 +180,7 @@ export interface LoopDeps {
     startedAt: number,
     opts?: CloseoutOptions & Record<string, unknown>,
   ) => Promise<void>;
-  recordOutcome: (unitType: string, tier: string, success: boolean) => void;
+  recordOutcome: (unitType: string, tier: string, success: boolean, tags?: string[], switchReport?: ProviderSwitchReport) => void;
   writeLock: (
     lockBase: string,
     unitType: string,
@@ -213,6 +214,7 @@ export interface LoopDeps {
   ) => Promise<{
     routing: { tier: string; modelDowngraded: boolean } | null;
     appliedModel: { provider: string; id: string } | null;
+    priorTools?: string[];
   }>;
   resolveModelId: <T extends { id: string; provider: string }>(
     modelId: string,
