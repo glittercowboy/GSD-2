@@ -1633,6 +1633,10 @@ export class AgentSession {
 		options?: { persist?: boolean },
 	): Promise<void> {
 		const previousModel = this.model;
+		// Explicit model switches must cancel any in-flight retry loop from the
+		// previous provider/model. Otherwise stale provider backoff errors can
+		// continue to land after the user or runtime has already switched models.
+		this._retryHandler.abortRetry();
 		this.agent.setModel(model);
 		this.sessionManager.appendModelChange(model.provider, model.id);
 		if (options?.persist !== false) {
