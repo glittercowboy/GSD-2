@@ -130,7 +130,7 @@ test("V8 JSON.parse with line/column suffix is transient", () => {
 test("#2882: 'Unterminated string in JSON' (truncated stream) is transient", () => {
   const result = classifyError("Unterminated string in JSON at position 1024 (line 1 column 1025)");
   assert.equal(isTransient(result), true, "'Unterminated string in JSON' should be transient");
-  // Note: "Unterminated" matches CONNECTION_RE ("terminated") first due to classification order.
-  // Still transient either way — both connection and stream kinds trigger auto-retry.
-  assert.equal(result.kind, "connection", "'Unterminated' matches CONNECTION_RE before STREAM_RE");
+  // "in JSON at position \d+" matches STREAM_RE before CONNECTION_RE checks "terminated".
+  // Still transient either way — both stream and connection kinds trigger auto-retry.
+  assert.equal(result.kind, "stream", "'Unterminated string in JSON at position' matches STREAM_RE first");
 });
