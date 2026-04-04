@@ -40,6 +40,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { useTheme } from "next-themes"
+import { useTranslations } from "next-intl"
 import {
   getCurrentScopeLabel,
   getLiveWorkspaceIndex,

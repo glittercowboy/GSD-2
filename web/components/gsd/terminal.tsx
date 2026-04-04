@@ -1,5 +1,7 @@
 "use client"
 
+import { useTranslations } from "next-intl"
+
 import { useEffect, useRef, useState } from "react"
 import { Compass, Loader2, OctagonX, Wrench } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -28,20 +30,20 @@ function getInputMode(state: ReturnType<typeof useGSDWorkspaceState>): InputMode
   return "prompt"
 }
 
-function inputModePlaceholder(mode: InputMode, state: ReturnType<typeof useGSDWorkspaceState>): string {
-  if (state.bootStatus === "loading") return "Loading workspace…"
-  if (state.bootStatus === "error") return "Workspace boot failed — check the visible error state"
-  if (state.commandInFlight) return `Sending ${state.commandInFlight}…`
+function inputModePlaceholder(mode: InputMode, state: ReturnType<typeof useGSDWorkspaceState>, t: (key: string, values?: Record<string, string>) => string): string {
+  if (state.bootStatus === "loading") return t("placeholders.loading")
+  if (state.bootStatus === "error") return t("placeholders.bootError")
+  if (state.commandInFlight) return t("placeholders.sending", { command: state.commandInFlight })
   if (state.boot?.onboarding.locked) {
     return getOnboardingPresentation(state).detail
   }
   switch (mode) {
     case "steer":
-      return "Type a steering message to redirect the agent…"
+      return t("placeholders.steer")
     case "follow_up":
-      return "Agent is active — type a follow-up or /state"
+      return t("placeholders.followUp")
     case "prompt":
-      return "Type a prompt, /state, /new, or /clear"
+      return t("placeholders.prompt")
   }
 }
 
