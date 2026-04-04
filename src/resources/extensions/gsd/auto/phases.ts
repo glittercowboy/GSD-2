@@ -709,7 +709,7 @@ export async function runDispatch(
 // ─── runGuards ────────────────────────────────────────────────────────────────
 
 /**
- * Phase 2: Guards — budget ceiling, context window, secrets re-check.
+ * Phase 2: Guards — stop directives, budget ceiling, context window, secrets re-check.
  * Returns break to exit the loop, or next to proceed to dispatch.
  */
 export async function runGuards(
@@ -717,6 +717,48 @@ export async function runGuards(
   mid: string,
 ): Promise<PhaseResult> {
   const { ctx, pi, s, deps, prefs } = ic;
+
+  // ── Stop/Backtrack directive guard (#3487) ──
+  // Check for unexecuted stop or backtrack captures BEFORE dispatching any unit.
+  // This ensures user "halt" directives are honored immediately.
+  try {
+    const { loadStopCaptures, markCaptureExecuted } = await import("../captures.js");
+    const stopCaptures = loadStopCaptures(s.basePath);
+    if (stopCaptures.length > 0) {
+      const first = stopCaptures[0];
+      const isBacktrack = first.classification === "backtrack";
+      const label = isBacktrack
+        ? `Backtrack directive: ${first.text}`
+        : `Stop directive: ${first.text}`;
+
+      ctx.ui.notify(label, "warning");
+      deps.sendDesktopNotification(
+        "GSD", label, "warning", "stop-directive",
+        basename(s.originalBasePath || s.basePath),
+      );
+
+      // Mark all stop/backtrack captures as executed so they don't re-fire
+      for (const cap of stopCaptures) {
+        markCaptureExecuted(s.basePath, cap.id);
+      }
+
+      // For backtrack captures, write the backtrack trigger before pausing
+      if (isBacktrack) {
+        try {
+          const { executeBacktrack } = await import("../triage-resolution.js");
+          executeBacktrack(s.basePath, mid, first);
+        } catch (e) {
+          debugLog("guards", { phase: "backtrack-execution-error", error: String(e) });
+        }
+      }
+
+      await deps.pauseAuto(ctx, pi);
+      debugLog("autoLoop", { phase: "exit", reason: isBacktrack ? "user-backtrack" : "user-stop" });
+      return { action: "break", reason: isBacktrack ? "user-backtrack" : "user-stop" };
+    }
+  } catch (e) {
+    debugLog("guards", { phase: "stop-guard-error", error: String(e) });
+  }
 
   // Budget ceiling guard
   const budgetCeiling = prefs?.budget_ceiling;

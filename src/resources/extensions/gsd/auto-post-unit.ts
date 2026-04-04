@@ -46,7 +46,7 @@ import {
   persistHookState,
   resolveHookArtifactPath,
 } from "./post-unit-hooks.js";
-import { hasPendingCaptures, loadPendingCaptures } from "./captures.js";
+import { hasPendingCaptures, loadPendingCaptures, revertExecutorResolvedCaptures } from "./captures.js";
 import { debugLog } from "./debug-logger.js";
 import { runSafely } from "./auto-utils.js";
 import type { AutoSession, SidecarItem } from "./auto/session.js";
@@ -591,6 +591,49 @@ export async function postUnitPostVerification(pctx: PostUnitContext): Promise<"
 
         // Fall through to normal dispatch — deriveState will re-derive the unit
       }
+    }
+  }
+
+  // ── Fast-path stop detection (#3487) ──
+  // Before waiting for triage, check if any PENDING captures contain explicit
+  // stop/halt language. If so, pause immediately — don't wait for triage.
+  if (s.currentUnit && s.currentUnit.type !== "triage-captures") {
+    try {
+      const pending = loadPendingCaptures(s.basePath);
+      const STOP_PATTERN = /\b(stop|halt|abort|don'?t continue|pause|cease)\b/i;
+      const stopCapture = pending.find(c => STOP_PATTERN.test(c.text));
+      if (stopCapture) {
+        ctx.ui.notify(
+          `Stop directive detected in pending capture ${stopCapture.id}: "${stopCapture.text}" — pausing auto-mode.`,
+          "warning",
+        );
+        debugLog("postUnit", { phase: "fast-stop", captureId: stopCapture.id });
+        await pauseAuto(ctx, pi);
+        return "stopped";
+      }
+    } catch (e) {
+      debugLog("postUnit", { phase: "fast-stop-error", error: String(e) });
+    }
+  }
+
+  // ── Capture protection: revert executor-silenced captures (#3487) ──
+  // Non-triage agents can write **Status:** resolved to CAPTURES.md, bypassing
+  // the triage pipeline. Revert those to pending before the triage check.
+  if (
+    s.currentUnit &&
+    s.currentUnit.type !== "triage-captures"
+  ) {
+    try {
+      const reverted = revertExecutorResolvedCaptures(s.basePath);
+      if (reverted > 0) {
+        debugLog("postUnit", { phase: "capture-protection", reverted });
+        ctx.ui.notify(
+          `Reverted ${reverted} capture${reverted === 1 ? "" : "s"} silenced by executor — re-queuing for triage.`,
+          "warning",
+        );
+      }
+    } catch (e) {
+      debugLog("postUnit", { phase: "capture-protection-error", error: String(e) });
     }
   }
 
