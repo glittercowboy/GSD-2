@@ -316,6 +316,7 @@ export interface ClassificationResult {
   tier: ComplexityTier;
   reason: string;
   downgraded: boolean;
+  taskMetadata?: TaskMetadata;
 }
 
 export interface TaskMetadata {
