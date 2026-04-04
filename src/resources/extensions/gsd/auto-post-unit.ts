@@ -279,8 +279,9 @@ export async function postUnitPreVerification(pctx: PostUnitContext, opts?: PreV
                 try {
                   const { getTaskIssueNumberForCommit } = await import("../github-sync/sync.js");
                   ghIssueNumber = getTaskIssueNumberForCommit(s.basePath, mid, sid, tid) ?? undefined;
-                } catch {
+                } catch (err) {
                   // GitHub sync not available — skip
+                  process.stderr.write(`gsd [auto-post-unit]: operation failed: ${err instanceof Error ? err.message : String(err)}\n`);
                 }
 
                 taskContext = {
@@ -732,3 +733,4 @@ export async function postUnitPostVerification(pctx: PostUnitContext): Promise<"
 
   return "continue";
 }
+

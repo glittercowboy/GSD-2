@@ -112,8 +112,9 @@ async function openProjectDbIfPresent(basePath: string): Promise<void> {
   try {
     const { openDatabase } = await import("./gsd-db.js");
     openDatabase(gsdDbPath);
-  } catch {
+  } catch (err) {
     /* non-fatal — DB lifecycle block below will retry */
+    process.stderr.write(`gsd [auto-start]: DB open failed: ${err instanceof Error ? err.message : String(err)}\n`);
   }
 }
 
@@ -213,8 +214,9 @@ export async function bootstrapAutoSession(
       try {
         nativeAddAll(base);
         nativeCommit(base, "chore: init gsd");
-      } catch {
+      } catch (err) {
         /* nothing to commit */
+        process.stderr.write(`gsd [auto-start]: mkdir failed: ${err instanceof Error ? err.message : String(err)}\n`);
       }
     }
 
@@ -724,8 +726,9 @@ export async function bootstrapAutoSession(
           }
         }
       }
-    } catch {
+    } catch (err) {
       /* non-fatal */
+      process.stderr.write(`gsd [auto-start]: operation failed: ${err instanceof Error ? err.message : String(err)}\n`);
     }
 
     return true;
@@ -735,3 +738,4 @@ export async function bootstrapAutoSession(
     throw err;
   }
 }
+

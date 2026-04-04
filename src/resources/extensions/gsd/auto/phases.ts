@@ -1261,7 +1261,9 @@ export async function runUnitPhase(
         blockers: [],
         nextSteps: [],
       });
-    } catch { /* non-fatal — anchor is advisory */ }
+    } catch (err) { /* non-fatal — anchor is advisory */
+      process.stderr.write(`gsd [phases]: phase anchor failed: ${err instanceof Error ? err.message : String(err)}\n`);
+    }
   }
 
   deps.emitJournalEvent({ ts: new Date().toISOString(), flowId: ic.flowId, seq: ic.nextSeq(), eventType: "unit-end", data: { unitType, unitId, status: unitResult.status, artifactVerified, ...(unitResult.errorContext ? { errorContext: unitResult.errorContext } : {}) }, causedBy: { flowId: ic.flowId, seq: unitStartSeq } });
@@ -1384,3 +1386,4 @@ export async function runFinalize(
 
   return { action: "next", data: undefined as void };
 }
+

@@ -41,8 +41,11 @@ export async function closeoutUnit(
           if (process.env.GSD_DEBUG) console.error(`[gsd] memory extraction failed for ${unitType}/${unitId}:`, err);
         });
       }
-    } catch { /* non-fatal */ }
+    } catch (err) { /* non-fatal */
+      process.stderr.write(`gsd [auto-unit-closeout]: operation failed: ${err instanceof Error ? err.message : String(err)}\n`);
+    }
   }
 
   return activityFile ?? undefined;
 }
+

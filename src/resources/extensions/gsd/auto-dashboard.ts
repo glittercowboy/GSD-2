@@ -285,8 +285,9 @@ export function updateSliceProgressCache(base: string, mid: string, activeSid?: 
             taskDetails = dbTasks.map(t => ({ id: t.id, title: t.title, done: t.status === "complete" || t.status === "done" }));
           }
         }
-      } catch {
+      } catch (err) {
         // Non-fatal — just omit task count
+        process.stderr.write(`gsd [auto-dashboard]: operation failed: ${err instanceof Error ? err.message : String(err)}\n`);
       }
     }
 
@@ -297,8 +298,9 @@ export function updateSliceProgressCache(base: string, mid: string, activeSid?: 
       activeSliceTasks,
       taskDetails,
     };
-  } catch {
+  } catch (err) {
     // Non-fatal — widget just won't show progress bar
+    process.stderr.write(`gsd [auto-dashboard]: operation failed: ${err instanceof Error ? err.message : String(err)}\n`);
   }
 }
 
@@ -332,8 +334,9 @@ function refreshLastCommit(basePath: string): void {
       };
     }
     lastCommitFetchedAt = Date.now();
-  } catch {
+  } catch (err) {
     // Non-fatal — just skip last commit display
+    process.stderr.write(`gsd [auto-dashboard]: operation failed: ${err instanceof Error ? err.message : String(err)}\n`);
   }
 }
 
@@ -376,7 +379,9 @@ function ensureWidgetModeLoaded(): void {
     if (saved && WIDGET_MODES.includes(saved as WidgetMode)) {
       widgetMode = saved as WidgetMode;
     }
-  } catch { /* non-fatal — use default */ }
+  } catch (err) { /* non-fatal — use default */
+    process.stderr.write(`gsd [auto-dashboard]: operation failed: ${err instanceof Error ? err.message : String(err)}\n`);
+  }
 }
 
 /** Persist widget mode to global preferences YAML. */
@@ -395,7 +400,9 @@ function persistWidgetMode(mode: WidgetMode): void {
       content = content.trimEnd() + "\n" + line + "\n";
     }
     writeFileSync(prefsPath, content, "utf-8");
-  } catch { /* non-fatal — mode still set in memory */ }
+  } catch (err) { /* non-fatal — mode still set in memory */
+    process.stderr.write(`gsd [auto-dashboard]: file write failed: ${err instanceof Error ? err.message : String(err)}\n`);
+  }
 }
 
 /** Cycle to the next widget mode. Returns the new mode. */
@@ -458,7 +465,9 @@ export function updateProgressWidget(
 
   // Cache git branch at widget creation time (not per render)
   let cachedBranch: string | null = null;
-  try { cachedBranch = getCurrentBranch(accessors.getBasePath()); } catch { /* not in git repo */ }
+  try { cachedBranch = getCurrentBranch(accessors.getBasePath()); } catch (err) { /* not in git repo */
+    process.stderr.write(`gsd [auto-dashboard]: git branch detection failed: ${err instanceof Error ? err.message : String(err)}\n`);
+  }
 
   // Cache short pwd (last 2 path segments only) + worktree/branch info
   let widgetPwd: string;
@@ -519,7 +528,9 @@ export function updateProgressWidget(
         }
         refreshRtkLabel();
         cachedLines = undefined;
-      } catch { /* non-fatal */ }
+      } catch (err) { /* non-fatal */
+        process.stderr.write(`gsd [auto-dashboard]: DB status update failed: ${err instanceof Error ? err.message : String(err)}\n`);
+      }
     }, 15_000);
 
     return {
@@ -878,3 +889,4 @@ function padToWidth(s: string, colWidth: number): string {
   if (vis >= colWidth) return truncateToWidth(s, colWidth, "…");
   return s + " ".repeat(colWidth - vis);
 }
+

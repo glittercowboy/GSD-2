@@ -99,8 +99,9 @@ export function startUnitSupervision(sctx: SupervisionContext): void {
           }
         }
       }
-    } catch {
+    } catch (err) {
       // Non-fatal — fall through with no estimate
+      process.stderr.write(`gsd [auto-timers]: operation failed: ${err instanceof Error ? err.message : String(err)}\n`);
     }
   }
   const estimateMinutes = taskEstimate ? parseEstimateMinutes(taskEstimate) : null;
@@ -219,7 +220,9 @@ export function startUnitSupervision(sctx: SupervisionContext): void {
       resolveAgentEndCancelled({ message: `Idle watchdog error: ${message}`, category: "idle", isTransient: true });
       try {
         ctx.ui.notify(`Idle watchdog error: ${message}`, "warning");
-      } catch { /* best effort */ }
+      } catch (err) { /* best effort */
+        process.stderr.write(`gsd [auto-timers]: notification failed: ${err instanceof Error ? err.message : String(err)}\n`);
+      }
     }
   }, 15000);
 
@@ -253,7 +256,9 @@ export function startUnitSupervision(sctx: SupervisionContext): void {
       resolveAgentEndCancelled({ message: `Hard timeout error: ${message}`, category: "timeout", isTransient: true });
       try {
         ctx.ui.notify(`Hard timeout error: ${message}`, "warning");
-      } catch { /* best effort */ }
+      } catch (err) { /* best effort */
+        process.stderr.write(`gsd [auto-timers]: notification failed: ${err instanceof Error ? err.message : String(err)}\n`);
+      }
     }
   }, hardTimeoutMs);
 
@@ -311,3 +316,4 @@ export function startUnitSupervision(sctx: SupervisionContext): void {
     }
   }, 15_000);
 }
+

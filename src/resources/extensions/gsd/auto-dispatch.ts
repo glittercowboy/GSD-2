@@ -712,7 +712,9 @@ export const DISPATCH_RULES: DispatchRule[] = [
             }
           }
         }
-      } catch { /* fall through — don't block on DB errors */ }
+      } catch (err) { /* fall through — don't block on DB errors */
+        process.stderr.write(`gsd [auto-dispatch]: lock cleanup failed: ${err instanceof Error ? err.message : String(err)}\n`);
+      }
 
       return {
         action: "dispatch",
@@ -754,8 +756,9 @@ export async function resolveDispatch(
   try {
     const registry = getRegistry();
     return await registry.evaluateDispatch(ctx);
-  } catch {
+  } catch (err) {
     // Registry not initialized — fall back to inline loop
+    process.stderr.write(`gsd [auto-dispatch]: dispatch failed: ${err instanceof Error ? err.message : String(err)}\n`);
   }
 
   for (const rule of DISPATCH_RULES) {
@@ -779,3 +782,4 @@ export async function resolveDispatch(
 export function getDispatchRuleNames(): string[] {
   return DISPATCH_RULES.map((r) => r.name);
 }
+

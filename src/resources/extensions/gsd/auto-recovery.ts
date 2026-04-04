@@ -109,8 +109,9 @@ function detectMainBranch(basePath: string): string {
       encoding: "utf-8",
     });
     if (result.trim()) return "main";
-  } catch {
+  } catch (err) {
     // main doesn't exist
+    process.stderr.write(`gsd [auto-recovery]: operation failed: ${err instanceof Error ? err.message : String(err)}\n`);
   }
   try {
     const result = execFileSync("git", ["rev-parse", "--verify", "master"], {
@@ -119,8 +120,9 @@ function detectMainBranch(basePath: string): string {
       encoding: "utf-8",
     });
     if (result.trim()) return "master";
-  } catch {
+  } catch (err) {
     // master doesn't exist either
+    process.stderr.write(`gsd [auto-recovery]: operation failed: ${err instanceof Error ? err.message : String(err)}\n`);
   }
   return "main"; // default fallback
 }
@@ -144,8 +146,9 @@ function getChangedFilesSinceBranch(basePath: string, targetBranch: string): str
       ).trim();
       return result ? result.split("\n").filter(Boolean) : [];
     }
-  } catch {
+  } catch (err) {
     // merge-base failed — fall back
+    process.stderr.write(`gsd [auto-recovery]: operation failed: ${err instanceof Error ? err.message : String(err)}\n`);
   }
 
   // Fallback: check last 20 commits
@@ -246,8 +249,9 @@ export function verifyExpectedArtifact(
       for (const gid of gateIds) {
         if (pendingIds.has(gid)) return false;
       }
-    } catch {
+    } catch (err) {
       // DB unavailable — treat as verified to avoid blocking
+      process.stderr.write(`gsd [auto-recovery]: dispatch failed: ${err instanceof Error ? err.message : String(err)}\n`);
     }
     return true;
   }
@@ -335,8 +339,9 @@ export function verifyExpectedArtifact(
             }
           }
         }
-      } catch {
+      } catch (err) {
         // Parse failure — don't block; slice plan may have non-standard format
+        process.stderr.write(`gsd [auto-recovery]: operation failed: ${err instanceof Error ? err.message : String(err)}\n`);
       }
     }
   }
@@ -418,7 +423,9 @@ export function writeBlockerPlaceholder(
   if (unitType === "execute-task" && isDbAvailable()) {
     const { milestone: mid, slice: sid, task: tid } = parseUnitId(unitId);
     if (mid && sid && tid) {
-      try { updateTaskStatus(mid, sid, tid, "complete", new Date().toISOString()); } catch { /* non-fatal */ }
+      try { updateTaskStatus(mid, sid, tid, "complete", new Date().toISOString()); } catch (err) { /* non-fatal */
+        process.stderr.write(`gsd [auto-recovery]: DB status update failed: ${err instanceof Error ? err.message : String(err)}\n`);
+      }
     }
   }
 
@@ -439,20 +446,23 @@ function abortAndResetMerge(
   if (hasMergeHead) {
     try {
       nativeMergeAbort(basePath);
-    } catch {
+    } catch (err) {
       /* best-effort */
+      process.stderr.write(`gsd [auto-recovery]: git merge-abort failed: ${err instanceof Error ? err.message : String(err)}\n`);
     }
   } else if (squashMsgPath) {
     try {
       unlinkSync(squashMsgPath);
-    } catch {
+    } catch (err) {
       /* best-effort */
+      process.stderr.write(`gsd [auto-recovery]: file unlink failed: ${err instanceof Error ? err.message : String(err)}\n`);
     }
   }
   try {
     nativeResetHard(basePath);
-  } catch {
+  } catch (err) {
     /* best-effort */
+    process.stderr.write(`gsd [auto-recovery]: git reset failed: ${err instanceof Error ? err.message : String(err)}\n`);
   }
 }
 
@@ -592,3 +602,4 @@ export function buildLoopRemediationSteps(
   }
   return null;
 }
+

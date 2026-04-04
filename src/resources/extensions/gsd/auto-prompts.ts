@@ -198,7 +198,9 @@ export async function inlineDependencySummaries(
       }
       // If slice not found in DB, fall through to file-based parsing
     }
-  } catch { /* fall through */ }
+  } catch (err) { /* fall through */
+    process.stderr.write(`gsd [auto-prompts]: operation failed: ${err instanceof Error ? err.message : String(err)}\n`);
+  }
 
   // If DB didn't provide depends, fall back to roadmap parsing
   if (!depends) {
@@ -276,8 +278,9 @@ export async function inlineDecisionsFromDb(
         return `### Decisions\nSource: \`.gsd/DECISIONS.md\`\n\n${formatted}`;
       }
     }
-  } catch {
+  } catch (err) {
     // DB not available — fall through to filesystem
+    process.stderr.write(`gsd [auto-prompts]: operation failed: ${err instanceof Error ? err.message : String(err)}\n`);
   }
   return inlineGsdRootFile(base, "decisions.md", "Decisions");
 }
@@ -303,8 +306,9 @@ export async function inlineRequirementsFromDb(
         return `### Requirements\nSource: \`.gsd/REQUIREMENTS.md\`\n\n${formatted}`;
       }
     }
-  } catch {
+  } catch (err) {
     // DB not available — fall through to filesystem
+    process.stderr.write(`gsd [auto-prompts]: operation failed: ${err instanceof Error ? err.message : String(err)}\n`);
   }
   return inlineGsdRootFile(base, "requirements.md", "Requirements");
 }
@@ -325,8 +329,9 @@ export async function inlineProjectFromDb(
         return `### Project\nSource: \`.gsd/PROJECT.md\`\n\n${content}`;
       }
     }
-  } catch {
+  } catch (err) {
     // DB not available — fall through to filesystem
+    process.stderr.write(`gsd [auto-prompts]: operation failed: ${err instanceof Error ? err.message : String(err)}\n`);
   }
   return inlineGsdRootFile(base, "project.md", "Project");
 }
@@ -486,8 +491,9 @@ export function buildSkillActivationBlock(params: {
       for (const skillName of taskPlan.frontmatter.skills_used) {
         matched.add(normalizeSkillReference(skillName));
       }
-    } catch {
+    } catch (err) {
       // Non-fatal — malformed task plan should not break prompt construction
+      process.stderr.write(`gsd [auto-prompts]: operation failed: ${err instanceof Error ? err.message : String(err)}\n`);
     }
   }
 
@@ -736,7 +742,9 @@ export async function checkNeedsReassessment(
         return { sliceId: lastCompleted };
       }
     }
-  } catch { /* fall through */ }
+  } catch (err) { /* fall through */
+    process.stderr.write(`gsd [auto-prompts]: operation failed: ${err instanceof Error ? err.message : String(err)}\n`);
+  }
 
   // File-based fallback using roadmap checkboxes
   const roadmapPath = resolveMilestoneFile(base, mid, "ROADMAP");
@@ -802,7 +810,9 @@ export async function checkNeedsRunUat(
         return { sliceId: sid, uatType };
       }
     }
-  } catch { /* fall through */ }
+  } catch (err) { /* fall through */
+    process.stderr.write(`gsd [auto-prompts]: operation failed: ${err instanceof Error ? err.message : String(err)}\n`);
+  }
 
   // File-based fallback using roadmap checkboxes
   if (!prefs?.uat_dispatch) return null;
@@ -1312,7 +1322,9 @@ export async function buildCompleteMilestonePrompt(
     if (isDbAvailable()) {
       sliceIds = getMilestoneSlices(mid).map(s => s.id);
     }
-  } catch { /* fall through */ }
+  } catch (err) { /* fall through */
+    process.stderr.write(`gsd [auto-prompts]: operation failed: ${err instanceof Error ? err.message : String(err)}\n`);
+  }
   // File-based fallback: parse roadmap for slice IDs when DB has no data
   if (sliceIds.length === 0 && roadmapPath) {
     const roadmapContent = await loadFile(roadmapPath);
@@ -1393,7 +1405,9 @@ export async function buildValidateMilestonePrompt(
         }
       }
     }
-  } catch { /* fall through */ }
+  } catch (err) { /* fall through */
+    process.stderr.write(`gsd [auto-prompts]: git push failed: ${err instanceof Error ? err.message : String(err)}\n`);
+  }
 
   // Inline all slice summaries and UAT results
   let valSliceIds: string[] = [];
@@ -1402,7 +1416,9 @@ export async function buildValidateMilestonePrompt(
     if (isDbAvailable()) {
       valSliceIds = getMilestoneSlices(mid).map(s => s.id);
     }
-  } catch { /* fall through */ }
+  } catch (err) { /* fall through */
+    process.stderr.write(`gsd [auto-prompts]: operation failed: ${err instanceof Error ? err.message : String(err)}\n`);
+  }
   // File-based fallback: parse roadmap for slice IDs when DB has no data
   if (valSliceIds.length === 0 && roadmapPath) {
     const roadmapContent = await loadFile(roadmapPath);
@@ -1541,8 +1557,9 @@ export async function buildReplanSlicePrompt(
         `- **${c.id}**: "${c.text}" — ${c.rationale ?? "no rationale"}`
       ).join("\n");
     }
-  } catch {
+  } catch (err) {
     // Non-fatal — captures module may not be available
+    process.stderr.write(`gsd [auto-prompts]: capture count failed: ${err instanceof Error ? err.message : String(err)}\n`);
   }
 
   return loadPrompt("replan-slice", {
@@ -1642,8 +1659,9 @@ export async function buildReassessRoadmapPrompt(
         `- **${c.id}**: "${c.text}" — ${c.rationale ?? "deferred during triage"}`
       ).join("\n");
     }
-  } catch {
+  } catch (err) {
     // Non-fatal — captures module may not be available
+    process.stderr.write(`gsd [auto-prompts]: capture count failed: ${err instanceof Error ? err.message : String(err)}\n`);
   }
 
   const reassessCommitInstruction = "Do not commit — .gsd/ planning docs are managed externally and not tracked in git.";
@@ -1859,7 +1877,9 @@ export async function buildRewriteDocsPrompt(
               .filter(t => t.status !== "complete" && t.status !== "done")
               .map(t => ({ id: t.id }));
           }
-        } catch { /* fall through */ }
+        } catch (err) { /* fall through */
+          process.stderr.write(`gsd [auto-prompts]: operation failed: ${err instanceof Error ? err.message : String(err)}\n`);
+        }
 
         if (!incompleteTasks) {
           // DB unavailable — no task data to inline
@@ -1911,3 +1931,4 @@ export async function buildRewriteDocsPrompt(
     overridesPath: relGsdRootFile("OVERRIDES"),
   });
 }
+
