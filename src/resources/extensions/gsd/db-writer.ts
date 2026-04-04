@@ -272,6 +272,10 @@ export interface SaveRequirementFields {
 /**
  * Save a new requirement to DB and regenerate REQUIREMENTS.md.
  * Auto-assigns the next ID via nextRequirementId().
+ *
+ * The ID computation and insert are wrapped in a single transaction
+ * to prevent parallel race conditions (same pattern as saveDecisionToDb).
+ *
  * Returns the assigned ID.
  */
 export async function saveRequirementToDb(
@@ -281,24 +285,37 @@ export async function saveRequirementToDb(
   try {
     const db = await import('./gsd-db.js');
 
-    const id = await nextRequirementId();
+    // Atomic ID assignment + insert inside a transaction.
+    const id = db.transaction(() => {
+      const adapter = db._getAdapter();
+      if (!adapter) throw new GSDError(GSD_STALE_STATE, "gsd-db: No database open");
 
-    const requirement: Requirement = {
-      id,
-      class: fields.class,
-      status: fields.status ?? 'active',
-      description: fields.description,
-      why: fields.why,
-      source: fields.source,
-      primary_owner: fields.primary_owner ?? '',
-      supporting_slices: fields.supporting_slices ?? '',
-      validation: fields.validation ?? '',
-      notes: fields.notes ?? '',
-      full_content: '',
-      superseded_by: null,
-    };
+      const row = adapter
+        .prepare('SELECT MAX(CAST(SUBSTR(id, 2) AS INTEGER)) as max_num FROM requirements')
+        .get();
+      const maxNum = row ? (row['max_num'] as number | null) : null;
+      const nextId = (maxNum == null || isNaN(maxNum))
+        ? 'R001'
+        : `R${String(maxNum + 1).padStart(3, '0')}`;
 
-    db.upsertRequirement(requirement);
+      const requirement: Requirement = {
+        id: nextId,
+        class: fields.class,
+        status: fields.status ?? 'active',
+        description: fields.description,
+        why: fields.why,
+        source: fields.source,
+        primary_owner: fields.primary_owner ?? '',
+        supporting_slices: fields.supporting_slices ?? '',
+        validation: fields.validation ?? '',
+        notes: fields.notes ?? '',
+        full_content: '',
+        superseded_by: null,
+      };
+
+      db.upsertRequirement(requirement);
+      return nextId;
+    });
 
     // Fetch all requirements for full file regeneration
     const adapter = db._getAdapter();
@@ -358,6 +375,11 @@ export interface SaveDecisionFields {
 /**
  * Save a new decision to DB and regenerate DECISIONS.md.
  * Auto-assigns the next ID via nextDecisionId().
+ *
+ * The ID computation (SELECT MAX) and insert are wrapped in a single
+ * transaction to prevent parallel tool calls from computing the same ID
+ * and silently overwriting each other (#3326, #3339, #3459).
+ *
  * Returns the assigned ID.
  */
 export async function saveDecisionToDb(
@@ -367,18 +389,33 @@ export async function saveDecisionToDb(
   try {
     const db = await import('./gsd-db.js');
 
-    const id = await nextDecisionId();
+    // Atomic ID assignment + insert inside a transaction to prevent
+    // parallel calls from racing on the same MAX(id) value.
+    const id = db.transaction(() => {
+      const adapter = db._getAdapter();
+      if (!adapter) throw new GSDError(GSD_STALE_STATE, "gsd-db: No database open");
 
-    db.upsertDecision({
-      id,
-      when_context: fields.when_context ?? '',
-      scope: fields.scope,
-      decision: fields.decision,
-      choice: fields.choice,
-      rationale: fields.rationale,
-      revisable: fields.revisable ?? 'Yes',
-      made_by: fields.made_by ?? 'agent',
-      superseded_by: null,
+      const row = adapter
+        .prepare('SELECT MAX(CAST(SUBSTR(id, 2) AS INTEGER)) as max_num FROM decisions')
+        .get();
+      const maxNum = row ? (row['max_num'] as number | null) : null;
+      const nextId = (maxNum == null || isNaN(maxNum))
+        ? 'D001'
+        : `D${String(maxNum + 1).padStart(3, '0')}`;
+
+      db.upsertDecision({
+        id: nextId,
+        when_context: fields.when_context ?? '',
+        scope: fields.scope,
+        decision: fields.decision,
+        choice: fields.choice,
+        rationale: fields.rationale,
+        revisable: fields.revisable ?? 'Yes',
+        made_by: fields.made_by ?? 'agent',
+        superseded_by: null,
+      });
+
+      return nextId;
     });
 
     // Fetch all decisions (including superseded for the full register)
