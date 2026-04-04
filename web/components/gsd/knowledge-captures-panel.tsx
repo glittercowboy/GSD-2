@@ -445,11 +445,6 @@ export function KnowledgeCapturesPanel({ initialTab }: KnowledgeCapturesPanelPro
             onRefresh={() => void loadKnowledgeData()}
             t={t}
           />
-            data={knowledgeState.data as KnowledgeData | null}
-            phase={knowledgeState.phase}
-            error={knowledgeState.error}
-            onRefresh={() => void loadKnowledgeData()}
-          />
         ) : (
           <CapturesTabContent
             data={capturesData}

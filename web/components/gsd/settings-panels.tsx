@@ -36,6 +36,7 @@ import {
 import { useTerminalFontSize } from "@/lib/use-terminal-font-size"
 import { useEditorFontSize } from "@/lib/use-editor-font-size"
 import { authFetch } from "@/lib/auth"
+import { useTranslations } from "next-intl"
 
 // ═══════════════════════════════════════════════════════════════════════
 // SHARED INFRASTRUCTURE

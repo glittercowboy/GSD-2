@@ -1985,7 +1985,7 @@ export function CommandSurface() {
       {/* Master toggle */}
       <ToggleRow
         label="UI overrides"
-        description=t("admin.description")
+        description={t("admin.description")}
         checked={devOverrides.enabled}
         onCheckedChange={devOverrides.setEnabled}
         testId="admin-ui-overrides-master"
