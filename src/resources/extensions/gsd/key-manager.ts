@@ -45,8 +45,8 @@ export const PROVIDER_REGISTRY: ProviderInfo[] = [
   { id: "openai",           label: "OpenAI",                  category: "llm", envVar: "OPENAI_API_KEY",         prefixes: ["sk-"],     dashboardUrl: "platform.openai.com/api-keys" },
   { id: "github-copilot",   label: "GitHub Copilot",          category: "llm", envVar: "GITHUB_TOKEN",           hasOAuth: true },
   { id: "openai-codex",     label: "ChatGPT Plus/Pro (Codex)",category: "llm",                                   hasOAuth: true },
-  { id: "google-gemini-cli",label: "Google Gemini CLI",       category: "llm",                                   hasOAuth: true },
-  { id: "google-antigravity",label: "Antigravity",            category: "llm",                                   hasOAuth: true },
+  { id: "google-gemini-cli",label: "Google Gemini CLI",       category: "llm", envVar: "GEMINI_CLI_KEY",         prefixes: ["AIza"],    hasOAuth: true },
+  { id: "google-antigravity",label: "Antigravity",            category: "llm", envVar: "GEMINI_CLI_KEY",         prefixes: ["AIza"],    hasOAuth: true },
   { id: "google",           label: "Google (Gemini)",         category: "llm", envVar: "GEMINI_API_KEY",         dashboardUrl: "aistudio.google.com/apikey" },
   { id: "groq",             label: "Groq",                    category: "llm", envVar: "GROQ_API_KEY",           dashboardUrl: "console.groq.com" },
   { id: "xai",              label: "xAI (Grok)",              category: "llm", envVar: "XAI_API_KEY",            dashboardUrl: "console.x.ai" },
@@ -333,6 +333,26 @@ export async function handleAddKey(
   }
 
   auth.set(provider.id, { type: "api_key", key });
+
+  // Handle project ID for Gemini CLI providers
+  if (provider.id === "google-gemini-cli" || provider.id === "google-antigravity") {
+    const projectId = await ctx.ui.input(
+      "Enter your Google Cloud Project ID:",
+      "e.g. my-project-123",
+    );
+    if (projectId === null || projectId === undefined || !projectId.trim()) {
+      ctx.ui.notify("Project ID is required. Key not saved.", "error");
+      auth.remove(provider.id);
+      return false;
+    }
+    const trimmedProject = projectId.trim();
+
+    // Store as JSON so the provider can parse it like an OAuth credential
+    const combined = JSON.stringify({ token: key, projectId: trimmedProject, type: 'api_key' });
+    auth.set(provider.id, { type: "api_key", key: combined });
+    ctx.ui.notify(`Project ID ${trimmedProject} saved.`, "success");
+  }
+
   if (provider.envVar) {
     process.env[provider.envVar] = key;
   }
@@ -716,14 +736,29 @@ export async function handleRotateKey(
     }
   }
 
-  // Remove old keys and add new one
-  // Preserve any OAuth credentials
   const oauthCreds = creds.filter((c) => c.type === "oauth");
   auth.remove(provider.id);
   for (const c of oauthCreds) {
     auth.set(provider.id, c);
   }
-  auth.set(provider.id, { type: "api_key", key: newKey });
+  
+  let keyToSave = newKey;
+  if (provider.id === "google-gemini-cli" || provider.id === "google-antigravity") {
+    const projectId = await ctx.ui.input(
+      "Enter your Google Cloud Project ID:",
+      "e.g. my-project-123",
+    );
+    if (projectId === null || projectId === undefined || !projectId.trim()) {
+      ctx.ui.notify("Project ID is required. Rotation cancelled.", "error");
+      // Restore old keys if possible? Re-adding all old apiKeyCreds
+      for (const c of apiKeyCreds) auth.set(provider.id, c);
+      return false;
+    }
+    keyToSave = JSON.stringify({ token: newKey, projectId: projectId.trim(), type: 'api_key' });
+    ctx.ui.notify(`Project ID ${projectId.trim()} saved.`, "success");
+  }
+
+  auth.set(provider.id, { type: "api_key", key: keyToSave });
 
   if (provider.envVar) {
     process.env[provider.envVar] = newKey;

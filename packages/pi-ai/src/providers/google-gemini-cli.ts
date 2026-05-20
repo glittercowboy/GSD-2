@@ -344,21 +344,40 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli", GoogleGe
 		};
 
 		try {
-			// apiKey is JSON-encoded: { token, projectId }
+			// apiKey can be:
+			// 1. JSON-encoded: { token, projectId } (OAuth)
+			// 2. Plain string: API key (requires GEMINI_CLI_PROJECT_ID or GOOGLE_CLOUD_PROJECT)
 			const apiKeyRaw = options?.apiKey;
 			if (!apiKeyRaw) {
-				throw new Error("Google Cloud Code Assist requires OAuth authentication. Use /login to authenticate.");
+				throw new Error("Google Cloud Code Assist requires authentication. Use /login to authenticate or set GEMINI_CLI_KEY.");
 			}
 
 			let accessToken: string;
 			let projectId: string;
+			let isOAuth = false;
 
 			try {
-				const parsed = JSON.parse(apiKeyRaw) as { token: string; projectId: string };
+				const parsed = JSON.parse(apiKeyRaw) as { token: string; projectId: string; type?: string };
 				accessToken = parsed.token;
 				projectId = parsed.projectId;
+				// If type is explicitly 'api_key', it's not OAuth.
+				// Otherwise assume OAuth for backward compatibility with existing auth.json entries.
+				isOAuth = parsed.type !== "api_key";
 			} catch {
-				throw new Error("Invalid Google Cloud Code Assist credentials. Use /login to re-authenticate.");
+				// Treat as plain API key
+				accessToken = apiKeyRaw;
+				projectId =
+					process.env.GEMINI_CLI_PROJECT_ID ||
+					process.env.GOOGLE_CLOUD_PROJECT ||
+					process.env.GCLOUD_PROJECT ||
+					"";
+
+				if (!projectId) {
+					throw new Error(
+						"Missing project ID for Google Cloud Code Assist. " +
+						"Please set GEMINI_CLI_PROJECT_ID, GOOGLE_CLOUD_PROJECT, or GCLOUD_PROJECT.",
+					);
+				}
 			}
 
 			if (!accessToken || !projectId) {
@@ -376,14 +395,19 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli", GoogleGe
 			}
 			const headers = isAntigravity ? getAntigravityHeaders() : GEMINI_CLI_HEADERS;
 
-			const requestHeaders = {
-				Authorization: `Bearer ${accessToken}`,
+			const requestHeaders: Record<string, string> = {
 				"Content-Type": "application/json",
 				Accept: "text/event-stream",
 				...headers,
 				...(needsClaudeThinkingBetaHeader(model) ? { "anthropic-beta": CLAUDE_THINKING_BETA_HEADER } : {}),
 				...options?.headers,
 			};
+
+			if (isOAuth) {
+				requestHeaders.Authorization = `Bearer ${accessToken}`;
+			} else {
+				requestHeaders["x-goog-api-key"] = accessToken;
+			}
 			const requestBodyJson = JSON.stringify(requestBody);
 
 			// Fetch with retry logic for rate limits, transient errors, and endpoint fallbacks.
@@ -822,9 +846,11 @@ export const streamSimpleGoogleGeminiCli: StreamFunction<"google-gemini-cli", Si
 	context: Context,
 	options?: SimpleStreamOptions,
 ): AssistantMessageEventStream => {
-	const apiKey = options?.apiKey;
+	const apiKey = options?.apiKey || getEnvApiKey(model.provider);
 	if (!apiKey) {
-		throw new Error("Google Cloud Code Assist requires OAuth authentication. Use /login to authenticate.");
+		throw new Error(
+			"Google Cloud Code Assist requires authentication. Use /login to authenticate or set GEMINI_CLI_KEY.",
+		);
 	}
 
 	const base = buildBaseOptions(model, options, apiKey);

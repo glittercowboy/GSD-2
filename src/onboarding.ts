@@ -101,6 +101,9 @@ const LLM_PROVIDER_IDS = Array.from(new Set([
 const API_KEY_PREFIXES: Record<string, string[]> = {
   anthropic: ['sk-ant-'],
   openai: ['sk-'],
+  google: ['AIza'],
+  'google-gemini-cli': ['AIza'],
+  'google-antigravity': ['AIza'],
 }
 
 export const OTHER_PROVIDERS = [
@@ -455,6 +458,8 @@ export async function runLlmStep(p: ClackModule, pc: PicoModule, authStorage: Au
       options: [
         { value: 'anthropic', label: 'Anthropic (Claude)' },
         { value: 'openai', label: 'OpenAI' },
+        { value: 'google-gemini-cli', label: 'Google Gemini CLI', hint: 'requires project ID' },
+        { value: 'google-antigravity', label: 'Antigravity (Gemini 3, Claude)', hint: 'requires project ID' },
         ...OTHER_PROVIDERS.map(op => ({ value: op.value, label: op.label })),
       ],
     })
@@ -573,6 +578,25 @@ async function runApiKeyFlow(
   }
 
   authStorage.set(providerId, { type: 'api_key', key: trimmed })
+
+  // Handle project ID for Gemini CLI providers
+  if (providerId === 'google-gemini-cli' || providerId === 'google-antigravity') {
+    const projectId = await p.text({
+      message: `Enter your Google Cloud Project ID:`,
+      placeholder: 'e.g. my-project-123',
+      validate: (val) => {
+        if (!val || val.trim().length === 0) return 'Project ID is required for this provider'
+      },
+    })
+    if (p.isCancel(projectId) || !projectId) return false
+    const trimmedProject = (projectId as string).trim()
+
+    // Store as JSON so the provider can parse it like an OAuth credential
+    const combined = JSON.stringify({ token: trimmed, projectId: trimmedProject, type: 'api_key' })
+    authStorage.set(providerId, { type: 'api_key', key: combined })
+    p.log.success(`Project ID ${pc.green(trimmedProject)} saved`)
+  }
+
   persistDefaultProvider(providerId)
   p.log.success(`API key saved for ${pc.green(providerLabel)}`)
 

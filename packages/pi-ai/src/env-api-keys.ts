@@ -128,6 +128,8 @@ export function getEnvApiKey(provider: any): string | undefined {
 		xai: "XAI_API_KEY",
 		openrouter: "OPENROUTER_API_KEY",
 		"vercel-ai-gateway": "AI_GATEWAY_API_KEY",
+		"google-gemini-cli": "GEMINI_CLI_KEY",
+		"google-antigravity": "GEMINI_CLI_KEY",
 		zai: "ZAI_API_KEY",
 		mistral: "MISTRAL_API_KEY",
 		minimax: "MINIMAX_API_KEY",
