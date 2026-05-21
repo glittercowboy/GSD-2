@@ -16,6 +16,7 @@ import type { RoadmapSliceEntry } from "./types.js";
 import { checkGitHealth, checkRuntimeHealth, checkGlobalHealth, checkEngineHealth } from "./doctor-checks.js";
 import { checkEnvironmentHealth } from "./doctor-environment.js";
 import { runProviderChecks } from "./doctor-providers.js";
+import { validateTitle } from "./validation.js";
 
 // ── Re-exports ─────────────────────────────────────────────────────────────
 // All public types and functions from extracted modules are re-exported here
@@ -25,33 +26,7 @@ export { summarizeDoctorIssues, filterDoctorIssues, formatDoctorReport, formatDo
 export { runEnvironmentChecks, runFullEnvironmentChecks, formatEnvironmentReport, type EnvironmentCheckResult } from "./doctor-environment.js";
 export { computeProgressScore, computeProgressScoreWithContext, formatProgressLine, formatProgressReport, type ProgressScore, type ProgressLevel } from "./progress-score.js";
 
-/**
- * Characters that are used as delimiters in GSD state management documents
- * and should not appear in milestone or slice titles.
- *
- * - "\u2014" (em dash, U+2014): used as a display separator in STATE.md and other docs.
- *   A title containing "\u2014" makes the separator ambiguous, corrupting state display
- *   and confusing the LLM agent that reads and writes these files.
- * - "\u2013" (en dash, U+2013): visually similar to em dash; same ambiguity risk.
- * - "/" (forward slash, U+002F): used as the path separator in unit IDs (M001/S01)
- *   and git branch names (gsd/M001/S01). A slash in a title can break path resolution.
- */
-const TITLE_DELIMITER_RE = /[\u2014\u2013\/]/; // em dash, en dash, forward slash
-
-/**
- * Check whether a milestone or slice title contains characters that conflict
- * with GSD's state document delimiter conventions.
- * Returns a human-readable description of the problem, or null if the title is safe.
- */
-export function validateTitle(title: string): string | null {
-  if (TITLE_DELIMITER_RE.test(title)) {
-    const found: string[] = [];
-    if (/[\u2014\u2013]/.test(title)) found.push("em/en dash (\u2014 or \u2013)");
-    if (/\//.test(title)) found.push("forward slash (/)");
-    return `title contains ${found.join(" and ")}, which conflict with GSD state document delimiters`;
-  }
-  return null;
-}
+export { validateTitle } from "./validation.js";
 
 function validatePreferenceShape(preferences: GSDPreferences): string[] {
   const issues: string[] = [];

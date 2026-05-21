@@ -5,9 +5,11 @@ import {
   clearUnitRuntimeRecord,
   formatExecuteTaskRecoveryStatus,
   inspectExecuteTaskDurability,
+  isInFlightRuntimePhase,
   readUnitRuntimeRecord,
   writeUnitRuntimeRecord,
 } from "../unit-runtime.ts";
+import { closeDatabase, insertMilestone, insertSlice, insertTask, openDatabase } from "../gsd-db.ts";
 import { clearPathCache } from '../paths.ts';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -21,6 +23,12 @@ writeFileSync(
   "# S02: Test Slice\n\n## Tasks\n\n- [ ] **T09: Do the thing** `est:10m`\n  Description.\n",
   "utf-8",
 );
+
+console.log("\n=== in-flight runtime phases ===");
+{
+  assert.equal(isInFlightRuntimePhase("crashed"), true, "crashed records remain recoverable");
+  assert.equal(isInFlightRuntimePhase("finalized"), false, "finalized records are terminal");
+}
 
 console.log("\n=== runtime record write/read/update ===");
 {
@@ -63,6 +71,35 @@ console.log("\n=== runtime record cleanup ===");
   clearUnitRuntimeRecord(base, "execute-task", "M100/S02/T09");
   const loaded = readUnitRuntimeRecord(base, "execute-task", "M100/S02/T09");
   assert.deepStrictEqual(loaded, null, "record removed");
+}
+
+console.log("\n=== execute-task durability trusts closed DB task status ===");
+{
+  const dbBase = mkdtempSync(join(tmpdir(), "gsd-unit-runtime-db-test-"));
+  mkdirSync(join(dbBase, ".gsd", "milestones", "M300", "slices", "S01", "tasks"), { recursive: true });
+  try {
+    openDatabase(join(dbBase, ".gsd", "gsd.db"));
+    insertMilestone({ id: "M300", title: "DB Milestone", status: "active" });
+    insertSlice({ id: "S01", milestoneId: "M300", title: "DB Slice", status: "in_progress" });
+    insertTask({ id: "T01", milestoneId: "M300", sliceId: "S01", title: "DB Task", status: "complete" });
+    writeFileSync(
+      join(dbBase, ".gsd", "milestones", "M300", "slices", "S01", "S01-PLAN.md"),
+      "# S01\n\n## Tasks\n\n- [ ] **T01: DB Task** `est:10m`\n",
+      "utf-8",
+    );
+    writeFileSync(join(dbBase, ".gsd", "STATE.md"), "## Next Action\nExecute T01 for S01: DB task\n", "utf-8");
+
+    const status = await inspectExecuteTaskDurability(dbBase, "M300/S01/T01");
+    assert.ok(status !== null, "db-complete: status exists");
+    assert.equal(status!.dbComplete, true, "db-complete: closed DB status is captured");
+    assert.equal(status!.summaryExists, false, "db-complete: summary can still be missing");
+    assert.equal(status!.taskChecked, false, "db-complete: checkbox can still be unchecked");
+    assert.equal(status!.nextActionAdvanced, false, "db-complete: next action can still point at task");
+    assert.equal(formatExecuteTaskRecoveryStatus(status!), "DB task status is closed");
+  } finally {
+    closeDatabase();
+    rmSync(dbBase, { recursive: true, force: true });
+  }
 }
 
 console.log("\n=== hook unit type sanitization (slash in unitType) ===");

@@ -7,7 +7,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -42,6 +42,60 @@ test("parkMilestone updates DB status to 'parked' (#2694)", () => {
     assert.equal(getMilestone("M001")!.status, "parked", "DB status should be parked");
 
     closeDatabase();
+  } finally {
+    closeDatabase();
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("parkMilestone ignores blocked SUMMARY.md when DB milestone is active (#5828)", () => {
+  const base = createBase();
+  try {
+    openDatabase(":memory:");
+    insertMilestone({ id: "M001", title: "Test", status: "active" });
+    writeFileSync(
+      join(base, ".gsd", "milestones", "M001", "M001-SUMMARY.md"),
+      [
+        "---",
+        "status: closeout_blocked",
+        "---",
+        "",
+        "# M001 Summary",
+        "",
+        "Completion was not persisted.",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const parked = parkMilestone(base, "M001", "test");
+
+    assert.ok(parked, "active DB row should allow parking despite a blocked SUMMARY.md");
+    assert.ok(
+      existsSync(join(base, ".gsd", "milestones", "M001", "M001-PARKED.md")),
+      "PARKED.md should be written",
+    );
+    assert.equal(getMilestone("M001")!.status, "parked", "DB status should be parked");
+  } finally {
+    closeDatabase();
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("parkMilestone refuses DB-complete milestones (#5828)", () => {
+  const base = createBase();
+  try {
+    openDatabase(":memory:");
+    insertMilestone({ id: "M001", title: "Test", status: "complete" });
+
+    const parked = parkMilestone(base, "M001", "test");
+
+    assert.equal(parked, false, "complete DB row should not be parkable");
+    assert.equal(
+      existsSync(join(base, ".gsd", "milestones", "M001", "M001-PARKED.md")),
+      false,
+      "PARKED.md should not be written",
+    );
+    assert.equal(getMilestone("M001")!.status, "complete", "DB status should remain complete");
   } finally {
     closeDatabase();
     rmSync(base, { recursive: true, force: true });

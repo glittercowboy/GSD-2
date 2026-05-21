@@ -1,298 +1,90 @@
 /**
- * Model UnitType Mapping — regression tests for #2865.
+ * Model UnitType Mapping — behavior tests for #2865 / #2900 / ADR-011.
  *
- * Verifies that all auto-dispatch unitTypes have corresponding entries in:
- * - resolveModelWithFallbacksForUnit (preferences-models.ts)
- * - classifyUnitPhase (metrics.ts)
- * - LIFECYCLE_ONLY_UNITS (auto-post-unit.ts)
- * - unitVerb / unitPhaseLabel (auto-dashboard.ts)
- * - resolveExpectedArtifactPath (auto-artifact-paths.ts)
- *
- * Uses source-level checks to avoid import resolution issues in dev.
- *
- * Copyright (c) 2026 Jeremy McSpadden <jeremy@fluxlabs.net>
+ * Verifies model routing, metrics/dashboard labels, and artifact resolution
+ * through exported runtime APIs instead of inspecting source text.
  */
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const gsdDir = join(__dirname, "..");
+import { resolveExpectedArtifactPath } from "../auto-artifact-paths.ts";
+import { unitPhaseLabel, unitVerb } from "../auto-dashboard.ts";
+import { classifyUnitPhase } from "../metrics.ts";
+import { resolveModelWithFallbacksForUnit } from "../preferences-models.ts";
+import { KNOWN_UNIT_LABELS } from "../preferences-types.ts";
 
-function readSrc(file: string): string {
-  return readFileSync(join(gsdDir, file), "utf-8");
+function withModelPreferences<T>(fn: () => T): T {
+  const oldHome = process.env.GSD_HOME;
+  const home = mkdtempSync(join(tmpdir(), "gsd-model-map-"));
+  try {
+    process.env.GSD_HOME = home;
+    writeFileSync(join(home, "preferences.md"), [
+      "---",
+      "models:",
+      "  research: research-model",
+      "  planning: planning-model",
+      "  discuss: discuss-model",
+      "  execution: execution-model",
+      "  execution_simple: simple-model",
+      "  completion: completion-model",
+      "  validation: validation-model",
+      "  subagent: subagent-model",
+      "---",
+      "",
+    ].join("\n"));
+    return fn();
+  } finally {
+    if (oldHome === undefined) delete process.env.GSD_HOME;
+    else process.env.GSD_HOME = oldHome;
+    rmSync(home, { recursive: true, force: true });
+  }
 }
 
-const preferencesSrc = readSrc("preferences-models.ts");
-const metricsSrc = readSrc("metrics.ts");
-const postUnitSrc = readSrc("auto-post-unit.ts");
-const dashboardSrc = readSrc("auto-dashboard.ts");
-const artifactSrc = readSrc("auto-artifact-paths.ts");
-const guidedFlowSrc = readSrc("guided-flow.ts");
-const autoDispatchSrc = readSrc("auto-dispatch.ts");
+test("discuss unit types route to the discuss model bucket", () => {
+  withModelPreferences(() => {
+    assert.equal(resolveModelWithFallbacksForUnit("discuss-milestone")?.primary, "discuss-model");
+    assert.equal(resolveModelWithFallbacksForUnit("discuss-slice")?.primary, "discuss-model");
+  });
+});
 
-// Derive unitTypes directly from auto-dispatch.ts source so the test
-// automatically tracks dispatch rule changes (Copilot review feedback).
-const AUTO_DISPATCH_UNIT_TYPES = (() => {
-  const unitTypeRegex = /unitType:\s*["']([^"']+)["']/g;
-  const unitTypes = new Set<string>();
-  let match: RegExpExecArray | null;
-  while ((match = unitTypeRegex.exec(autoDispatchSrc)) !== null) {
-    unitTypes.add(match[1]);
+test("validation unit types route to the validation model bucket", () => {
+  withModelPreferences(() => {
+    assert.equal(resolveModelWithFallbacksForUnit("validate-milestone")?.primary, "validation-model");
+    assert.equal(resolveModelWithFallbacksForUnit("gate-evaluate")?.primary, "validation-model");
+  });
+});
+
+test("worktree-merge routes to completion and is recognized as a unit label", () => {
+  withModelPreferences(() => {
+    assert.ok(KNOWN_UNIT_LABELS.includes("worktree-merge"));
+    assert.equal(resolveModelWithFallbacksForUnit("worktree-merge")?.primary, "completion-model");
+  });
+});
+
+test("every known unit label with a dispatch phase resolves when all model buckets are configured", () => {
+  withModelPreferences(() => {
+    const missing = KNOWN_UNIT_LABELS.filter((unitType) => !resolveModelWithFallbacksForUnit(unitType));
+    assert.deepEqual(missing, []);
+  });
+});
+
+test("discuss-slice has discussion metrics and dashboard labels", () => {
+  assert.equal(classifyUnitPhase("discuss-slice"), "discussion");
+  assert.equal(unitVerb("discuss-slice"), "discussing");
+  assert.equal(unitPhaseLabel("discuss-slice"), "DISCUSS");
+});
+
+test("discuss-slice resolves to the slice context artifact path", () => {
+  const base = mkdtempSync(join(tmpdir(), "gsd-discuss-artifact-"));
+  try {
+    mkdirSync(join(base, ".gsd", "milestones", "M001", "slices", "S01"), { recursive: true });
+    const path = resolveExpectedArtifactPath("discuss-slice", "M001/S01", base);
+    assert.equal(path, join(realpathSync(base), ".gsd", "milestones", "M001", "slices", "S01", "S01-CONTEXT.md"));
+  } finally {
+    rmSync(base, { recursive: true, force: true });
   }
-  return Array.from(unitTypes);
-})();
-
-// Additionally include unitTypes used by guided-flow but not auto-dispatch
-// (e.g., discuss-slice is dispatched by guided-flow but not auto-dispatch).
-const ALL_KNOWN_UNIT_TYPES = [
-  ...new Set([...AUTO_DISPATCH_UNIT_TYPES, "discuss-slice"]),
-];
-
-// ═══════════════════════════════════════════════════════════════════════════
-// #2865: discuss dispatches must NOT alias to plan unitTypes
-// ═══════════════════════════════════════════════════════════════════════════
-
-test("#2865: no dispatchWorkflow with gsd-discuss customType uses plan-milestone", () => {
-  // Match dispatchWorkflow calls where "gsd-discuss" appears before "plan-milestone"
-  // in the same call (the 5 args are on consecutive lines).
-  const blocks = guidedFlowSrc.split(/dispatchWorkflow\(/);
-  for (const block of blocks) {
-    const callEnd = block.indexOf(");");
-    if (callEnd === -1) continue;
-    const call = block.slice(0, callEnd);
-    if (call.includes('"gsd-discuss"') && call.includes('"plan-milestone"')) {
-      assert.fail(`Discuss dispatch should not use plan-milestone: ...dispatchWorkflow(${call.slice(0, 120).trim()}...`);
-    }
-  }
-});
-
-test("#2865: no dispatchWorkflow with gsd-discuss customType uses plan-slice", () => {
-  const blocks = guidedFlowSrc.split(/dispatchWorkflow\(/);
-  for (const block of blocks) {
-    const callEnd = block.indexOf(");");
-    if (callEnd === -1) continue;
-    const call = block.slice(0, callEnd);
-    if (call.includes('"gsd-discuss"') && call.includes('"plan-slice"')) {
-      assert.fail(`Discuss slice dispatch should not use plan-slice: ...dispatchWorkflow(${call.slice(0, 120).trim()}...`);
-    }
-  }
-});
-
-test("#2865: no buildDiscussPrompt call dispatches with plan-milestone", () => {
-  const blocks = guidedFlowSrc.split(/dispatchWorkflow\(/);
-  for (const block of blocks) {
-    const callEnd = block.indexOf(");");
-    if (callEnd === -1) continue;
-    const call = block.slice(0, callEnd);
-    if (call.includes("buildDiscussPrompt") && call.includes('"plan-milestone"')) {
-      assert.fail(`buildDiscussPrompt dispatch should not use plan-milestone`);
-    }
-  }
-});
-
-test("#2865: no buildDiscussSlicePrompt call dispatches with plan-slice", () => {
-  const blocks = guidedFlowSrc.split(/dispatchWorkflow\(/);
-  for (const block of blocks) {
-    const callEnd = block.indexOf(");");
-    if (callEnd === -1) continue;
-    const call = block.slice(0, callEnd);
-    if (call.includes("buildDiscussSlicePrompt") && call.includes('"plan-slice"')) {
-      assert.fail(`buildDiscussSlicePrompt dispatch should not use plan-slice`);
-    }
-  }
-});
-
-test("#2865: no guided-discuss-milestone loadPrompt dispatches with plan-milestone", () => {
-  const blocks = guidedFlowSrc.split(/dispatchWorkflow\(/);
-  for (const block of blocks) {
-    const callEnd = block.indexOf(");");
-    if (callEnd === -1) continue;
-    const call = block.slice(0, callEnd);
-    if (call.includes("guided-discuss-milestone") && call.includes('"plan-milestone"')) {
-      assert.fail(`guided-discuss-milestone dispatch should not use plan-milestone`);
-    }
-  }
-});
-
-// ═══════════════════════════════════════════════════════════════════════════
-// preferences-models.ts: resolveModelWithFallbacksForUnit coverage
-// ═══════════════════════════════════════════════════════════════════════════
-
-test("resolveModelWithFallbacksForUnit handles discuss-milestone", () => {
-  assert.ok(preferencesSrc.includes('"discuss-milestone"'), "missing discuss-milestone case");
-});
-
-test("resolveModelWithFallbacksForUnit handles discuss-slice", () => {
-  assert.ok(preferencesSrc.includes('"discuss-slice"'), "missing discuss-slice case");
-});
-
-test("discuss unitTypes fall back to planning when models.discuss is unset", () => {
-  assert.ok(
-    preferencesSrc.includes("m.discuss ?? m.planning"),
-    "discuss should fall back to m.planning",
-  );
-});
-
-test("validation unitTypes fall back to planning when models.validation is unset", () => {
-  assert.ok(
-    preferencesSrc.includes("m.validation ?? m.planning"),
-    "validation should fall back to m.planning",
-  );
-});
-
-test("all auto-dispatch unitTypes have preference mapping or subagent handling", () => {
-  const unmapped: string[] = [];
-  for (const ut of ALL_KNOWN_UNIT_TYPES) {
-    if (!preferencesSrc.includes(`"${ut}"`)) {
-      unmapped.push(ut);
-    }
-  }
-  assert.deepEqual(unmapped, [], `Unmapped unitTypes in preferences-models.ts: ${unmapped.join(", ")}`);
-});
-
-// ═══════════════════════════════════════════════════════════════════════════
-// #2900: worktree-merge must map to completion phase
-// ═══════════════════════════════════════════════════════════════════════════
-
-test("#2900: resolveModelWithFallbacksForUnit handles worktree-merge", () => {
-  assert.ok(preferencesSrc.includes('"worktree-merge"'), "missing worktree-merge case in switch");
-});
-
-// ═══════════════════════════════════════════════════════════════════════════
-// #2900: KNOWN_UNIT_TYPES must include all dispatched unit types
-// ═══════════════════════════════════════════════════════════════════════════
-
-const preferenceTypesSrc = readSrc("preferences-types.ts");
-
-test("#2900: KNOWN_UNIT_TYPES includes all auto-dispatch unit types", () => {
-  const missing: string[] = [];
-  for (const ut of ALL_KNOWN_UNIT_TYPES) {
-    if (!preferenceTypesSrc.includes(`"${ut}"`)) {
-      missing.push(ut);
-    }
-  }
-  assert.deepEqual(missing, [], `Missing from KNOWN_UNIT_TYPES: ${missing.join(", ")}`);
-});
-
-test("#2900: KNOWN_UNIT_TYPES includes worktree-merge", () => {
-  assert.ok(preferenceTypesSrc.includes('"worktree-merge"'), "worktree-merge missing from KNOWN_UNIT_TYPES");
-});
-
-// ═══════════════════════════════════════════════════════════════════════════
-// metrics.ts: classifyUnitPhase coverage
-// ═══════════════════════════════════════════════════════════════════════════
-
-test("classifyUnitPhase includes discussion phase", () => {
-  assert.ok(metricsSrc.includes('"discussion"'), "MetricsPhase should include discussion");
-});
-
-test("classifyUnitPhase maps discuss-milestone and discuss-slice", () => {
-  assert.ok(metricsSrc.includes('"discuss-milestone"'), "missing discuss-milestone in metrics");
-  assert.ok(metricsSrc.includes('"discuss-slice"'), "missing discuss-slice in metrics");
-});
-
-// ═══════════════════════════════════════════════════════════════════════════
-// auto-post-unit.ts: LIFECYCLE_ONLY_UNITS
-// ═══════════════════════════════════════════════════════════════════════════
-
-test("LIFECYCLE_ONLY_UNITS includes discuss-slice", () => {
-  assert.ok(postUnitSrc.includes('"discuss-slice"'), "discuss-slice should be lifecycle-only");
-});
-
-// ═══════════════════════════════════════════════════════════════════════════
-// auto-dashboard.ts: display label coverage
-// ═══════════════════════════════════════════════════════════════════════════
-
-test("unitVerb handles discuss-slice", () => {
-  assert.ok(dashboardSrc.includes('"discuss-slice"'), "missing discuss-slice in dashboard");
-});
-
-// ═══════════════════════════════════════════════════════════════════════════
-// auto-artifact-paths.ts: artifact resolution
-// ═══════════════════════════════════════════════════════════════════════════
-
-// ═══════════════════════════════════════════════════════════════════════════
-// ADR-011: meta-test — every KNOWN_UNIT_TYPES entry must appear in all four
-// downstream registries so a future unit type added to KNOWN_UNIT_TYPES can't
-// silently fall through to wrong defaults in metrics/dashboard/artifacts/post-unit.
-// ═══════════════════════════════════════════════════════════════════════════
-
-// Intentional exceptions — unit types that legitimately rely on default/null
-// behavior in a specific registry. Entries captured here reflect the current
-// baseline at the time ADR-011 landed; adding to this allowlist for a NEW unit
-// type requires explicit justification in the commit.
-//
-// Test intent: catch the case where someone adds a new unit type to
-// KNOWN_UNIT_TYPES but forgets to wire it into one of the four registries.
-// The allowlist freezes the baseline so pre-existing omissions do not block
-// the test, but any brand-new addition must be either handled or justified.
-// Deep-mode project-level units (workflow-preferences, discuss-project,
-// discuss-requirements, research-decision, research-project) operate above
-// the milestone/slice/task model. They do not produce slice-shaped artifacts,
-// they do not have per-unit dashboard renderers, and they do not have
-// post-unit hooks that mirror execute/complete patterns. They legitimately
-// rely on default behavior in all four registries. Adding them to the
-// allowlist with this justification.
-const DEEP_MODE_PROJECT_UNITS = [
-  "workflow-preferences",
-  "discuss-project",
-  "discuss-requirements",
-  "research-decision",
-  "research-project",
-];
-
-const REGISTRY_EXCEPTIONS: Record<string, Set<string>> = {
-  // metrics.ts classifyUnitPhase uses default → "execution" for most unit types.
-  "metrics.ts": new Set([
-    "worktree-merge", "custom-step",
-    "rewrite-docs", "run-uat", "gate-evaluate", "replan-slice",
-    "reactive-execute", "validate-milestone", "complete-milestone",
-    ...DEEP_MODE_PROJECT_UNITS,
-  ]),
-  "auto-dashboard.ts": new Set([
-    "worktree-merge",
-    "gate-evaluate", "reactive-execute", "validate-milestone", "complete-milestone",
-    ...DEEP_MODE_PROJECT_UNITS,
-  ]),
-  "auto-artifact-paths.ts": new Set([
-    "rewrite-docs", "gate-evaluate", "reactive-execute", "discuss-slice", "worktree-merge",
-    ...DEEP_MODE_PROJECT_UNITS,
-  ]),
-  "auto-post-unit.ts": new Set([
-    "execute-task", "reactive-execute", "gate-evaluate", "worktree-merge",
-    ...DEEP_MODE_PROJECT_UNITS,
-  ]),
-};
-
-const REGISTRY_SOURCES: Array<[string, string]> = [
-  ["metrics.ts", metricsSrc],
-  ["auto-dashboard.ts", dashboardSrc],
-  ["auto-artifact-paths.ts", artifactSrc],
-  ["auto-post-unit.ts", postUnitSrc],
-];
-
-test("ADR-011 meta: every KNOWN_UNIT_TYPES entry appears in all 4 downstream registries", () => {
-  const missing: Array<{ registry: string; unitType: string }> = [];
-  for (const [registry, src] of REGISTRY_SOURCES) {
-    for (const ut of ALL_KNOWN_UNIT_TYPES) {
-      if (REGISTRY_EXCEPTIONS[registry]?.has(ut)) continue;
-      if (!src.includes(`"${ut}"`)) {
-        missing.push({ registry, unitType: ut });
-      }
-    }
-  }
-  assert.deepEqual(
-    missing,
-    [],
-    "Each listed unit type is absent from the given registry — either add a handler or add to REGISTRY_EXCEPTIONS with justification:\n" +
-      missing.map((m) => `  ${m.registry}: "${m.unitType}"`).join("\n"),
-  );
-});
-
-test("resolveExpectedArtifactPath handles discuss-slice", () => {
-  assert.ok(artifactSrc.includes('"discuss-slice"'), "missing discuss-slice in artifact paths");
 });

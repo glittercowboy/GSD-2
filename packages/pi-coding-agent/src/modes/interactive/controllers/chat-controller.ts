@@ -1,4 +1,5 @@
-// GSD-2 Interactive Chat Controller
+// Project/App: GSD-2
+// File Purpose: Interactive TUI chat stream controller.
 import { Loader, Markdown, Spacer, Text } from "@gsd/pi-tui";
 
 import type { InteractiveModeEvent, InteractiveModeStateHost } from "../interactive-mode-state.js";
@@ -28,7 +29,12 @@ type RenderedSegment =
 		contentType: "text" | "thinking";
 		component: AssistantMessageComponent;
 	}
-	| { kind: "tool"; contentIndex: number; component: ToolExecutionComponent };
+	| { kind: "tool"; contentIndex: number; component: ToolExecutionComponent }
+	| { kind: "tool-summary"; component: ToolPhaseSummaryComponent; phases: ToolExecutionPhase[] };
+
+type DesiredSegment =
+	| { kind: "text-run"; startIndex: number; endIndex: number; contentType: "text" | "thinking" }
+	| { kind: "tool"; contentIndex: number; toolId: string };
 
 let renderedSegments: RenderedSegment[] = [];
 // When providers reuse one assistant lifecycle across internal sub-turns,
@@ -36,12 +42,89 @@ let renderedSegments: RenderedSegment[] = [];
 // claude-code MCP pruning can remove stale provisional text later.
 let orphanedSegments: RenderedSegment[] = [];
 
-function hasVisibleAssistantContent(message: { content: Array<any> }): boolean {
-	return message.content.some(
-		(c) =>
-			(c.type === "text" && typeof c.text === "string" && c.text.trim().length > 0)
-			|| (c.type === "thinking" && typeof c.thinking === "string" && c.thinking.trim().length > 0),
+function startLoadingAnimation(host: InteractiveModeStateHost): void {
+	if (host.pendingWorkingMessage === null) {
+		host.loadingAnimation = undefined;
+		host.statusContainer.clear();
+		return;
+	}
+
+	host.loadingAnimation = new Loader(
+		host.ui,
+		(spinner) => theme.fg("accent", spinner),
+		(text) => theme.fg("muted", text),
+		host.defaultWorkingMessage,
 	);
+	host.statusContainer.addChild(host.loadingAnimation);
+	if (host.pendingWorkingMessage !== undefined) {
+		if (host.pendingWorkingMessage) {
+			host.loadingAnimation.setMessage(host.pendingWorkingMessage);
+		}
+		host.pendingWorkingMessage = undefined;
+	}
+}
+
+function getVisibleTextLikeBlockType(block: any): "text" | "thinking" | undefined {
+	if (block?.type === "text" && typeof block.text === "string" && block.text.trim().length > 0) return "text";
+	if (block?.type === "thinking" && typeof block.thinking === "string" && block.thinking.trim().length > 0) return "thinking";
+	return undefined;
+}
+
+function buildDesiredSegments(
+	blocks: Array<any>,
+	options: { shouldSkipTextBlock?: (block: any, index: number) => boolean } = {},
+): DesiredSegment[] {
+	const desired: DesiredSegment[] = [];
+	let runStart = -1;
+	let runEnd = -1;
+	let runType: "text" | "thinking" | undefined;
+	const closeRun = () => {
+		if (runStart !== -1 && runType) {
+			desired.push({ kind: "text-run", startIndex: runStart, endIndex: runEnd, contentType: runType });
+			runStart = -1;
+			runEnd = -1;
+			runType = undefined;
+		}
+	};
+
+	for (let i = 0; i < blocks.length; i++) {
+		const block = blocks[i];
+		const blockType = getVisibleTextLikeBlockType(block);
+		const isInvisibleTextLike = blockType === undefined && (block?.type === "text" || block?.type === "thinking");
+		const isTool = block?.type === "toolCall" || block?.type === "serverToolUse";
+
+		if (blockType) {
+			if (options.shouldSkipTextBlock?.(block, i)) {
+				closeRun();
+				continue;
+			}
+			if (runStart === -1) {
+				runStart = i;
+				runEnd = i;
+				runType = blockType;
+			} else if (runType !== blockType) {
+				closeRun();
+				runStart = i;
+				runEnd = i;
+				runType = blockType;
+			} else {
+				runEnd = i;
+			}
+		} else {
+			if (isInvisibleTextLike) continue;
+			closeRun();
+			if (isTool) {
+				desired.push({ kind: "tool", contentIndex: i, toolId: block.id });
+			}
+		}
+	}
+	closeRun();
+
+	return desired;
+}
+
+function hasVisibleAssistantContent(message: { content: Array<any> }): boolean {
+	return message.content.some((c) => getVisibleTextLikeBlockType(c) !== undefined);
 }
 
 function hasAssistantToolBlocks(message: { content: Array<any> }): boolean {
@@ -112,9 +195,25 @@ function mergeToolPhases(phases: ToolExecutionPhase[]): ToolExecutionPhase[] {
 		if (previous?.label === phase.label) {
 			previous.count += phase.count;
 			previous.durationMs += phase.durationMs;
+			previous.targets = mergeTargets(previous.targets, phase.targets);
+			if (previous.actionLabel !== phase.actionLabel) {
+				previous.actionLabel = undefined;
+			}
 		} else {
-			merged.push({ ...phase });
+			merged.push({ ...phase, targets: phase.targets ? [...phase.targets] : undefined });
 		}
+	}
+	return merged;
+}
+
+function mergeTargets(existing: string[] | undefined, incoming: string[] | undefined): string[] | undefined {
+	if (!existing && !incoming) return undefined;
+	const seen = new Set<string>();
+	const merged: string[] = [];
+	for (const target of [...(existing ?? []), ...(incoming ?? [])]) {
+		if (!target || seen.has(target)) continue;
+		seen.add(target);
+		merged.push(target);
 	}
 	return merged;
 }
@@ -124,17 +223,25 @@ function replaceCompactToolRowsWithPhaseSummary(
 ): void {
 	let changed = false;
 	const nextRenderedSegments: RenderedSegment[] = [];
-	let rollupRun: Array<{ seg: Extract<RenderedSegment, { kind: "tool" }>; phase: ToolExecutionPhase }> = [];
+	let rollupRun: Array<{
+		seg: Extract<RenderedSegment, { kind: "tool" | "tool-summary" }>;
+		phases: ToolExecutionPhase[];
+	}> = [];
 
 	const flushRollupRun = () => {
-		if (rollupRun.length < 2) {
+		const actionCount = rollupRun.reduce(
+			(total, item) => total + item.phases.reduce((sum, phase) => sum + phase.count, 0),
+			0,
+		);
+		if (actionCount < 2) {
 			nextRenderedSegments.push(...rollupRun.map((item) => item.seg));
 			rollupRun = [];
 			return;
 		}
 
 		const firstIndex = Math.max(0, host.chatContainer.children.indexOf(rollupRun[0].seg.component));
-		const summary = new ToolPhaseSummaryComponent(mergeToolPhases(rollupRun.map((item) => item.phase)));
+		const phases = mergeToolPhases(rollupRun.flatMap((item) => item.phases));
+		const summary = new ToolPhaseSummaryComponent(phases);
 
 		for (const { seg } of rollupRun) {
 			host.chatContainer.removeChild(seg.component);
@@ -149,13 +256,18 @@ function replaceCompactToolRowsWithPhaseSummary(
 		}
 
 		changed = true;
+		nextRenderedSegments.push({ kind: "tool-summary", component: summary, phases });
 		rollupRun = [];
 	};
 
 	for (const seg of renderedSegments) {
 		const phase = seg.kind === "tool" ? seg.component.getRollupPhase() : null;
 		if (seg.kind === "tool" && phase) {
-			rollupRun.push({ seg, phase });
+			rollupRun.push({ seg, phases: [phase] });
+			continue;
+		}
+		if (seg.kind === "tool-summary") {
+			rollupRun.push({ seg, phases: seg.component.getPhases() });
 			continue;
 		}
 
@@ -260,19 +372,7 @@ export async function handleAgentEvent(host: InteractiveModeStateHost & {
 				host.loadingAnimation.stop();
 			}
 			host.statusContainer.clear();
-			host.loadingAnimation = new Loader(
-				host.ui,
-				(spinner) => theme.fg("accent", spinner),
-				(text) => theme.fg("muted", text),
-				host.defaultWorkingMessage,
-			);
-			host.statusContainer.addChild(host.loadingAnimation);
-			if (host.pendingWorkingMessage !== undefined) {
-				if (host.pendingWorkingMessage) {
-					host.loadingAnimation.setMessage(host.pendingWorkingMessage);
-				}
-				host.pendingWorkingMessage = undefined;
-			}
+			startLoadingAnimation(host);
 			host.ui.requestRender();
 			break;
 
@@ -409,6 +509,7 @@ export async function handleAgentEvent(host: InteractiveModeStateHost & {
 							details: externalToolResult.details,
 							isError: externalToolResult.isError,
 						});
+						replaceCompactToolRowsWithPhaseSummary(host);
 					}
 				}
 
@@ -439,59 +540,14 @@ export async function handleAgentEvent(host: InteractiveModeStateHost & {
 					// Only prune provisional pre-tool prose after post-tool prose exists,
 					// so MCP tool-only windows do not blank the assistant content.
 					const shouldDropPreToolProse = isClaudeCodeProvider && hasMcpToolBlock && hasPostToolText;
-					type DesiredSegment =
-						| { kind: "text-run"; startIndex: number; endIndex: number; contentType: "text" | "thinking" }
-						| { kind: "tool"; contentIndex: number; toolId: string };
-				const desired: DesiredSegment[] = [];
-				let runStart = -1;
-				let runEnd = -1;
-				let runType: "text" | "thinking" | undefined;
-				const closeRun = () => {
-					if (runStart !== -1 && runType) {
-						desired.push({ kind: "text-run", startIndex: runStart, endIndex: runEnd, contentType: runType });
-						runStart = -1;
-						runEnd = -1;
-						runType = undefined;
-						}
-					};
-				for (let i = 0; i < blocks.length; i++) {
-					const b = blocks[i];
-					const blockType = b.type === "text" || b.type === "thinking" ? b.type : undefined;
-					const isTextLike = blockType === "text" || blockType === "thinking";
-					const isTool = b.type === "toolCall" || b.type === "serverToolUse";
-					// For Claude Code MCP turns, prune only pre-tool prose, never thinking.
-					const textValue = blockType === "text" && typeof b?.text === "string" ? b.text : "";
-					const isLikelyQuestion = blockType === "text" && typeof textValue === "string" && /\?\s*$/.test(textValue.trim());
-					const shouldSkipProse = shouldDropPreToolProse
-						&& firstToolIdx >= 0
-						&& i < firstToolIdx
-						&& blockType === "text"
-						&& !isLikelyQuestion;
-					if (shouldSkipProse) {
-						closeRun();
-						continue;
-					}
-						if (isTextLike) {
-							if (runStart === -1) {
-								runStart = i;
-								runEnd = i;
-								runType = blockType;
-							} else if (runType !== blockType) {
-								closeRun();
-								runStart = i;
-								runEnd = i;
-								runType = blockType;
-							} else {
-								runEnd = i;
-							}
-						} else {
-							closeRun();
-							if (isTool) {
-								desired.push({ kind: "tool", contentIndex: i, toolId: b.id });
-							}
-						}
-					}
-					closeRun();
+					const desired = buildDesiredSegments(blocks, {
+						shouldSkipTextBlock: (block: any, index: number) => {
+							if (!shouldDropPreToolProse || firstToolIdx < 0 || index >= firstToolIdx) return false;
+							if (getVisibleTextLikeBlockType(block) !== "text") return false;
+							const textValue = typeof block?.text === "string" ? block.text : "";
+							return !/\?\s*$/.test(textValue.trim());
+						},
+					});
 
 					// Claude Code MCP can emit provisional pre-tool prose that gets
 					// superseded by post-tool output. Prune stale text-run segments so
@@ -679,6 +735,10 @@ export async function handleAgentEvent(host: InteractiveModeStateHost & {
 						pinnedTextComponent = undefined;
 						host.pinnedMessageContainer.clear();
 						lastPinnedText = "";
+						if (!host.loadingAnimation) {
+							host.statusContainer.clear();
+							startLoadingAnimation(host);
+						}
 					}
 				}
 
@@ -711,49 +771,7 @@ export async function handleAgentEvent(host: InteractiveModeStateHost & {
 					// ranges/components don't keep stale partial indices.
 					if (renderedSegments.length > 0) {
 						const finalBlocks = host.streamingMessage.content;
-						type DesiredSegment =
-							| { kind: "text-run"; startIndex: number; endIndex: number; contentType: "text" | "thinking" }
-							| { kind: "tool"; contentIndex: number; toolId: string };
-						const desired: DesiredSegment[] = [];
-						let runStart = -1;
-						let runEnd = -1;
-						let runType: "text" | "thinking" | undefined;
-						const closeRun = () => {
-							if (runStart !== -1 && runType) {
-								desired.push({ kind: "text-run", startIndex: runStart, endIndex: runEnd, contentType: runType });
-								runStart = -1;
-								runEnd = -1;
-								runType = undefined;
-							}
-						};
-
-						for (let i = 0; i < finalBlocks.length; i++) {
-							const block = finalBlocks[i] as any;
-							const blockType = block?.type === "text" || block?.type === "thinking" ? block.type : undefined;
-							const isTextLike = blockType === "text" || blockType === "thinking";
-							const isTool = block?.type === "toolCall" || block?.type === "serverToolUse";
-
-							if (isTextLike) {
-								if (runStart === -1) {
-									runStart = i;
-									runEnd = i;
-									runType = blockType;
-								} else if (runType !== blockType) {
-									closeRun();
-									runStart = i;
-									runEnd = i;
-									runType = blockType;
-								} else {
-									runEnd = i;
-								}
-							} else {
-								closeRun();
-								if (isTool) {
-									desired.push({ kind: "tool", contentIndex: i, toolId: block.id });
-								}
-							}
-						}
-						closeRun();
+						const desired = buildDesiredSegments(finalBlocks);
 
 						const toolComponentsById = new Map<string, ToolExecutionComponent>();
 						for (const [toolId, component] of host.pendingTools.entries()) {
@@ -843,7 +861,6 @@ export async function handleAgentEvent(host: InteractiveModeStateHost & {
 					host.streamingComponent.setShowMetadata(true);
 					host.streamingComponent.updateContent(host.streamingMessage);
 				}
-				replaceCompactToolRowsWithPhaseSummary(host);
 
 				if (host.streamingMessage.stopReason === "aborted" || host.streamingMessage.stopReason === "error") {
 					if (!errorMessage) {
@@ -862,6 +879,7 @@ export async function handleAgentEvent(host: InteractiveModeStateHost & {
 					for (const [, component] of host.pendingTools.entries()) {
 						component.setArgsComplete();
 					}
+					replaceCompactToolRowsWithPhaseSummary(host);
 				}
 				host.streamingComponent = undefined;
 				host.streamingMessage = undefined;
@@ -912,7 +930,7 @@ export async function handleAgentEvent(host: InteractiveModeStateHost & {
 			const component = host.pendingTools.get(event.toolCallId);
 			if (component) {
 				component.updateResult({ ...event.result, isError: event.isError });
-				host.pendingTools.delete(event.toolCallId);
+				replaceCompactToolRowsWithPhaseSummary(host);
 				host.ui.requestRender();
 			}
 			break;

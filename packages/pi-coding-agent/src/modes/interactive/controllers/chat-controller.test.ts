@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { Container } from "@gsd/pi-tui";
+import stripAnsi from "strip-ansi";
 
 import { findLatestPinnableText, handleAgentEvent } from "./chat-controller.js";
 import { initTheme } from "../theme/theme.js";
@@ -110,4 +112,119 @@ test("handleAgentEvent: agent_start clears stale adaptive blocking error", async
 
 	assert.equal(cleared, true);
 	assert.equal(requestedRender, true);
+});
+
+test("handleAgentEvent: agent_start suppresses loader when extension requested no working message", async () => {
+	initTheme("dark", false);
+	let addChildCalled = false;
+	let requestedRender = false;
+	const host = {
+		isInitialized: true,
+		clearBlockingError() {},
+		retryEscapeHandler: undefined,
+		retryLoader: undefined,
+		loadingAnimation: undefined,
+		statusContainer: {
+			clear() {},
+			addChild() {
+				addChildCalled = true;
+			},
+		},
+		ui: {
+			requestRender() {
+				requestedRender = true;
+			},
+		},
+		defaultEditor: {},
+		footer: {
+			invalidate() {},
+		},
+		settingsManager: {
+			getTimestampFormat() {
+				return "date-time-iso";
+			},
+		},
+		defaultWorkingMessage: "Working...",
+		pendingWorkingMessage: null,
+	} as any;
+
+	await handleAgentEvent(host, { type: "agent_start" } as any);
+
+	assert.equal(host.loadingAnimation, undefined);
+	assert.equal(host.pendingWorkingMessage, null);
+	assert.equal(addChildCalled, false);
+	assert.equal(requestedRender, true);
+});
+
+test("handleAgentEvent: standalone completed tool events roll up incrementally", async () => {
+	initTheme("dark", false);
+	const chatContainer = new Container();
+	let renderCount = 0;
+	const host = {
+		isInitialized: true,
+		footer: { invalidate() {} },
+		settingsManager: {
+			getTimestampFormat() {
+				return "date-time-iso";
+			},
+			getShowImages() {
+				return false;
+			},
+		},
+		getRegisteredToolDefinition() {
+			return undefined;
+		},
+		chatContainer,
+		pendingTools: new Map(),
+		ui: {
+			requestRender() {
+				renderCount++;
+			},
+		},
+	} as any;
+
+	for (const [toolCallId, toolName] of [
+		["read-1", "read"],
+		["read-2", "read"],
+		["edit-1", "edit"],
+	] as const) {
+		const target =
+			toolName === "edit"
+				? {
+						kind: "file",
+						action: "edit",
+						inputPath: `src/${toolCallId}.txt`,
+						resolvedPath: `/tmp/project/src/${toolCallId}.txt`,
+						line: 10,
+					}
+				: {
+						kind: "file",
+						action: "read",
+						inputPath: `src/${toolCallId}.txt`,
+						resolvedPath: `/tmp/project/src/${toolCallId}.txt`,
+					};
+		await handleAgentEvent(host, {
+			type: "tool_execution_start",
+			toolCallId,
+			toolName,
+			args: { path: `src/${toolCallId}.txt` },
+		} as any);
+		await handleAgentEvent(host, {
+			type: "tool_execution_end",
+			toolCallId,
+			toolName,
+			result: { content: [], details: { target }, isError: false },
+			isError: false,
+		} as any);
+	}
+
+	const rendered = stripAnsi(chatContainer.render(100).join("\n"));
+	assert.match(rendered, /Context reads · 2 files\s+success · \d+(ms|s)/);
+	assert.match(rendered, /src\/read-1\.txt/);
+	assert.match(rendered, /src\/read-2\.txt/);
+	assert.match(rendered, /File changes · 1 file, 1 edit\s+success · \d+(ms|s)/);
+	assert.match(rendered, /src\/edit-1\.txt:10/);
+	assert.doesNotMatch(rendered, /^\s*│?\s*read\s+success ·/m);
+	assert.doesNotMatch(rendered, /^\s*│?\s*edit\s+success ·/m);
+	assert.ok(renderCount > 0);
 });

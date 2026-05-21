@@ -79,13 +79,10 @@ describe("TUI autocomplete shrink clearing (#3721)", () => {
     (tui as any).doRender();
 
     assert.ok(terminal.writtenData.length >= 1, "shrink render should write a differential buffer");
-    // The real terminal cursor was positioned at the editor cursor row (row 1)
-    // for IME. Deleted autocomplete rows start after the new content bottom
-    // (row 3), so the first move must go down 2 rows from the actual cursor.
     const buffer = terminal.writtenData[0];
     assert.ok(
-      buffer.startsWith("\x1b[?2026h\x1b[2B\r"),
-      `expected shrink diff to move down from the hardware cursor row, got ${JSON.stringify(buffer)}`,
+      buffer.includes("\x1b[2J\x1b[21;1H"),
+      `expected short shrink to redraw at the bottom anchor, got ${JSON.stringify(buffer)}`,
     );
   });
 });

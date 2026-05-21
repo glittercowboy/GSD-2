@@ -1,3 +1,4 @@
+// GSD2 - Write gate regression tests.
 /**
  * Unit tests for the CONTEXT.md write-gate (D031 guard chain).
  *
@@ -11,7 +12,7 @@
 
 import test, { afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync, unlinkSync, existsSync, rmSync } from 'node:fs';
+import { mkdirSync, writeFileSync, unlinkSync, existsSync, rmSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -682,6 +683,44 @@ test('write-gate: loadWriteGateSnapshot returns empty default when persist file 
     clearDiscussionFlowState(base);
     try {
       rmSync(base, { recursive: true, force: true });
+    } catch { /* swallow */ }
+  }
+});
+
+// ─── Scenario 30: write-gate persistence recreates dangling external .gsd target ──
+
+test('write-gate: resetWriteGateState persists through dangling .gsd symlink', () => {
+  const base = join(tmpdir(), `gsd-write-gate-dangling-${randomUUID()}`);
+  const externalState = join(tmpdir(), `gsd-write-gate-external-${randomUUID()}`);
+  const stateFilePath = join(base, '.gsd', 'runtime', 'write-gate-state.json');
+  const originalEnv = process.env.GSD_PERSIST_WRITE_GATE_STATE;
+
+  try {
+    process.env.GSD_PERSIST_WRITE_GATE_STATE = '1';
+    mkdirSync(base, { recursive: true });
+    symlinkSync(externalState, join(base, '.gsd'), 'junction');
+    assert.strictEqual(existsSync(join(base, '.gsd')), false, 'precondition: .gsd symlink target is missing');
+
+    resetWriteGateState(base);
+
+    assert.ok(existsSync(externalState), 'missing external state target was recreated');
+    assert.ok(existsSync(stateFilePath), 'write-gate snapshot persisted under .gsd/runtime');
+    assert.deepEqual(loadWriteGateSnapshot(base), {
+      verifiedDepthMilestones: [],
+      verifiedApprovalGates: [],
+      activeQueuePhase: false,
+      pendingGateId: null,
+    });
+  } finally {
+    if (originalEnv === undefined) {
+      delete process.env.GSD_PERSIST_WRITE_GATE_STATE;
+    } else {
+      process.env.GSD_PERSIST_WRITE_GATE_STATE = originalEnv;
+    }
+    clearDiscussionFlowState(base);
+    try {
+      rmSync(base, { recursive: true, force: true });
+      rmSync(externalState, { recursive: true, force: true });
     } catch { /* swallow */ }
   }
 });

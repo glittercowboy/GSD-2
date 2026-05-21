@@ -90,21 +90,24 @@ describe("my feature", () => {
 
 - ✅ Phase 0 (shared harness)
 - ✅ Phase 1a (sanity: `--version`, `--help`, env isolation)
+- ✅ Phase 1b (fake-LLM provider + agent loop tests)
+- ✅ Phase 2 (real-process MCP server e2e)
+- ✅ Phase 6 (native TS↔Rust ABI smoke)
+- ✅ Phase 7 (migration smoke)
 - ✅ B (docker runtime smoke against current source)
-- ✅ D (Windows runner — non-blocking; promotes to required after 5 consecutive green)
-- ⏳ Phase 1b (fake-LLM provider + agent loop test)
-- ⏳ Phase 2 (real-process MCP server e2e)
-- ⏳ Phase 6 (native TS↔Rust ABI smoke)
-- ⏳ Phase 7 (migration smoke)
-- ⏳ E (`gsd undo` e2e — schema rollback dropped; not a shipped feature)
-- ⏳ A (Studio launch-only — defer feature-level e2e until Studio ships features)
+- ✅ D (Windows smoke coverage — non-blocking inside the portability job)
+- Dropped: `gsd undo` e2e. Schema rollback is not a shipped feature.
+- Dropped: Studio launch-only e2e. Studio is retired from the CI e2e process.
 
-See the e2e remediation plan in the parent PR description for the full sequence.
+The suite now covers the originally planned shipped CLI/runtime surfaces. Add
+new e2e tests when a change needs real process, filesystem, environment,
+packaging, or cross-platform coverage that unit and integration tests cannot
+prove.
 
 ## CI runners
 
 - **`e2e`** (linux) — required gate.
 - **`docker-e2e`** (linux) — gated on Docker-relevant change filter.
-- **`e2e-windows`** (windows) — non-blocking until 5 consecutive green; runs the
-  same suite as `e2e` against `dist/loader.js`. Catches Windows-specific path,
-  TMPDIR, and child-process regressions.
+- **`windows-portability`** (windows) — blocking portability checks plus a
+  non-blocking e2e smoke subset for Windows-specific path, TMPDIR, and
+  child-process regressions.

@@ -3,6 +3,7 @@ import { type Static, Type } from "@sinclair/typebox";
 import { existsSync, readdirSync, statSync } from "fs";
 import nodePath from "path";
 import { resolveToCwd } from "./path-utils.js";
+import { createToolTarget, type ToolTargetMetadata } from "./tool-target.js";
 import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult, truncateHead } from "./truncate.js";
 
 const lsSchema = Type.Object({
@@ -15,6 +16,7 @@ export type LsToolInput = Static<typeof lsSchema>;
 const DEFAULT_LIMIT = 500;
 
 export interface LsToolDetails {
+	target?: ToolTargetMetadata;
 	truncation?: TruncationResult;
 	entryLimitReached?: number;
 }
@@ -68,6 +70,12 @@ export function createLsTool(cwd: string, options?: LsToolOptions): AgentTool<ty
 				(async () => {
 					try {
 						const dirPath = resolveToCwd(path || ".", cwd);
+						const target = createToolTarget({
+							kind: "directory",
+							action: "list",
+							inputPath: path || ".",
+							resolvedPath: dirPath,
+						});
 						const effectiveLimit = limit ?? DEFAULT_LIMIT;
 
 						// Check if path exists
@@ -124,7 +132,7 @@ export function createLsTool(cwd: string, options?: LsToolOptions): AgentTool<ty
 						signal?.removeEventListener("abort", onAbort);
 
 						if (results.length === 0) {
-							resolve({ content: [{ type: "text", text: "(empty directory)" }], details: undefined });
+							resolve({ content: [{ type: "text", text: "(empty directory)" }], details: { target } });
 							return;
 						}
 
@@ -133,7 +141,7 @@ export function createLsTool(cwd: string, options?: LsToolOptions): AgentTool<ty
 						const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
 
 						let output = truncation.content;
-						const details: LsToolDetails = {};
+						const details: LsToolDetails = { target };
 
 						// Build notices
 						const notices: string[] = [];
@@ -154,7 +162,7 @@ export function createLsTool(cwd: string, options?: LsToolOptions): AgentTool<ty
 
 						resolve({
 							content: [{ type: "text", text: output }],
-							details: Object.keys(details).length > 0 ? details : undefined,
+							details,
 						});
 					} catch (e: any) {
 						signal?.removeEventListener("abort", onAbort);

@@ -98,7 +98,7 @@ These features apply only in **worktree mode**.
 Auto mode creates and manages worktrees automatically:
 
 1. When a milestone starts, a worktree is created at `.gsd/worktrees/<MID>/` on branch `milestone/<MID>`
-2. The project-root SQLite database and project-root `.gsd/` state remain canonical; the worktree is an isolated execution checkout, not an independent planning-state copy
+2. The project-root SQLite database remains canonical runtime state; artifact/projection files are rendered under the active worktree-local `.gsd/` while execution runs inside that worktree
    SQLite WAL coordination is single-host only; do not share this runtime across machines, and see `src/resources/extensions/gsd/docs/COORDINATION.md` for the coordination constraints.
 3. All execution happens inside the worktree
 4. On milestone completion, the worktree is squash-merged to the integration branch

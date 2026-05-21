@@ -48,7 +48,7 @@ Narrate decomposition reasoning in complete sentences: grouping, risk order, ver
 Then:
 1. Use the **Roadmap** output template from the inlined context above
 2. {{skillActivation}}
-3. Create only as many demoable vertical slices as the work genuinely needs.
+3. Create only as many demoable vertical slices as the work genuinely needs. Use 1-10 slices, sized to the work; tiny/single-file/static work should usually be one slice.
 4. Order by risk, high-risk first.
 5. Call `gsd_plan_milestone` to persist milestone fields, slice rows, and **Horizontal Checklist** through the DB-backed path. Fill checklist concerns considered during planning: requirements, decisions, shutdown, revenue, auth, shared resources, reconnection. Omit for trivial milestones. Do **not** write `{{outputPath}}`, `ROADMAP.md`, or other planning artifacts manually; the tool owns rendering and persistence.
 6. If planning produced structural decisions (slice ordering, technology choices, scope exclusions), call `gsd_decision_save` for each; the tool assigns IDs and regenerates `.gsd/DECISIONS.md`.
@@ -78,6 +78,8 @@ Apply these when decomposing and ordering slices:
 - Ship features, not proofs; use clearly marked realistic stubs only when necessary.
 - **Dependency format is comma-separated, never range syntax.** Write `depends:[S01,S02,S03]`, not `depends:[S01-S03]`.
 - Roadmap ambition must match the milestone; right-size decomposition.
+- Missing ecosystem markers are not a reason to over-plan. If Project Classification says `untyped-existing`, treat the listed content files as the project surface and use generic file-level workflow guidance.
+- For `untyped-existing` projects with 1-2 content files, prefer exactly one slice unless the request clearly spans multiple independent user-visible capabilities. For 3-5 content files, prefer 1-2 slices.
 
 ## Progressive Planning (ADR-011)
 

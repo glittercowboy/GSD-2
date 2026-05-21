@@ -11,6 +11,7 @@ import type {
 	SessionStats,
 	ThinkingLevel,
 } from "@gsd-build/contracts" with { "resolution-mode": "import" };
+import { buildGsdClientSpawnPlan } from "./gsd-client-spawn.js";
 
 /**
  * Mirrors the RPC command/response protocol from the GSD agent.
@@ -86,12 +87,8 @@ export class GsdClient implements vscode.Disposable {
 			return;
 		}
 
-		const proc = spawn(this.binaryPath, ["--mode", "rpc"], {
-			cwd: this.cwd,
-			stdio: ["pipe", "pipe", "pipe"],
-			env: { ...process.env },
-			shell: process.platform === "win32",
-		});
+		const spawnPlan = buildGsdClientSpawnPlan(this.binaryPath, this.cwd);
+		const proc = spawn(spawnPlan.command, spawnPlan.args, spawnPlan.options);
 		this.process = proc;
 
 		this.buffer = "";

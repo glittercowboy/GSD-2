@@ -1,33 +1,43 @@
 /**
  * dispatch-guard-closed-status.test.ts — #3653
  *
- * Verify that the dispatch guard uses isClosedStatus() instead of a raw
- * `status === "complete"` check when determining whether a slice is done.
+ * Verify that the dispatch guard treats all closed DB slice statuses as done.
  * Reconciled slices may carry statuses like "skipped" or "cancelled" which
  * are also closed — the raw check caused false dispatch blocks.
  */
 
-import { describe, test } from "node:test";
+import { afterEach, beforeEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const sourceFile = join(__dirname, "..", "dispatch-guard.ts");
+import { getPriorSliceCompletionBlocker } from "../dispatch-guard.ts";
+import { closeDatabase, insertMilestone, insertSlice, openDatabase } from "../gsd-db.ts";
 
 describe("dispatch-guard isClosedStatus migration (#3653)", () => {
-  const source = readFileSync(sourceFile, "utf-8");
+  let base: string;
 
-  test("imports isClosedStatus from status-guards", () => {
-    assert.match(source, /import\s*\{[^}]*isClosedStatus[^}]*\}\s*from\s*["']\.\/status-guards/);
+  beforeEach(() => {
+    base = mkdtempSync(join(tmpdir(), "gsd-dispatch-guard-closed-"));
+    mkdirSync(join(base, ".gsd", "milestones", "M001"), { recursive: true });
+    writeFileSync(join(base, ".gsd", "milestones", "M001", "CONTEXT.md"), "# M001\n");
+    openDatabase(join(base, ".gsd", "gsd.db"));
   });
 
-  test("uses isClosedStatus() for slice done check instead of raw comparison", () => {
-    assert.match(source, /done:\s*isClosedStatus\(r\.status\)/);
+  afterEach(() => {
+    closeDatabase();
+    rmSync(base, { recursive: true, force: true });
   });
 
-  test("does not use raw status === 'complete' for DB slice rows", () => {
-    assert.doesNotMatch(source, /done:\s*r\.status\s*===\s*["']complete["']/);
+  test("skipped prior DB slices do not block later slice dispatch", () => {
+    insertMilestone({ id: "M001", title: "Milestone 1", status: "active", depends_on: [] });
+    insertSlice({ id: "S01", milestoneId: "M001", title: "Skipped Slice", status: "skipped", depends: [] });
+    insertSlice({ id: "S02", milestoneId: "M001", title: "Next Slice", status: "pending", depends: [] });
+
+    assert.equal(
+      getPriorSliceCompletionBlocker(base, "main", "execute-task", "M001-S02-T01"),
+      null,
+    );
   });
 });

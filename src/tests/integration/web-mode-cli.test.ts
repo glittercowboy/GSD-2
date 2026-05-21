@@ -19,7 +19,7 @@ test('parseCliArgs recognizes --web explicitly', () => {
 test('package hooks declare a concrete staged web host', () => {
   const rootPackage = JSON.parse(readFileSync(join(projectRoot, 'package.json'), 'utf-8'))
   assert.equal(rootPackage.scripts['stage:web-host'], 'node scripts/stage-web-standalone.cjs')
-  assert.equal(rootPackage.scripts['build:web-host'], 'npm --prefix web run build && npm run stage:web-host')
+  assert.equal(rootPackage.scripts['build:web-host'], 'cross-env NODE_ENV=production npm --prefix web run build && npm run stage:web-host')
   assert.equal(rootPackage.scripts['gsd'], 'node scripts/dev-cli.js')
   assert.equal(rootPackage.scripts['gsd:web'], 'npm run build:contracts && npm run build:pi && npm run copy-resources && node scripts/build-web-if-stale.cjs && node scripts/dev-cli.js --web')
   assert.equal(rootPackage.scripts['gsd:web:stop'], 'node scripts/dev-cli.js web stop')
@@ -29,13 +29,7 @@ test('package hooks declare a concrete staged web host', () => {
   assert.equal(webPackage.scripts['start:standalone'], 'node .next/standalone/web/server.js')
 })
 
-test('web mode launcher defines or imports a browser opener', () => {
-  const source = readFileSync(join(projectRoot, 'src', 'web-mode.ts'), 'utf-8')
-  // openBrowser is now defined directly in web-mode.ts (was previously imported from onboarding.js)
-  assert.match(source, /openBrowser/)
-})
-
-test('cli.ts branches to web mode before interactive startup and preserves cwd-scoped launch inputs', async (t) => {
+test('web CLI branch preserves cwd-scoped launch inputs', async (t) => {
   const tmp = mkdtempSync(join(tmpdir(), 'gsd-web-cli-'))
   const cwd = join(tmp, 'project space')
   mkdirSync(cwd, { recursive: true })
@@ -43,13 +37,6 @@ test('cli.ts branches to web mode before interactive startup and preserves cwd-s
   let launchInputs: { cwd: string; projectSessionsDir: string; agentDir: string } | undefined
 
   t.after(() => { rmSync(tmp, { recursive: true, force: true }) });
-
-  const cliSource = readFileSync(join(projectRoot, 'src', 'cli.ts'), 'utf-8')
-  const branchIndex = cliSource.indexOf('const webBranch = await runWebCliBranch')
-  const modelRegistryIndex = cliSource.indexOf('const modelRegistry =')
-  assert.ok(branchIndex !== -1, 'cli.ts contains an explicit web branch handoff')
-  assert.ok(modelRegistryIndex !== -1, 'cli.ts still contains the model-registry startup path')
-  assert.ok(branchIndex < modelRegistryIndex, 'web branch runs before interactive startup state is constructed')
 
   const result = await cliWeb.runWebCliBranch(cliWeb.parseCliArgs(['node', 'dist/loader.js', '--web']), {
     cwd: () => cwd,

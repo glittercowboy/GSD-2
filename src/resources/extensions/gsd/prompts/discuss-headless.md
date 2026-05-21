@@ -106,8 +106,8 @@ Directories use bare IDs. Files use ID-SUFFIX format. Titles live inside content
 
 In a single pass:
 1. `mkdir -p .gsd/milestones/{{milestoneId}}/slices`
-2. Write or update `.gsd/PROJECT.md` — use the **Project** output template below. Describe what the project is, its current state, and list the milestone sequence.
-3. Write or update `.gsd/REQUIREMENTS.md` — use the **Requirements** output template below. Confirm states, ownership, and traceability before roadmap creation.
+2. Call `gsd_summary_save` with `artifact_type: "PROJECT"` and full Project template content. The tool persists the DB-backed PROJECT artifact and renders `.gsd/PROJECT.md`. Describe what the project is, its current state, and list the milestone sequence.
+3. Persist requirements with `gsd_requirement_save` or `gsd_requirement_update`, then call `gsd_summary_save` with `artifact_type: "REQUIREMENTS"` so the tool renders `.gsd/REQUIREMENTS.md` from DB rows. Confirm states, ownership, and traceability before roadmap creation.
 
 **Depth-Preservation Guidance for context.md:** Preserve the specification's exact terminology, emphasis, and framing. Do not flatten domain-specific language into generics. CONTEXT.md is downstream agents' only window into this spec.
 
@@ -120,8 +120,8 @@ In a single pass:
 
 Before emitting the ready phrase, verify in the CURRENT turn that you have:
 
-- [ ] Written `.gsd/PROJECT.md` (step 2)
-- [ ] Written `.gsd/REQUIREMENTS.md` (step 3)
+- [ ] Called `gsd_summary_save` for the PROJECT artifact (step 2)
+- [ ] Persisted requirements and called `gsd_summary_save` for the REQUIREMENTS artifact (step 3)
 - [ ] Written `{{contextPath}}` (step 4)
 - [ ] Called `gsd_plan_milestone` (step 5)
 
@@ -129,15 +129,24 @@ If ANY box is unchecked, **STOP**. Do NOT emit the ready phrase. Emit the missin
 
 Do not announce the ready phrase as something you are "about to" do. The ready phrase is a post-write signal, not an intent signal.
 
-After completing steps 1–7 above, say exactly: "Milestone {{milestoneId}} ready." — nothing else. Auto-mode will start automatically.
+After completing steps 1–7 above, end with this concise user-facing handoff:
+
+```
+Milestone {{milestoneId}} ready.
+
+Next steps:
+- Run `/gsd auto` to start execution if it does not begin automatically.
+- Use `/gsd status` or `/gsd visualize` to inspect the roadmap.
+- Use `/gsd notifications` to review or configure delivery alerts.
+```
 
 ### Multi-Milestone
 
 #### Phase 1: Shared artifacts
 
 1. For each milestone, call `gsd_milestone_generate_id`; never invent IDs. Then `mkdir -p .gsd/milestones/<ID>/slices`.
-2. Write `.gsd/PROJECT.md` — use the **Project** output template below.
-3. Write `.gsd/REQUIREMENTS.md` — use the **Requirements** output template below. Capture Active, Deferred, Out of Scope, and any already Validated requirements. Later milestones may have provisional ownership where slice plans do not exist yet.
+2. Call `gsd_summary_save` with `artifact_type: "PROJECT"` and full Project template content so the tool persists the DB-backed PROJECT artifact and renders `.gsd/PROJECT.md`.
+3. Persist requirements with `gsd_requirement_save` or `gsd_requirement_update`, then call `gsd_summary_save` with `artifact_type: "REQUIREMENTS"` so the tool renders `.gsd/REQUIREMENTS.md` from DB rows. Capture Active, Deferred, Out of Scope, and any already Validated requirements. Later milestones may have provisional ownership where slice plans do not exist yet.
 4. For any architectural or pattern decisions, call `gsd_decision_save` — the tool auto-assigns IDs and regenerates `.gsd/DECISIONS.md` automatically.
 
 #### Phase 2: Primary milestone
@@ -205,8 +214,8 @@ For single-milestone projects, do NOT write this file.
 
 Before emitting the ready phrase, verify in the CURRENT turn that you have:
 
-- [ ] Written `.gsd/PROJECT.md`
-- [ ] Written `.gsd/REQUIREMENTS.md`
+- [ ] Called `gsd_summary_save` for the PROJECT artifact
+- [ ] Persisted requirements and called `gsd_summary_save` for the REQUIREMENTS artifact
 - [ ] Written the primary milestone `CONTEXT.md`
 - [ ] Called `gsd_plan_milestone` for the primary milestone
 - [ ] Written `.gsd/DISCUSSION-MANIFEST.json` with `gates_completed === total`
@@ -215,7 +224,16 @@ If ANY box is unchecked, **STOP**. Do NOT emit the ready phrase. Emit the missin
 
 Do not announce the ready phrase as something you are "about to" do. The ready phrase is a post-write signal, not an intent signal.
 
-After completing every step above, say exactly: "Milestone {{milestoneId}} ready." — nothing else. Auto-mode will start automatically.
+After completing every step above, end with this concise user-facing handoff:
+
+```
+Milestone {{milestoneId}} ready.
+
+Next steps:
+- Run `/gsd auto` to start execution if it does not begin automatically.
+- Use `/gsd status` or `/gsd visualize` to inspect the roadmap.
+- Use `/gsd notifications` to review or configure delivery alerts.
+```
 
 ## Critical Rules
 

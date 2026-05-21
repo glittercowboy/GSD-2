@@ -1,4 +1,7 @@
+// Project/App: GSD-2
+// File Purpose: Registers workspace-aware dynamic filesystem and shell tools.
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname } from "node:path";
 
 import type { ExtensionAPI } from "@gsd/pi-coding-agent";
@@ -7,6 +10,24 @@ import { createBashTool, createEditTool, createReadTool, createWriteTool } from 
 import { DEFAULT_BASH_TIMEOUT_SECS } from "../constants.js";
 import { setLogBasePath, logWarning } from "../workflow-logger.js";
 import { resolveGsdPathContract } from "../paths.js";
+
+export function safeWorkspaceCwd(): string {
+  try {
+    return process.cwd();
+  } catch {
+    const projectRoot = process.env.GSD_PROJECT_ROOT;
+    if (projectRoot && existsSync(projectRoot)) return projectRoot;
+    return homedir();
+  }
+}
+
+export function resolveCtxCwd(ctx?: unknown): string {
+  if (ctx && typeof ctx === "object" && typeof (ctx as { cwd?: unknown }).cwd === "string") {
+    const cwd = (ctx as { cwd: string }).cwd;
+    if (existsSync(cwd)) return cwd;
+  }
+  return safeWorkspaceCwd();
+}
 
 /**
  * Resolve the correct DB path for the current working directory.
@@ -18,7 +39,7 @@ export function resolveProjectRootDbPath(basePath: string): string {
   return resolveGsdPathContract(basePath).projectDb;
 }
 
-export async function ensureDbOpen(basePath: string = process.cwd()): Promise<boolean> {
+export async function ensureDbOpen(basePath: string = safeWorkspaceCwd()): Promise<boolean> {
   try {
     const db = await import("../gsd-db.js");
     const contract = resolveGsdPathContract(basePath);
@@ -50,8 +71,9 @@ export async function ensureDbOpen(basePath: string = process.cwd()): Promise<bo
 }
 
 export function registerDynamicTools(pi: ExtensionAPI): void {
-  const baseBash = createBashTool(process.cwd(), {
-    spawnHook: (ctx) => ({ ...ctx, cwd: process.cwd() }),
+  const fallbackRoot = safeWorkspaceCwd();
+  const baseBash = createBashTool(fallbackRoot, {
+    spawnHook: (ctx) => ctx,
   });
   const dynamicBash = {
     ...baseBash,
@@ -62,16 +84,20 @@ export function registerDynamicTools(pi: ExtensionAPI): void {
       onUpdate?: unknown,
       ctx?: unknown,
     ) => {
+      const basePath = resolveCtxCwd(ctx);
+      const fresh = createBashTool(basePath, {
+        spawnHook: (spawnCtx) => ({ ...spawnCtx, cwd: basePath }),
+      });
       const paramsWithTimeout = {
         ...params,
         timeout: params.timeout ?? DEFAULT_BASH_TIMEOUT_SECS,
       };
-      return (baseBash as any).execute(toolCallId, paramsWithTimeout, signal, onUpdate, ctx);
+      return (fresh as any).execute(toolCallId, paramsWithTimeout, signal, onUpdate, ctx);
     },
   };
   pi.registerTool(dynamicBash as any);
 
-  const baseWrite = createWriteTool(process.cwd());
+  const baseWrite = createWriteTool(fallbackRoot);
   pi.registerTool({
     ...baseWrite,
     execute: async (
@@ -81,12 +107,12 @@ export function registerDynamicTools(pi: ExtensionAPI): void {
       onUpdate?: unknown,
       ctx?: unknown,
     ) => {
-      const fresh = createWriteTool(process.cwd());
+      const fresh = createWriteTool(resolveCtxCwd(ctx));
       return (fresh as any).execute(toolCallId, params, signal, onUpdate, ctx);
     },
   } as any);
 
-  const baseRead = createReadTool(process.cwd());
+  const baseRead = createReadTool(fallbackRoot);
   pi.registerTool({
     ...baseRead,
     execute: async (
@@ -96,12 +122,12 @@ export function registerDynamicTools(pi: ExtensionAPI): void {
       onUpdate?: unknown,
       ctx?: unknown,
     ) => {
-      const fresh = createReadTool(process.cwd());
+      const fresh = createReadTool(resolveCtxCwd(ctx));
       return (fresh as any).execute(toolCallId, params, signal, onUpdate, ctx);
     },
   } as any);
 
-  const baseEdit = createEditTool(process.cwd());
+  const baseEdit = createEditTool(fallbackRoot);
   pi.registerTool({
     ...baseEdit,
     execute: async (
@@ -111,7 +137,7 @@ export function registerDynamicTools(pi: ExtensionAPI): void {
       onUpdate?: unknown,
       ctx?: unknown,
     ) => {
-      const fresh = createEditTool(process.cwd());
+      const fresh = createEditTool(resolveCtxCwd(ctx));
       return (fresh as any).execute(toolCallId, params, signal, onUpdate, ctx);
     },
   } as any);

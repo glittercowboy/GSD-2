@@ -6,43 +6,50 @@
  * dispatch blocks completion for needs-remediation while state derives
  * completing-milestone, creating a permanent deadlock.
  *
- * This structural test verifies the verdict === 'needs-remediation' guard
- * exists at all three derivation paths in state.ts.
+ * This behavior test verifies DB-backed state derivation does not route a
+ * needs-remediation validation verdict into milestone completion.
  */
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
-const source = readFileSync(join(__dirname, '..', 'state.ts'), 'utf-8');
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import {
+  closeDatabase,
+  insertAssessment,
+  insertMilestone,
+  insertSlice,
+  openDatabase,
+} from '../gsd-db.ts';
+import { deriveStateFromDb } from '../state.ts';
 
 describe('needs-remediation revalidation guard (#3670)', () => {
-  test('verdict === needs-remediation guard exists in state.ts', () => {
-    const matches = source.match(/verdict\s*===\s*['"]needs-remediation['"]/g);
-    assert.ok(matches, 'verdict === "needs-remediation" check must exist in state.ts');
-    assert.ok(matches.length >= 2,
-      `Expected at least 2 needs-remediation guards (deriveStateFromDb + _deriveStateImpl), found ${matches.length}`);
-  });
+  test('needs-remediation assessment blocks completion when every slice is done', async () => {
+    const base = mkdtempSync(join(tmpdir(), 'gsd-needs-remediation-'));
+    try {
+      openDatabase(':memory:');
+      insertMilestone({ id: 'M001', title: 'Needs remediation', status: 'active' });
+      insertSlice({ id: 'S01', milestoneId: 'M001', title: 'Done slice', status: 'complete' });
+      insertAssessment({
+        path: join(base, '.gsd', 'milestones', 'M001', 'M001-VALIDATION.md'),
+        milestoneId: 'M001',
+        status: 'needs-remediation',
+        scope: 'milestone-validation',
+        fullContent: 'Verdict: needs-remediation',
+      });
 
-  test('needsRevalidation variable is derived from verdict', () => {
-    assert.match(source, /needsRevalidation.*=.*verdict\s*===\s*['"]needs-remediation['"]/,
-      'needsRevalidation should incorporate verdict === "needs-remediation"');
-  });
+      const state = await deriveStateFromDb(base);
 
-  test('deriveStateFromDb path uses needs-remediation guard', () => {
-    assert.match(source, /!validationTerminal\s*\|\|\s*verdict\s*===\s*['"]needs-remediation['"]/,
-      'deriveStateFromDb should check !validationTerminal || verdict === "needs-remediation"');
-  });
-
-  test('extractVerdict is called on validation content', () => {
-    const extractCalls = source.match(/extractVerdict\(validationContent\)/g);
-    assert.ok(extractCalls, 'extractVerdict should be called on validation content');
-    assert.ok(extractCalls.length >= 2,
-      `Expected at least 2 extractVerdict calls, found ${extractCalls.length}`);
+      assert.equal(state.phase, 'blocked');
+      assert.match(state.nextAction, /remediation/i);
+      assert.ok(
+        state.blockers.some((blocker) => blocker.includes('needs-remediation')),
+        'blocked state explains the remediation verdict',
+      );
+    } finally {
+      closeDatabase();
+      rmSync(base, { recursive: true, force: true });
+    }
   });
 });

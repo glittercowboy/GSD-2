@@ -105,6 +105,7 @@ export interface ComposeContextModeInstructionOptions {
 const CONTEXT_MODE_LANE_LABELS: Record<Exclude<ContextModePolicy, "none">, string> = {
   interview: "interview",
   research: "research",
+  triage: "triage",
   planning: "planning",
   execution: "execution",
   verification: "verification",
@@ -112,8 +113,24 @@ const CONTEXT_MODE_LANE_LABELS: Record<Exclude<ContextModePolicy, "none">, strin
   docs: "documentation",
 };
 
-const CONTEXT_MODE_GUIDANCE =
-  "Use `gsd_exec` for noisy commands, `gsd_exec_search` before reruns, and `gsd_resume` after compaction or resume.";
+const CONTEXT_MODE_GUIDANCE_BY_LANE: Record<Exclude<ContextModePolicy, "none">, string> = {
+  interview:
+    "Use `gsd_resume` to restore prior discussion, `gsd_exec` for noisy discovery, and `gsd_exec_search` before repeating scans.",
+  research:
+    "Use `gsd_exec` for noisy research scans, `gsd_exec_search` before reruns, and `gsd_resume` to restore prior findings.",
+  triage:
+    "Use `gsd_resume` to restore prior triage context, `gsd_exec_search` to reuse evidence, and `gsd_exec` for noisy validation checks.",
+  planning:
+    "Use `gsd_resume` for planning continuity, `gsd_exec` for noisy checks, and `gsd_exec_search` before rerunning diagnostics.",
+  execution:
+    "Use `gsd_exec` for builds, tests, and diagnostics, `gsd_exec_search` before reruns, and `gsd_resume` after compaction or resume.",
+  verification:
+    "Use `gsd_exec` for verification commands, `gsd_exec_search` to reuse prior evidence, and `gsd_resume` after compaction or resume.",
+  orchestration:
+    "Use `gsd_resume` before resuming orchestration, `gsd_exec_search` to reuse prior runs, and `gsd_exec` for noisy coordination checks.",
+  docs:
+    "Use `gsd_resume` for prior context, `gsd_exec_search` for saved evidence, and `gsd_exec` for noisy doc validation commands.",
+};
 
 /**
  * Render the Context Mode instruction lane for a unit type. Unknown unit
@@ -129,15 +146,16 @@ export function composeContextModeInstructions(
   if (!manifest || manifest.contextMode === "none") return "";
 
   const lane = CONTEXT_MODE_LANE_LABELS[manifest.contextMode];
+  const guidance = CONTEXT_MODE_GUIDANCE_BY_LANE[manifest.contextMode];
   if (opts.renderMode === "nested") {
-    return `Context Mode (${lane} lane): ${CONTEXT_MODE_GUIDANCE}`;
+    return `Context Mode (${lane} lane): ${guidance}`;
   }
 
   return [
     "## Context Mode",
     "",
     `Lane: **${lane} lane**.`,
-    CONTEXT_MODE_GUIDANCE,
+    guidance,
   ].join("\n");
 }
 

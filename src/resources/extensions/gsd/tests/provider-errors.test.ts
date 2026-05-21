@@ -7,20 +7,24 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
 import { classifyError, isTransient, isTransientNetworkError } from "../error-classifier.ts";
 import { pauseAutoForProviderError } from "../provider-error-pause.ts";
 import { resumeAutoAfterProviderDelay } from "../bootstrap/provider-error-resume.ts";
-import { MAX_TRANSIENT_AUTO_RESUMES } from "../bootstrap/agent-end-recovery.ts";
+import {
+  MAX_TRANSIENT_AUTO_RESUMES,
+  isTerminalDeletedWorktreeProviderError,
+  resetTransientRetryState,
+  shouldDeferTransientErrorToCoreRetry,
+  suppressTerminalDeletedWorktreeMessageEnd,
+} from "../bootstrap/agent-end-recovery.ts";
+import { _buildCancelledUnitStopReason } from "../auto/phases.ts";
+import { autoSession } from "../auto-runtime-state.ts";
 import { getNextFallbackModel } from "../preferences.ts";
 // Zero-import module — imported by path rather than through the package
 // barrel to avoid pulling the full AgentSession / @gsd/pi-ai dep graph into
 // this unit test (see #4837).
 import { RETRYABLE_ERROR_RE } from "../../../../../packages/pi-coding-agent/src/core/retryable-error-regex.ts";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
+import { streamOpenAICodexResponses } from "../../../../../packages/pi-ai/src/providers/openai-codex-responses.ts";
 
 // ── classifyError ────────────────────────────────────────────────────────────
 
@@ -153,6 +157,12 @@ test("classifyError treats unknown error as not transient", () => {
   const result = classifyError("something went wrong");
   assert.ok(!isTransient(result));
   assert.equal(result.kind, "unknown");
+});
+
+test("classifyError treats schema overload as tool-schema (non-transient)", () => {
+  const result = classifyError("Schema overload: consecutive tool validation failures exceeded cap");
+  assert.equal(result.kind, "tool-schema");
+  assert.ok(!isTransient(result));
 });
 
 test("classifyError treats empty string as not transient", () => {
@@ -402,6 +412,64 @@ test("pauseAutoForProviderError falls back to indefinite pause when not rate lim
   ]);
 });
 
+test("isTerminalDeletedWorktreeProviderError matches removed auto-worktree paths only", () => {
+  assert.equal(
+    isTerminalDeletedWorktreeProviderError('Path "/Users/dev/.gsd/projects/abc123/worktrees/M005" does not exist'),
+    true,
+  );
+  assert.equal(
+    isTerminalDeletedWorktreeProviderError('Path "/Users/dev/app/.gsd/worktrees/M005" does not exist'),
+    true,
+  );
+  assert.equal(
+    isTerminalDeletedWorktreeProviderError('Path "/Users/dev/app/src/file.ts" does not exist'),
+    false,
+  );
+  assert.equal(
+    isTerminalDeletedWorktreeProviderError('Path "/Users/dev/.gsd/projects/abc123/worktrees/M005" failed with EACCES'),
+    false,
+  );
+});
+
+test("suppresses terminal completion deleted-worktree message before it renders", () => {
+  autoSession.reset();
+  autoSession.completionStopInProgress = true;
+  try {
+    const event = {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        stopReason: "error",
+        errorMessage: 'Path "/Users/dev/.gsd/projects/abc123/worktrees/M005" does not exist',
+        content: [],
+      },
+    } as any;
+
+    assert.equal(suppressTerminalDeletedWorktreeMessageEnd(event), true);
+    assert.equal(event.message.stopReason, "completed");
+    assert.equal(event.message.errorMessage, undefined);
+    assert.deepEqual(event.message.content, []);
+  } finally {
+    autoSession.reset();
+  }
+});
+
+test("does not suppress deleted-worktree provider errors outside terminal completion", () => {
+  autoSession.reset();
+  const event = {
+    type: "message_end",
+    message: {
+      role: "assistant",
+      stopReason: "error",
+      errorMessage: 'Path "/Users/dev/.gsd/projects/abc123/worktrees/M005" does not exist',
+      content: [],
+    },
+  } as any;
+
+  assert.equal(suppressTerminalDeletedWorktreeMessageEnd(event), false);
+  assert.equal(event.message.stopReason, "error");
+});
+
 // ── resumeAutoAfterProviderDelay ────────────────────────────────────────────
 
 test("resumeAutoAfterProviderDelay restarts paused auto-mode from the recorded base path", async () => {
@@ -518,172 +586,73 @@ test("resumeAutoAfterProviderDelay resets provider retry state without clearing 
   ]);
 });
 
-// ── Escalating backoff for transient errors (#1166) ─────────────────────────
+// ── Provider recovery behavior (#1166 / #2813 / #4373) ─────────────────────
 
-test("agent-end-recovery.ts tracks consecutive transient errors for escalating backoff", () => {
-  const src = readFileSync(join(__dirname, "..", "bootstrap", "agent-end-recovery.ts"), "utf-8");
+test("resetTransientRetryState is callable by resume recovery", () => {
+  resetTransientRetryState();
+  assert.equal(classifyError("stream_exhausted_without_result").kind, "connection");
+});
 
-  assert.ok(
-    src.includes("consecutiveTransientCount"),
-    "agent-end-recovery.ts must track consecutiveTransientCount for escalating backoff (#1166)",
+test("cancelled unit stop reason differentiates session startup failures", () => {
+  assert.deepEqual(
+    _buildCancelledUnitStopReason("plan-slice", "S01", {
+      category: "session-failed",
+      message: "Session creation timed out",
+    }),
+    {
+      notifyMessage: "Session creation failed for plan-slice S01: Session creation timed out. Stopping auto-mode.",
+      stopReason: "Session creation failed: Session creation timed out",
+      loopReason: "session-failed",
+    },
   );
-  assert.ok(
-    src.includes("MAX_TRANSIENT_AUTO_RESUMES"),
-    "agent-end-recovery.ts must define MAX_TRANSIENT_AUTO_RESUMES to cap infinite retries (#1166)",
+
+  assert.deepEqual(
+    _buildCancelledUnitStopReason("execute-task", "T01", {
+      category: "aborted",
+      message: "Request aborted by user",
+    }),
+    {
+      notifyMessage: "Unit execute-task T01 aborted after dispatch: Request aborted by user. Stopping auto-mode.",
+      stopReason: "Unit aborted: Request aborted by user",
+      loopReason: "unit-aborted",
+    },
   );
 });
 
-test("agent-end-recovery.ts resets retry state before resolveAgentEnd on success", () => {
-  const src = readFileSync(join(__dirname, "..", "bootstrap", "agent-end-recovery.ts"), "utf-8");
+test("openai-codex response stream surfaces nested error type and message", async () => {
+  const originalFetch = globalThis.fetch;
+  const tokenPayload = Buffer.from(JSON.stringify({
+    "https://api.openai.com/auth": { chatgpt_account_id: "acct-test" },
+  })).toString("base64");
+  const apiKey = `header.${tokenPayload}.signature`;
+  globalThis.fetch = (async () => new Response(
+    'data: {"type":"error","error":{"type":"server_error","code":"server_error","message":"upstream failed"}}\n\n',
+    { status: 200, headers: { "content-type": "text/event-stream" } },
+  )) as typeof fetch;
 
-  // After successful agent_end, resetRetryState must be called before resolveAgentEnd.
-  assert.ok(
-    /resetRetryState[\s\S]{0,250}resolveAgentEnd/.test(src),
-    "resetRetryState must be called before resolveAgentEnd on the success path (#1166)",
-  );
-});
+  try {
+    const stream = streamOpenAICodexResponses(
+      {
+        provider: "openai-codex-responses",
+        id: "gpt-5.1-codex",
+        baseUrl: "https://codex.example.test",
+      } as any,
+      { messages: [], systemPrompt: "", tools: [] } as any,
+      { apiKey } as any,
+    );
 
-test("agent-end-recovery.ts applies escalating delay for repeated transient errors", () => {
-  const src = readFileSync(join(__dirname, "..", "bootstrap", "agent-end-recovery.ts"), "utf-8");
+    const events = [];
+    for await (const event of stream) {
+      events.push(event);
+    }
 
-  // Must contain the exponential backoff formula (may span multiple lines)
-  assert.ok(
-    src.includes("2 ** Math.max(0, retryState.consecutiveTransientCount"),
-    "agent-end-recovery.ts must escalate retryAfterMs exponentially for consecutive transient errors (#1166)",
-  );
-});
-
-test("agent-end-recovery.ts resumes transient provider pauses through startAuto instead of a hidden prompt", () => {
-  const src = readFileSync(join(__dirname, "..", "bootstrap", "agent-end-recovery.ts"), "utf-8");
-
-  assert.ok(
-    src.includes("resumeAutoAfterProviderDelay"),
-    "agent-end-recovery.ts must resume paused auto-mode through resumeAutoAfterProviderDelay (#2813)",
-  );
-  assert.ok(
-    !src.includes('Continue execution — provider error recovery delay elapsed.'),
-    "transient provider resume must not rely on a hidden continue prompt (#2813)",
-  );
-});
-
-test("agent-end-recovery.ts does not defer rate-limit errors to core retry handler before fallback (#4373)", () => {
-  const src = readFileSync(join(__dirname, "..", "bootstrap", "agent-end-recovery.ts"), "utf-8");
-  assert.ok(
-    src.includes('if (isTransient(cls) && cls.kind !== "rate-limit")'),
-    "rate-limit errors must bypass transient core-retry deferral so fallback can execute (#4373)",
-  );
-});
-
-test("agent-end-recovery.ts updates dashboard dispatched model after fallback switch", () => {
-  const src = readFileSync(join(__dirname, "..", "bootstrap", "agent-end-recovery.ts"), "utf-8");
-  assert.ok(
-    src.includes("setCurrentDispatchedModelId"),
-    "agent-end-recovery.ts should update currentDispatchedModelId when recovery switches model",
-  );
-});
-
-// ── Codex error extraction (#1166) ──────────────────────────────────────────
-
-test("openai-codex-responses.ts extracts nested error fields", () => {
-  const codexSource = readFileSync(
-    join(__dirname, "../../../../../packages/pi-ai/src/providers/openai-codex-responses.ts"),
-    "utf-8",
-  );
-
-  // Must access event.error.message (nested), not just event.message (top-level)
-  assert.ok(
-    codexSource.includes("errorObj?.message"),
-    "mapCodexEvents must extract message from nested event.error object (#1166)",
-  );
-  assert.ok(
-    codexSource.includes("errorObj?.type"),
-    "mapCodexEvents must extract type from nested event.error object (#1166)",
-  );
-});
-
-// ── Fix 1: resetTransientRetryState resets module-level singleton ────────────
-
-test("resetTransientRetryState is exported from agent-end-recovery.ts", () => {
-  const src = readFileSync(join(__dirname, "..", "bootstrap", "agent-end-recovery.ts"), "utf-8");
-  assert.ok(
-    src.includes("export function resetTransientRetryState"),
-    "agent-end-recovery.ts must export resetTransientRetryState for provider-error-resume.ts",
-  );
-});
-
-// ── Fix 2: Session creation timeout treated as transient in phases.ts ───────
-
-test("phases.ts handles timeout session-creation failures with pause instead of stopAuto", () => {
-  const src = readFileSync(join(__dirname, "..", "auto", "phases.ts"), "utf-8");
-
-  // The cancelled + isTransient session-start path must pause, not hard-stop
-  assert.ok(
-    src.includes('errorCategory === "timeout"'),
-    "phases.ts must check errorCategory === 'timeout' on transient cancelled unitResults",
-  );
-  assert.ok(
-    src.includes('errorCategory === "session-failed"'),
-    "phases.ts must also check errorCategory === 'session-failed' on transient cancelled unitResults",
-  );
-  // Must call pauseAuto or pauseAutoForProviderError (not stopAuto) for timeout cancellations
-  assert.ok(
-    /errorCategory === "timeout"[\s\S]{0,1800}pauseAuto/.test(src),
-    "phases.ts must call pauseAuto for session-timeout failures (not stopAuto or continue)",
-  );
-  assert.ok(
-    /errorCategory === "session-failed"[\s\S]{0,700}pauseAuto/.test(src),
-    "phases.ts must call pauseAuto for transient session-start failures (not stopAuto or continue)",
-  );
-  // Must NOT use action: "continue" for transient cancellations (causes infinite loops)
-  assert.ok(
-    !/isTransient[\s\S]{0,500}action:\s*"continue"/.test(src),
-    "phases.ts must NOT return action:continue for cancelled units — use break+pause instead",
-  );
-});
-
-// ── Fix 2b: Session creation timeout schedules auto-resume timer ─────────────
-
-test("phases.ts schedules auto-resume timer for session creation timeouts", () => {
-  const src = readFileSync(join(__dirname, "..", "auto", "phases.ts"), "utf-8");
-
-  // Must use pauseAutoForProviderError (not bare pauseAuto) for session-timeout
-  assert.ok(
-    src.includes("pauseAutoForProviderError"),
-    "phases.ts must use pauseAutoForProviderError for session-timeout auto-resume",
-  );
-  // Must schedule resume via resumeAutoAfterProviderDelay
-  assert.ok(
-    src.includes("resumeAutoAfterProviderDelay"),
-    "phases.ts must schedule resume via resumeAutoAfterProviderDelay",
-  );
-  // Must track consecutive session timeouts
-  assert.ok(
-    src.includes("consecutiveSessionTimeouts"),
-    "phases.ts must track consecutive session timeouts for escalating backoff",
-  );
-  // Must cap session timeout auto-resumes
-  assert.ok(
-    /MAX_SESSION_TIMEOUT_AUTO_RESUMES\s*=\s*\d+/.test(src),
-    "phases.ts must cap session timeout auto-resumes",
-  );
-});
-
-test("phases.ts differentiates session creation timeout from unit hard timeout", () => {
-  const src = readFileSync(join(__dirname, "..", "auto", "phases.ts"), "utf-8");
-  assert.ok(
-    src.includes("Session creation timed out"),
-    "phases.ts must check for 'Session creation timed out' message to differentiate from unit hard timeout",
-  );
-});
-
-test("phases.ts resets session timeout counter on successful unit completion", () => {
-  const src = readFileSync(join(__dirname, "..", "auto", "phases.ts"), "utf-8");
-  const resetIdx = src.indexOf("consecutiveSessionTimeouts = 0");
-  const closeoutIdx = src.indexOf("closeoutUnit");
-  assert.ok(
-    resetIdx !== -1 && closeoutIdx !== -1 && resetIdx < closeoutIdx,
-    "consecutiveSessionTimeouts must reset before closeoutUnit (on success path)",
-  );
+    const errorEvent = events.find((event) => event.type === "error");
+    assert.ok(errorEvent, "stream should emit an error event");
+    assert.equal(errorEvent.error.errorMessage, "Codex server_error: upstream failed");
+    assert.equal(classifyError(errorEvent.error.errorMessage).kind, "server");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 // ── Fix 3: MAX_TRANSIENT_AUTO_RESUMES raised to 8 ───────────────────────────
@@ -760,4 +729,16 @@ test("agent-session retryable error regex matches server_error (underscore)", ()
   assert.ok(!RETRYABLE_ERROR_RE.test("model not found"));
   // "temporarily backed off" must NOT be matched (intentional exclusion #3429)
   assert.ok(!RETRYABLE_ERROR_RE.test("temporarily backed off"));
+});
+
+test("exhausted retry errors are not deferred back to core retry handling", () => {
+  const cls = classifyError("Retry failed after 3 attempts: 500 empty_stream: upstream stream closed before first payload");
+  assert.equal(cls.kind, "server");
+  assert.equal(
+    shouldDeferTransientErrorToCoreRetry(
+      cls,
+      "Retry failed after 3 attempts: 500 empty_stream: upstream stream closed before first payload",
+    ),
+    false,
+  );
 });

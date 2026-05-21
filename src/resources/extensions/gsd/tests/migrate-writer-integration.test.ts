@@ -13,6 +13,9 @@ import { parseRoadmap, parsePlan } from '../parsers-legacy.ts';
 import { parseSummary } from '../files.ts';
 import { deriveState } from '../state.ts';
 import { invalidateAllCaches } from '../cache.ts';
+import { ensureDbOpen } from '../bootstrap/dynamic-tools.ts';
+import { closeDatabase, getAllMilestones, getArtifact } from '../gsd-db.ts';
+import { importWrittenMigrationToDb } from '../migrate/command.ts';
 import type {
   GSDProject,
   GSDMilestone,
@@ -250,6 +253,51 @@ test('Scenario 1: Incomplete project — write, parse, deriveState', async () =>
     }
 });
 
+test('Scenario 1b: written migration imports into authoritative DB state', async () => {
+    const base = mkdtempSync(join(tmpdir(), 'gsd-writer-db-import-'));
+    try {
+      const project = buildIncompleteProject();
+      await writeGSDDirectory(project, base);
+
+      assert.equal(await ensureDbOpen(base), true, 'db import: ensureDbOpen creates authoritative DB');
+
+      invalidateAllCaches();
+      const before = await deriveState(base);
+      assert.equal(before.activeMilestone, null, 'db import: markdown-only migration is invisible before DB import');
+
+      const imported = await importWrittenMigrationToDb(base);
+      assert.deepStrictEqual(imported.hierarchy, { milestones: 1, slices: 2, tasks: 3 }, 'db import: hierarchy counts');
+
+      invalidateAllCaches();
+      const after = await deriveState(base);
+      assert.deepStrictEqual(after.phase, 'executing', 'db import: deriveState sees imported DB hierarchy');
+      assert.deepStrictEqual(after.activeMilestone?.id, 'M001', 'db import: active milestone');
+      assert.deepStrictEqual(after.activeSlice?.id, 'S02', 'db import: active slice');
+      assert.deepStrictEqual(after.activeTask?.id, 'T03', 'db import: active task');
+    } finally {
+      closeDatabase();
+      rmSync(base, { recursive: true, force: true });
+    }
+});
+
+test('Scenario 1c: DB import verification fails when preview counts do not match', async () => {
+    const base = mkdtempSync(join(tmpdir(), 'gsd-writer-db-check-'));
+    try {
+      const project = buildIncompleteProject();
+      await writeGSDDirectory(project, base);
+
+      const preview = generatePreview(project);
+      await assert.rejects(
+        () => importWrittenMigrationToDb(base, { ...preview, totalTasks: preview.totalTasks + 1 }),
+        /migration DB import verification failed: tasks 3\/4/,
+      );
+      assert.deepStrictEqual(getAllMilestones(), [], 'db import: failed verification rolls back hierarchy rewrite');
+    } finally {
+      closeDatabase();
+      rmSync(base, { recursive: true, force: true });
+    }
+});
+
   // ─── Scenario 2: Fully complete project ────────────────────────────────
 
 test('Scenario 2: Fully complete project — deriveState phase', async () => {
@@ -288,7 +336,12 @@ test('Scenario 2: Fully complete project — deriveState phase', async () => {
       assert.deepStrictEqual(preview.taskCompletionPct, 100, 'complete: preview taskCompletionPct');
       assert.deepStrictEqual(preview.requirements.total, 0, 'complete: preview requirements total');
 
+      const imported = await importWrittenMigrationToDb(base, preview);
+      assert.ok(imported.artifacts >= 6, 'complete: imports generated milestone artifacts');
+      assert.ok(getArtifact('milestones/M001/M001-VALIDATION.md') !== null, 'complete: M001-VALIDATION.md imported as artifact');
+      assert.ok(getArtifact('milestones/M001/M001-SUMMARY.md') !== null, 'complete: M001-SUMMARY.md imported as artifact');
     } finally {
+      closeDatabase();
       rmSync(base, { recursive: true, force: true });
     }
 });

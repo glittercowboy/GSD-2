@@ -2,62 +2,18 @@
  * auto-paused-session-validation.test.ts — Validates milestone existence
  * before restoring from paused-session.json (#1664).
  *
- * Two layers:
- * 1. Source-code regression: ensures auto.ts validates the milestone before
- *    trusting paused-session.json (guards against accidental removal).
- * 2. Filesystem unit: confirms resolveMilestonePath / resolveMilestoneFile
- *    correctly detect missing and completed milestones.
+ * Filesystem unit coverage confirms resolveMilestonePath / resolveMilestoneFile
+ * correctly detect missing and completed milestones.
  */
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
-import { fileURLToPath } from "node:url";
-import { dirname } from "node:path";
 
 import { resolveMilestonePath, resolveMilestoneFile } from "../paths.ts";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const AUTO_TS_PATH = join(__dirname, "..", "auto.ts");
-
-// ─── Source-code regression guard ───────────────────────────────────────────
-
-test("auto.ts validates milestone before restoring paused session (#1664)", () => {
-  const source = readFileSync(AUTO_TS_PATH, "utf-8");
-
-  // The resume block must call resolveMilestonePath to verify the milestone dir exists
-  assert.ok(
-    source.includes('resolveMilestonePath(base, meta.milestoneId)'),
-    "auto.ts must call resolveMilestonePath to verify paused milestone exists",
-  );
-
-  // The resume block must check for a SUMMARY file to detect completed milestones
-  assert.ok(
-    source.includes('resolveMilestoneFile(base, meta.milestoneId, "SUMMARY")'),
-    "auto.ts must check for SUMMARY file to detect completed milestones",
-  );
-
-  assert.ok(
-    source.includes("await ensureDbOpen(base)") &&
-      source.indexOf("await ensureDbOpen(base)") < source.indexOf('resolveMilestoneFile(base, meta.milestoneId, "SUMMARY")'),
-    "auto.ts must open the canonical DB before using SUMMARY as a paused-session fallback",
-  );
-
-  // Resume path must sanitize paused session file metadata before unlink/recovery.
-  assert.ok(
-    source.includes("normalizeSessionFilePath(meta.sessionFile ?? null)"),
-    "auto.ts must sanitize paused-session metadata sessionFile before using it",
-  );
-
-  // Pause path must sanitize live session file path before persisting metadata.
-  assert.ok(
-    source.includes("normalizeSessionFilePath(ctx?.sessionManager?.getSessionFile() ?? null)"),
-    "auto.ts must sanitize sessionManager getSessionFile output before persisting",
-  );
-});
 
 // ─── Filesystem validation unit tests ───────────────────────────────────────
 

@@ -1,13 +1,4 @@
-/**
- * worktree-db-same-file.test.ts — Regression test for #2823.
- *
- * Verifies that reconcileWorktreeDb() does not ATTACH a WAL-mode DB file
- * to itself when the worktree DB path resolves to the same physical file
- * as the main DB path (shared-WAL / symlink layout).
- *
- * Also verifies that the auto-loop classifies "database disk image is
- * malformed" as an infrastructure error to prevent wasting retries.
- */
+// GSD-2 — Worktree DB same-file reconciliation regression tests.
 
 import { describe, test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
@@ -15,10 +6,8 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   rmSync,
   symlinkSync,
-  writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -29,9 +18,10 @@ import {
   reconcileWorktreeDb,
   insertDecision,
 } from "../gsd-db.ts";
+import {
+  _shouldReconcileWorktreeDb,
+} from "../auto-worktree.ts";
 import { isInfrastructureError } from "../auto/infra-errors.ts";
-
-// ─── Fix 1 & 2: reconcileWorktreeDb same-file guard ─────────────────
 
 describe("#2823: reconcileWorktreeDb same-file guard", () => {
   let tmpDir: string;
@@ -50,7 +40,6 @@ describe("#2823: reconcileWorktreeDb same-file guard", () => {
     mkdirSync(mainGsd, { recursive: true });
     const mainDbPath = join(mainGsd, "gsd.db");
 
-    // Create a real DB at mainDbPath
     openDatabase(mainDbPath);
     insertDecision({
       id: "D001",
@@ -64,17 +53,14 @@ describe("#2823: reconcileWorktreeDb same-file guard", () => {
       superseded_by: null,
     });
 
-    // Create a worktree path that resolves to the same file via symlink
     const wtGsd = join(tmpDir, "worktree", ".gsd");
     mkdirSync(join(tmpDir, "worktree"), { recursive: true });
     symlinkSync(mainGsd, wtGsd, "junction");
     const worktreeDbPath = join(wtGsd, "gsd.db");
 
-    // Both paths exist and resolve to the same physical file
     assert.ok(existsSync(mainDbPath), "main DB exists");
-    assert.ok(existsSync(worktreeDbPath), "worktree DB path exists (via symlink)");
+    assert.ok(existsSync(worktreeDbPath), "worktree DB path exists via symlink");
 
-    // This should NOT attempt ATTACH — should return zero result
     const result = reconcileWorktreeDb(mainDbPath, worktreeDbPath);
 
     assert.equal(result.decisions, 0, "no decisions reconciled");
@@ -101,7 +87,6 @@ describe("#2823: reconcileWorktreeDb same-file guard", () => {
       superseded_by: null,
     });
 
-    // Same exact path — should bail immediately
     const result = reconcileWorktreeDb(dbPath, dbPath);
 
     assert.equal(result.decisions, 0);
@@ -109,7 +94,6 @@ describe("#2823: reconcileWorktreeDb same-file guard", () => {
   });
 
   test("still reconciles when paths are genuinely different files", () => {
-    // Main DB
     const mainGsd = join(tmpDir, "main", ".gsd");
     mkdirSync(mainGsd, { recursive: true });
     const mainDbPath = join(mainGsd, "gsd.db");
@@ -128,7 +112,6 @@ describe("#2823: reconcileWorktreeDb same-file guard", () => {
     });
     closeDatabase();
 
-    // Create a separate worktree DB with different data
     const wtGsd = join(tmpDir, "worktree", ".gsd");
     mkdirSync(wtGsd, { recursive: true });
     const worktreeDbPath = join(wtGsd, "gsd.db");
@@ -147,42 +130,36 @@ describe("#2823: reconcileWorktreeDb same-file guard", () => {
     });
     closeDatabase();
 
-    // Re-open main and reconcile — should work normally
     openDatabase(mainDbPath);
     const result = reconcileWorktreeDb(mainDbPath, worktreeDbPath);
 
-    assert.ok(
-      result.decisions > 0,
-      "should reconcile decisions from a genuinely different DB",
-    );
+    assert.ok(result.decisions > 0, "should reconcile decisions from a different DB");
   });
 });
 
-test("merge-time DB reconciliation only runs when legacy worktree DB exists", () => {
-  const src = readFileSync(join(import.meta.dirname, "..", "auto-worktree.ts"), "utf-8");
-  const reconcileIdx = src.indexOf("reconcileWorktreeDb(mainDbPath, worktreeDbPath)");
-  assert.ok(reconcileIdx !== -1, "merge-time reconcile call exists");
-  const guardWindow = src.slice(Math.max(0, reconcileIdx - 240), reconcileIdx);
-
-  assert.ok(
-    guardWindow.includes("existsSync(worktreeDbPath)") && guardWindow.includes("!isSamePath(worktreeDbPath, mainDbPath)"),
-    "merge-time reconcile requires a real legacy worktree DB and distinct DB paths",
+test("merge-time DB reconciliation requires an existing distinct worktree DB", () => {
+  assert.equal(
+    _shouldReconcileWorktreeDb("worktree.db", "main.db", () => true, () => false),
+    true,
+  );
+  assert.equal(
+    _shouldReconcileWorktreeDb("worktree.db", "main.db", () => false, () => false),
+    false,
+  );
+  assert.equal(
+    _shouldReconcileWorktreeDb("worktree.db", "main.db", () => true, () => true),
+    false,
   );
 });
 
-// ─── Fix 3: infrastructure error classification ─────────────────────
-
 describe("#2823: malformed DB classified as infrastructure error", () => {
   test("database disk image is malformed is detected as infra error", () => {
-    const err = new Error("database disk image is malformed");
-    const code = isInfrastructureError(err);
-    assert.ok(code !== null, "should be classified as infrastructure error");
+    const code = isInfrastructureError(new Error("database disk image is malformed"));
     assert.equal(code, "SQLITE_CORRUPT");
   });
 
   test("other SQLite errors are not falsely classified", () => {
-    const err = new Error("SQLITE_BUSY: database is locked");
-    const code = isInfrastructureError(err);
-    assert.equal(code, null, "SQLITE_BUSY should not be infra error (it's transient)");
+    const code = isInfrastructureError(new Error("SQLITE_BUSY: database is locked"));
+    assert.equal(code, null);
   });
 });

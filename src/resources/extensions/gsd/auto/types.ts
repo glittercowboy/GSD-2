@@ -45,6 +45,9 @@ export const BUDGET_THRESHOLDS: Array<{
  */
 export interface AgentEndEvent {
   messages: unknown[];
+  sessionId?: string;
+  turnId?: string;
+  abortOrigin?: "session-transition" | "user" | "timeout" | "unknown";
 }
 
 /**
@@ -53,7 +56,7 @@ export interface AgentEndEvent {
  */
 export interface ErrorContext {
   message: string;
-  category: "provider" | "timeout" | "idle" | "network" | "aborted" | "session-failed" | "unknown";
+  category: "provider" | "tool-schema" | "timeout" | "idle" | "network" | "aborted" | "session-failed" | "unknown";
   stopReason?: string;
   isTransient?: boolean;
   retryAfterMs?: number;
@@ -74,6 +77,7 @@ export interface UnitResult {
 export type PhaseResult<T = void> =
   | { action: "continue" }
   | { action: "break"; reason: string }
+  | { action: "retry"; reason: string; data?: T }
   | { action: "next"; data: T }
 
 export interface IterationContext {
@@ -94,6 +98,9 @@ export interface LoopState {
   stuckRecoveryAttempts: number;
   /** Consecutive finalize timeout count — stops auto-mode after threshold. */
   consecutiveFinalizeTimeouts: number;
+  consecutiveDispatchCount?: Map<string, number>;
+  lastDispatchedKey?: string | null;
+  lastDispatchPhase?: string | null;
 }
 
 /** Max consecutive finalize timeouts before hard-stopping auto-mode. */

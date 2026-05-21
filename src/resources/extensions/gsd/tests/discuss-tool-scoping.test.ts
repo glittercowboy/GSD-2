@@ -16,15 +16,12 @@
 
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 import { DISCUSS_TOOLS_ALLOWLIST } from "../constants.ts";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const promptsDir = join(__dirname, "..", "prompts");
-const guidedFlowPath = join(__dirname, "..", "guided-flow.ts");
+import { _dispatchWorkflowForTest } from "../guided-flow.ts";
 
 // ─── Heavy tools that should NOT be in discuss scope ─────────────────────────
 
@@ -57,6 +54,7 @@ const DISCUSS_REQUIRED_TOOLS = [
   "gsd_decision_save",         // discuss.md output phase
   "gsd_plan_milestone",        // discuss.md output phase (single + multi milestone)
   "gsd_milestone_generate_id", // discuss.md multi-milestone Phase 1
+  "gsd_requirement_save",      // discuss-headless.md capability contract creation
   "gsd_requirement_update",    // used during discuss for requirement updates
 ];
 
@@ -95,36 +93,46 @@ describe("discuss tool scoping (#2949)", () => {
     );
   });
 
-  test("guided-discuss-slice.md references gsd_summary_save", () => {
-    const prompt = readFileSync(join(promptsDir, "guided-discuss-slice.md"), "utf-8");
-    assert.ok(
-      prompt.includes("gsd_summary_save"),
-      "guided-discuss-slice.md should reference gsd_summary_save",
-    );
-  });
+  test("dispatchWorkflow scopes and restores tools for discuss unit types", async () => {
+    const originalWorkflowPath = process.env.GSD_WORKFLOW_PATH;
+    const tmp = mkdtempSync(join(tmpdir(), "gsd-discuss-tools-"));
+    const workflowPath = join(tmp, "GSD-WORKFLOW.md");
+    writeFileSync(workflowPath, "# Workflow\n");
+    const setCalls: string[][] = [];
+    const sent: unknown[] = [];
+    let sentTools: string[] = [];
+    let activeTools = ["gsd_summary_save", "gsd_complete_task", "bash"];
+    process.env.GSD_WORKFLOW_PATH = workflowPath;
+    try {
+      await _dispatchWorkflowForTest(
+        {
+          getActiveTools: () => [...activeTools],
+          setActiveTools: (tools: string[]) => {
+            setCalls.push([...tools]);
+            activeTools = [...tools];
+          },
+          sendMessage: (message: unknown) => {
+            sent.push(message);
+            sentTools = [...activeTools];
+          },
+        } as any,
+        "Discuss the project",
+        "gsd-run",
+        undefined,
+        "discuss-milestone",
+      );
+    } finally {
+      if (originalWorkflowPath === undefined) delete process.env.GSD_WORKFLOW_PATH;
+      else process.env.GSD_WORKFLOW_PATH = originalWorkflowPath;
+      rmSync(tmp, { recursive: true, force: true });
+    }
 
-  test("discuss.md references gsd_plan_milestone and gsd_decision_save", () => {
-    const prompt = readFileSync(join(promptsDir, "discuss.md"), "utf-8");
-    assert.ok(
-      prompt.includes("gsd_plan_milestone"),
-      "discuss.md should reference gsd_plan_milestone",
-    );
-    assert.ok(
-      prompt.includes("gsd_decision_save"),
-      "discuss.md should reference gsd_decision_save",
-    );
-  });
-
-  test("dispatchWorkflow source code scopes tools for discuss unit types", () => {
-    const source = readFileSync(guidedFlowPath, "utf-8");
-    // Verify that dispatchWorkflow references the allowlist for tool scoping
-    assert.ok(
-      source.includes("DISCUSS_TOOLS_ALLOWLIST"),
-      "guided-flow.ts should reference DISCUSS_TOOLS_ALLOWLIST for tool scoping",
-    );
-    assert.ok(
-      source.includes("setActiveTools"),
-      "guided-flow.ts should call setActiveTools to scope tools during discuss",
-    );
+    assert.deepEqual(setCalls[0], ["gsd_summary_save", "bash"]);
+    assert.deepEqual(setCalls.at(-1), ["gsd_summary_save", "gsd_complete_task", "bash"]);
+    assert.ok(sentTools.length > 0, "dispatch should queue a message");
+    assert.ok(sentTools.includes("gsd_summary_save"), "dispatch keeps the discuss save tool");
+    assert.ok(!sentTools.includes("gsd_complete_task"), "dispatch removes heavy completion tools");
+    assert.equal(sent.length, 1);
+    assert.match(String((sent[0] as { content?: unknown }).content), /Discuss the project/);
   });
 });

@@ -33,7 +33,7 @@ You execute. The inlined task plan is authoritative. Verify referenced files and
 ## Execution Rules
 
 1. Tersely narrate transitions, decisions, and verification outcomes between tool-call clusters.
-2. Call `memory_query` with 2-4 keywords from the task title and touched files unless this is purely mechanical.
+2. Use the injected memory/context blocks first. Call `memory_query` with 2-4 keywords from the task title and touched files only when no injected memory block exists or the inlined memory/context is insufficient for this task.
 3. {{skillActivation}} Follow activated skills before code edits.
 4. Execute the task plan. Before any `Write` that creates an artifact or output file, check whether that path already exists. If it does, read it first and decide whether the work is already done, should be extended, or truly needs replacement.
 5. Build real behavior through the intended surface; stubs/mocks belong in tests only.
@@ -59,10 +59,12 @@ Keep about **{{verificationBudget}}** for verification and summary. If context i
 - If the plan is fundamentally invalid, set `blocker_discovered: true` in the summary and explain.
 - For downstream-impacting ambiguity that cannot be resolved from code, plans, or decisions, include an `escalation` object with question, options, recommendation, rationale, and `continueWithDefault`.
 - Capture meaningful architecture/pattern/observability decisions with `capture_thought`; capture non-obvious gotchas or conventions only when they save future investigation.
-- Read the template at `{{taskSummaryTemplatePath}}`.
+- Use the inlined Task Summary template below. Read `{{taskSummaryTemplatePath}}` only if the inlined template is absent or visibly truncated.
 - Call `gsd_task_complete` with camelCase fields `milestoneId`, `sliceId`, `taskId`, `oneLiner`, `narrative`, `verification`, and `verificationEvidence`.
 - The DB-backed tool is the canonical write path. Do **not** manually write `{{taskSummaryPath}}` or edit PLAN.md checkboxes; the tool renders the summary and updates state.
 - Do not run git commands; the system commits from your summary.
+
+{{inlinedTemplates}}
 
 **Autonomous execution:** no human is available. Do not call `ask_user_questions` or `secure_env_collect`; make reasonable assumptions and document them.
 

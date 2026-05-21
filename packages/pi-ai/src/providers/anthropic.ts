@@ -71,14 +71,13 @@ function hasBearerAuthorizationHeader(model: Model<"anthropic-messages">): boole
 	return typeof authHeader === "string" && authHeader.trim().toLowerCase().startsWith("bearer ");
 }
 
-async function createClient(
+export function buildAnthropicClientOptions(
 	model: Model<"anthropic-messages">,
 	apiKey: string,
 	interleavedThinking: boolean,
 	optionsHeaders?: Record<string, string>,
 	dynamicHeaders?: Record<string, string>,
-): Promise<{ client: Anthropic; isOAuthToken: boolean }> {
-	const AnthropicClass = await getAnthropicClass();
+) {
 	// Adaptive thinking models (Opus 4.6, Sonnet 4.6) have interleaved thinking built-in.
 	// The beta header is deprecated on Opus 4.6 and redundant on Sonnet 4.6, so skip it.
 	const needsInterleavedBeta = interleavedThinking && !supportsAdaptiveThinking(model.id);
@@ -90,7 +89,7 @@ async function createClient(
 			betaFeatures.push("interleaved-thinking-2025-05-14");
 		}
 
-		const client = new AnthropicClass({
+		return {
 			apiKey: null,
 			authToken: apiKey,
 			baseURL: resolveAnthropicBaseUrl(model),
@@ -105,9 +104,7 @@ async function createClient(
 				dynamicHeaders,
 				optionsHeaders,
 			),
-		});
-
-		return { client, isOAuthToken: false };
+		};
 	}
 
 	// Skip beta headers for providers that don't support fine-grained-tool-streaming.
@@ -126,7 +123,7 @@ async function createClient(
 	// API key auth (Anthropic OAuth removed per TOS compliance — use API keys or Claude CLI)
 	// Some Anthropic-compatible providers require Bearer auth instead of x-api-key.
 	const usesBearerAuth = usesAnthropicBearerAuth(model.provider) || hasBearerAuthorizationHeader(model);
-	const client = new AnthropicClass({
+	return {
 		apiKey: usesBearerAuth ? null : apiKey,
 		authToken: usesBearerAuth ? apiKey : undefined,
 		baseURL: resolveAnthropicBaseUrl(model),
@@ -140,8 +137,24 @@ async function createClient(
 			model.headers,
 			optionsHeaders,
 		),
-	});
+	};
+}
 
+async function createClient(
+	model: Model<"anthropic-messages">,
+	apiKey: string,
+	interleavedThinking: boolean,
+	optionsHeaders?: Record<string, string>,
+	dynamicHeaders?: Record<string, string>,
+): Promise<{ client: Anthropic; isOAuthToken: boolean }> {
+	const AnthropicClass = await getAnthropicClass();
+	const client = new AnthropicClass(buildAnthropicClientOptions(
+		model,
+		apiKey,
+		interleavedThinking,
+		optionsHeaders,
+		dynamicHeaders,
+	));
 	return { client, isOAuthToken: false };
 }
 

@@ -5,33 +5,41 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
+import { runUpdate } from "../update-cmd.ts";
+import { handleUpdate } from "../resources/extensions/gsd/commands-handlers.ts";
 
-test("update-cmd prints latest version before comparison (#3445)", () => {
-  const src = readFileSync(join(__dirname, "..", "update-cmd.ts"), "utf-8");
-  const latestPrintIdx = src.indexOf("Latest version:");
-  const comparisonIdx = src.indexOf("compareSemver(latest, current)");
+test("update-cmd prints latest version before comparison (#3445)", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalVersion = process.env.GSD_VERSION;
+  const originalStdoutWrite = process.stdout.write;
+  const writes: string[] = [];
+
+  try {
+    process.env.GSD_VERSION = "1.2.3";
+    globalThis.fetch = async () => Response.json({ version: "1.2.3" });
+    (process.stdout as any).write = (chunk: unknown) => {
+      writes.push(String(chunk));
+      return true;
+    };
+
+    await runUpdate();
+  } finally {
+    globalThis.fetch = originalFetch;
+    (process.stdout as any).write = originalStdoutWrite;
+    if (originalVersion === undefined) {
+      delete process.env.GSD_VERSION;
+    } else {
+      process.env.GSD_VERSION = originalVersion;
+    }
+  }
+
+  const output = writes.join("");
+  const latestPrintIdx = output.indexOf("Latest version:");
+  const comparisonIdx = output.indexOf("Already up to date.");
   assert.ok(latestPrintIdx !== -1, "Must print latest version");
-  assert.ok(latestPrintIdx < comparisonIdx, "Must print latest BEFORE comparison");
-});
-
-test("update commands use the registry fetch helper instead of npm view (#3806)", () => {
-  const src = readFileSync(join(__dirname, "..", "update-cmd.ts"), "utf-8");
-  const handlerSrc = readFileSync(join(__dirname, "..", "resources", "extensions", "gsd", "commands-handlers.ts"), "utf-8");
-  assert.ok(
-    src.includes("fetchLatestVersionFromRegistry"),
-    "update-cmd should use the shared registry fetch helper",
-  );
-  assert.ok(!src.includes("npm view "), "update-cmd should no longer shell out to npm view");
-  assert.ok(
-    handlerSrc.includes("fetchLatestVersionForCommand"),
-    "/gsd update should fetch the latest version through a registry helper too",
-  );
-  assert.ok(!handlerSrc.includes("npm view "), "/gsd update should no longer shell out to npm view");
+  assert.ok(latestPrintIdx < comparisonIdx, "Must print latest BEFORE comparison result");
 });
 
 test("update-check exports resolveInstallCommand (#4145)", async () => {
@@ -67,20 +75,37 @@ test("resolveInstallCommand returns npm command when not running under Bun (#414
   }
 });
 
-test("update-cmd uses resolveInstallCommand instead of hardcoded npm (#4145)", () => {
-  const src = readFileSync(join(__dirname, "..", "update-cmd.ts"), "utf-8");
-  assert.ok(
-    src.includes("resolveInstallCommand"),
-    "update-cmd should use resolveInstallCommand for package manager detection",
-  );
-});
+test("/gsd update handler fetches latest version through the registry endpoint (#3806)", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalVersion = process.env.GSD_VERSION;
+  const fetchUrls: string[] = [];
+  const notifications: Array<{ message: string; level: string }> = [];
 
-test("commands-handlers uses resolveInstallCommand instead of hardcoded npm (#4145)", () => {
-  const handlerSrc = readFileSync(join(__dirname, "..", "resources", "extensions", "gsd", "commands-handlers.ts"), "utf-8");
-  assert.ok(
-    handlerSrc.includes("resolveInstallCommand"),
-    "/gsd update handler should use resolveInstallCommand for package manager detection",
-  );
+  try {
+    process.env.GSD_VERSION = "1.2.3";
+    globalThis.fetch = async (input) => {
+      fetchUrls.push(String(input));
+      return Response.json({ version: "1.2.3" });
+    };
+
+    await handleUpdate({
+      ui: {
+        notify(message: string, level: string) {
+          notifications.push({ message, level });
+        },
+      },
+    } as any);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalVersion === undefined) {
+      delete process.env.GSD_VERSION;
+    } else {
+      process.env.GSD_VERSION = originalVersion;
+    }
+  }
+
+  assert.deepEqual(fetchUrls, ["https://registry.npmjs.org/gsd-pi/latest"]);
+  assert.ok(notifications.some((notification) => notification.message.includes("Already up to date")));
 });
 
 test("isBunInstall detects bun install via argv[1] even when process.versions.bun is undefined (#4145)", async () => {

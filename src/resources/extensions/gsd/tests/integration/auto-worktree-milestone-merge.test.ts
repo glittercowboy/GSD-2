@@ -1,3 +1,5 @@
+// Project/App: GSD-2
+// File Purpose: Auto-worktree milestone squash-merge integration tests.
 /**
  * auto-worktree-milestone-merge.test.ts — Integration tests for mergeMilestoneToMain.
  *
@@ -25,6 +27,13 @@ import {
 import { getSliceBranchName } from "../../worktree.ts";
 import { nativeMergeSquash } from "../../native-git-bridge.ts";
 import { drainLogs, setStderrLoggingEnabled } from "../../workflow-logger.ts";
+import {
+  closeDatabase,
+  insertMilestone,
+  insertSlice,
+  insertTask,
+  openDatabase,
+} from "../../gsd-db.ts";
 
 function run(cmd: string, cwd: string): string {
   // Safe: all inputs are hardcoded test strings, not user input
@@ -117,6 +126,7 @@ describe("auto-worktree-milestone-merge", { timeout: 300_000 }, () => {
 
   afterEach(() => {
     process.chdir(savedCwd);
+    closeDatabase();
     for (const d of tempDirs) {
       if (existsSync(d)) rmSync(d, { recursive: true, force: true });
     }
@@ -179,6 +189,24 @@ describe("auto-worktree-milestone-merge", { timeout: 300_000 }, () => {
     addSliceToMilestone(repo, wtPath, "M020", "S03", "Logging infra", [
       { file: "logger.ts", content: "export const log = () => {};\n", message: "add logger" },
     ]);
+    openDatabase(":memory:");
+    insertMilestone({ id: "M020", title: "M020: Backend foundation", status: "complete" });
+    for (const slice of [
+      { id: "S01", title: "Core API", tasks: [{ id: "T01", title: "Create API router" }] },
+      { id: "S02", title: "Error handling", tasks: [{ id: "T02", title: "Handle API errors" }] },
+      { id: "S03", title: "Logging infra", tasks: [{ id: "T03", title: "Wire request logging" }] },
+    ]) {
+      insertSlice({ id: slice.id, milestoneId: "M020", title: slice.title, status: "complete" });
+      for (const task of slice.tasks) {
+        insertTask({
+          id: task.id,
+          sliceId: slice.id,
+          milestoneId: "M020",
+          title: task.title,
+          status: "complete",
+        });
+      }
+    }
 
     const roadmap = makeRoadmap("M020", "Backend foundation", [
       { id: "S01", title: "Core API" },
@@ -193,13 +221,20 @@ describe("auto-worktree-milestone-merge", { timeout: 300_000 }, () => {
     assert.ok(result.commitMessage.includes("- S01: Core API"), "body lists S01");
     assert.ok(result.commitMessage.includes("- S02: Error handling"), "body lists S02");
     assert.ok(result.commitMessage.includes("- S03: Logging infra"), "body lists S03");
+    assert.ok(result.commitMessage.includes("Completed tasks:"), "body lists completed tasks");
+    assert.ok(result.commitMessage.includes("- S01/T01: Create API router"), "body lists S01 task");
+    assert.ok(result.commitMessage.includes("- S02/T02: Handle API errors"), "body lists S02 task");
+    assert.ok(result.commitMessage.includes("Milestone: M020 - Backend foundation"), "body has human milestone context");
     assert.ok(result.commitMessage.includes("GSD-Milestone: M020"), "body has GSD-Milestone trailer");
     assert.ok(result.commitMessage.includes("Branch: milestone/M020"), "body has branch metadata");
+    assert.ok(!result.commitMessage.includes("auto-commit after complete-milestone"), "body avoids generic complete-milestone fallback");
+    assert.ok(!result.commitMessage.includes("GSD-Unit:"), "body avoids generic unit trailer");
 
     const gitMsg = run("git log -1 --format=%B main", repo).trim();
     assert.match(gitMsg, /^feat:/, "git commit message starts with feat:");
     assert.ok(gitMsg.includes("GSD-Milestone: M020"), "git commit has GSD-Milestone trailer");
     assert.ok(gitMsg.includes("- S01: Core API"), "git commit body has S01");
+    assert.ok(gitMsg.includes("- S03/T03: Wire request logging"), "git commit body has task names");
   });
 
   test("nothing to commit — safe when no code changes (#1738, #1792)", () => {
@@ -779,6 +814,11 @@ describe("auto-worktree-milestone-merge", { timeout: 300_000 }, () => {
     assert.ok(
       !existsSync(mergeHeadPath),
       "#2912: MERGE_HEAD must be cleaned up after merge conflict error",
+    );
+    assert.equal(
+      run("git diff --name-only --diff-filter=U", repo),
+      "",
+      "squash conflict cleanup must clear unmerged index entries",
     );
   });
 

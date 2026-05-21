@@ -57,7 +57,7 @@ import {
 } from "@/lib/dev-overrides"
 import { DoctorPanel, ForensicsPanel, SkillHealthPanel } from "./diagnostics-panels"
 import { KnowledgeCapturesPanel } from "./knowledge-captures-panel"
-import { PrefsPanel, ModelRoutingPanel, BudgetPanel, RemoteQuestionsPanel, GeneralPanel, ExperimentalPanel } from "./settings-panels"
+import { PrefsPanel, ModelRoutingPanel, BudgetPanel, RemoteQuestionsPanel, McpConnectionsPanel, GeneralPanel, ExperimentalPanel } from "./settings-panels"
 import { DevRootSettingsSection } from "./projects-view"
 import {
   QuickPanel,
@@ -2129,7 +2129,12 @@ export function CommandSurface() {
       case "session": return renderSessionSection()
       case "compact": return renderCompactSection()
       case "workspace": return <DevRootSettingsSection />
-      case "integrations": return <RemoteQuestionsPanel />
+      case "integrations": return (
+        <div className="space-y-6">
+          <RemoteQuestionsPanel />
+          <McpConnectionsPanel />
+        </div>
+      )
       case "gsd-forensics": return <ForensicsPanel />
       case "gsd-doctor": return <DoctorPanel />
       case "gsd-skill-health": return <SkillHealthPanel />
@@ -2143,6 +2148,7 @@ export function CommandSurface() {
           <ModelRoutingPanel />
           <BudgetPanel />
           <RemoteQuestionsPanel />
+          <McpConnectionsPanel />
           <GeneralPanel />
           <ExperimentalPanel />
         </div>

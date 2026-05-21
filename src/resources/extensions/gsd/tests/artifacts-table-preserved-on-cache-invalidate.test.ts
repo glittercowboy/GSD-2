@@ -18,11 +18,8 @@
 
 import { describe, test, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 
 import { invalidateAllCaches } from "../cache.ts";
-import { extractSourceRegion } from "./test-helpers.ts";
 import {
   openDatabase,
   closeDatabase,
@@ -141,38 +138,6 @@ describe("invalidateAllCaches() must preserve the artifacts table", () => {
       count,
       inserts.length,
       `all ${inserts.length} artifact rows must survive repeated invalidate calls; got ${count}`,
-    );
-  });
-});
-
-describe("cache.ts must not re-import clearArtifacts into invalidateAllCaches", () => {
-  const src = readFileSync(
-    resolve(process.cwd(), "src", "resources", "extensions", "gsd", "cache.ts"),
-    "utf-8",
-  );
-
-  test("clearArtifacts is not imported from gsd-db", () => {
-    assert.ok(
-      !/import\s*\{[^}]*clearArtifacts[^}]*\}\s*from\s*['"]\.\/gsd-db/.test(src),
-      "cache.ts must not import clearArtifacts — it causes the artifacts-table-wipe regression",
-    );
-  });
-
-  test("invalidateAllCaches does not call clearArtifacts", () => {
-    const fnIdx = src.indexOf("function invalidateAllCaches");
-    assert.ok(fnIdx !== -1);
-    const body = extractSourceRegion(src, "function invalidateAllCaches", { fromIdx: fnIdx });
-    assert.ok(
-      !/\bclearArtifacts\s*\(/.test(body),
-      "invalidateAllCaches must not call clearArtifacts() — it wipes the write-through store",
-    );
-  });
-
-  test("cache.ts documents why clearArtifacts is not bundled here", () => {
-    // Future reviewers need to see the rationale or they'll re-add it.
-    assert.ok(
-      /artifacts.*NOT included|write-through store/i.test(src),
-      "cache.ts must explain why the artifacts table is NOT invalidated here",
     );
   });
 });

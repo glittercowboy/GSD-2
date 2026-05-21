@@ -312,8 +312,8 @@ describe("TUI cursor tracking regression (#3764)", () => {
 
     assert.ok(terminal.writtenData.length >= 1, "shrink render should produce a differential buffer");
     assert.ok(
-      terminal.writtenData[0].startsWith("\x1b[?2026h\x1b[1B\r"),
-      `shrink diff should move down from the actual hardware cursor row, got ${JSON.stringify(terminal.writtenData[0])}`,
+      terminal.writtenData[0].includes("\x1b[2J\x1b[22;1H"),
+      `short shrink should redraw at the bottom anchor, got ${JSON.stringify(terminal.writtenData[0])}`,
     );
 
     // After shrink, hardwareCursorRow should be at IME position again

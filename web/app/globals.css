@@ -92,8 +92,8 @@
 }
 
 @theme inline {
-  --font-sans: var(--font-geist-sans), 'Geist', 'Geist Fallback';
-  --font-mono: var(--font-geist-mono), 'Geist Mono', 'Geist Mono Fallback';
+  --font-sans: 'Geist', 'Geist Fallback', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'Geist Mono', 'Geist Mono Fallback', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);

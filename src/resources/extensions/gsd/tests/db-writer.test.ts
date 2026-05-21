@@ -27,6 +27,7 @@ import {
   saveArtifactToDb,
   extractDeferredSliceRef,
 } from '../db-writer.ts';
+import { getAllDecisionsFromMemories } from '../context-store.ts';
 import type { Decision, Requirement } from '../types.ts';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -326,11 +327,14 @@ describe('db-writer', () => {
 
       assert.deepStrictEqual(result.id, 'D001', 'saveDecisionToDb returns D001 as first ID');
 
-      // Verify DB state
-      const dbDecision = getDecisionById('D001');
-      assert.ok(!!dbDecision, 'decision exists in DB after save');
-      assert.deepStrictEqual(dbDecision?.scope, 'arch', 'DB decision has correct scope');
-      assert.deepStrictEqual(dbDecision?.choice, 'Option A', 'DB decision has correct choice');
+      // ADR-013 Stage 3: decisions land in memories, not the legacy table.
+      const memoryDecisions = getAllDecisionsFromMemories();
+      assert.equal(memoryDecisions.length, 1, 'one memory row exists after save');
+      const memDecision = memoryDecisions[0];
+      assert.ok(memDecision, 'memory decision exists after save');
+      assert.equal(memDecision.id, 'D001');
+      assert.equal(memDecision.scope, 'arch', 'memory decision has correct scope');
+      assert.equal(memDecision.choice, 'Option A', 'memory decision has correct choice');
 
       // Verify markdown file was written
       const mdPath = path.join(tmpDir, '.gsd', 'DECISIONS.md');
@@ -394,10 +398,11 @@ describe('db-writer', () => {
         assert.match(id, /^D\d{3}$/, `ID ${id} should match D### pattern`);
       }
 
-      // Verify all 5 exist in DB
+      // ADR-013 Stage 3: verify all 5 exist in the memories table (decisions
+      // table receives no writes from saveDecisionToDb post-cutover).
+      const memoryIds = new Set(getAllDecisionsFromMemories().map((d) => d.id));
       for (const id of ids) {
-        const row = getDecisionById(id);
-        assert.ok(row, `Decision ${id} should exist in DB`);
+        assert.ok(memoryIds.has(id), `Decision ${id} should exist in memories`);
       }
     } finally {
       closeDatabase();

@@ -29,14 +29,48 @@
 
 import { describe, test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { WorktreeResolver } from "../worktree-resolver.ts";
+import {
+  WorktreeLifecycle,
+  type WorktreeLifecycleDeps,
+  type WorktreeLifecycleTestOverrides,
+} from "../worktree-lifecycle.ts";
+import { WorktreeStateProjection } from "../worktree-state-projection.ts";
 import { MergeConflictError } from "../git-service.ts";
-import type { WorktreeResolverDeps } from "../worktree-resolver.ts";
 import type { AutoSession } from "../auto/session.ts";
+
+// Test-local: extras the WorktreeResolver-era fixture passed but Lifecycle
+// does not need (shouldUseWorktreeIsolation, syncWorktreeStateBack,
+// captureIntegrationBranch). Lifecycle ignores them via structural typing.
+// The C1-C4-inlined primitive overrides come from
+// `WorktreeLifecycleTestOverrides`, the test seam exported by the Module.
+type LegacyTestDeps = WorktreeLifecycleDeps & WorktreeLifecycleTestOverrides & {
+  shouldUseWorktreeIsolation?: () => boolean;
+  syncWorktreeStateBack?: (
+    mainBasePath: string,
+    worktreePath: string,
+    milestoneId: string,
+  ) => { synced: string[] };
+  captureIntegrationBranch?: (basePath: string, mid: string | undefined) => void;
+  GitServiceImpl?: new (basePath: string, gitConfig: unknown) => unknown;
+};
+
+/**
+ * Shim factory preserving the legacy WorktreeResolver throw shape for
+ * `mergeAndExit` so the existing assert.throws bodies migrate verbatim.
+ */
+function makeResolver(s: AutoSession, deps: LegacyTestDeps) {
+  const lifecycle = new WorktreeLifecycle(s, deps);
+  return {
+    mergeAndExit: (mid: string, ctx: { notify: (msg: string, level?: "info" | "warning" | "error" | "success") => void }) => {
+      const r = lifecycle.exitMilestone(mid, { merge: true }, ctx);
+      if (!r.ok && r.cause instanceof Error) throw r.cause;
+    },
+  };
+}
 
 // ─── Test-only session double ───────────────────────────────────────────
 // `AutoSession` is a large class but `WorktreeResolver` only reads a few
@@ -55,8 +89,8 @@ function makeSession(basePath: string): AutoSession {
  * boring-tech approach — no mocking library, just plain objects.
  */
 function makeDeps(
-  overrides: Partial<WorktreeResolverDeps> = {},
-): WorktreeResolverDeps {
+  overrides: Partial<LegacyTestDeps> = {},
+): LegacyTestDeps {
   return {
     isInAutoWorktree: () => true,
     shouldUseWorktreeIsolation: () => true,
@@ -68,8 +102,14 @@ function makeDeps(
     enterAutoWorktree: () => "",
     enterBranchModeForMilestone: () => undefined,
     getAutoWorktreePath: () => null,
-    autoCommitCurrentBranch: () => undefined,
+    autoCommitCurrentBranch: (
+      _basePath: string,
+      _unitType: string,
+      _unitId: string,
+      _taskContext?: unknown,
+    ) => null,
     getCurrentBranch: () => "worktree/M001",
+    checkoutBranch: () => undefined,
     autoWorktreeBranch: (mid: string) => `worktree/${mid}`,
     resolveMilestoneFile: () => null, // no roadmap → early return path
     readFileSync: () => "",
@@ -79,6 +119,9 @@ function makeDeps(
     loadEffectiveGSDPreferences: () => ({ preferences: {} }),
     invalidateAllCaches: () => undefined,
     captureIntegrationBranch: () => undefined,
+    worktreeProjection: new WorktreeStateProjection(),
+    // ADR-016 phase 2 / C4 (#5627): GitServiceImpl constructor → factory.
+    gitServiceFactory: () => ({}) as never,
     ...overrides,
   };
 }
@@ -98,14 +141,36 @@ function makeNotifyCtx(): {
 
 describe("WorktreeResolver.mergeAndExit re-throws MergeConflictError (#2330)", () => {
   let baseDir: string;
+  const savedCwd = process.cwd();
 
   beforeEach(() => {
     baseDir = mkdtempSync(join(tmpdir(), "merge-conflict-stops-loop-"));
     // Fake out a milestone directory so mergeAndExit reaches mergeMilestoneToMain.
     mkdirSync(join(baseDir, ".gsd", "milestones", "M001"), { recursive: true });
+    // ADR-016 phase 2 / C1 (#5624): worktree-lifecycle.ts now calls
+    // node:fs.readFileSync directly (the dep was retired), so the roadmap
+    // file must exist on disk for the test to reach mergeMilestoneToMain.
+    writeFileSync(
+      join(baseDir, ".gsd", "milestones", "M001", "M001-ROADMAP.md"),
+      "# M001\n",
+    );
+    // ADR-016 phase 2 / C3 (#5626): `getIsolationMode` is also inlined.
+    // Without explicit isolation preferences the mode defaults to "none"
+    // and the merge short-circuits before the test's mocked
+    // `mergeMilestoneToMain` is reached. Write a preferences file so the
+    // standalone routes through worktree-mode merge.
+    writeFileSync(
+      join(baseDir, ".gsd", "preferences.md"),
+      "## Git\n- isolation: worktree\n",
+    );
   });
 
   afterEach(() => {
+    // ADR-016 phase 2 / C2 (#5625): the inlined `mergeMilestoneStandalone`
+    // chdirs into the project root before the merge body runs. Restore
+    // cwd before deleting `baseDir` so the next test's `process.cwd()`
+    // doesn't fail with ENOENT.
+    try { process.chdir(savedCwd); } catch { /* best-effort */ }
     try {
       rmSync(baseDir, { recursive: true, force: true });
     } catch {
@@ -117,7 +182,7 @@ describe("WorktreeResolver.mergeAndExit re-throws MergeConflictError (#2330)", (
     const conflicted = ["src/feature.ts", "README.md"];
     const roadmapPath = join(baseDir, ".gsd", "milestones", "M001", "M001-ROADMAP.md");
     const deps = makeDeps({
-      resolveMilestoneFile: (_base, _mid, type) =>
+      resolveMilestoneFile: (_base: string, _mid: string, type: string) =>
         type === "ROADMAP" ? roadmapPath : null,
       readFileSync: () => "# M001\n",
       mergeMilestoneToMain: () => {
@@ -125,7 +190,7 @@ describe("WorktreeResolver.mergeAndExit re-throws MergeConflictError (#2330)", (
       },
     });
 
-    const resolver = new WorktreeResolver(makeSession(baseDir), deps);
+    const resolver = makeResolver(makeSession(baseDir), deps);
     const ctx = makeNotifyCtx();
 
     assert.throws(
@@ -148,7 +213,7 @@ describe("WorktreeResolver.mergeAndExit re-throws MergeConflictError (#2330)", (
     const roadmapPath = join(baseDir, ".gsd", "milestones", "M001", "M001-ROADMAP.md");
     class FakePermError extends Error {}
     const deps = makeDeps({
-      resolveMilestoneFile: (_base, _mid, type) =>
+      resolveMilestoneFile: (_base: string, _mid: string, type: string) =>
         type === "ROADMAP" ? roadmapPath : null,
       readFileSync: () => "# M001\n",
       mergeMilestoneToMain: () => {
@@ -156,7 +221,7 @@ describe("WorktreeResolver.mergeAndExit re-throws MergeConflictError (#2330)", (
       },
     });
 
-    const resolver = new WorktreeResolver(makeSession(baseDir), deps);
+    const resolver = makeResolver(makeSession(baseDir), deps);
     const ctx = makeNotifyCtx();
 
     assert.throws(
@@ -174,13 +239,13 @@ describe("WorktreeResolver.mergeAndExit re-throws MergeConflictError (#2330)", (
   test("successful merge does not throw", () => {
     const roadmapPath = join(baseDir, ".gsd", "milestones", "M001", "M001-ROADMAP.md");
     const deps = makeDeps({
-      resolveMilestoneFile: (_base, _mid, type) =>
+      resolveMilestoneFile: (_base: string, _mid: string, type: string) =>
         type === "ROADMAP" ? roadmapPath : null,
       readFileSync: () => "# M001\n",
       mergeMilestoneToMain: () => ({ pushed: false, codeFilesChanged: true }),
     });
 
-    const resolver = new WorktreeResolver(makeSession(baseDir), deps);
+    const resolver = makeResolver(makeSession(baseDir), deps);
     const ctx = makeNotifyCtx();
 
     // Should not throw — the success path.

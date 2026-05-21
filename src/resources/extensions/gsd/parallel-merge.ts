@@ -8,9 +8,13 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { loadFile } from "./files.js";
-import { resolveGsdPathContract, resolveMilestoneFile } from "./paths.js";
-import { mergeMilestoneToMain } from "./auto-worktree.js";
+import { resolveGsdPathContract } from "./paths.js";
+import { getAutoWorktreePath } from "./auto-worktree.js";
+import { buildWorktreeLifecycleDeps } from "./auto.js";
+import {
+  mergeMilestoneStandalone,
+  type MergeStandaloneResult,
+} from "./worktree-lifecycle.js";
 import { MergeConflictError } from "./git-service.js";
 import { removeSessionStatus } from "./session-status-io.js";
 import type { WorkerInfo } from "./parallel-orchestrator.js";
@@ -136,44 +140,46 @@ export function determineMergeOrder(
 
 /**
  * Attempt to merge a single milestone's worktree back to main.
- * Wraps mergeMilestoneToMain with error handling for parallel context.
+ *
+ * Routes through `WorktreeLifecycle.mergeMilestoneStandalone` so parallel
+ * callers get the same projection-finalize / roadmap-fallback / secondary-
+ * teardown invariants as the single-loop path. Closes the parallel-merge
+ * bypass that ADR-016 names (issue #5618).
  */
 export async function mergeCompletedMilestone(
   basePath: string,
   milestoneId: string,
 ): Promise<MergeResult> {
+  // Resolve the worktree path explicitly; parallel-merge has no AutoSession
+  // to read it from. Only use the worktree path when git actually knows
+  // about it (`getAutoWorktreePath` returns non-null). When the directory
+  // exists on disk but isn't a registered git worktree (e.g. a stale
+  // session-status marker dir), fall back to the project root and let the
+  // standalone's mode detection pick branch-mode or skipped — using the
+  // un-registered dir as `worktreeBasePath` would cause `getCurrentBranch`
+  // to fail with a "Worktree HEAD diverged" error.
+  const registeredWtPath = getAutoWorktreePath(basePath, milestoneId);
+  const worktreeBasePath = registeredWtPath ?? basePath;
+
+  let result: MergeStandaloneResult;
   try {
-    // Load the roadmap content (needed by mergeMilestoneToMain)
-    const roadmapPath = resolveMilestoneFile(basePath, milestoneId, "ROADMAP");
-    if (!roadmapPath) {
-      return {
-        milestoneId,
-        success: false,
-        error: `No roadmap found for ${milestoneId}`,
-      };
-    }
-
-    const roadmapContent = await loadFile(roadmapPath);
-    if (!roadmapContent) {
-      return {
-        milestoneId,
-        success: false,
-        error: `Could not read roadmap for ${milestoneId}`,
-      };
-    }
-
-    // Attempt the merge
-    const result = mergeMilestoneToMain(basePath, milestoneId, roadmapContent);
-
-    // Clean up parallel session status
-    removeSessionStatus(basePath, milestoneId);
-
-    return {
+    result = mergeMilestoneStandalone(buildWorktreeLifecycleDeps(), {
+      originalBasePath: basePath,
+      worktreeBasePath,
       milestoneId,
-      success: true,
-      commitMessage: result.commitMessage,
-      pushed: result.pushed,
-    };
+      // Parallel context never runs with degraded isolation — workers only
+      // exist when isolation succeeded. Pass `false` explicitly so the
+      // standalone's degraded-skip branch is not reached.
+      isolationDegraded: false,
+      notify: (msg, level) => {
+        // Surface user-visible messages from the standalone through the
+        // workflow logger so the parallel merge's progress is visible in
+        // the same channel as the rest of the parallel orchestration.
+        if (level === "error" || level === "warning") {
+          logWarning("parallel", `${milestoneId}: ${msg}`);
+        }
+      },
+    });
   } catch (err) {
     if (err instanceof MergeConflictError) {
       return {
@@ -189,6 +195,27 @@ export async function mergeCompletedMilestone(
       error: getErrorMessage(err),
     };
   }
+
+  if (!result.merged) {
+    return {
+      milestoneId,
+      success: false,
+      error:
+        result.mode === "skipped"
+          ? `Merge skipped for ${milestoneId} (mode=none or isolation degraded).`
+          : `No roadmap for ${milestoneId} — milestone branch preserved for manual merge.`,
+    };
+  }
+
+  // Clean up parallel session status — only on a real merge.
+  removeSessionStatus(basePath, milestoneId);
+
+  return {
+    milestoneId,
+    success: true,
+    commitMessage: result.commitMessage,
+    pushed: result.pushed,
+  };
 }
 
 /**

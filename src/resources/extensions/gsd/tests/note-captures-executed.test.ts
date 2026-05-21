@@ -6,41 +6,45 @@
  * adds a filter for classification === "note" and calls markCaptureExecuted
  * for each matching capture.
  *
- * Structural verification test — reads source to confirm the note filter
- * and markCaptureExecuted call exist.
+ * Behavior test — resolved note captures should be marked executed without
+ * dispatching inject/replan work.
  */
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
-const source = readFileSync(join(__dirname, '..', 'triage-resolution.ts'), 'utf-8');
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { loadAllCaptures } from '../captures.ts';
+import { executeTriageResolutions } from '../triage-resolution.ts';
 
 describe('note captures executed in triage resolution (#3578)', () => {
-  test('markCaptureExecuted is imported', () => {
-    assert.match(source, /markCaptureExecuted/,
-      'markCaptureExecuted should be imported');
-  });
+  test('resolved note captures are stamped executed', () => {
+    const base = mkdtempSync(join(tmpdir(), 'gsd-note-capture-'));
+    try {
+      mkdirSync(join(base, '.gsd'), { recursive: true });
+      writeFileSync(join(base, '.gsd', 'CAPTURES.md'), [
+        '# Captures',
+        '',
+        '### cap-note',
+        '**Text:** Remember this',
+        '**Captured:** 2026-01-01T00:00:00.000Z',
+        '**Status:** resolved',
+        '**Classification:** note',
+        '**Resolution:** informational only',
+        '**Resolved:** 2026-01-01T00:01:00.000Z',
+        '',
+      ].join('\n'));
 
-  test('note classification filter exists', () => {
-    assert.match(source, /classification\s*===\s*"note"/,
-      'filter should check classification === "note"');
-  });
+      const result = executeTriageResolutions(base, 'M001', 'S01');
+      const [capture] = loadAllCaptures(base);
 
-  test('note filter checks resolved status and not-executed', () => {
-    assert.match(source, /status\s*===\s*"resolved"\s*&&\s*!c\.executed\s*&&\s*c\.classification\s*===\s*"note"/,
-      'filter should check resolved + not-executed + note classification');
-  });
-
-  test('markCaptureExecuted is called for note captures', () => {
-    // The source should call markCaptureExecuted for note captures
-    const noteSection = source.slice(source.indexOf('classification === "note"'));
-    assert.match(noteSection, /markCaptureExecuted\(basePath,\s*cap\.id\)/,
-      'markCaptureExecuted should be called for note captures');
+      assert.equal(result.injected, 0);
+      assert.equal(result.replanned, 0);
+      assert.ok(result.actions.some((action) => action.includes('Note acknowledged: cap-note')));
+      assert.equal(capture?.executed, true);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
   });
 });

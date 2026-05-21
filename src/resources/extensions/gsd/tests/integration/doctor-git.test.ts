@@ -1,3 +1,4 @@
+// GSD-2 doctor git integration tests
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 /**
@@ -13,7 +14,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, realpathSync, readFileSync, symlinkSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { execSync } from "node:child_process";
+import { execSync, spawnSync } from "node:child_process";
 
 import { runGSDDoctor } from "../../doctor.ts";
 import { closeDatabase, insertMilestone, insertSlice, openDatabase } from "../../gsd-db.ts";
@@ -73,6 +74,21 @@ Completed.
   run("git add -A", dir);
   run("git commit -m \"add milestone\"", dir);
 
+  return dir;
+}
+
+function createStashApplyConflict(): string {
+  const dir = createRepoWithCompletedMilestone();
+  writeFileSync(join(dir, "README.md"), "# local stashed work\n");
+  run('git stash push -m "local work"', dir);
+  writeFileSync(join(dir, "README.md"), "# merged milestone work\n");
+  run("git add README.md", dir);
+  run('git commit -m "feat: merged readme"', dir);
+  const apply = spawnSync("git", ["stash", "apply", "stash@{0}"], {
+    cwd: dir,
+    encoding: "utf-8",
+  });
+  if (apply.error) throw apply.error;
   return dir;
 }
 
@@ -292,6 +308,26 @@ describe('doctor-git', async () => {
 
       // Verify MERGE_HEAD is gone
       assert.ok(!existsSync(join(dir, ".git", "MERGE_HEAD")), "MERGE_HEAD removed after fix");
+    });
+
+    test('unresolved_git_conflicts is manual-only and preserves conflict state', async () => {
+      const dir = createStashApplyConflict();
+      cleanups.push(dir);
+      assert.equal(existsSync(join(dir, ".git", "MERGE_HEAD")), false, "stash apply conflict should not require MERGE_HEAD");
+
+      const detect = await runGSDDoctor(dir);
+      const conflictIssues = detect.issues.filter(i => i.code === "unresolved_git_conflicts");
+      assert.equal(conflictIssues.length, 1, "detects unresolved Git conflict index");
+      assert.equal(conflictIssues[0]?.severity, "error");
+      assert.equal(conflictIssues[0]?.fixable, false);
+      assert.match(conflictIssues[0]?.message ?? "", /README\.md/);
+
+      const fixed = await runGSDDoctor(dir, { fix: true });
+      assert.ok(
+        !fixed.fixesApplied.some((fix) => fix.includes("cleaned merge state")),
+        "doctor fix must not reset conflict files",
+      );
+      assert.match(run("git diff --name-only --diff-filter=U", dir), /README\.md/, "conflict remains for manual resolution");
     });
 
     // ─── Test 4: Tracked runtime files detection & fix ─────────────────
@@ -759,6 +795,49 @@ describe('doctor-git', async () => {
       // Verify the snapshot commit was created with the gsd snapshot tag
       const log = run("git log -1 --oneline", dir);
       assert.ok(log.includes("gsd snapshot"), "commit is tagged with gsd snapshot");
+    });
+
+    test('stale_uncommitted_changes (skips snapshot when tracked changes contain conflict markers)', async () => {
+      const dir = createRepoWithActiveMilestone();
+      cleanups.push(dir);
+
+      const pastDate = new Date(Date.now() - 45 * 60 * 1000).toISOString();
+      run(`git commit --amend --no-edit --date="${pastDate}"`, dir);
+      execSync(`git commit --amend --no-edit`, {
+        cwd: dir,
+        stdio: ["ignore", "pipe", "pipe"],
+        encoding: "utf-8",
+        env: { ...process.env, GIT_COMMITTER_DATE: pastDate },
+      });
+
+      writeFileSync(join(dir, "README.md"), [
+        "# test",
+        "<<<<<<< Updated upstream",
+        "modified content",
+        "=======",
+        "stashed content",
+        ">>>>>>> Stashed changes",
+        "",
+      ].join("\n"));
+
+      const commitsBefore = run("git rev-list --count HEAD", dir);
+      const fixed = await runGSDDoctor(dir, { fix: true });
+      const conflictIssues = fixed.issues.filter(
+        i => i.code === ("conflict_markers_in_tracked_files" as typeof i.code),
+      );
+
+      assert.equal(conflictIssues.length, 1, "detects conflict markers before snapshotting");
+      assert.equal(conflictIssues[0]?.severity, "error", "conflict marker issue blocks automation");
+      assert.equal(conflictIssues[0]?.fixable, false, "conflict marker issue requires manual resolution");
+      assert.ok(
+        fixed.fixesApplied.some(f => f.includes("gsd snapshot skipped")),
+        "fix reports skipped snapshot",
+      );
+
+      const commitsAfter = run("git rev-list --count HEAD", dir);
+      assert.equal(commitsAfter, commitsBefore, "no snapshot commit is created");
+      assert.equal(run("git diff --cached --name-only", dir), "", "no files are staged");
+      assert.match(run("git status --short", dir), /M README\.md/m, "tracked file remains modified");
     });
 
     // ─── Test: stale_uncommitted_changes NOT flagged when recent commit ──

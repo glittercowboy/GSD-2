@@ -28,7 +28,7 @@ Then do the thing `STATE.md` says to do next.
 ## The Hierarchy
 
 ```
-Milestone  →  a shippable version (4-10 slices)
+Milestone  →  a shippable version (1-10 slices, sized to the work)
   Slice    →  one demoable vertical capability (1-7 tasks)
     Task   →  one context-window-sized unit of work (fits in one session)
 ```
@@ -331,7 +331,7 @@ The **Don't Hand-Roll** and **Common Pitfalls** sections prevent the most expens
 
 **For a milestone (roadmap):**
 1. Read `M###-CONTEXT.md`, `M###-RESEARCH.md`, and `.gsd/DECISIONS.md` if they exist.
-2. Decompose the vision into 4-10 demoable vertical slices.
+2. Decompose the vision into 1-10 demoable vertical slices. Prefer one slice for tiny, single-file, or static work unless the request clearly spans independent capabilities.
 3. Order by risk (high-risk first to validate feasibility early).
 4. Write `M###-ROADMAP.md` with checkboxes, risk levels, dependencies, demo sentences.
 5. **Write the boundary map** — for each slice, specify what it produces (functions, types, interfaces, endpoints) and what it consumes from upstream slices. This forces interface thinking before implementation and enables deterministic verification that slices actually connect.
@@ -448,6 +448,13 @@ What differed from the plan and why (or "None").
 
 The one-liner must be substantive: "JWT auth with refresh rotation using jose" not "Authentication implemented."
 
+When `key_files` or `key_decisions` are empty, render them as empty YAML lists:
+
+```yaml
+key_files: []
+key_decisions: []
+```
+
 **Slice summary:** Written when all tasks in a slice complete. Compresses all task summaries. Includes `drill_down_paths` to each task summary. During slice completion, review task summaries for `key_decisions` and ensure any significant ones are captured in `.gsd/DECISIONS.md`.
 
 **Milestone summary:** Updated each time a slice completes. Compresses all slice summaries. This is what gets injected into later slice planning instead of loading many individual summaries.
@@ -560,7 +567,7 @@ In all modes, slices and tasks commit sequentially on the active branch; there a
 
 1. **Milestone starts** → capture the current integration branch.
 2. **Optional isolation** → create `milestone/M001` only when `git.isolation` is `worktree` or `branch`.
-3. **Per-task commits** — atomic, descriptive, bisectable.
+3. **Per-task commits** — atomic, descriptive, bisectable, and published only after execute-task verification passes.
 4. **Slice completes** → write slice summary, UAT script, roadmap checkbox, and milestone summary.
 5. **Milestone completes** → if isolated, squash-merge the milestone branch back to the captured integration branch and clean up the worktree/branch.
 
@@ -573,6 +580,8 @@ fix: handle empty state rebuild
 ```
 
 In `none` mode these commits land directly on the current branch. In isolated modes they land on `milestone/<MID>` and are squashed back at milestone completion.
+
+Execute-task closeout is fail-closed: the system writes verification evidence first, defers the task commit or snapshot until verification passes, and pauses instead of publishing changes when verification fails or cannot complete.
 
 ### Commit Conventions
 

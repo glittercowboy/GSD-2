@@ -48,8 +48,8 @@ The `.gsd/` directory looks like this:
   gsd.db              — authoritative runtime database (local, gitignored)
   PROJECT.md          — living description of what the project is
   REQUIREMENTS.md     — requirement contract (active/validated/deferred)
-  DECISIONS.md        — append-only architectural decisions log
-  KNOWLEDGE.md        — cross-session rules, patterns, and lessons
+  DECISIONS.md        — projected architectural decisions log
+  KNOWLEDGE.md        — manual rules plus projected patterns and lessons
   RUNTIME.md          — runtime context: API endpoints, env vars, services
   STATE.md            — quick-glance status of current work
   PREFERENCES.md      — project-level preferences (optional)
@@ -73,10 +73,10 @@ The `.gsd/` directory looks like this:
 |------|---------|
 | `PROJECT.md` | High-level project description, updated as the project evolves |
 | `REQUIREMENTS.md` | Formal requirement contract — tracks what's active, validated, and deferred |
-| `DECISIONS.md` | Append-only log of architectural decisions with rationale |
-| `KNOWLEDGE.md` | Rules, patterns, and lessons learned across sessions — GSD reads this at the start of every task |
+| `DECISIONS.md` | Projected architectural decisions with rationale, rendered from memory-backed decision rows |
+| `KNOWLEDGE.md` | Manual Rules plus memory-projected Patterns and Lessons. GSD injects Rules from the file and injects Patterns/Lessons through the memory block at the start of every task |
 | `RUNTIME.md` | Runtime context like API URLs, ports, and environment variables |
-| `gsd.db` | Authoritative runtime state for workflow hierarchy, completion, requirements, decisions, and summaries |
+| `gsd.db` | Authoritative runtime state for workflow hierarchy, completion, requirements, memory-backed decisions/knowledge, and summaries |
 | `STATE.md` | Current status at a glance — rendered from the database, don't edit manually |
 
 ## How Work Flows
@@ -105,4 +105,4 @@ GSD maintains a knowledge base that persists across sessions. Add rules, pattern
 /gsd knowledge lesson "The OAuth flow requires the redirect URL to match exactly"
 ```
 
-This knowledge is injected into every task prompt automatically.
+Rules append directly to `.gsd/KNOWLEDGE.md`. Patterns and Lessons are stored as memories, projected back into `.gsd/KNOWLEDGE.md` for review, and injected into task prompts through the memory block.

@@ -135,6 +135,20 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
 
 	/**
+	 * Optional final tool filter applied immediately before each provider call.
+	 *
+	 * Use this for runtime policy that depends on the fully active tool set.
+	 * The returned list is what token audit and the provider request both see.
+	 * Receives the post-transform AgentMessage context so policy can scope
+	 * request-local custom messages without inspecting provider payload text.
+	 */
+	filterTools?: (
+		tools: AgentTool<any>[],
+		signal?: AbortSignal,
+		messages?: AgentMessage[],
+	) => AgentTool<any>[] | Promise<AgentTool<any>[]>;
+
+	/**
 	 * Resolves an API key dynamically for each LLM call.
 	 *
 	 * Useful for short-lived OAuth tokens (e.g., GitHub Copilot) that may expire
@@ -320,23 +334,25 @@ export interface AgentContext {
 	tools?: AgentTool<any>[];
 }
 
+export type AgentAbortOrigin = "session-transition" | "user" | "timeout" | "unknown";
+
 /**
  * Events emitted by the Agent for UI updates.
  * These events provide fine-grained lifecycle information for messages, turns, and tool executions.
  */
 export type AgentEvent =
 	// Agent lifecycle
-	| { type: "agent_start" }
-	| { type: "agent_end"; messages: AgentMessage[] }
+	| { type: "agent_start"; sessionId?: string; turnId?: string }
+	| { type: "agent_end"; messages: AgentMessage[]; sessionId?: string; turnId?: string; abortOrigin?: AgentAbortOrigin }
 	// Turn lifecycle - a turn is one assistant response + any tool calls/results
-	| { type: "turn_start" }
-	| { type: "turn_end"; message: AgentMessage; toolResults: ToolResultMessage[] }
+	| { type: "turn_start"; sessionId?: string; turnId?: string }
+	| { type: "turn_end"; message: AgentMessage; toolResults: ToolResultMessage[]; sessionId?: string; turnId?: string }
 	// Message lifecycle - emitted for user, assistant, and toolResult messages
-	| { type: "message_start"; message: AgentMessage }
+	| { type: "message_start"; message: AgentMessage; sessionId?: string; turnId?: string }
 	// Only emitted for assistant messages during streaming
-	| { type: "message_update"; message: AgentMessage; assistantMessageEvent: AssistantMessageEvent }
-	| { type: "message_end"; message: AgentMessage }
+	| { type: "message_update"; message: AgentMessage; assistantMessageEvent: AssistantMessageEvent; sessionId?: string; turnId?: string }
+	| { type: "message_end"; message: AgentMessage; sessionId?: string; turnId?: string }
 	// Tool execution lifecycle
-	| { type: "tool_execution_start"; toolCallId: string; toolName: string; args: any }
-	| { type: "tool_execution_update"; toolCallId: string; toolName: string; args: any; partialResult: any }
-	| { type: "tool_execution_end"; toolCallId: string; toolName: string; result: any; isError: boolean };
+	| { type: "tool_execution_start"; toolCallId: string; toolName: string; args: any; sessionId?: string; turnId?: string }
+	| { type: "tool_execution_update"; toolCallId: string; toolName: string; args: any; partialResult: any; sessionId?: string; turnId?: string }
+	| { type: "tool_execution_end"; toolCallId: string; toolName: string; result: any; isError: boolean; sessionId?: string; turnId?: string };

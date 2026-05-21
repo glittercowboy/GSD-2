@@ -256,6 +256,32 @@ export function releaseMilestoneLease(
 }
 
 /**
+ * Force-release all held leases for a worker.
+ *
+ * Used by crash recovery once PID liveness has confirmed the worker is dead.
+ * No fencing token is required because this path is cleanup-only for a
+ * non-running process.
+ */
+export function forceReleaseLeasesForWorker(workerId: string): number {
+  if (!isDbAvailable()) return 0;
+  const db = _getAdapter()!;
+  let changes = 0;
+  transaction(() => {
+    const result = db.prepare(
+      `UPDATE milestone_leases
+       SET status = 'released'
+       WHERE worker_id = :worker_id
+         AND status = 'held'`,
+    ).run({ ":worker_id": workerId });
+    changes =
+      typeof (result as { changes?: unknown }).changes === "number"
+        ? (result as { changes: number }).changes
+        : 0;
+  });
+  return changes;
+}
+
+/**
  * Read current lease row for diagnostics. Returns null if no row exists.
  */
 export function getMilestoneLease(milestoneId: string): MilestoneLeaseRow | null {

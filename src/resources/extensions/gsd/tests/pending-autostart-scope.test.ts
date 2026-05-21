@@ -11,6 +11,7 @@ import {
   clearPendingAutoStart,
   _getPendingAutoStart,
 } from "../guided-flow.ts";
+import type { PendingAutoStartInput } from "../pending-auto-start.ts";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -18,6 +19,15 @@ function makeProjectDir(): string {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "gsd-pas-scope-")));
   mkdirSync(join(dir, ".gsd", "milestones"), { recursive: true });
   return dir;
+}
+
+function pendingInput(basePath: string, milestoneId: string) {
+  return {
+    basePath,
+    milestoneId,
+    ctx: { ui: { notify: () => undefined } } as any,
+    pi: { sendMessage: () => undefined } as any,
+  };
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -38,7 +48,7 @@ describe("pendingAutoStart scope pinning (C1)", () => {
   });
 
   test("setPendingAutoStart stores a scope whose paths derive from the basePath at reservation time", () => {
-    setPendingAutoStart(base, { basePath: base, milestoneId: "M001" });
+    setPendingAutoStart(base, pendingInput(base, "M001"));
 
     const entry = _getPendingAutoStart(base);
     assert.ok(entry, "entry should exist");
@@ -54,8 +64,22 @@ describe("pendingAutoStart scope pinning (C1)", () => {
     assert.equal(entry.scope.stateFile(), expectedState);
   });
 
+  test("setPendingAutoStart rejects entries without ctx and pi before storing them", () => {
+    assert.throws(
+      () =>
+        setPendingAutoStart(base, {
+          basePath: base,
+          milestoneId: "M001",
+        } as PendingAutoStartInput),
+      /requires ctx and pi/,
+      "pending entries must include the handles later used by auto-start recovery",
+    );
+
+    assert.equal(_getPendingAutoStart(base), null);
+  });
+
   test("scope paths are unaffected by process.chdir after reservation", (t) => {
-    setPendingAutoStart(base, { basePath: base, milestoneId: "M002" });
+    setPendingAutoStart(base, pendingInput(base, "M002"));
 
     const entry = _getPendingAutoStart(base);
     assert.ok(entry, "entry should exist");
@@ -82,7 +106,7 @@ describe("pendingAutoStart scope pinning (C1)", () => {
 
   test("scope identityKey matches the realpath of the original basePath even with trailing slash", () => {
     const baseWithSlash = base + "/";
-    setPendingAutoStart(base, { basePath: baseWithSlash, milestoneId: "M003" });
+    setPendingAutoStart(base, pendingInput(baseWithSlash, "M003"));
 
     const entry = _getPendingAutoStart(base);
     assert.ok(entry, "entry should exist");
@@ -96,7 +120,7 @@ describe("pendingAutoStart scope pinning (C1)", () => {
   });
 
   test("clearPendingAutoStart removes the entry", () => {
-    setPendingAutoStart(base, { basePath: base, milestoneId: "M001" });
+    setPendingAutoStart(base, pendingInput(base, "M001"));
 
     const before = _getPendingAutoStart(base);
     assert.ok(before, "entry should exist before clear");
@@ -108,7 +132,7 @@ describe("pendingAutoStart scope pinning (C1)", () => {
   });
 
   test("_getPendingAutoStart with no basePath argument returns the sole entry", () => {
-    setPendingAutoStart(base, { basePath: base, milestoneId: "M001" });
+    setPendingAutoStart(base, pendingInput(base, "M001"));
 
     // No argument — should return the sole entry
     const entry = _getPendingAutoStart();

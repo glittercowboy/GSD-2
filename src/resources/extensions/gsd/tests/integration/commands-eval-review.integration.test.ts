@@ -1,3 +1,5 @@
+// Project/App: GSD-2
+// File Purpose: Integration tests for the /gsd eval-review helper chain.
 /**
  * Integration test for `/gsd eval-review` .
  *
@@ -10,7 +12,7 @@
 
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -119,7 +121,7 @@ describe("integration: /gsd eval-review helper chain on a real on-disk slice", (
     );
     assert.equal(ctx.truncated, false);
     assert.equal(ctx.sliceId, "S07");
-    assert.equal(ctx.outputPath, evalReviewWritePath(layout.sliceDir, "S07"));
+    assert.equal(ctx.outputPath, evalReviewWritePath(realpathSync(layout.sliceDir), "S07"));
 
     const prompt = buildEvalReviewPrompt(ctx);
 

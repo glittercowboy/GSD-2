@@ -374,6 +374,12 @@ export class CmuxClient {
     const stdout = await this.runAsync(["send-surface", "--surface", surfaceId, payload]);
     return stdout !== null;
   }
+
+  // Send Ctrl-C (ETX) to a surface to interrupt the running command.
+  async sendInterrupt(surfaceId: string): Promise<boolean> {
+    const stdout = await this.runAsync(["send-surface", "--surface", surfaceId, "\x03"]);
+    return stdout !== null;
+  }
 }
 
 export function syncCmuxSidebar(preferences: CmuxPreferences | undefined, state: CmuxState): void {

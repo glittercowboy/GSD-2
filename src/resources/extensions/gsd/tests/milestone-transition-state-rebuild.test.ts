@@ -11,99 +11,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, realpathSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { fileURLToPath } from "node:url";
+import { AutoSession } from "../auto/session.ts";
+import { runPreDispatch } from "../auto/phases.ts";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-
-// ─── Source-level checks ──────────────────────────────────────────────────────
-
-test("auto/phases.ts milestone transition block calls rebuildState", () => {
-  const phasesSrc = readFileSync(
-    join(__dirname, "..", "auto", "phases.ts"),
-    "utf-8",
-  );
-
-  // rebuildState must be called within the milestone transition block
-  assert.ok(
-    phasesSrc.includes("deps.rebuildState(s.basePath)"),
-    "auto/phases.ts should call deps.rebuildState(s.basePath) during milestone transition",
-  );
-
-  // The rebuildState call must appear AFTER the pruneQueueOrder call
-  // (i.e. after all transition cleanup is done)
-  const pruneIdx = phasesSrc.indexOf("deps.pruneQueueOrder(s.basePath, pendingIds)");
-  const rebuildIdx = phasesSrc.indexOf("deps.rebuildState(s.basePath)");
-  assert.ok(pruneIdx > 0, "pruneQueueOrder should exist in phases.ts");
-  assert.ok(rebuildIdx > 0, "rebuildState should exist in phases.ts");
-  assert.ok(
-    rebuildIdx > pruneIdx,
-    "rebuildState should be called after pruneQueueOrder in the milestone transition block",
-  );
-});
-
-test("auto/phases.ts milestone transition block resets completed-units.json", () => {
-  const phasesSrc = readFileSync(
-    join(__dirname, "..", "auto", "phases.ts"),
-    "utf-8",
-  );
-
-  // completed-units.json must be archived and cleared during milestone transition
-  const transitionStart = phasesSrc.indexOf("Milestone transition");
-  assert.ok(transitionStart > 0, "Milestone transition block should exist");
-
-  // The old file is archived before being cleared (#2313)
-  const archiveSection = phasesSrc.indexOf("completed-units-", transitionStart);
-  assert.ok(
-    archiveSection > 0,
-    "auto/phases.ts should archive completed-units.json during milestone transition",
-  );
-
-  // The disk file should be cleared to an empty array
-  assert.ok(
-    phasesSrc.includes('atomicWriteSync(completedKeysPath, JSON.stringify([], null, 2))'),
-    "auto/phases.ts should write empty array to completed-units.json during milestone transition",
-  );
-});
-
-test("auto/loop-deps.ts LoopDeps interface includes rebuildState", () => {
-  const loopDepsSrc = readFileSync(
-    join(__dirname, "..", "auto", "loop-deps.ts"),
-    "utf-8",
-  );
-
-  assert.ok(
-    loopDepsSrc.includes("rebuildState: (basePath: string) => Promise<void>"),
-    "LoopDeps interface should declare rebuildState method",
-  );
-});
-
-test("auto.ts buildLoopDeps wires rebuildState", () => {
-  const autoSrc = readFileSync(
-    join(__dirname, "..", "auto.ts"),
-    "utf-8",
-  );
-
-  // rebuildState should be in the LoopDeps object literal.
-  // Match the signature prefix so the test survives future param changes
-  // (e.g. the DECOUPLE-02 change from `()` to `(pi: ExtensionAPI)`).
-  const buildLoopDepsIdx = autoSrc.indexOf("function buildLoopDeps(");
-  assert.ok(buildLoopDepsIdx > 0, "buildLoopDeps function should exist");
-
-  const afterBuild = autoSrc.slice(buildLoopDepsIdx);
-  assert.ok(
-    afterBuild.includes("rebuildState,") || afterBuild.includes("rebuildState:"),
-    "buildLoopDeps should include rebuildState in the returned deps object",
-  );
-});
-
-// ─── Functional test: completed-units.json reset ─────────────────────────────
-
-test("completed-units.json is cleared on milestone transition (functional)", () => {
+test("milestone transition archives completed units and rebuilds state", async () => {
   const tempDir = realpathSync(mkdtempSync(join(tmpdir(), "gsd-cu-reset-")));
+  const calls: string[] = [];
   try {
-    // Create .gsd directory with a populated completed-units.json
     const gsdDir = join(tempDir, ".gsd");
     mkdirSync(gsdDir, { recursive: true });
 
@@ -116,16 +32,90 @@ test("completed-units.json is cleared on milestone transition (functional)", () 
     ];
     writeFileSync(completedKeysPath, JSON.stringify(staleEntries, null, 2));
 
-    // Verify stale entries exist
-    const before = JSON.parse(readFileSync(completedKeysPath, "utf-8"));
-    assert.equal(before.length, 4, "Should have 4 stale entries before reset");
+    const s = new AutoSession();
+    s.basePath = tempDir;
+    s.originalBasePath = tempDir;
+    s.currentMilestoneId = "M001";
+    s.unitDispatchCount.set("old", 1);
+    s.unitRecoveryCount.set("old", 1);
+    s.unitLifetimeDispatches.set("old", 1);
 
-    // Simulate what phases.ts does: write empty array
-    writeFileSync(completedKeysPath, JSON.stringify([], null, 2));
+    const state = {
+      phase: "planning",
+      activeMilestone: { id: "M002", title: "Next" },
+      activeSlice: null,
+      activeTask: null,
+      recentDecisions: [],
+      blockers: [],
+      nextAction: "Plan M002",
+      registry: [
+        { id: "M001", title: "Done", status: "complete" },
+        { id: "M002", title: "Next", status: "active" },
+      ],
+    };
 
-    // Verify reset
+    const result = await runPreDispatch({
+      ctx: { ui: { notify() {} } },
+      pi: {},
+      s,
+      prefs: undefined,
+      iteration: 1,
+      flowId: "test-flow",
+      nextSeq: () => 1,
+      deps: {
+        checkResourcesStale: () => null,
+        invalidateAllCaches: () => calls.push("invalidate"),
+        preDispatchHealthGate: async () => ({ proceed: true, fixesApplied: [] }),
+        syncProjectRootToWorktree: () => {},
+        deriveState: async () => state,
+        syncCmuxSidebar: () => {},
+        preflightCleanRoot: () => ({ ok: true, stashPushed: false }),
+        postflightPopStash: () => ({ ok: true, needsManualRecovery: false }),
+        resolver: {
+          mergeAndExit: () => calls.push("merge"),
+        },
+        lifecycle: {
+          enterMilestone: (mid: string) => {
+            calls.push(`enter:${mid}`);
+            return { ok: true, mode: "worktree", path: `/wt/${mid}` };
+          },
+          exitMilestone: (mid: string, opts: { merge: boolean }) => {
+            calls.push(opts.merge ? `merge:${mid}` : `exit:${mid}`);
+            return { ok: true, merged: opts.merge, codeFilesChanged: false };
+          },
+        },
+        sendDesktopNotification: () => {},
+        logCmuxEvent: () => {},
+        getIsolationMode: () => "none",
+        captureIntegrationBranch: () => {},
+        pruneQueueOrder: (_base: string, pending: string[]) => calls.push(`prune:${pending.join(",")}`),
+        rebuildState: async () => calls.push("rebuild"),
+        setActiveMilestoneId: (_base: string, mid: string) => calls.push(`active:${mid}`),
+        reconcileMergeState: () => "clean",
+        emitJournalEvent: () => {},
+        stopAuto: async () => {},
+        pauseAuto: async () => {},
+        closeoutUnit: async () => {},
+        buildSnapshotOpts: () => ({}),
+      },
+    } as any, {
+      recentUnits: [{ key: "stale" }],
+      stuckRecoveryAttempts: 2,
+      consecutiveFinalizeTimeouts: 0,
+    });
+
+    assert.equal(result.action, "next");
+    assert.equal(s.currentMilestoneId, "M002");
+    assert.equal(s.unitDispatchCount.size, 0);
+    assert.equal(s.unitRecoveryCount.size, 0);
+    assert.equal(s.unitLifetimeDispatches.size, 0);
+    assert.ok(existsSync(join(gsdDir, "completed-units-M001.json")));
     const after = JSON.parse(readFileSync(completedKeysPath, "utf-8"));
-    assert.deepEqual(after, [], "completed-units.json should be empty after milestone transition");
+    assert.deepEqual(after, []);
+    assert.ok(
+      calls.indexOf("prune:M002") < calls.indexOf("rebuild"),
+      `expected prune before rebuild, got ${calls.join(" > ")}`,
+    );
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

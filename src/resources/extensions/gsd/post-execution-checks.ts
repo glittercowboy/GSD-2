@@ -47,6 +47,46 @@ export interface PostExecutionResult {
 // ─── Import Resolution Check ─────────────────────────────────────────────────
 
 /**
+ * Replace the contents of single- and double-quoted string literals on a single
+ * source line with spaces so import patterns do not match text inside strings.
+ * Template-literal spans are handled separately via the inTemplateLiteral flag.
+ */
+function stripStringLiterals(line: string): string {
+  let result = "";
+  let i = 0;
+
+  while (i < line.length) {
+    const ch = line[i];
+
+    if (ch === '"' || ch === "'") {
+      result += ch;
+      i++;
+
+      while (i < line.length) {
+        const c = line[i];
+
+        if (c === "\\" && i + 1 < line.length) {
+          result += "  ";
+          i += 2;
+        } else if (c === ch) {
+          result += ch;
+          i++;
+          break;
+        } else {
+          result += " ";
+          i++;
+        }
+      }
+    } else {
+      result += ch;
+      i++;
+    }
+  }
+
+  return result;
+}
+
+/**
  * Extract relative import paths from TypeScript/JavaScript source code.
  * Returns array of { importPath, lineNum } for relative imports.
  */
@@ -62,13 +102,22 @@ export function extractRelativeImports(
   //   import './path'
   //   require('./path')
   //   require("../path")
-  const importPattern = /(?:import\s+(?:.*?\s+from\s+)?|require\s*\(\s*)(['"])(\.\.?\/[^'"]+)\1/g;
+  const importPattern = /(?:^|[;{}]\s*)import\s+(?:.*?\s+from\s+)?(['"])(\.\.?\/[^'"]+)\1/g;
+  const requirePattern = /require\s*\(\s*(['"])(\.\.?\/[^'"]+)\1/g;
 
   // Track if we're inside a block comment
   let inBlockComment = false;
+  let inTemplateLiteral = false;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+
+    if (inTemplateLiteral) {
+      if ((line.match(/(?<!\\)`/g) ?? []).length % 2 === 1) {
+        inTemplateLiteral = false;
+      }
+      continue;
+    }
 
     // Handle block comment boundaries
     if (inBlockComment) {
@@ -101,10 +150,22 @@ export function extractRelativeImports(
 
     // Reset lastIndex for each line
     importPattern.lastIndex = 0;
+    requirePattern.lastIndex = 0;
+
+    const strippedLine = stripStringLiterals(line);
 
     while ((match = importPattern.exec(line)) !== null) {
+      const importOffset = match[0].indexOf("import");
+      const importStart = match.index + importOffset;
+      if (
+        strippedLine.slice(importStart, importStart + "import".length) !==
+        "import"
+      ) {
+        continue;
+      }
+
       // Check if this match is after a // comment marker on the same line
-      const beforeMatch = line.substring(0, match.index);
+      const beforeMatch = strippedLine.substring(0, match.index);
       if (beforeMatch.includes("//")) {
         continue;
       }
@@ -113,6 +174,30 @@ export function extractRelativeImports(
         importPath: match[2],
         lineNum: i + 1,
       });
+    }
+
+    while ((match = requirePattern.exec(line)) !== null) {
+      if (
+        strippedLine.slice(match.index, match.index + "require".length) !==
+        "require"
+      ) {
+        continue;
+      }
+
+      // Check if this match is after a // comment marker on the same line
+      const beforeMatch = strippedLine.substring(0, match.index);
+      if (beforeMatch.includes("//")) {
+        continue;
+      }
+
+      imports.push({
+        importPath: match[2],
+        lineNum: i + 1,
+      });
+    }
+
+    if ((strippedLine.match(/(?<!\\)`/g) ?? []).length % 2 === 1) {
+      inTemplateLiteral = true;
     }
   }
 
@@ -159,16 +244,6 @@ export function resolveImportPath(
       ".woff", ".woff2", ".ttf", ".otf", ".eot",
     ]);
     const runtimeFallbackExtensions = new Set([".js", ".jsx", ".mjs", ".cjs"]);
-    const dottedStemFallbackExtensions = new Set([".server", ".client", ".webhook"]);
-
-    if (
-      explicitExt !== "" &&
-      !runtimeFallbackExtensions.has(explicitExt) &&
-      !nonFallbackExtensions.has(explicitExt) &&
-      !dottedStemFallbackExtensions.has(explicitExt)
-    ) {
-      return { exists: false, resolvedPath: null };
-    }
 
     if (nonFallbackExtensions.has(explicitExt) && !runtimeFallbackExtensions.has(explicitExt)) {
       return { exists: false, resolvedPath: null };

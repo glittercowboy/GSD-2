@@ -1,65 +1,39 @@
-import test from "node:test"
+import test, { after } from "node:test"
 import assert from "node:assert/strict"
-import { readFileSync } from "node:fs"
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-// Regression for #4470: /gsd onboarding re-entry used to replay the @clack
-// first-run wizard, which wedged the TUI (clack takes over raw stdin and
-// pauses it on teardown) and rendered a duplicate intro/logo header.
-//
-// The fix replaces re-entry with a ctx.ui.select setup hub owned by the TUI.
-// These assertions guarantee the handler does NOT invoke runOnboarding (the
-// clack wizard) and therefore cannot re-render the intro/logo or wedge stdin.
+const gsdHome = mkdtempSync(join(tmpdir(), "gsd-onboarding-reentry-"))
+process.env.GSD_HOME = gsdHome
+const { handleOnboarding } = await import("../resources/extensions/gsd/commands/handlers/onboarding.ts")
 
-test("re-entry onboarding handler does not replay the clack wizard", () => {
-  const handlerSource = readFileSync(
-    join(
-      import.meta.dirname,
-      "..",
-      "resources",
-      "extensions",
-      "gsd",
-      "commands",
-      "handlers",
-      "onboarding.ts",
-    ),
-    "utf-8",
-  )
+after(() => rmSync(gsdHome, { recursive: true, force: true }))
 
-  assert.doesNotMatch(
-    handlerSource,
-    /\brunOnboarding\s*\(/,
-    "re-entry handler must not call runOnboarding — that path owns stdin via @clack and wedges the TUI",
-  )
-  assert.doesNotMatch(
-    handlerSource,
-    /from\s+["'][^"']*\/onboarding(\.js)?["']/,
-    "re-entry handler must not import the first-run wizard module",
-  )
-  assert.match(
-    handlerSource,
-    /ctx\.ui\.select\(/,
-    "re-entry handler must route through ctx.ui.select (the setup hub)",
-  )
-})
+// Regression for #4470: /gsd onboarding re-entry must route through the
+// TUI-owned setup hub instead of replaying the first-run clack wizard.
 
-test("first-run wizard still supports showIntro option for boot-time caller", () => {
-  // src/onboarding.ts is still used by the first-run boot path in src/cli.ts;
-  // its showIntro option stays so boot can suppress a duplicate intro when
-  // another surface has already rendered the logo.
-  const onboardingSource = readFileSync(
-    join(import.meta.dirname, "..", "onboarding.ts"),
-    "utf-8",
-  )
+test("re-entry onboarding handler opens the TUI setup hub and routes selected steps", async () => {
+  const notifications: Array<{ message: string; level: string }> = []
+  const selections: Array<{ message: string; options: string[] }> = []
+  const ctx = {
+    ui: {
+      notify(message: string, level: string) {
+        notifications.push({ message, level })
+      },
+      async select(message: string, options: string[]) {
+        selections.push({ message, options })
+        return options.find((option) => option.includes("LLM")) ?? options[0]
+      },
+    },
+  }
 
-  assert.match(
-    onboardingSource,
-    /interface RunOnboardingOptions[\s\S]*showIntro\?: boolean/,
-    "runOnboarding should accept a showIntro option",
-  )
-  assert.match(
-    onboardingSource,
-    /if \(opts\.showIntro !== false\)/,
-    "runOnboarding should gate logo/intro rendering behind showIntro",
-  )
+  await handleOnboarding("", ctx as any)
+
+  assert.equal(selections.length, 1)
+  assert.equal(selections[0].message, "GSD Setup — pick a step to configure")
+  assert.ok(selections[0].options.some((option) => option.includes("LLM")))
+  assert.equal(notifications.length, 1)
+  assert.match(notifications[0].message, /LLM provider setup/)
+  assert.equal(notifications[0].level, "info")
 })

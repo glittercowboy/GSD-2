@@ -1,3 +1,5 @@
+// Project/App: GSD-2
+// File Purpose: Pure budget and context guard decisions for GSD auto-mode.
 /**
  * Budget alert level tracking and enforcement for auto-mode.
  * Pure functions — no module state or side effects.
@@ -29,4 +31,27 @@ export function getBudgetEnforcementAction(
   if (enforcement === "halt") return "halt";
   if (enforcement === "pause") return "pause";
   return "warn";
+}
+
+export function getUnitCostSpikeAction(
+  unitCostUsd: number,
+  rollingAvgUsd: number,
+  multiplier = 3.0,
+): "none" | "pause" {
+  if (!Number.isFinite(unitCostUsd) || unitCostUsd < 0) return "none";
+  if (!Number.isFinite(rollingAvgUsd) || rollingAvgUsd <= 0) return "none";
+  if (!Number.isFinite(multiplier) || multiplier <= 0) return "none";
+  return unitCostUsd >= (rollingAvgUsd * multiplier) ? "pause" : "none";
+}
+
+export function getContextPauseAction(
+  contextPercent: number | null | undefined,
+  thresholdPercent: number,
+): "none" | "pause" {
+  if (!Number.isFinite(contextPercent) || !Number.isFinite(thresholdPercent)) return "none";
+  if (contextPercent === null || contextPercent === undefined || thresholdPercent <= 0) return "none";
+
+  const usage = contextPercent <= 1 ? contextPercent * 100 : contextPercent;
+  const threshold = thresholdPercent <= 1 ? thresholdPercent * 100 : thresholdPercent;
+  return usage >= threshold ? "pause" : "none";
 }

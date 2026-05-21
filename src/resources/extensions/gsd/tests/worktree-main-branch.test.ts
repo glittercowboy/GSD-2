@@ -1,25 +1,27 @@
-/**
- * Regression test for #3461: createAutoWorktree must use git.main_branch
- * preference when META.json integration branch is absent.
- */
+// GSD-2 — Auto-worktree main branch preference regression tests.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 
-test("auto-worktree.ts includes main_branch preference in startPoint fallback (#3461)", () => {
-  const src = readFileSync(
-    join(import.meta.dirname, "..", "auto-worktree.ts"),
-    "utf-8",
+import { _resolveAutoWorktreeStartPoint } from "../auto-worktree.ts";
+
+test("auto-worktree start point prefers milestone integration branch", () => {
+  const startPoint = _resolveAutoWorktreeStartPoint(
+    "release/integration",
+    "dev",
+    () => true,
   );
-  // The fix adds gitPrefs?.main_branch to the startPoint fallback chain
-  assert.ok(
-    src.includes("gitPrefs?.main_branch") || src.includes("prefs.main_branch"),
-    "createAutoWorktree must check git.main_branch preference before falling back to nativeDetectMainBranch",
+
+  assert.equal(startPoint, "release/integration");
+});
+
+test("auto-worktree start point uses git.main_branch only when it exists", () => {
+  assert.equal(
+    _resolveAutoWorktreeStartPoint(null, "dev", (branch) => branch === "dev"),
+    "dev",
   );
-  assert.match(
-    src,
-    /nativeBranchExists\(basePath,\s*gitPrefs\.main_branch\)/,
-    "createAutoWorktree must validate git.main_branch exists before using it",
+  assert.equal(
+    _resolveAutoWorktreeStartPoint(null, "stale", () => false),
+    undefined,
   );
 });

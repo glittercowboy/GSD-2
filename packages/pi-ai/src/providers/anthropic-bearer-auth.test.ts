@@ -1,32 +1,36 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import type { Model } from "../types.js";
+import { buildAnthropicClientOptions } from "./anthropic.js";
 
-function resolveSourcePath(fileName: string): string {
-	const localPath = join(import.meta.dirname, fileName);
-	if (existsSync(localPath)) return localPath;
-	return join(import.meta.dirname, "..", "..", "src", "providers", fileName);
+function anthropicModel(overrides: Partial<Model<"anthropic-messages">> = {}): Model<"anthropic-messages"> {
+	return {
+		id: "claude-sonnet-4",
+		name: "Claude Sonnet 4",
+		api: "anthropic-messages",
+		provider: "anthropic",
+		baseUrl: "https://api.anthropic.com",
+		reasoning: true,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 200000,
+		maxTokens: 8192,
+		...overrides,
+	};
 }
-
-const source = readFileSync(resolveSourcePath("anthropic.ts"), "utf-8");
 
 describe("anthropic bearer auth for custom providers (#3874)", () => {
 	it("treats Bearer Authorization headers as authToken-capable providers", () => {
-		assert.match(
-			source,
-			/usesAnthropicBearerAuth\(model\.provider\) \|\| hasBearerAuthorizationHeader\(model\)/,
-			"custom providers with Authorization headers should opt into bearer auth",
+		const options = buildAnthropicClientOptions(
+			anthropicModel({
+				provider: "custom-anthropic-compatible",
+				headers: { Authorization: "Bearer upstream-token" },
+			}),
+			"request-token",
+			false,
 		);
-		assert.match(
-			source,
-			/apiKey: usesBearerAuth \? null : apiKey/,
-			"bearer-auth providers should not send x-api-key",
-		);
-		assert.match(
-			source,
-			/authToken: usesBearerAuth \? apiKey : undefined/,
-			"bearer-auth providers should send authToken instead",
-		);
+
+		assert.equal(options.apiKey, null, "custom providers with Authorization headers should not send x-api-key");
+		assert.equal(options.authToken, "request-token", "custom providers with Authorization headers should use authToken");
 	});
 });

@@ -9,46 +9,42 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
-const completeTaskSrc = readFileSync(
-  join(__dirname, '..', 'tools', 'complete-task.ts'),
-  'utf-8',
-);
-const roadmapSlicesSrc = readFileSync(
-  join(__dirname, '..', 'roadmap-slices.ts'),
-  'utf-8',
-);
+import { normalizeListParam } from "../tools/complete-task.ts";
+import { parseRoadmapSlices } from "../roadmap-slices.ts";
 
 describe('complete-task normalizeListParam (#3692)', () => {
-  test('normalizeListParam function is defined', () => {
-    assert.match(completeTaskSrc, /function normalizeListParam\(/,
-      'normalizeListParam function should be defined in complete-task.ts');
+  test('normalizes newline-delimited key file strings', () => {
+    assert.deepEqual(
+      normalizeListParam("- src/app.ts\n* tests/app.test.ts\n  docs/notes.md"),
+      ["src/app.ts", "tests/app.test.ts", "docs/notes.md"],
+    );
   });
 
-  test('normalizeListParam is applied to keyFiles', () => {
-    assert.match(completeTaskSrc, /normalizeListParam\(params\.keyFiles\)/,
-      'normalizeListParam should be applied to keyFiles');
-  });
-
-  test('normalizeListParam is applied to keyDecisions', () => {
-    assert.match(completeTaskSrc, /normalizeListParam\(params\.keyDecisions\)/,
-      'normalizeListParam should be applied to keyDecisions');
+  test('normalizes arrays and empty values', () => {
+    assert.deepEqual(normalizeListParam(["api", 42]), ["api", "42"]);
+    assert.deepEqual(normalizeListParam("   "), []);
+    assert.deepEqual(normalizeListParam(undefined), []);
   });
 });
 
 describe('roadmap-slices depColumnIndex detection (#3692)', () => {
-  test('depColumnIndex is detected from header row', () => {
-    assert.match(roadmapSlicesSrc, /depColumnIndex/,
-      'depColumnIndex variable should exist in roadmap-slices.ts');
-    assert.match(roadmapSlicesSrc, /headerCells/,
-      'headerCells should be parsed from the header row');
-    assert.match(roadmapSlicesSrc, /depends|deps|depend/i,
-      'header detection should match depends/deps/depend');
+  test('parses dependencies from the dependency table column only', () => {
+    const slices = parseRoadmapSlices([
+      "## Slices",
+      "| ID | Title | Risk | Depends | Status |",
+      "| -- | ----- | ---- | ------- | ------ |",
+      "| S01 | Foundation | low | none | Done |",
+      "| S02 | Title mentions S01 but no dependency | medium | none | Pending |",
+      "| S03 | Integration | high | S01, S02 | Pending |",
+    ].join("\n"));
+
+    assert.deepEqual(
+      slices.map((slice) => ({ id: slice.id, depends: slice.depends })),
+      [
+        { id: "S01", depends: [] },
+        { id: "S02", depends: [] },
+        { id: "S03", depends: ["S01", "S02"] },
+      ],
+    );
   });
 });

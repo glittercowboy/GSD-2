@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -361,74 +361,95 @@ test("resolveModelId: bare ID with claude-code as only provider still resolves",
 
 // ─── selectAndApplyModel verbose-gating tests ──────────────────────────
 
-test("model change notify in selectAndApplyModel is gated behind verbose flag", () => {
-  // The Model [phase] [tier] notification should only fire when verbose=true.
-  // The dashboard header already shows the active model, so the notification
-  // is redundant noise during auto-mode (#3719).
-  const gsdDir = join(__dirname, "..");
-  const src = readFileSync(join(gsdDir, "auto-model-selection.ts"), "utf-8");
+test("model change notify in selectAndApplyModel is gated behind verbose flag", async (t) => {
+  const originalCwd = process.cwd();
+  const tempProject = makeTempDir("gsd-routing-verbose-project-");
+  const notifications: Array<{ message: string; level: string }> = [];
+  t.after(() => {
+    process.chdir(originalCwd);
+    rmSync(tempProject, { recursive: true, force: true });
+  });
 
-  // Find the block where setModel succeeds (appliedModel = model) and
-  // verify notify is inside an `if (verbose)` guard.
-  const setModelBlock = src.match(
-    /const ok = await pi\.setModel\(model[\s\S]*?appliedModel = model;([\s\S]*?)break;/,
+  mkdirSync(join(tempProject, ".gsd"), { recursive: true });
+  writeFileSync(
+    join(tempProject, ".gsd", "PREFERENCES.md"),
+    ["---", "models:", "  planning: claude-sonnet-4-6", "---"].join("\n"),
+    "utf-8",
   );
-  assert.ok(setModelBlock, "should find the setModel success block");
+  process.chdir(tempProject);
 
-  const blockBody = setModelBlock![1];
-  // The notify call must be inside an if (verbose) block
-  assert.ok(
-    blockBody.includes("if (verbose)"),
-    "Model change ctx.ui.notify must be gated behind if (verbose) to avoid auto-mode notification noise",
+  await selectAndApplyModel(
+    {
+      modelRegistry: { getAvailable: () => [{ id: "claude-sonnet-4-6", provider: "anthropic", api: "anthropic-messages" }] },
+      sessionManager: { getSessionId: () => "test-session" },
+      ui: { notify: (message: string, level: string) => notifications.push({ message, level }) },
+      model: { provider: "anthropic", id: "claude-sonnet-4-6", api: "anthropic-messages" },
+    } as any,
+    {
+      setModel: async () => true,
+      emitBeforeModelSelect: async () => undefined,
+      getActiveTools: () => [],
+      emitAdjustToolSet: async () => undefined,
+      setActiveTools: () => {},
+    } as any,
+    "plan-slice",
+    "M001/S01",
+    tempProject,
+    undefined,
+    false,
+    { provider: "anthropic", id: "claude-sonnet-4-6" },
+    undefined,
+    true,
   );
-  assert.ok(
-    blockBody.includes("ctx.ui.notify"),
-    "notify call should still exist (just verbose-gated)",
-  );
+
+  assert.deepEqual(notifications, []);
 });
 
-test("model policy resolves candidates from the policy-eligible pool", () => {
-  const src = readFileSync(join(__dirname, "..", "auto-model-selection.ts"), "utf-8");
-  assert.ok(
-    src.includes("const resolutionPool = uokFlags.modelPolicy ? routingEligibleModels : availableModels"),
-    "selectAndApplyModel should resolve model IDs against policy-eligible models when model policy is enabled",
-  );
-});
+test("selectAndApplyModel re-applies captured thinking level after setModel success", async (t) => {
+  const originalCwd = process.cwd();
+  const tempProject = makeTempDir("gsd-routing-thinking-project-");
+  const thinkingLevels: unknown[] = [];
+  t.after(() => {
+    process.chdir(originalCwd);
+    rmSync(tempProject, { recursive: true, force: true });
+  });
 
-test("model policy receives task metadata for requirement-vector decisions", () => {
-  const src = readFileSync(join(__dirname, "..", "auto-model-selection.ts"), "utf-8");
-  assert.ok(
-    src.includes("taskMetadata: taskMetadataForPolicy"),
-    "applyModelPolicyFilter should receive task metadata so requirement vectors are unit-aware",
+  mkdirSync(join(tempProject, ".gsd"), { recursive: true });
+  writeFileSync(
+    join(tempProject, ".gsd", "PREFERENCES.md"),
+    ["---", "models:", "  planning: claude-sonnet-4-6", "---"].join("\n"),
+    "utf-8",
   );
-  assert.ok(
-    src.includes("extractTaskMetadata(unitId, basePath)"),
-    "execute-task dispatch should derive metadata before policy filtering",
-  );
-});
+  process.chdir(tempProject);
 
-test("dynamic routing passes provider-qualified model keys to the router", () => {
-  const src = readFileSync(join(__dirname, "..", "auto-model-selection.ts"), "utf-8");
-  assert.ok(
-    src.includes("routingEligibleModels.map(m => `${m.provider}/${m.id}`)"),
-    "selectAndApplyModel should preserve provider prefixes for dynamic routing candidates",
+  await selectAndApplyModel(
+    {
+      modelRegistry: { getAvailable: () => [{ id: "claude-sonnet-4-6", provider: "anthropic", api: "anthropic-messages" }] },
+      sessionManager: { getSessionId: () => "test-session" },
+      ui: { notify: () => {} },
+      model: { provider: "anthropic", id: "claude-sonnet-4-6", api: "anthropic-messages" },
+    } as any,
+    {
+      setModel: async () => true,
+      setThinkingLevel: (level: unknown) => { thinkingLevels.push(level); },
+      emitBeforeModelSelect: async () => undefined,
+      getActiveTools: () => [],
+      emitAdjustToolSet: async () => undefined,
+      setActiveTools: () => {},
+    } as any,
+    "plan-slice",
+    "M001/S01",
+    tempProject,
+    undefined,
+    false,
+    { provider: "anthropic", id: "claude-sonnet-4-6" },
+    undefined,
+    true,
+    undefined,
+    { effort: "high" } as any,
   );
-  assert.ok(
-    !src.includes("routingEligibleModels.map(m => m.id)"),
-    "selectAndApplyModel must not strip providers before resolving tier_models",
-  );
-});
 
-test("selectAndApplyModel re-applies captured thinking level after setModel success", () => {
-  const src = readFileSync(join(__dirname, "..", "auto-model-selection.ts"), "utf-8");
-  assert.ok(
-    src.includes("autoModeStartThinkingLevel?: ReturnType<ExtensionAPI[\"getThinkingLevel\"]> | null"),
-    "selectAndApplyModel should accept an autoModeStartThinkingLevel parameter",
-  );
-  assert.ok(
-    src.includes("reapplyThinkingLevel(pi, autoModeStartThinkingLevel)"),
-    "selectAndApplyModel should re-apply captured thinking level after model changes",
-  );
+  assert.deepEqual(thinkingLevels, [{ effort: "high" }]);
 });
 
 test("resolveModelId: anthropic wins over claude-code when session provider is not claude-code", () => {

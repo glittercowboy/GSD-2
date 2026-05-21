@@ -1,15 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 
 import {
   clearSessionModelOverride,
   getSessionModelOverride,
   setSessionModelOverride,
 } from "../session-model-override.js";
-
-const phasesSource = readFileSync(join(import.meta.dirname, "..", "auto", "phases.ts"), "utf-8");
 
 test("setSessionModelOverride stores provider/model for the session", () => {
   const sessionId = `session-override-${Date.now()}`;
@@ -27,9 +23,18 @@ test("clearSessionModelOverride removes the session override", () => {
   assert.equal(getSessionModelOverride(sessionId), undefined);
 });
 
-test("auto dispatch threads manual session model override into selectAndApplyModel", () => {
-  assert.ok(
-    phasesSource.includes("s.manualSessionModelOverride"),
-    "auto/phases.ts should pass s.manualSessionModelOverride into selectAndApplyModel",
-  );
+test("session model overrides are isolated by session id", () => {
+  const first = `session-first-${Date.now()}`;
+  const second = `session-second-${Date.now()}`;
+  setSessionModelOverride(first, { provider: "openai-codex", id: "gpt-5.4" });
+  setSessionModelOverride(second, { provider: "anthropic", id: "claude-sonnet-4-6" });
+
+  assert.deepEqual(getSessionModelOverride(first), {
+    provider: "openai-codex",
+    id: "gpt-5.4",
+  });
+  assert.deepEqual(getSessionModelOverride(second), {
+    provider: "anthropic",
+    id: "claude-sonnet-4-6",
+  });
 });

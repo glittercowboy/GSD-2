@@ -1,36 +1,45 @@
 /**
- * stale-lockfile-recovery.test.ts — #3668
- *
- * Verify that session-lock.ts contains pre-flight stale lock cleanup logic
- * that removes orphaned lock directories when the owning PID is dead,
- * preventing the 30-min stale window from blocking /gsd after crashes.
+ * stale-lockfile-recovery.test.ts — #3668.
  */
 
-import { describe, test } from "node:test";
+import { describe, test, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const sourceFile = join(__dirname, "..", "session-lock.ts");
+import { acquireSessionLock, releaseSessionLock } from "../session-lock.ts";
+
+let tempBase: string | null = null;
+
+afterEach(() => {
+  if (tempBase) {
+    releaseSessionLock(tempBase);
+    rmSync(tempBase, { recursive: true, force: true });
+  }
+  tempBase = null;
+});
 
 describe("stale lockfile auto-recovery (#3668)", () => {
-  const source = readFileSync(sourceFile, "utf-8");
+  test("acquireSessionLock removes an orphan proper-lockfile directory before acquiring", () => {
+    tempBase = mkdtempSync(join(tmpdir(), "gsd-stale-lock-"));
+    const gsdDir = join(tempBase, ".gsd");
+    mkdirSync(join(gsdDir, "auto.lock.lock"), { recursive: true });
+    writeFileSync(
+      join(gsdDir, "auto.lock"),
+      JSON.stringify({
+        pid: 999_999_999,
+        startedAt: new Date().toISOString(),
+        unitType: "execute-task",
+        unitId: "M001/S01/T01",
+        unitStartedAt: new Date().toISOString(),
+      }),
+      "utf-8",
+    );
 
-  test("checks for orphan lock with isPidAlive", () => {
-    assert.match(source, /isPidAlive\(existingData\.pid\)/);
-  });
+    const result = acquireSessionLock(tempBase);
 
-  test("removes stale lock directory with rmSync", () => {
-    assert.match(source, /rmSync\(lockDir,\s*\{\s*recursive:\s*true/);
-  });
-
-  test("references issue #3218 in pre-flight cleanup comment", () => {
-    assert.match(source, /#3218.*Pre-flight stale lock cleanup/);
-  });
-
-  test("provides actionable rm -rf workaround in error message", () => {
-    assert.match(source, /rm\s+-rf/);
+    assert.equal(result.acquired, true);
+    assert.equal(existsSync(join(gsdDir, "auto.lock.lock")), true, "new active lock directory is present");
   });
 });

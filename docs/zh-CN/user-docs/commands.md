@@ -27,16 +27,40 @@
 | `/gsd forensics` | 全访问 GSD 调试器：用于分析自动模式失败，支持结构化异常检测、单元追踪和 LLM 引导的根因分析 |
 | `/gsd cleanup` | 清理 GSD 状态文件和过期 worktrees |
 | `/gsd visualize` | 打开工作流可视化器（进度、依赖、指标、时间线） |
+| `/gsd brief <mode> [topic] [--slides]` | 生成自包含的可视化 HTML 简报。模式：`diagram`、`plan`、`diff`、`recap`、`table`、`slides`。 |
 | `/gsd export --html` | 为当前或已完成的 milestone 生成自包含 HTML 报告 |
 | `/gsd export --html --all` | 一次性为所有 milestones 生成回顾报告 |
 | `/gsd update` | 在会话内更新到最新版本 |
-| `/gsd knowledge` | 添加持久化项目知识（规则、模式或经验） |
+| `/gsd knowledge` | 添加持久化项目知识。Rules 仍手动维护在 `KNOWLEDGE.md` 中；patterns 和 lessons 由 memories 承载，并投影回文件。 |
 | `/gsd fast` | 为支持的模型切换 service tier（优先级 API 路由） |
 | `/gsd rate` | 评价上一个单元所用模型层级（over / ok / under），帮助改进自适应路由 |
 | `/gsd changelog` | 查看分类后的发行说明 |
 | `/gsd logs` | 浏览活动日志、调试日志和指标 |
 | `/gsd remote` | 控制远程自动模式 |
 | `/gsd help` | 查看所有 GSD 子命令的分类参考及说明 |
+
+## Visual Briefs
+
+`/gsd brief` 会让 agent 收集必要的证据，并生成一个响应式的自包含 HTML 文件，用于可视化审查、规划、回顾或演示。用法：
+
+```text
+/gsd brief <diagram|plan|diff|recap|table|slides> [topic] [--slides]
+```
+
+模式说明：
+
+| 模式 | 适用场景 |
+|------|----------|
+| `diagram` | 系统架构、流程、状态、数据或过程图。若第一个参数不是已知模式，GSD 会将整个输入作为图表主题处理。 |
+| `plan` | 可视化实现计划，包含范围、可能涉及的文件、边缘情况、风险和测试要点。 |
+| `diff` | 对当前已暂存和未暂存的变更进行可视化审查。若未提供主题，默认审查当前仓库变更。 |
+| `recap` | 用于上下文切换的项目概览。若未提供主题，默认回顾当前项目。 |
+| `table` | 以可读的 HTML 表格形式呈现密集的对比、审计、矩阵或状态报告。 |
+| `slides` | 生成简洁的可视化幻灯片。对其他模式加上 `--slides` 标志也会请求生成幻灯片输出。 |
+
+生成的文件保存在 GSD agent 目录的 `diagrams/` 文件夹下，文件名采用描述性的 kebab-case `.html` 格式。文件为完全自包含的 HTML（内嵌 CSS，使用少量 JavaScript）；图表模式可能使用 Mermaid 等 CDN 库，但即使 CDN 加载失败，也需保留有用的文字内容。
+
+文件写入后，GSD 会尝试使用本地平台命令打开浏览器（macOS 使用 `open`，Linux 使用 `xdg-open`，Windows 使用 `cmd /c start`）。若浏览器无法打开或失败，命令会输出文件的绝对路径。
 
 ## 配置与诊断
 

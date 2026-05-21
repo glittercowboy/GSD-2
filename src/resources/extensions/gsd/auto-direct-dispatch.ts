@@ -23,6 +23,7 @@ import {
   buildExecuteTaskPrompt,
   buildCompleteSlicePrompt,
   buildCompleteMilestonePrompt,
+  buildValidateMilestonePrompt,
   buildReassessRoadmapPrompt,
   buildRunUatPrompt,
   buildReplanSlicePrompt,
@@ -31,7 +32,6 @@ import { loadEffectiveGSDPreferences } from "./preferences.js";
 import type { MinimalModelRegistry } from "./context-budget.js";
 import { pauseAuto } from "./auto.js";
 import { resolveCanonicalMilestoneRoot } from "./worktree-manager.js";
-import { logWarning } from "./workflow-logger.js";
 import {
   getWorkflowTransportSupportError,
   getRequiredWorkflowToolsForAutoUnit,
@@ -208,6 +208,14 @@ export async function dispatchDirectPhase(
       break;
     }
 
+    case "validate":
+    case "validate-milestone": {
+      unitType = "validate-milestone";
+      unitId = mid;
+      prompt = await buildValidateMilestonePrompt(mid, midTitle, dispatchBase);
+      break;
+    }
+
     case "uat":
     case "run-uat": {
       // UAT targets the most recently completed slice, not the active (next
@@ -266,7 +274,7 @@ export async function dispatchDirectPhase(
 
     default:
       ctx.ui.notify(
-        `Unknown phase "${phase}". Valid phases: research, plan, execute, complete, reassess, uat, replan.`,
+        `Unknown phase "${phase}". Valid phases: research, plan, execute, complete, validate, reassess, uat, replan.`,
         "warning",
       );
       return;
@@ -281,6 +289,7 @@ export async function dispatchDirectPhase(
       unitType,
       authMode: ctx.model?.provider ? ctx.modelRegistry.getProviderAuthMode(ctx.model.provider) : undefined,
       baseUrl: ctx.model?.baseUrl,
+      activeTools: typeof pi.getActiveTools === "function" ? pi.getActiveTools() : [],
     },
   );
   if (compatibilityError) {
@@ -290,38 +299,13 @@ export async function dispatchDirectPhase(
 
   ctx.ui.notify(`Dispatching ${unitType} for ${unitId}...`, "info");
 
-  const originalCwd = process.cwd();
-
-  try {
-    // Ensure cwd matches dispatchBase BEFORE newSession() captures it. Synchronous —
-    // no awaits between chdir and newSession.
-    try {
-      if (process.cwd() !== dispatchBase) {
-        process.chdir(dispatchBase);
-      }
-    } catch (err) {
-      const msg = `Failed to chdir before direct-dispatch newSession (basePath: ${dispatchBase}): ${err instanceof Error ? err.message : String(err)}`;
-      logWarning("engine", msg, { file: "auto-direct-dispatch.ts", basePath: dispatchBase, error: err instanceof Error ? err.message : String(err) });
-      ctx.ui.notify(`${msg}. Cancelling dispatch to avoid running in the wrong directory.`, "error");
-      return;
-    }
-
-    const result = await ctx.newSession();
-    if (result.cancelled) {
-      ctx.ui.notify("Session creation cancelled.", "warning");
-      return;
-    }
-    pi.sendMessage(
-      { customType: "gsd-dispatch", content: prompt, display: false },
-      { triggerTurn: true },
-    );
-  } finally {
-    try {
-      if (process.cwd() !== originalCwd) {
-        process.chdir(originalCwd);
-      }
-    } catch (err) {
-      logWarning("engine", `Failed to restore cwd after direct dispatch: ${err instanceof Error ? err.message : String(err)}`, { file: "auto-direct-dispatch.ts", basePath: originalCwd });
-    }
+  const result = await ctx.newSession({ workspaceRoot: dispatchBase });
+  if (result.cancelled) {
+    ctx.ui.notify("Session creation cancelled.", "warning");
+    return;
   }
+  pi.sendMessage(
+    { customType: "gsd-dispatch", content: prompt, display: false },
+    { triggerTurn: true },
+  );
 }

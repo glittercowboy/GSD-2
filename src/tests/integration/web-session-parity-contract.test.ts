@@ -7,7 +7,6 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { PassThrough } from "node:stream"
 import { StringDecoder } from "node:string_decoder"
-import type { RpcSessionState } from "@gsd-build/contracts"
 
 const repoRoot = process.cwd()
 const bridge = await import("../../web/bridge-service.ts")
@@ -15,6 +14,8 @@ const onboarding = await import("../../web/onboarding-service.ts")
 const browserRoute = await import("../../../web/app/api/session/browser/route.ts")
 const manageRoute = await import("../../../web/app/api/session/manage/route.ts")
 const gitRoute = await import("../../../web/app/api/git/route.ts")
+const commandSurfaceContract = await import("../../../web/lib/command-surface-contract.ts")
+const { GSDWorkspaceStore } = await import("../../../web/lib/gsd-workspace-store.tsx")
 const { AuthStorage } = await import("@gsd/pi-coding-agent")
 
 class FakeRpcChild extends EventEmitter {
@@ -635,58 +636,54 @@ test("/api/git exposes an explicit not-a-repo state instead of failing silently"
   })
 })
 
-test("browser session, settings, and git surfaces keep inspectable browse/manage/state markers on the shared surface", () => {
-  const contractSource = readFileSync(resolve(import.meta.dirname, "../../../web/lib/command-surface-contract.ts"), "utf8")
-  const storeSource = readFileSync(resolve(import.meta.dirname, "../../../web/lib/gsd-workspace-store.tsx"), "utf8")
-  const surfaceSource = readFileSync(resolve(import.meta.dirname, "../../../web/components/gsd/command-surface.tsx"), "utf8")
-  const sidebarSource = readFileSync(resolve(import.meta.dirname, "../../../web/components/gsd/sidebar.tsx"), "utf8")
-  const gitRouteSource = readFileSync(resolve(import.meta.dirname, "../../../web/app/api/git/route.ts"), "utf8")
+test("browser session, settings, and git surfaces keep inspectable state through contracts and store actions", () => {
+  const {
+    applyCommandSurfaceActionResult,
+    createInitialCommandSurfaceState,
+    setCommandSurfacePending,
+  } = commandSurfaceContract
 
-  const retryState: Pick<RpcSessionState, "autoRetryEnabled" | "retryInProgress" | "retryAttempt"> = {
-    autoRetryEnabled: true,
-    retryInProgress: false,
-    retryAttempt: 0,
-  }
-  assert.equal(retryState.autoRetryEnabled, true)
-  assert.equal(retryState.retryInProgress, false)
-  assert.equal(retryState.retryAttempt, 0)
+  const initial = createInitialCommandSurfaceState()
+  assert.equal(initial.gitSummary.loaded, false)
+  assert.equal(initial.sessionBrowser.loaded, false)
+  assert.equal(initial.resumeRequest.pending, false)
+  assert.equal(initial.renameRequest.pending, false)
+  assert.equal(initial.settingsRequests.autoRetry.pending, false)
 
-  assert.match(contractSource, /gitSummary:/, "command-surface-contract.ts must keep inspectable git-summary state on commandSurface")
-  assert.match(contractSource, /load_git_summary/, "command-surface-contract.ts must model git-summary loading state")
-  assert.match(contractSource, /sessionBrowser:/, "command-surface-contract.ts must keep inspectable session-browser state on commandSurface")
-  assert.match(contractSource, /resumeRequest:/, "command-surface-contract.ts must expose inspectable resume mutation state")
-  assert.match(contractSource, /renameRequest:/, "command-surface-contract.ts must expose inspectable rename mutation state")
-  assert.match(contractSource, /settingsRequests:/, "command-surface-contract.ts must expose inspectable settings mutation state")
-  assert.match(contractSource, /set_steering_mode/, "command-surface-contract.ts must model steering-mode mutations")
-  assert.match(contractSource, /set_follow_up_mode/, "command-surface-contract.ts must model follow-up-mode mutations")
-  assert.match(contractSource, /set_auto_compaction/, "command-surface-contract.ts must model auto-compaction mutations")
-  assert.match(contractSource, /set_auto_retry/, "command-surface-contract.ts must model auto-retry mutations")
-  assert.match(contractSource, /abort_retry/, "command-surface-contract.ts must model retry-cancellation mutations")
+  const pendingGit = setCommandSurfacePending(initial, "load_git_summary")
+  assert.equal(pendingGit.pendingAction, "load_git_summary")
+  assert.equal(pendingGit.gitSummary.pending, true)
 
-  assert.match(storeSource, /\/api\/git/, "gsd-workspace-store.tsx must load the current-project git summary route")
-  assert.match(storeSource, /loadGitSummary/, "gsd-workspace-store.tsx must expose a shared git-summary browser action")
-  assert.match(storeSource, /\/api\/session\/browser/, "gsd-workspace-store.tsx must load the dedicated current-project session browser route")
-  assert.match(storeSource, /\/api\/session\/manage/, "gsd-workspace-store.tsx must call the session manage route for browser renames")
-  assert.match(storeSource, /setSteeringModeFromSurface/, "gsd-workspace-store.tsx must expose a shared steering-mode browser action")
-  assert.match(storeSource, /setFollowUpModeFromSurface/, "gsd-workspace-store.tsx must expose a shared follow-up-mode browser action")
-  assert.match(storeSource, /setAutoCompactionFromSurface/, "gsd-workspace-store.tsx must expose a shared auto-compaction browser action")
-  assert.match(storeSource, /setAutoRetryFromSurface/, "gsd-workspace-store.tsx must expose a shared auto-retry browser action")
-  assert.match(storeSource, /abortRetryFromSurface/, "gsd-workspace-store.tsx must expose a shared retry-cancellation browser action")
+  const loadedGit = applyCommandSurfaceActionResult(pendingGit, {
+    action: "load_git_summary",
+    success: true,
+    message: "",
+    gitSummary: {
+      pending: false,
+      loaded: true,
+      result: {
+        kind: "not_repo",
+        project: {
+          scope: "current_project",
+          cwd: "/tmp/project",
+          repoRoot: null,
+          repoRelativePath: null,
+        },
+        message: "not inside a Git repository",
+      },
+      error: null,
+    },
+  })
+  assert.equal(loadedGit.gitSummary.loaded, true)
+  assert.equal(loadedGit.gitSummary.result?.kind, "not_repo")
 
-  assert.match(surfaceSource, /data-testid="command-surface-git-summary"/, "command-surface.tsx must expose the git summary panel")
-  assert.match(surfaceSource, /data-testid="command-surface-git-state"/, "command-surface.tsx must expose inspectable git-summary state text")
-  assert.match(surfaceSource, /data-testid="command-surface-git-not-repo"/, "command-surface.tsx must expose a browser-visible not-a-repo state")
-  assert.match(surfaceSource, /data-testid="command-surface-git-error"/, "command-surface.tsx must expose a browser-visible git load-error state")
-  assert.match(surfaceSource, /data-testid="command-surface-session-browser-query"/, "command-surface.tsx must expose a query marker for the session browser")
-  assert.match(surfaceSource, /data-testid="command-surface-session-browser-meta"/, "command-surface.tsx must expose current-project session-browser metadata")
-  assert.match(surfaceSource, /data-testid="command-surface-apply-resume"/, "command-surface.tsx must expose an inspectable resume action marker")
-  assert.match(surfaceSource, /data-testid="command-surface-apply-rename"/, "command-surface.tsx must expose an inspectable rename action marker")
-  assert.match(surfaceSource, /data-testid="command-surface-queue-settings"/, "command-surface.tsx must expose the queue settings panel")
-  assert.match(surfaceSource, /data-testid="command-surface-auto-compaction-settings"/, "command-surface.tsx must expose the auto-compaction settings panel")
-  assert.match(surfaceSource, /data-testid="command-surface-retry-settings"/, "command-surface.tsx must expose the retry settings panel")
-  assert.match(surfaceSource, /data-testid="command-surface-auto-retry-state"/, "command-surface.tsx must expose inspectable auto-retry state")
-  assert.match(surfaceSource, /data-testid="command-surface-abort-retry-state"/, "command-surface.tsx must expose inspectable retry-cancellation state")
-  assert.match(sidebarSource, /data-testid="sidebar-git-button"/, "sidebar.tsx must expose an inspectable Git affordance")
-  assert.match(sidebarSource, /openCommandSurface\("git", \{ source: "sidebar" \}\)/, "sidebar.tsx must open the shared git surface instead of leaving the Git button inert")
-  assert.match(gitRouteSource, /collectCurrentProjectGitSummary/, "web\/app\/api\/git\/route.ts must route the sidebar surface through the current-project git summary service")
+  const store = new GSDWorkspaceStore("/tmp/project")
+  assert.equal(typeof store.loadGitSummary, "function")
+  assert.equal(typeof store.renameSessionFromSurface, "function")
+  assert.equal(typeof store.switchSessionFromSurface, "function")
+  assert.equal(typeof store.setSteeringModeFromSurface, "function")
+  assert.equal(typeof store.setFollowUpModeFromSurface, "function")
+  assert.equal(typeof store.setAutoCompactionFromSurface, "function")
+  assert.equal(typeof store.setAutoRetryFromSurface, "function")
+  assert.equal(typeof store.abortRetryFromSurface, "function")
 })

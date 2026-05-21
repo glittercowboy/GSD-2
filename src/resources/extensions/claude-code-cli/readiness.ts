@@ -25,11 +25,20 @@ import { execFileSync } from "node:child_process";
  * we invoke `cmd /c <command> <args...>` explicitly. On POSIX we don't
  * need a shell at all.
  */
-function spawnClaude(command: string, args: string[], opts: { timeout: number; stdio: "pipe" }): Buffer {
-	if (process.platform === "win32") {
-		return execFileSync("cmd", ["/c", command, ...args], opts);
+export function buildClaudeSpawnInvocation(
+	command: string,
+	args: string[],
+	platform: NodeJS.Platform = process.platform,
+): { command: string; args: string[] } {
+	if (platform === "win32") {
+		return { command: "cmd", args: ["/c", command, ...args] };
 	}
-	return execFileSync(command, args, opts);
+	return { command, args };
+}
+
+function spawnClaude(command: string, args: string[], opts: { timeout: number; stdio: "pipe" }): Buffer {
+	const invocation = buildClaudeSpawnInvocation(command, args);
+	return execFileSync(invocation.command, invocation.args, opts);
 }
 
 /**
@@ -38,7 +47,11 @@ function spawnClaude(command: string, args: string[], opts: { timeout: number; s
  * Keep the explicit win32 ternary selector for regression coverage (Issue #4424):
  * Node's execFileSync must target `claude.cmd` directly on Windows.
  */
-const CLAUDE_COMMAND = process.platform === "win32" ? "claude.cmd" : "claude";
+export function getClaudeCommand(platform: NodeJS.Platform = process.platform): string {
+	return platform === "win32" ? "claude.cmd" : "claude";
+}
+
+const CLAUDE_COMMAND = getClaudeCommand();
 
 /**
  * Windows installs vary: some environments expose `claude.cmd` (npm shim),
@@ -46,7 +59,12 @@ const CLAUDE_COMMAND = process.platform === "win32" ? "claude.cmd" : "claude";
  * (for example Git Bash wrappers). Try all three to avoid false "not
  * installed" results in readiness checks.
  */
-const CLAUDE_COMMAND_CANDIDATES = process.platform === "win32" ? [CLAUDE_COMMAND, "claude.exe", "claude"] : [CLAUDE_COMMAND];
+export function getClaudeCommandCandidates(platform: NodeJS.Platform = process.platform): string[] {
+	const command = getClaudeCommand(platform);
+	return platform === "win32" ? [command, "claude.exe", "claude"] : [command];
+}
+
+const CLAUDE_COMMAND_CANDIDATES = getClaudeCommandCandidates();
 
 // Keep the version probe snappy — `claude --version` is a quick path.
 const VERSION_TIMEOUT_MS = 5_000;
@@ -97,7 +115,7 @@ function findWorkingCommand(): string | null {
  * back to a text heuristic. Note: the text heuristic only covers English
  * phrasing — the JSON path is the durable signal.
  */
-function parseAuthStatus(output: string): boolean | null {
+export function parseAuthStatus(output: string): boolean | null {
 	const trimmed = output.trim();
 	if (!trimmed) return null;
 

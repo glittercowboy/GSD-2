@@ -7,12 +7,12 @@
 
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-import { inlineDependencySummaries } from "../auto-prompts.js";
+import { buildExecuteTaskPrompt, buildPlanSlicePrompt, buildReactiveExecutePrompt, buildResearchSlicePrompt, inlineDependencySummaries } from "../auto-prompts.js";
 import { computeBudgets, truncateAtSectionBoundary } from "../context-budget.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -191,13 +191,58 @@ describe("prompt-budget: inlineDependencySummaries truncation", () => {
 // ─── plan-slice template includes executor constraints placeholder ────────────
 
 describe("prompt-budget: plan-slice template", () => {
-  it("contains {{executorContextConstraints}} placeholder", () => {
-    const templatePath = join(__dirname, "..", "prompts", "plan-slice.md");
-    const template = readFileSync(templatePath, "utf-8");
-    assert.ok(
-      template.includes("{{executorContextConstraints}}"),
-      "plan-slice.md should contain {{executorContextConstraints}} placeholder",
-    );
+  it("rendered plan-slice prompt includes executor context constraints", async () => {
+    const base = createFixtureBase();
+    try {
+      setupDependencyFixture(base, "M001", "S01", ["S00"], { S00: "### Results\n\nDone." });
+      const prompt = await buildPlanSlicePrompt("M001", "Milestone", "S01", "Current slice", base, "minimal", {
+        sessionContextWindow: 128_000,
+      });
+      assert.match(prompt, /Executor Context Constraints/);
+      assert.match(prompt, /128K token/);
+    } finally {
+      cleanup(base);
+    }
+  });
+
+  it("does not inline milestone-wide decisions when slice title has no specific scope", async () => {
+    const base = createFixtureBase();
+    try {
+      setupDependencyFixture(base, "M001", "S01", ["S00"], { S00: "### Results\n\nDone." });
+      writeFileSync(
+        join(base, ".gsd", "DECISIONS.md"),
+        "# Decisions\n\n- This broad decision body should stay out of generic slice planning prompts.\n",
+      );
+
+      const prompt = await buildPlanSlicePrompt("M001", "Milestone", "S01", "Setup implementation testing", base, "standard");
+
+      assert.match(prompt, /### On-demand Decisions/);
+      assert.match(prompt, /\.gsd\/DECISIONS\.md/);
+      assert.doesNotMatch(prompt, /broad decision body should stay out/);
+    } finally {
+      cleanup(base);
+    }
+  });
+});
+
+describe("prompt-budget: research-slice context", () => {
+  it("does not inline milestone-wide decisions when slice title has no specific scope", async () => {
+    const base = createFixtureBase();
+    try {
+      setupDependencyFixture(base, "M001", "S01", ["S00"], { S00: "### Results\n\nDone." });
+      writeFileSync(
+        join(base, ".gsd", "DECISIONS.md"),
+        "# Decisions\n\n- This broad research decision body should stay out of generic slice research prompts.\n",
+      );
+
+      const prompt = await buildResearchSlicePrompt("M001", "Milestone", "S01", "Setup implementation testing", base);
+
+      assert.match(prompt, /### On-demand Decisions/);
+      assert.match(prompt, /\.gsd\/DECISIONS\.md/);
+      assert.doesNotMatch(prompt, /broad research decision body should stay out/);
+    } finally {
+      cleanup(base);
+    }
   });
 });
 
@@ -323,13 +368,48 @@ describe("prompt-budget: different context windows produce different outputs", (
 // ─── execute-task template includes verificationBudget placeholder ─────────
 
 describe("prompt-budget: execute-task template", () => {
-  it("contains {{verificationBudget}} placeholder", () => {
-    const templatePath = join(__dirname, "..", "prompts", "execute-task.md");
-    const template = readFileSync(templatePath, "utf-8");
-    assert.ok(
-      template.includes("{{verificationBudget}}"),
-      "execute-task.md should contain {{verificationBudget}} placeholder",
-    );
+  it("rendered execute-task prompt includes verification budget", async () => {
+    const base = createFixtureBase();
+    try {
+      const sliceDir = join(base, ".gsd", "milestones", "M001", "slices", "S01");
+      const taskDir = join(sliceDir, "tasks");
+      mkdirSync(taskDir, { recursive: true });
+      writeFileSync(join(base, ".gsd", "milestones", "M001", "M001-ROADMAP.md"), "# Roadmap\n");
+      writeFileSync(join(sliceDir, "S01-PLAN.md"), "# Slice Plan\n");
+      writeFileSync(join(taskDir, "T01-PLAN.md"), "# Task Plan\n");
+
+      const prompt = await buildExecuteTaskPrompt("M001", "S01", "Slice", "T01", "Task", base, {
+        level: "minimal",
+        sessionContextWindow: 128_000,
+      });
+      assert.match(prompt, /verification/i);
+      assert.match(prompt, /~51K chars/);
+    } finally {
+      cleanup(base);
+    }
+  });
+
+  it("standard execute-task prompt keeps decisions template on demand", async () => {
+    const base = createFixtureBase();
+    try {
+      const sliceDir = join(base, ".gsd", "milestones", "M001", "slices", "S01");
+      const taskDir = join(sliceDir, "tasks");
+      mkdirSync(taskDir, { recursive: true });
+      writeFileSync(join(base, ".gsd", "milestones", "M001", "M001-ROADMAP.md"), "# Roadmap\n");
+      writeFileSync(join(sliceDir, "S01-PLAN.md"), "# Slice Plan\n");
+      writeFileSync(join(taskDir, "T01-PLAN.md"), "# Task Plan\n");
+
+      const prompt = await buildExecuteTaskPrompt("M001", "S01", "Slice", "T01", "Task", base, {
+        level: "standard",
+        sessionContextWindow: 128_000,
+      });
+
+      assert.match(prompt, /### On-demand Decisions Template/);
+      assert.match(prompt, /templates\/decisions\.md/);
+      assert.doesNotMatch(prompt, /### Output Template: Decisions/);
+    } finally {
+      cleanup(base);
+    }
   });
 
   it("verificationBudget format varies with context window size", () => {
@@ -485,131 +565,113 @@ describe("prompt-budget: execute-task builder truncation pattern", () => {
   });
 });
 
+describe("prompt-budget: reactive-execute builder", () => {
+  it("caps dependency carry-forward per ready subagent", async () => {
+    const base = createFixtureBase();
+    try {
+      const sliceDir = join(base, ".gsd", "milestones", "M001", "slices", "S01");
+      const taskDir = join(sliceDir, "tasks");
+      mkdirSync(taskDir, { recursive: true });
+      writeFileSync(
+        join(sliceDir, "S01-PLAN.md"),
+        [
+          "# S01: Slice",
+          "",
+          "## Tasks",
+          "",
+          "- [x] **T01: First dep** `est:15m`",
+          "- [x] **T02: Second dep** `est:15m`",
+          "- [ ] **T03: Ready task** `est:15m`",
+        ].join("\n"),
+      );
+      writeFileSync(join(taskDir, "T01-PLAN.md"), "## Expected Output\n\n- `src/a.ts` - A\n");
+      writeFileSync(join(taskDir, "T02-PLAN.md"), "## Expected Output\n\n- `src/b.ts` - B\n");
+      writeFileSync(
+        join(taskDir, "T03-PLAN.md"),
+        [
+          "## Inputs",
+          "",
+          "- `src/a.ts`",
+          "- `src/b.ts`",
+          "",
+          "## Expected Output",
+          "",
+          "- `src/c.ts`",
+        ].join("\n"),
+      );
+      const hugeSummary = [
+        "---",
+        "provides: []",
+        "key_decisions: []",
+        "patterns_established: []",
+        "key_files: []",
+        "---",
+        "# Summary",
+        "",
+        "## Diagnostics",
+        "Large diagnostic ".repeat(3000),
+      ].join("\n");
+      writeFileSync(join(taskDir, "T01-SUMMARY.md"), hugeSummary);
+      writeFileSync(join(taskDir, "T02-SUMMARY.md"), hugeSummary);
+
+      const prompt = await buildReactiveExecutePrompt("M001", "Milestone", "S01", "Slice", ["T03"], base, undefined, {
+        sessionContextWindow: 32_000,
+      });
+
+      assert.match(prompt, /\[\.\.\.truncated/);
+      assert.ok(prompt.length < hugeSummary.length * 2, "reactive prompt should not include full dependency summaries");
+    } finally {
+      cleanup(base);
+    }
+  });
+});
+
 // ─── Regression: prompt builders must thread modelRegistry + sessionContextWindow (issue #4142) ───
-//
-// `resolveExecutorContextWindow()` resolves the executor context window in 3
-// steps: (1) look up the configured executor model in `modelRegistry`, (2) fall
-// back to `sessionContextWindow`, (3) fall back to `DEFAULT_CONTEXT_WINDOW`
-// (200K). Before this fix, prompt-builder call sites passed `undefined` for
-// both knobs and always landed on Step 3 — even on 1M-token models. These
-// source-level assertions pin the wiring so future refactors cannot regress it.
 
-describe("prompt-budget: modelRegistry + sessionContextWindow wiring", () => {
-  const autoPromptsSrc = readFileSync(join(__dirname, "..", "auto-prompts.ts"), "utf-8");
-  const autoDispatchSrc = readFileSync(join(__dirname, "..", "auto-dispatch.ts"), "utf-8");
-  const autoDirectDispatchSrc = readFileSync(join(__dirname, "..", "auto-direct-dispatch.ts"), "utf-8");
-  const phasesSrc = readFileSync(join(__dirname, "..", "auto", "phases.ts"), "utf-8");
+describe("prompt-budget: modelRegistry + sessionContextWindow behavior", () => {
+  it("buildPlanSlicePrompt output changes when sessionContextWindow changes", async () => {
+    const base = createFixtureBase();
+    try {
+      setupDependencyFixture(base, "M001", "S01", ["S00"], { S00: "### Results\n\nDone." });
+      const small = await buildPlanSlicePrompt("M001", "Milestone", "S01", "Current slice", base, "minimal", {
+        sessionContextWindow: 128_000,
+      });
+      const large = await buildPlanSlicePrompt("M001", "Milestone", "S01", "Current slice", base, "minimal", {
+        sessionContextWindow: 1_000_000,
+      });
 
-  it("formatExecutorConstraints accepts and forwards both knobs", () => {
-    assert.match(
-      autoPromptsSrc,
-      /function formatExecutorConstraints\([^)]*sessionContextWindow[^)]*modelRegistry[^)]*\)/s,
-      "formatExecutorConstraints must accept sessionContextWindow and modelRegistry",
-    );
-    assert.match(
-      autoPromptsSrc,
-      /resolveExecutorContextWindow\(\s*modelRegistry\s*,\s*prefs\?\.preferences\s*,\s*sessionContextWindow/,
-      "formatExecutorConstraints must forward both to resolveExecutorContextWindow",
-    );
+      assert.match(small, /128K token/);
+      assert.match(large, /1000K token/);
+      assert.notEqual(small, large);
+    } finally {
+      cleanup(base);
+    }
   });
 
-  it("renderSlicePrompt options declare both knobs and forward to formatExecutorConstraints", () => {
-    assert.match(
-      autoPromptsSrc,
-      /async function renderSlicePrompt\(options:\s*\{[^}]*sessionContextWindow\?[^}]*modelRegistry\?/s,
-      "renderSlicePrompt options must declare both fields",
-    );
-    assert.match(
-      autoPromptsSrc,
-      /formatExecutorConstraints\(sessionContextWindow,\s*modelRegistry(?:,\s*sessionProvider)?\)/,
-      "renderSlicePrompt must forward both to formatExecutorConstraints",
-    );
-  });
+  it("buildExecuteTaskPrompt output changes when sessionContextWindow changes", async () => {
+    const base = createFixtureBase();
+    try {
+      const sliceDir = join(base, ".gsd", "milestones", "M001", "slices", "S01");
+      const taskDir = join(sliceDir, "tasks");
+      mkdirSync(taskDir, { recursive: true });
+      writeFileSync(join(base, ".gsd", "milestones", "M001", "M001-ROADMAP.md"), "# Roadmap\n");
+      writeFileSync(join(sliceDir, "S01-PLAN.md"), "# Slice Plan\n");
+      writeFileSync(join(taskDir, "T01-PLAN.md"), "# Task Plan\n");
 
-  it("buildPlanSlicePrompt options declare both knobs and thread them into renderSlicePrompt", () => {
-    assert.match(
-      autoPromptsSrc,
-      /export async function buildPlanSlicePrompt\([\s\S]*?options\?:\s*\{[^}]*sessionContextWindow\?[^}]*modelRegistry\?/,
-      "buildPlanSlicePrompt options must declare both fields",
-    );
-    assert.match(
-      autoPromptsSrc,
-      /sessionContextWindow:\s*options\?\.sessionContextWindow,\s*modelRegistry:\s*options\?\.modelRegistry/,
-      "buildPlanSlicePrompt must forward both into renderSlicePrompt",
-    );
-  });
+      const small = await buildExecuteTaskPrompt("M001", "S01", "Slice", "T01", "Task", base, {
+        level: "minimal",
+        sessionContextWindow: 128_000,
+      });
+      const large = await buildExecuteTaskPrompt("M001", "S01", "Slice", "T01", "Task", base, {
+        level: "minimal",
+        sessionContextWindow: 1_000_000,
+      });
 
-  it("ExecuteTaskPromptOptions declares both knobs", () => {
-    assert.match(
-      autoPromptsSrc,
-      /interface ExecuteTaskPromptOptions\s*\{[^}]*sessionContextWindow\?[^}]*modelRegistry\?/s,
-      "ExecuteTaskPromptOptions must declare both fields",
-    );
-  });
-
-  it("buildExecuteTaskPrompt forwards opts.modelRegistry + opts.sessionContextWindow to resolveExecutorContextWindow", () => {
-    assert.match(
-      autoPromptsSrc,
-      /resolveExecutorContextWindow\(\s*opts\.modelRegistry\s*,\s*prefs\?\.preferences\s*,\s*opts\.sessionContextWindow/,
-      "buildExecuteTaskPrompt must forward both into resolveExecutorContextWindow",
-    );
-  });
-
-  it("buildReactiveExecutePrompt accepts opts and forwards to embedded buildExecuteTaskPrompt", () => {
-    assert.match(
-      autoPromptsSrc,
-      /export async function buildReactiveExecutePrompt\([\s\S]*?opts\?:\s*\{[^}]*sessionContextWindow\?[^}]*modelRegistry\?/,
-      "buildReactiveExecutePrompt must accept sessionContextWindow + modelRegistry",
-    );
-    assert.match(
-      autoPromptsSrc,
-      /sessionContextWindow:\s*opts\?\.sessionContextWindow,\s*modelRegistry:\s*opts\?\.modelRegistry/,
-      "buildReactiveExecutePrompt must forward both into the embedded buildExecuteTaskPrompt call",
-    );
-  });
-
-  it("DispatchContext declares both knobs", () => {
-    assert.match(
-      autoDispatchSrc,
-      /interface DispatchContext\s*\{[^}]*sessionContextWindow\?[^}]*modelRegistry\?/s,
-      "DispatchContext must declare both fields so dispatch rules can thread them",
-    );
-  });
-
-  it("DISPATCH_RULES destructure and forward both knobs at every prompt-builder call site", () => {
-    // Every plan-slice / execute-task / reactive-execute rule must destructure
-    // both names from its match context so new call sites can't silently drop them.
-    const matchLines = autoDispatchSrc.match(/match:\s*async\s*\(\{[^}]*sessionContextWindow[^}]*modelRegistry[^}]*\}/g) ?? [];
-    assert.ok(
-      matchLines.length >= 5,
-      `expected ≥5 dispatch rules destructuring both knobs, got ${matchLines.length}`,
-    );
-
-    const forwardCount = (autoDispatchSrc.match(/sessionContextWindow,\s*modelRegistry/g) ?? []).length;
-    assert.ok(
-      forwardCount >= 5,
-      `expected ≥5 forward sites of { sessionContextWindow, modelRegistry }, got ${forwardCount}`,
-    );
-  });
-
-  it("runDispatch populates both knobs from ctx.model / ctx.modelRegistry", () => {
-    assert.match(
-      phasesSrc,
-      /sessionContextWindow:\s*ctx\.model\?\.contextWindow/,
-      "runDispatch must populate sessionContextWindow from ctx.model?.contextWindow",
-    );
-    assert.match(
-      phasesSrc,
-      /modelRegistry:\s*ctx\.modelRegistry/,
-      "runDispatch must populate modelRegistry from ctx.modelRegistry",
-    );
-  });
-
-  it("dispatchDirectPhase forwards both knobs to buildPlanSlicePrompt and buildExecuteTaskPrompt", () => {
-    const passes = (autoDirectDispatchSrc.match(/sessionContextWindow:\s*ctx\.model\?\.contextWindow[\s\S]*?modelRegistry:\s*ctx\.modelRegistry/g) ?? []).length;
-    assert.ok(
-      passes >= 2,
-      `dispatchDirectPhase must forward the pair at both prompt-builder call sites (≥2), got ${passes}`,
-    );
+      assert.match(small, /~51K chars/);
+      assert.match(large, /~400K chars/);
+      assert.notEqual(small, large);
+    } finally {
+      cleanup(base);
+    }
   });
 });

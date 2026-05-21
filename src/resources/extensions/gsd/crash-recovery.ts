@@ -30,14 +30,18 @@ import { join } from "node:path";
 import {
   findStaleWorkerForProject,
   getAllAutoWorkers,
+  markWorkerStopping,
+  markWorkerStoppingByPid,
   type AutoWorkerRow,
 } from "./db/auto-workers.js";
-import { getLatestForUnit, type DispatchStatus } from "./db/unit-dispatches.js";
+import { forceReleaseLeasesForWorker } from "./db/milestone-leases.js";
+import { markLatestActiveForWorkerCanceled, type DispatchStatus } from "./db/unit-dispatches.js";
 import { getRuntimeKv, setRuntimeKv, deleteRuntimeKv } from "./db/runtime-kv.js";
 import { _getAdapter, isDbAvailable } from "./gsd-db.js";
 import { gsdRoot, normalizeRealPath } from "./paths.js";
 import { atomicWriteSync } from "./atomic-write.js";
 import { effectiveLockFile } from "./session-lock.js";
+import { isInFlightRuntimePhase, listUnitRuntimeRecords, type AutoUnitRuntimeRecord } from "./unit-runtime.js";
 
 export interface LockData {
   pid: number;
@@ -53,6 +57,15 @@ const SESSION_FILE_KV_KEY = "session_file";
 
 function lockPath(basePath: string): string {
   return join(gsdRoot(basePath), effectiveLockFile());
+}
+
+function clearLegacyLockFile(basePath: string): void {
+  try {
+    const p = lockPath(basePath);
+    if (existsSync(p)) unlinkSync(p);
+  } catch {
+    // Best-effort.
+  }
 }
 
 function readLegacyLock(basePath: string): LockData | null {
@@ -103,10 +116,40 @@ function getLatestDispatchForWorker(workerId: string):
   return row ?? null;
 }
 
-function workerToLockData(worker: AutoWorkerRow): LockData {
+function latestInFlightRuntimeRecord(basePath: string): AutoUnitRuntimeRecord | null {
+  const records = listUnitRuntimeRecords(basePath).filter((record) =>
+    isInFlightRuntimePhase(record.phase),
+  );
+  if (records.length === 0) return null;
+  return records.sort((a, b) => {
+    const bTime = b.updatedAt || b.startedAt || 0;
+    const aTime = a.updatedAt || a.startedAt || 0;
+    return bTime - aTime;
+  })[0] ?? null;
+}
+
+function runtimeRecordToLockData(worker: AutoWorkerRow, record: AutoUnitRuntimeRecord, sessionFile?: string): LockData {
+  const startedAt = Number.isFinite(record.startedAt)
+    ? new Date(record.startedAt).toISOString()
+    : worker.started_at;
+  return {
+    pid: worker.pid,
+    startedAt: worker.started_at,
+    unitType: record.unitType,
+    unitId: record.unitId,
+    unitStartedAt: startedAt,
+    sessionFile,
+  };
+}
+
+function workerToLockData(basePath: string, worker: AutoWorkerRow): LockData {
   const dispatch = getLatestDispatchForWorker(worker.worker_id);
   const sessionFile =
     getRuntimeKv<string>("worker", worker.worker_id, SESSION_FILE_KV_KEY) ?? undefined;
+  if (!dispatch) {
+    const runtimeRecord = latestInFlightRuntimeRecord(basePath);
+    if (runtimeRecord) return runtimeRecordToLockData(worker, runtimeRecord, sessionFile);
+  }
   return {
     pid: worker.pid,
     startedAt: worker.started_at,
@@ -154,12 +197,18 @@ export function writeLock(
     // Best-effort — never throw from the lock writer.
   }
 
-  if (!isDbAvailable() || !sessionFile) return;
+  if (!isDbAvailable()) return;
   try {
     const projectRoot = normalizeRealPath(basePath);
     const worker = findActiveWorkerForCurrentProcess(projectRoot);
     if (!worker) return;
-    setRuntimeKv("worker", worker.worker_id, SESSION_FILE_KV_KEY, sessionFile);
+    if (sessionFile) {
+      setRuntimeKv("worker", worker.worker_id, SESSION_FILE_KV_KEY, sessionFile);
+    } else {
+      // Preliminary unit locks (before runUnit/newSession settles) must clear
+      // any prior pointer so crash recovery cannot ingest stale cross-unit context.
+      deleteRuntimeKv("worker", worker.worker_id, SESSION_FILE_KV_KEY);
+    }
   } catch {
     // Best-effort — never throw from the lock writer.
   }
@@ -173,18 +222,49 @@ export function writeLock(
  * stale session-file pointer.
  */
 export function clearLock(basePath: string): void {
-  try {
-    const p = lockPath(basePath);
-    if (existsSync(p)) unlinkSync(p);
-  } catch {
-    // Best-effort.
-  }
+  clearLegacyLockFile(basePath);
 
   if (!isDbAvailable()) return;
   try {
     const projectRoot = normalizeRealPath(basePath);
+    const staleWorker = findStaleWorkerForProject(projectRoot);
+    if (staleWorker) {
+      markWorkerStopping(staleWorker.worker_id);
+      forceReleaseLeasesForWorker(staleWorker.worker_id);
+      deleteRuntimeKv("worker", staleWorker.worker_id, SESSION_FILE_KV_KEY);
+      return;
+    }
+    const lock = readLegacyLock(basePath);
+    if (lock?.pid) markWorkerStoppingByPid(projectRoot, lock.pid);
     const worker = findActiveWorkerForCurrentProcess(projectRoot);
+    if (worker) deleteRuntimeKv("worker", worker.worker_id, SESSION_FILE_KV_KEY);
+
+    const stale = findStaleWorkerForProject(projectRoot);
+    if (stale) {
+      markWorkerStopping(stale.worker_id);
+      deleteRuntimeKv("worker", stale.worker_id, SESSION_FILE_KV_KEY);
+    }
+  } catch {
+    // Best-effort.
+  }
+}
+
+/**
+ * Clear a stale DB-backed worker lock after readCrashLock/findStaleWorkerForProject
+ * has identified a dead worker. Unlike clearLock(), this targets the stale
+ * worker row instead of the current process's active worker.
+ */
+export function clearStaleWorkerLock(basePath: string): void {
+  clearLegacyLockFile(basePath);
+
+  if (!isDbAvailable()) return;
+  try {
+    const projectRoot = normalizeRealPath(basePath);
+    const worker = findStaleWorkerForProject(projectRoot);
     if (!worker) return;
+    markLatestActiveForWorkerCanceled(worker.worker_id, "crash-recovered");
+    markWorkerStopping(worker.worker_id);
+    forceReleaseLeasesForWorker(worker.worker_id);
     deleteRuntimeKv("worker", worker.worker_id, SESSION_FILE_KV_KEY);
   } catch {
     // Best-effort.
@@ -204,7 +284,7 @@ export function readCrashLock(basePath: string): LockData | null {
     try {
       const projectRoot = normalizeRealPath(basePath);
       const stale = findStaleWorkerForProject(projectRoot);
-      if (stale) return workerToLockData(stale);
+      if (stale) return workerToLockData(basePath, stale);
     } catch {
       // Fall through to the legacy lock-file compatibility path.
     }
@@ -260,25 +340,56 @@ export function formatCrashInfo(lock: LockData): string {
  */
 export function emitCrashRecoveredUnitEnd(basePath: string, lock: LockData): void {
   if (!lock.unitType || !lock.unitId || lock.unitType === "starting") return;
+  emitOpenUnitEndForUnit(basePath, lock.unitType, lock.unitId, "crash-recovered");
+}
 
+/**
+ * Emit a synthetic unit-end journal event for a unit whose unit-start has
+ * no matching unit-end. Returns true if an event was emitted, false if the
+ * unit was already closed or no open start was found.
+ *
+ * Used by emitCrashRecoveredUnitEnd and the dispatch loop crash closeout
+ * path. Never throws — journal failure must not block recovery.
+ */
+export function emitOpenUnitEndForUnit(
+  basePath: string,
+  unitType: string,
+  unitId: string,
+  status: string,
+  errorContext?: { message: string; category: string; stopReason?: string; isTransient?: boolean; retryAfterMs?: number },
+): boolean {
   try {
     const all = queryJournal(basePath);
 
     const starts = all.filter(
-      (e) => e.eventType === "unit-start" && e.data?.unitId === lock.unitId,
+      (e) =>
+        e.eventType === "unit-start" &&
+        e.data?.unitType === unitType &&
+        e.data?.unitId === unitId,
     );
-    if (starts.length === 0) return;
+    if (starts.length === 0) return false;
 
-    const lastStart = starts[starts.length - 1];
+    const lastStart = [...starts].reverse().find((start) => {
+      return !all.some(
+        (e) =>
+          e.eventType === "unit-end" &&
+          e.data?.unitType === unitType &&
+          e.data?.unitId === unitId &&
+          e.causedBy?.flowId === start.flowId &&
+          e.causedBy?.seq === start.seq,
+      );
+    });
+    if (!lastStart) return false;
 
     const alreadyClosed = all.some(
       (e) =>
         e.eventType === "unit-end" &&
-        e.data?.unitId === lock.unitId &&
+        e.data?.unitType === unitType &&
+        e.data?.unitId === unitId &&
         e.causedBy?.flowId === lastStart.flowId &&
         e.causedBy?.seq === lastStart.seq,
     );
-    if (alreadyClosed) return;
+    if (alreadyClosed) return false;
 
     const maxSeq = all
       .filter((e) => e.flowId === lastStart.flowId)
@@ -290,15 +401,18 @@ export function emitCrashRecoveredUnitEnd(basePath: string, lock: LockData): voi
       seq: maxSeq + 1,
       eventType: "unit-end",
       data: {
-        unitType: lock.unitType,
-        unitId: lock.unitId,
-        status: "crash-recovered",
+        unitType,
+        unitId,
+        status,
         artifactVerified: false,
+        ...(errorContext ? { errorContext } : {}),
       },
       causedBy: { flowId: lastStart.flowId, seq: lastStart.seq },
     });
+    return true;
   } catch {
     // Never throw from crash recovery path.
+    return false;
   }
 }
 

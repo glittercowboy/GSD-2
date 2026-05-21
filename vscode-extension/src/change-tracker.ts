@@ -2,6 +2,16 @@ import * as vscode from "vscode";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { GsdClient, AgentEvent } from "./gsd-client.js";
+import {
+	captureCurrentSnapshots,
+	captureOriginalContent,
+	describeAction,
+	getToolInput,
+	getToolUseId,
+	isFileMutationTool,
+	normalizeToolName,
+	resolveToolPath,
+} from "./change-tracker-core.js";
 
 export interface FileSnapshot {
 	uri: vscode.Uri;
@@ -202,9 +212,9 @@ export class GsdChangeTracker implements vscode.Disposable {
 
 			case "tool_execution_start": {
 				const toolName = String(evt.toolName ?? "");
-				const normalizedToolName = toolName.toLowerCase();
+				const normalizedToolName = normalizeToolName(toolName);
 				const toolInput = getToolInput(evt);
-				const toolUseId = String(evt.toolCallId ?? evt.toolUseId ?? "");
+				const toolUseId = getToolUseId(evt);
 
 				// Update checkpoint label with first action description
 				if (!this.turnDescribed) {
@@ -221,15 +231,9 @@ export class GsdChangeTracker implements vscode.Disposable {
 				// Store the original content before the agent modifies it
 				// Only capture on FIRST modification (don't overwrite)
 				if (!this.originals.has(filePath)) {
-					try {
-						if (fs.existsSync(filePath)) {
-							const content = fs.readFileSync(filePath, "utf8");
-							this.originals.set(filePath, content);
-						} else {
-							this.originals.set(filePath, null);
-						}
-					} catch {
-						// Can't read file, skip tracking
+					const original = captureOriginalContent(filePath, fs);
+					if (original !== undefined) {
+						this.originals.set(filePath, original);
 					}
 				}
 
@@ -240,7 +244,7 @@ export class GsdChangeTracker implements vscode.Disposable {
 			}
 
 			case "tool_execution_end": {
-				const toolUseId = String(evt.toolCallId ?? evt.toolUseId ?? "");
+				const toolUseId = getToolUseId(evt);
 				const filePath = this.pendingTools.get(toolUseId);
 				if (filePath) {
 					this.pendingTools.delete(toolUseId);
@@ -253,9 +257,7 @@ export class GsdChangeTracker implements vscode.Disposable {
 	}
 
 	private resolveToolPath(input: Record<string, unknown>): string {
-		const rawPath = String(input.file_path ?? input.path ?? "");
-		if (!rawPath) return "";
-		return path.isAbsolute(rawPath) ? rawPath : path.resolve(this.workspaceRoot, rawPath);
+		return resolveToolPath(this.workspaceRoot, input);
 	}
 
 	private createCheckpoint(): void {
@@ -277,15 +279,7 @@ export class GsdChangeTracker implements vscode.Disposable {
 	}
 
 	private captureCurrentSnapshots(): Map<string, string | null> {
-		const snapshots = new Map<string, string | null>();
-		for (const filePath of this.originals.keys()) {
-			try {
-				snapshots.set(filePath, fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : null);
-			} catch {
-				snapshots.set(filePath, null);
-			}
-		}
-		return snapshots;
+		return captureCurrentSnapshots(this.originals.keys(), fs);
 	}
 
 	/**
@@ -299,39 +293,4 @@ export class GsdChangeTracker implements vscode.Disposable {
 		latest.label = `${time} — ${description}`;
 		this._onCheckpointChange.fire();
 	}
-}
-
-function describeAction(toolName: string, input: Record<string, unknown>): string {
-	switch (toolName.toLowerCase()) {
-		case "read": {
-			const p = String(input.file_path ?? input.path ?? "");
-			return `Read ${p.split(/[\\/]/).pop() ?? p}`;
-		}
-		case "write":
-		case "write_file": {
-			const p = String(input.file_path ?? "");
-			return `Write ${p.split(/[\\/]/).pop() ?? p}`;
-		}
-		case "edit": {
-			const p = String(input.file_path ?? "");
-			return `Edit ${p.split(/[\\/]/).pop() ?? p}`;
-		}
-		case "bash":
-			return `$ ${String(input.command ?? "").slice(0, 40)}`;
-		case "grep":
-			return `Grep: ${String(input.pattern ?? "").slice(0, 30)}`;
-		case "glob":
-			return `Glob: ${String(input.pattern ?? "").slice(0, 30)}`;
-		default:
-			return toolName;
-	}
-}
-
-function getToolInput(evt: AgentEvent): Record<string, unknown> {
-	const input = evt.args ?? evt.toolInput ?? evt.input ?? {};
-	return input && typeof input === "object" ? input as Record<string, unknown> : {};
-}
-
-function isFileMutationTool(toolName: string): boolean {
-	return toolName === "write" || toolName === "write_file" || toolName === "edit";
 }

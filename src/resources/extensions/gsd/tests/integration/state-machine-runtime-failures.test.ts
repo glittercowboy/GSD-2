@@ -195,6 +195,11 @@ describe("infrastructure error detection", () => {
     assert.equal(isInfrastructureError(err), "EAGAIN");
   });
 
+  test("ENOBUFS (no buffer space available) is detected", () => {
+    const err = Object.assign(new Error("spawnSync git ENOBUFS"), { code: "ENOBUFS" });
+    assert.equal(isInfrastructureError(err), "ENOBUFS");
+  });
+
   test("SQLite WAL corruption is detected via message scan", () => {
     const err = new Error("database disk image is malformed");
     assert.equal(isInfrastructureError(err), "SQLITE_CORRUPT");
@@ -223,7 +228,7 @@ describe("infrastructure error detection", () => {
   test("all INFRA_ERROR_CODES are covered", () => {
     const expectedCodes = [
       "ENOSPC", "ENOMEM", "EROFS", "EDQUOT", "EMFILE",
-      "ENFILE", "EAGAIN", "ECONNREFUSED", "ENOTFOUND", "ENETUNREACH",
+      "ENFILE", "EAGAIN", "ENOBUFS", "ECONNREFUSED", "ENOTFOUND", "ENETUNREACH",
     ];
     for (const code of expectedCodes) {
       assert.ok(INFRA_ERROR_CODES.has(code), `${code} should be in INFRA_ERROR_CODES`);

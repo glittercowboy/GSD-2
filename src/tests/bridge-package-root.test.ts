@@ -1,7 +1,5 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 
 /**
  * Regression test for #1881: Windows web mode — hardcoded Linux CI path in
@@ -16,6 +14,7 @@ import { join } from 'node:path'
  */
 
 import { safePackageRootFromImportUrl } from '../web/safe-import-meta-resolve.ts'
+import { resolveBridgeRuntimeConfig } from '../web/bridge-service.ts'
 
 test('safePackageRootFromImportUrl returns a path for a valid native file URL', () => {
   const result = safePackageRootFromImportUrl(import.meta.url)
@@ -49,23 +48,28 @@ test('safePackageRootFromImportUrl respects ancestorLevels', () => {
   assert.ok(level0.length > level2.length)
 })
 
-test('bridge-service.ts uses safePackageRootFromImportUrl for DEFAULT_PACKAGE_ROOT', () => {
-  const source = readFileSync(join(process.cwd(), 'src', 'web', 'bridge-service.ts'), 'utf-8')
-  assert.ok(
-    source.includes('safePackageRootFromImportUrl(import.meta.url)'),
-    'bridge-service.ts must derive DEFAULT_PACKAGE_ROOT via the safe helper',
-  )
-  const rawPattern = 'const DEFAULT_PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url'
-  assert.ok(
-    !source.includes(rawPattern),
-    'bridge-service.ts must not use raw fileURLToPath for DEFAULT_PACKAGE_ROOT',
-  )
+test('resolveBridgeRuntimeConfig accepts explicit package root when standalone import.meta.url is unusable', () => {
+  const config = resolveBridgeRuntimeConfig({
+    GSD_WEB_PROJECT_CWD: '/tmp/project',
+    GSD_WEB_PROJECT_SESSIONS_DIR: '/tmp/sessions',
+    GSD_WEB_PACKAGE_ROOT: '/tmp/package-root',
+  } as NodeJS.ProcessEnv)
+
+  assert.deepEqual(config, {
+    projectCwd: '/tmp/project',
+    projectSessionsDir: '/tmp/sessions',
+    packageRoot: '/tmp/package-root',
+  })
 })
 
-test('bridge-service resolveBridgeRuntimeConfig falls back to lazy default', () => {
-  const source = readFileSync(join(process.cwd(), 'src', 'web', 'bridge-service.ts'), 'utf-8')
-  assert.ok(
-    source.includes('env.GSD_WEB_PACKAGE_ROOT || getDefaultPackageRoot()'),
-    'resolveBridgeRuntimeConfig must fall back to lazy default package root',
-  )
+test('resolveBridgeRuntimeConfig falls back to a lazy default package root', () => {
+  const config = resolveBridgeRuntimeConfig({
+    GSD_WEB_PROJECT_CWD: '/tmp/project',
+    GSD_WEB_PROJECT_SESSIONS_DIR: '/tmp/sessions',
+  } as NodeJS.ProcessEnv)
+
+  assert.equal(config.projectCwd, '/tmp/project')
+  assert.equal(config.projectSessionsDir, '/tmp/sessions')
+  assert.equal(typeof config.packageRoot, 'string')
+  assert.ok(config.packageRoot.length > 0)
 })

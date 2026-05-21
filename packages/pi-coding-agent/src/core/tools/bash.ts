@@ -116,6 +116,7 @@ const bashSchema = Type.Object({
 export type BashToolInput = Static<typeof bashSchema>;
 
 export interface BashToolDetails {
+	cwd?: string;
 	truncation?: TruncationResult;
 	fullOutputPath?: string;
 	artifactId?: string;
@@ -384,6 +385,7 @@ export function createBashTool(cwd: string, options?: BashToolOptions): AgentToo
 						onUpdate({
 							content: [{ type: "text", text: truncation.content || "" }],
 							details: {
+								cwd: spawnContext.cwd,
 								truncation: truncation.truncated ? truncation : undefined,
 								fullOutputPath: spillFilePath,
 							},
@@ -412,10 +414,11 @@ export function createBashTool(cwd: string, options?: BashToolOptions): AgentToo
 						let outputText = truncation.content || "(no output)";
 
 						// Build details with truncation info
-						let details: BashToolDetails | undefined;
+						let details: BashToolDetails | undefined = { cwd: spawnContext.cwd };
 
 						if (truncation.truncated) {
 							details = {
+								...details,
 								truncation,
 								fullOutputPath: spillFilePath,
 								...(spillArtifactId ? { artifactId: spillArtifactId } : {}),

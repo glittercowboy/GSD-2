@@ -1,3 +1,4 @@
+// GSD2 - Coding agent session factory and runtime wiring
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
@@ -38,8 +39,53 @@ export function canRestoreSessionModel(
 ): boolean {
 	return modelRegistry.isProviderRequestReady(model.provider);
 }
-import { Agent, type AgentMessage, type ThinkingLevel } from "@gsd/pi-agent-core";
-import type { Message, Model } from "@gsd/pi-ai";
+
+const PROVIDER_TOOL_LIMITS: Record<string, number> = {
+	groq: 128,
+};
+
+function resolveProviderToolLimit(
+	providerCaps: ReturnType<typeof getProviderCapabilities>,
+	provider: string | undefined,
+): number {
+	if (provider && PROVIDER_TOOL_LIMITS[provider]) {
+		return PROVIDER_TOOL_LIMITS[provider];
+	}
+	return providerCaps.maxTools > 0 ? providerCaps.maxTools : 0;
+}
+
+export function filterToolsForProviderRequest(
+	tools: AgentTool[],
+	model: Pick<Model<any>, "api" | "provider">,
+): { compatible: AgentTool[]; filtered: AgentTool[] } {
+	const providerCaps = getProviderCapabilities(model.api);
+	if (!providerCaps.toolCalling) {
+		return { compatible: [], filtered: tools };
+	}
+
+	const compatible: AgentTool[] = [];
+	const filtered: AgentTool[] = [];
+	for (const tool of tools) {
+		const compat = getToolCompatibility(tool.name);
+		if (
+			(compat?.producesImages && !providerCaps.imageToolResults) ||
+			compat?.schemaFeatures?.some((feature) => providerCaps.unsupportedSchemaFeatures.includes(feature))
+		) {
+			filtered.push(tool);
+		} else {
+			compatible.push(tool);
+		}
+	}
+
+	const toolLimit = resolveProviderToolLimit(providerCaps, model.provider);
+	if (toolLimit > 0 && compatible.length > toolLimit) {
+		filtered.push(...compatible.splice(toolLimit));
+	}
+
+	return { compatible, filtered };
+}
+import { Agent, maybeLogProviderPayloadAudit, type AgentMessage, type AgentTool, type ThinkingLevel } from "@gsd/pi-agent-core";
+import { getProviderCapabilities, type Message, type Model } from "@gsd/pi-ai";
 import { getAgentDir, getDocsPath } from "../config.js";
 import { AgentSession } from "./agent-session.js";
 import { AuthStorage } from "./auth-storage.js";
@@ -82,6 +128,22 @@ import {
 	type ToolName,
 	writeTool,
 } from "./tools/index.js";
+import { getToolCompatibility } from "./tools/tool-compatibility-registry.js";
+
+export function getAdjustToolSetRequestCustomMessages(
+	messages: readonly AgentMessage[] | undefined,
+): Array<{ index: number; customType: string }> {
+	if (!messages) return [];
+	const requestMessages: Array<{ index: number; customType: string }> = [];
+	for (let index = messages.length - 1; index >= 0; index--) {
+		const message = messages[index] as { role?: unknown; customType?: unknown };
+		if (message?.role === "assistant") break;
+		if (message?.role === "custom" && typeof message.customType === "string") {
+			requestMessages.push({ index, customType: message.customType });
+		}
+	}
+	return requestMessages.reverse();
+}
 
 export interface CreateAgentSessionOptions {
 	/** Working directory for project-local discovery. Default: process.cwd() */
@@ -378,6 +440,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	};
 
 	const extensionRunnerRef: { current?: ExtensionRunner } = {};
+	const workspaceRootRef: { current: string } = { current: cwd };
 
 	agent = new Agent({
 		initialState: {
@@ -390,15 +453,36 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		onPayload: async (payload, currentModel) => {
 			const runner = extensionRunnerRef.current;
 			if (!runner?.hasHandlers("before_provider_request")) {
+				maybeLogProviderPayloadAudit(payload, "before_provider_request:unchanged");
 				return payload;
 			}
-			return runner.emitBeforeProviderRequest(payload, currentModel);
+			const nextPayload = await runner.emitBeforeProviderRequest(payload, currentModel);
+			maybeLogProviderPayloadAudit(nextPayload, "before_provider_request:after");
+			return nextPayload;
 		},
 		sessionId: sessionManager.getSessionId(),
 		transformContext: async (messages) => {
 			const runner = extensionRunnerRef.current;
 			if (!runner) return messages;
 			return runner.emitContext(messages);
+		},
+		filterTools: async (tools, _signal, messages) => {
+			const currentModel = agent.state.activeInferenceModel ?? agent.state.model ?? model;
+			if (!currentModel) return tools;
+			const providerFiltered = filterToolsForProviderRequest(tools, currentModel);
+			const runner = extensionRunnerRef.current;
+			if (!runner?.hasHandlers("adjust_tool_set")) return providerFiltered.compatible;
+			const result = await runner.emitAdjustToolSet({
+				selectedModelApi: currentModel.api,
+				selectedModelProvider: currentModel.provider,
+				selectedModelId: currentModel.id,
+				activeToolNames: providerFiltered.compatible.map((tool) => tool.name),
+				filteredTools: providerFiltered.filtered.map((tool) => tool.name),
+				requestCustomMessages: getAdjustToolSetRequestCustomMessages(messages),
+			});
+			if (!result?.toolNames) return providerFiltered.compatible;
+			const allowedNames = new Set(result.toolNames);
+			return providerFiltered.compatible.filter((tool) => allowedNames.has(tool.name));
 		},
 		steeringMode: settingsManager.getSteeringMode(),
 		followUpMode: settingsManager.getFollowUpMode(),
@@ -409,9 +493,46 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		getProviderOptions: async (currentModel) => {
 			if (currentModel.provider !== "claude-code") return undefined;
 			const runner = extensionRunnerRef.current;
-			if (!runner?.hasUI()) return undefined;
+			if (!runner) {
+				return { cwd: workspaceRootRef.current };
+			}
 			return {
-				extensionUIContext: runner.getUIContext(),
+				cwd: workspaceRootRef.current,
+				...(runner.hasUI() ? { extensionUIContext: runner.getUIContext() } : {}),
+				onExternalToolCall: async (toolCall: { id: string; name: string; arguments: Record<string, unknown> }) => {
+					if (!runner.hasHandlers("tool_call")) return;
+					await runner.emitToolCall({
+						type: "tool_call",
+						toolCallId: toolCall.id,
+						toolName: toolCall.name,
+						input: toolCall.arguments,
+					});
+				},
+				onExternalToolResult: async (event: {
+					toolCall: { id: string; name: string; arguments: Record<string, unknown> };
+					result: {
+						content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
+						details?: Record<string, unknown>;
+						isError: boolean;
+					};
+				}) => {
+					if (!runner.hasHandlers("tool_result")) return;
+					const content = event.result.content.map((block) => {
+						if (block.type === "image" && typeof block.data === "string" && typeof block.mimeType === "string") {
+							return { type: "image" as const, data: block.data, mimeType: block.mimeType };
+						}
+						return { type: "text" as const, text: typeof block.text === "string" ? block.text : "" };
+					});
+					await runner.emitToolResult({
+						type: "tool_result",
+						toolCallId: event.toolCall.id,
+						toolName: event.toolCall.name,
+						input: event.toolCall.arguments,
+						content,
+						details: event.result.details,
+						isError: event.result.isError,
+					});
+				},
 			};
 		},
 		getApiKey: async (provider) => {
@@ -486,7 +607,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					const removed = modelRegistry.authStorage.removeLegacyOAuthCredential(resolvedProvider);
 					if (removed) {
 						console.warn(
-							`[auth] Removed unsupported Anthropic OAuth credential from auth.json (#3952).`,
+							`[auth] Removed unsupported Anthropic OAuth credential from auth.json.`,
 						);
 					}
 					if (isClaudeCodeBinaryInPath()) {
@@ -554,6 +675,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		modelRegistry,
 		initialActiveToolNames,
 		extensionRunnerRef,
+		workspaceRootRef,
 		isClaudeCodeReady: options.isClaudeCodeReady,
 	});
 	const extensionsResult = resourceLoader.getExtensions();

@@ -1,3 +1,5 @@
+// Project/App: GSD-2
+// File Purpose: Contract tests for browser workflow action derivation.
 import test from "node:test";
 import assert from "node:assert/strict";
 
@@ -56,6 +58,22 @@ test("auto paused → primary is /gsd auto with label Resume Auto", () => {
   assert.equal(result.primary.command, "/gsd auto");
   assert.equal(result.primary.label, "Resume Auto");
   assert.equal(result.primary.variant, "default");
+});
+
+test("step mode → primary is /gsd next with label Next Step", () => {
+  const result = deriveWorkflowAction(baseInput({ stepMode: true }));
+  assert.ok(result.primary);
+  assert.equal(result.primary.command, "/gsd next");
+  assert.equal(result.primary.label, "Next Step");
+  assert.equal(result.primary.variant, "default");
+  assert.equal(result.secondaries.some((action) => action.command === "/gsd next"), false);
+});
+
+test("paused step mode → primary remains /gsd next", () => {
+  const result = deriveWorkflowAction(baseInput({ autoPaused: true, stepMode: true }));
+  assert.ok(result.primary);
+  assert.equal(result.primary.command, "/gsd next");
+  assert.equal(result.primary.label, "Next Step");
 });
 
 test("pre-planning + no milestones → primary is /gsd with label Initialize Project", () => {

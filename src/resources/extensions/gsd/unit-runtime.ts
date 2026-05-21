@@ -10,6 +10,8 @@ import {
 } from "./paths.js";
 import { loadFile, parseTaskPlanMustHaves, countMustHavesMentionedInSummary } from "./files.js";
 import { parseUnitId } from "./unit-id.js";
+import { getTask, isDbAvailable, refreshOpenDatabaseFromDisk } from "./gsd-db.js";
+import { isClosedStatus } from "./status-guards.js";
 
 // Per-record advisory lock — prevents read-modify-write races between
 // concurrent writers updating disjoint fields of the same runtime record.
@@ -67,10 +69,24 @@ export type UnitRuntimePhase =
   | "wrapup-warning-sent"
   | "timeout"
   | "finalize-timeout"
+  | "crashed"
   | "recovered"
   | "finalized"
   | "paused"
   | "skipped";
+
+export const IN_FLIGHT_RUNTIME_PHASES: ReadonlySet<UnitRuntimePhase> = new Set([
+  "dispatched",
+  "wrapup-warning-sent",
+  "timeout",
+  "finalize-timeout",
+  "crashed",
+  "paused",
+]);
+
+export function isInFlightRuntimePhase(phase: UnitRuntimePhase): boolean {
+  return IN_FLIGHT_RUNTIME_PHASES.has(phase);
+}
 
 export interface ExecuteTaskRecoveryStatus {
   planPath: string;
@@ -78,6 +94,7 @@ export interface ExecuteTaskRecoveryStatus {
   summaryExists: boolean;
   taskChecked: boolean;
   nextActionAdvanced: boolean;
+  dbComplete: boolean;
   mustHaveCount: number;
   mustHavesMentionedInSummary: number;
 }
@@ -199,6 +216,12 @@ export async function inspectExecuteTaskDurability(
   const escapedTid = tid.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const taskChecked = !!planContent && new RegExp(`^- \\[[xX]\\] \\*\\*${escapedTid}:`, "m").test(planContent);
   const nextActionAdvanced = !new RegExp(`Execute ${tid}\\b`).test(stateContent);
+  let dbComplete = false;
+  if (isDbAvailable()) {
+    refreshOpenDatabaseFromDisk();
+    const task = getTask(mid, sid, tid);
+    dbComplete = !!task && isClosedStatus(task.status);
+  }
 
   // Must-have coverage: load task plan and count mentions in summary
   let mustHaveCount = 0;
@@ -225,12 +248,14 @@ export async function inspectExecuteTaskDurability(
     summaryExists,
     taskChecked,
     nextActionAdvanced,
+    dbComplete,
     mustHaveCount,
     mustHavesMentionedInSummary,
   };
 }
 
 export function formatExecuteTaskRecoveryStatus(status: ExecuteTaskRecoveryStatus): string {
+  if (status.dbComplete) return "DB task status is closed";
   const missing = [] as string[];
   if (!status.summaryExists) missing.push(`summary missing (${status.summaryPath})`);
   if (!status.taskChecked) missing.push(`task checkbox unchecked in ${status.planPath}`);

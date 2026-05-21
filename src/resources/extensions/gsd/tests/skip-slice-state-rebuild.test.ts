@@ -1,31 +1,63 @@
 /**
- * Regression test for #3477: gsd_skip_slice tool must rebuild STATE.md
- * after updating the DB so auto-mode reads the correct state.
+ * Regression test for #3477: gsd_skip_slice updates DB state and rebuilds
+ * the projected STATE.md artifact.
  */
-import { test } from "node:test";
+
+import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 
-test("gsd_skip_slice tool calls rebuildState after DB update (#3477)", () => {
-  const src = readFileSync(
-    join(import.meta.dirname, "..", "bootstrap", "db-tools.ts"),
-    "utf-8",
-  );
-  // The fix adds a rebuildState call after updateSliceStatus in skip_slice
-  assert.ok(
-    src.includes("rebuildState"),
-    "gsd_skip_slice must call rebuildState after updating slice status",
-  );
-});
+import { registerDbTools } from "../bootstrap/db-tools.ts";
+import {
+  closeDatabase,
+  getSlice,
+  insertMilestone,
+  insertSlice,
+  openDatabase,
+} from "../gsd-db.ts";
 
-test("rethink prompt warns against markdown-only edits for skip (#3477)", () => {
-  const prompt = readFileSync(
-    join(import.meta.dirname, "..", "prompts", "rethink.md"),
-    "utf-8",
-  );
-  assert.ok(
-    prompt.includes("MUST") && prompt.includes("gsd_skip_slice"),
-    "Rethink prompt must emphasize gsd_skip_slice tool requirement",
-  );
+test("gsd_skip_slice marks a slice skipped and refreshes STATE.md", async () => {
+  const base = mkdtempSync(join(tmpdir(), "gsd-skip-slice-"));
+  const tools = new Map<string, any>();
+  const pi = { registerTool: (tool: any) => tools.set(tool.name, tool) };
+
+  try {
+    mkdirSync(join(base, ".gsd", "milestones", "M001", "slices", "S01"), { recursive: true });
+    openDatabase(join(base, ".gsd", "gsd.db"));
+    insertMilestone({ id: "M001", title: "Skip Test", status: "active", depends_on: [] });
+    insertSlice({
+      id: "S01",
+      milestoneId: "M001",
+      title: "Skipped slice",
+      status: "pending",
+      risk: "low",
+      depends: [],
+      demo: "",
+      sequence: 1,
+    });
+
+    registerDbTools(pi as any);
+    const skipSlice = tools.get("gsd_skip_slice");
+    assert.ok(skipSlice, "gsd_skip_slice is registered");
+
+    const result = await skipSlice.execute(
+      "tool-call",
+      { milestoneId: "M001", sliceId: "S01", reason: "descoped" },
+      undefined,
+      undefined,
+      { cwd: base },
+    );
+
+    assert.equal(result.details.operation, "skip_slice");
+    assert.equal(getSlice("M001", "S01")?.status, "skipped");
+
+    const statePath = join(base, ".gsd", "STATE.md");
+    assert.equal(existsSync(statePath), true, "STATE.md should be rebuilt");
+    assert.match(readFileSync(statePath, "utf-8"), /Active Slice:\*\* None/);
+  } finally {
+    closeDatabase();
+    rmSync(base, { recursive: true, force: true });
+  }
 });

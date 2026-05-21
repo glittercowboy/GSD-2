@@ -18,17 +18,19 @@ import { randomUUID } from "node:crypto";
 import {
   appendFileSync,
   existsSync,
+  lstatSync,
+  rmSync,
   writeFileSync,
   readFileSync,
   mkdirSync,
   renameSync,
   unlinkSync,
 } from "node:fs";
-import { join, dirname } from "node:path";
+import { isAbsolute, join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gsdRoot } from "./paths.js";
 import { createWorktree, worktreePath, removeWorktree } from "./worktree-manager.js";
-import { autoWorktreeBranch, runWorktreePostCreateHook } from "./auto-worktree.js";
+import { autoWorktreeBranch, runWorktreePostCreateHook, syncGsdStateToWorktree } from "./auto-worktree.js";
 import {
   writeSessionStatus,
   removeSessionStatus,
@@ -83,6 +85,91 @@ let sliceState: SliceOrchestratorState | null = null;
 const SLICE_ORCHESTRATOR_STATE_FILE = "slice-orchestrator.json";
 const TMP_SUFFIX = ".tmp";
 export const SLICE_WORKER_AUTO_ARGS = ["headless", "--json", "auto"] as const;
+
+export function _resolveSliceParallelMaxWorkersForTest(maxWorkers?: number): number {
+  return maxWorkers ?? 2;
+}
+
+export function _buildSliceWorkerEnvForTest(
+  basePath: string,
+  milestoneId: string,
+  sliceId: string,
+  workerToken: string,
+  sourceEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  return {
+    ...sourceEnv,
+    GSD_SLICE_LOCK: sliceId,
+    GSD_MILESTONE_LOCK: milestoneId,
+    GSD_PROJECT_ROOT: basePath,
+    GSD_PARALLEL_WORKER: "1",
+    GSD_SLICE_WORKER_TOKEN: workerToken,
+  };
+}
+
+function isValidSliceWorktreePath(basePath: string, wtPath: string): boolean {
+  if (!existsSync(wtPath)) return false;
+  const gitPath = join(wtPath, ".git");
+  if (!existsSync(gitPath)) return false;
+  try {
+    if (!lstatSync(gitPath).isFile()) return false;
+    const content = readFileSync(gitPath, "utf8").trim();
+    if (!content.startsWith("gitdir: ")) return false;
+    const rawGitdir = content.slice("gitdir: ".length).trim();
+    if (!rawGitdir) return false;
+    const resolvedGitdir = isAbsolute(rawGitdir) ? rawGitdir : resolve(wtPath, rawGitdir);
+    const expectedPrefix = join(basePath, ".git", "worktrees").replaceAll("\\", "/");
+    const normalized = resolvedGitdir.replaceAll("\\", "/");
+    return normalized === expectedPrefix || normalized.startsWith(`${expectedPrefix}/`);
+  } catch {
+    return false;
+  }
+}
+
+function isWorkerPidAlive(pid: number): boolean {
+  if (!Number.isFinite(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === "ESRCH") return false;
+    return true;
+  }
+}
+
+async function waitForStartupGrace(pid: number, graceMs: number): Promise<boolean> {
+  const end = Date.now() + graceMs;
+  while (Date.now() < end) {
+    if (!isWorkerPidAlive(pid)) return false;
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+  }
+  return isWorkerPidAlive(pid);
+}
+
+function createSliceWorktree(basePath: string, milestoneId: string, sliceId: string): string {
+  const wtBranch = `slice/${milestoneId}/${sliceId}`;
+  const wtName = `${milestoneId}-${sliceId}`;
+  const wtPath = worktreePath(basePath, wtName);
+
+  if (existsSync(wtPath) && !isValidSliceWorktreePath(basePath, wtPath)) {
+    rmSync(wtPath, { recursive: true, force: true });
+  }
+  if (!existsSync(wtPath)) {
+    createWorktree(basePath, wtName, { branch: wtBranch });
+  }
+
+  const hookError = runWorktreePostCreateHook(basePath, wtPath);
+  if (hookError) {
+    throw new Error(`slice worktree post-create hook failed (${wtName}): ${hookError}`);
+  }
+  syncGsdStateToWorktree(basePath, wtPath);
+
+  if (!existsSync(join(wtPath, ".gsd"))) {
+    throw new Error(`slice worktree preflight failed (${wtName}): missing .gsd in worktree`);
+  }
+  return wtPath;
+}
 
 interface PersistedSliceWorker {
   milestoneId: string;
@@ -313,7 +400,24 @@ export function restoreSliceState(basePath: string): PersistedSliceState | null 
  * crash followed by a fresh process is detectable. (Issue #4980 HIGH-8)
  */
 export function isSliceParallelActive(basePath?: string): boolean {
-  if (sliceState?.active === true) return true;
+  const hasRunningWorkers = (): boolean => {
+    if (!sliceState) return false;
+    for (const worker of sliceState.workers.values()) {
+      if (worker.state === "running") {
+        if (worker.process) return true;
+        if (isRecoveredSliceWorkerAlive(worker)) return true;
+      }
+    }
+    return false;
+  };
+
+  if (sliceState?.active === true) {
+    if (hasRunningWorkers()) return true;
+    sliceState.active = false;
+    removeSliceStateFile(sliceState.basePath);
+    return false;
+  }
+
   if (!basePath) return false;
   const restored = restoreSliceState(basePath);
   if (!restored || restored.workers.length === 0) return false;
@@ -344,7 +448,11 @@ export function isSliceParallelActive(basePath?: string): boolean {
       cost: w.cost,
     });
   }
-  return true;
+
+  if (hasRunningWorkers()) return true;
+  sliceState.active = false;
+  removeSliceStateFile(sliceState.basePath);
+  return false;
 }
 
 /**
@@ -371,7 +479,7 @@ export async function startSliceParallel(
     return { started: [], errors: [{ sid: "all", error: "Cannot start slice-parallel from within a parallel worker" }] };
   }
 
-  const maxWorkers = opts.maxWorkers ?? 2;
+  const maxWorkers = _resolveSliceParallelMaxWorkersForTest(opts.maxWorkers);
   const budgetCeiling = opts.budgetCeiling;
 
   // Initialize orchestrator state
@@ -401,14 +509,8 @@ export async function startSliceParallel(
 
   for (const slice of toSpawn) {
     try {
-      // Create worktree for this slice
-      const wtBranch = `slice/${milestoneId}/${slice.id}`;
       const wtName = `${milestoneId}-${slice.id}`;
-      const wtPath = worktreePath(basePath, wtName);
-
-      if (!existsSync(wtPath)) {
-        createWorktree(basePath, wtName, { branch: wtBranch });
-      }
+      const wtPath = createSliceWorktree(basePath, milestoneId, slice.id);
 
       // Create worker info
       const worker: SliceWorkerInfo = {
@@ -429,10 +531,10 @@ export async function startSliceParallel(
 
       // Spawn worker
       const spawned = spawnSliceWorker(basePath, milestoneId, slice.id);
-      if (spawned) {
+      if (spawned && await waitForStartupGrace(worker.pid, 1200)) {
         started.push(slice.id);
       } else {
-        errors.push({ sid: slice.id, error: "Failed to spawn worker process" });
+        errors.push({ sid: slice.id, error: "Worker failed startup gate" });
         sliceState.workers.delete(slice.id);
         try {
           removeWorktree(basePath, wtName, { deleteBranch: true, force: true });
@@ -447,6 +549,21 @@ export async function startSliceParallel(
         removeWorktree(basePath, wtName, { deleteBranch: true, force: true });
       } catch { /* ignore cleanup failures */ }
     }
+  }
+
+  // Guard: if workers died immediately, treat as failed start so callers
+  // don't exit auto-mode and re-dispatch in a rapid loop.
+  for (let i = started.length - 1; i >= 0; i--) {
+    const sid = started[i];
+    const worker = sliceState.workers.get(sid);
+    if (worker && isWorkerPidAlive(worker.pid)) continue;
+    started.splice(i, 1);
+    errors.push({ sid, error: "Worker exited immediately after spawn" });
+    sliceState.workers.delete(sid);
+    const wtName = `${milestoneId}-${sid}`;
+    try {
+      removeWorktree(basePath, wtName, { deleteBranch: true, force: true });
+    } catch { /* ignore cleanup failures */ }
   }
 
   // If nothing started, deactivate
@@ -624,14 +741,7 @@ function spawnSliceWorker(
   try {
     child = spawn(process.execPath, [binPath, ...SLICE_WORKER_AUTO_ARGS], {
       cwd: worker.worktreePath,
-      env: {
-        ...process.env,
-        GSD_SLICE_LOCK: sliceId,
-        GSD_MILESTONE_LOCK: milestoneId,
-        GSD_PROJECT_ROOT: basePath,
-        GSD_PARALLEL_WORKER: "1",
-        GSD_SLICE_WORKER_TOKEN: worker.workerToken,
-      },
+      env: _buildSliceWorkerEnvForTest(basePath, milestoneId, sliceId, worker.workerToken),
       stdio: ["ignore", "pipe", "pipe"],
       detached: false,
     });

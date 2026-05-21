@@ -141,6 +141,14 @@ test("Feature 1: executive summary paragraph is rendered", () => {
   assert.ok(html.includes("$2.50 spent"), "should contain cost");
 });
 
+test("report uses the shared GSD HTML shell", () => {
+  const html = generateHtmlReport(mockData(), mockOpts());
+  assert.ok(html.includes('<span class="logo">GSD</span>'), "should render shared shell logo");
+  assert.ok(html.includes('<span class="kind-chip">Report</span>'), "should render report kind chip");
+  assert.ok(html.includes('<nav class="toc" aria-label="Report sections">'), "should render shared shell TOC");
+  assert.ok(html.includes('<main>'), "should render content inside shared shell main");
+});
+
 test("Feature 1: executive summary includes budget context when set", () => {
   const data = mockData({ health: { ...mockData().health, budgetCeiling: 10.00 } });
   const html = generateHtmlReport(data, mockOpts());

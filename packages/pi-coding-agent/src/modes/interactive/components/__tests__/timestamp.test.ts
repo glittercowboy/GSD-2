@@ -1,3 +1,6 @@
+// Project/App: GSD-2
+// File Purpose: Timestamp formatting regression tests for transcript metadata.
+
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { formatTimestamp } from "../timestamp.js";
@@ -12,7 +15,7 @@ describe("formatTimestamp", () => {
 		assert.equal(formatTimestamp(ts), "2026-03-24 10:34"); // default
 	});
 
-	test("date-time-us format", () => {
+	test("date-time-us format uses hyphenated month-day-year dates", () => {
 		assert.equal(formatTimestamp(ts, "date-time-us"), "03-24-2026 10:34 AM");
 	});
 

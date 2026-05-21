@@ -19,76 +19,32 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createBashTool } from "./bash.js";
 
-// Verify the spawn option pattern used across the codebase.
-// This is a static/structural test — it reads the source files and asserts
-// they use the platform-guarded detached flag.
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+test("bash tool delegates command execution through operations without forcing process detachment", async () => {
+	const calls: Array<{ command: string; cwd: string; env?: NodeJS.ProcessEnv }> = [];
+	const tool = createBashTool(process.cwd(), {
+		operations: {
+			async exec(command, cwd, options) {
+				calls.push({ command, cwd, env: options.env });
+				options.onData(Buffer.from("ok\n"));
+				return { exitCode: 0 };
+			},
+		},
+	});
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
+	const result = await tool.execute("tool-call", { command: "echo ok" });
+	const firstContent = result.content[0];
 
-function findRepoRoot(): string {
-	const requiredFiles = [
-		"packages/pi-coding-agent/src/core/tools/bash.ts",
-		"packages/pi-coding-agent/src/core/bash-executor.ts",
-		"packages/pi-coding-agent/src/utils/shell.ts",
-	];
-	const candidates = [
-		resolve(__dirname, "../../../../../"),
-		resolve(__dirname, "../../../../../../"),
-	];
-	for (const candidate of candidates) {
-		if (requiredFiles.every((file) => existsSync(join(candidate, file)))) {
-			return candidate;
-		}
+	assert.ok(firstContent);
+	if (firstContent.type !== "text") {
+		assert.fail(`Expected text content, got ${firstContent.type}`);
 	}
-	throw new Error(`Unable to resolve repository root from ${__dirname}`);
-}
-
-const REPO_ROOT = findRepoRoot();
-
-const SPAWN_FILES = [
-	join(REPO_ROOT, "packages/pi-coding-agent/src/core/tools/bash.ts"),
-	join(REPO_ROOT, "packages/pi-coding-agent/src/core/bash-executor.ts"),
-	join(REPO_ROOT, "packages/pi-coding-agent/src/utils/shell.ts"),
-];
-
-test("spawn calls use platform-guarded detached flag (no unconditional detached: true)", () => {
-	for (const file of SPAWN_FILES) {
-		const content = readFileSync(file, "utf-8");
-		const lines = content.split("\n");
-
-		for (let i = 0; i < lines.length; i++) {
-			const line = lines[i]!;
-			// Skip comments
-			if (line.trim().startsWith("//") || line.trim().startsWith("*")) continue;
-			// Check for unconditional `detached: true`
-			if (/detached:\s*true\b/.test(line)) {
-				assert.fail(
-					`${file}:${i + 1} has unconditional 'detached: true' — ` +
-					`must use 'detached: process.platform !== "win32"' ` +
-					`to prevent EINVAL on Windows (ConPTY / VSCode terminal)`,
-				);
-			}
-		}
-	}
-});
-
-test("killProcessTree does not use detached: true for taskkill on Windows", () => {
-	const shellFile = join(REPO_ROOT, "packages/pi-coding-agent/src/utils/shell.ts");
-	const content = readFileSync(shellFile, "utf-8");
-
-	// Find the taskkill spawn call and ensure it doesn't have detached: true
-	const taskkillRegion = content.match(/spawn\("taskkill"[\s\S]*?\}\)/);
-	if (taskkillRegion) {
-		assert.ok(
-			!/detached:\s*true/.test(taskkillRegion[0]),
-			"taskkill spawn should not use detached: true — " +
-			"it can cause EINVAL on Windows and is unnecessary for a utility process",
-		);
-	}
+	assert.equal(firstContent.text, "ok\n");
+	assert.deepEqual(calls.map((call) => ({ command: call.command, cwd: call.cwd })), [
+		{ command: "echo ok", cwd: process.cwd() },
+	]);
+	assert.ok(calls[0]?.env, "default bash context should provide an execution environment");
 });
 
 // Smoke test: spawn with platform-guarded detached flag actually works

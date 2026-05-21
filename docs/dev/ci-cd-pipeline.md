@@ -66,7 +66,10 @@ docker run --rm -v $(pwd):/workspace ghcr.io/gsd-build/gsd-pi:latest --version
 | Release Pipeline | `pipeline.yml` | After CI succeeds on main | Three-stage promotion |
 | Native Binaries | `build-native.yml` | `v*` tags | Cross-compile platform binaries |
 | Dev Cleanup | `cleanup-dev-versions.yml` | Weekly (Monday 06:00 UTC) | Unpublish `-dev.` versions older than 30 days |
-| AI Triage | `triage.yml` | New issues + PRs | Automated classification via Claude Haiku (v2.36) |
+| Agent Workflow Guard | `agent-workflow-guard.yml` | PR changes to workflow files | Blocks workflow diffs that expand `allowed_non_write_users` |
+| AI Triage | `ai-triage.yml` | Issues: opened/edited/reopened; PRs: opened/synchronize/reopened; trusted `issue_comment` with `/rerun-triage` | Automated classification and normalized triage labels for issues/PRs |
+| Issue Dedupe | `issue-dedupe.yml` | Opened/edited/reopened issues + manual dispatch | Posts likely duplicate candidates once per issue |
+| Issue Lifecycle | `issue-lifecycle.yml` | Label changes + schedule + manual dispatch | Adds lifecycle guidance comments and sweeps stale `needs-info` issues |
 
 **CI optimization (v2.38):** GitHub Actions minutes were reduced ~60-70% (~10k → ~3-4k/month) through workflow consolidation and caching improvements.
 
@@ -75,14 +78,17 @@ docker run --rm -v $(pwd):/workspace ghcr.io/gsd-build/gsd-pi:latest --version
 - **npm cache in pipeline** — dev-publish, test-verify, and prod-release now use `cache: 'npm'` on setup-node, saving ~1-2 min per job on repeat runs
 - **Exponential backoff** — npm registry propagation waits in `build-native.yml` replaced hardcoded `sleep 30` + fixed 15s retries with exponential backoff (5s → 10s → 20s → 30s cap), typically finishing in <15s when the registry is fast
 - **Security hardening** — pipeline.yml moved `${{ }}` expressions from `run:` blocks to `env:` variables to prevent command injection vectors
-### Docs-Only PR Detection (v2.41)
+### Build-Relevant Change Detection
 
-CI automatically detects when a PR contains only documentation changes (`.md` files and `docs/` content). When docs-only:
+CI classifies changed files before the expensive jobs run. Changes that do not
+touch build, runtime, test, package, web, native, Docker, or TypeScript config
+paths skip the build/test matrix.
 
-- **Skipped:** `build`, `windows-portability` (no code to compile or test)
+- **Skipped:** `build`, `integration-tests`, `e2e`, `docker-e2e`, and `windows-portability`
 - **Still runs:** `lint` (secret scanning, `.gsd/` check), `docs-check` (prompt injection scan)
 
-This saves CI minutes on documentation PRs while still enforcing security checks.
+This saves CI minutes on documentation and metadata-only PRs while still
+enforcing security checks.
 
 ### Prompt Injection Scan (v2.41)
 
@@ -104,10 +110,10 @@ The pipeline only triggers after `ci.yml` passes. Key gating tests include:
 
 - **Unit tests** (`npm run test:unit`) — includes `auto-session-encapsulation.test.ts` which enforces that all auto-mode state is encapsulated in `AutoSession`, plus dispatch loop regression tests that exercise the full `deriveState → resolveDispatch → idempotency` chain without an LLM. Any PR adding module-level mutable state to `auto.ts` will fail CI and block the pipeline.
 - **Integration tests** (`npm run test:integration`)
+- **E2E tests** (`npm run test:e2e`)
 - **Extension typecheck** (`npm run typecheck:extensions`)
 - **Package validation** (`npm run validate-pack`)
 - **Smoke tests** (`npm run test:smoke`) — run post-build in the pipeline against the local binary and again against the globally-installed `@dev` package
-- **Fixture tests** (`npm run test:fixtures`) — replay recorded LLM conversations without hitting real APIs
 - **Live regression tests** (`npm run test:live-regression`) — run against the installed binary in the Test stage to catch runtime regressions before promotion to `@next`
 
 ### Approving a Prod Release

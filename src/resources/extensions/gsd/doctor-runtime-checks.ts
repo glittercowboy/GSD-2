@@ -7,7 +7,7 @@ import { milestonesDir, gsdRoot, resolveGsdRootFile } from "./paths.js";
 import { deriveState, isGhostMilestone, isReusableGhostMilestone } from "./state.js";
 import { saveFile } from "./files.js";
 import { nativeIsRepo, nativeForEachRef, nativeUpdateRef } from "./native-git-bridge.js";
-import { readCrashLock, isLockProcessAlive, clearLock } from "./crash-recovery.js";
+import { readCrashLock, isLockProcessAlive, clearStaleWorkerLock } from "./crash-recovery.js";
 import { getActiveAutoWorkers } from "./db/auto-workers.js";
 import { normalizeRealPath } from "./paths.js";
 import { ensureGitignore, isGsdGitignored } from "./gitignore.js";
@@ -15,8 +15,22 @@ import { readAllSessionStatuses, isSessionStale, removeSessionStatus } from "./s
 import { recoverFailedMigration } from "./migrate-external.js";
 import { splitCompletedKey } from "./forensics.js";
 import { findMilestoneIds } from "./milestone-ids.js";
+import { loadEffectiveGSDPreferences } from "./preferences.js";
 
 const MAX_UAT_ATTEMPTS = 3;
+
+function isCurrentGsdStateIntactForMigratingCleanup(basePath: string): boolean {
+  try {
+    const stateFile = resolveGsdRootFile(basePath, "STATE");
+    const milestonesPath = milestonesDir(basePath);
+    const dbPath = join(gsdRoot(basePath), "gsd.db");
+    const hasDbFile = existsSync(dbPath);
+    const hasNonEmptyDb = hasDbFile && statSync(dbPath).size > 0;
+    return existsSync(stateFile) && existsSync(milestonesPath) && hasNonEmptyDb;
+  } catch {
+    return false;
+  }
+}
 
 function hasAssessmentVerdict(basePath: string, mid: string, sid: string): boolean {
   const assessmentPath = join(gsdRoot(basePath), "milestones", mid, "slices", sid, `${sid}-ASSESSMENT.md`);
@@ -35,6 +49,8 @@ export async function checkRuntimeHealth(
   shouldFix: (code: DoctorIssueCode) => boolean,
 ): Promise<void> {
   const root = gsdRoot(basePath);
+  const gitPrefs = loadEffectiveGSDPreferences(basePath)?.preferences?.git;
+  const manageGitignore = gitPrefs?.manage_gitignore;
 
   // ── Stale crash lock ──────────────────────────────────────────────────
   // Phase C pt 2: the lock state lives in the workers + unit_dispatches
@@ -56,7 +72,7 @@ export async function checkRuntimeHealth(
         });
 
         if (shouldFix("stale_crash_lock")) {
-          clearLock(basePath);
+          clearStaleWorkerLock(basePath);
           fixesApplied.push("cleared stale auto-mode worker state");
         }
       }
@@ -80,17 +96,29 @@ export async function checkRuntimeHealth(
         // heartbeat for this project?" — readCrashLock returns null for
         // healthy live workers (it surfaces stale ones only), so we must
         // consult getActiveAutoWorkers directly.
-        const projectRoot = normalizeRealPath(basePath);
-        const activeWorkers = getActiveAutoWorkers().filter(
-          (w) => w.project_root_realpath === projectRoot && isLockProcessAlive({
-            pid: w.pid,
-            startedAt: w.started_at,
-            unitType: "starting",
-            unitId: "bootstrap",
-            unitStartedAt: w.started_at,
-          }),
-        );
-        const lockHolderAlive = activeWorkers.length > 0;
+        let lockHolderAlive = false;
+        try {
+          const projectRoot = normalizeRealPath(basePath);
+          for (const worker of getActiveAutoWorkers()) {
+            if (worker.project_root_realpath !== projectRoot) continue;
+            try {
+              if (isLockProcessAlive({
+                pid: worker.pid,
+                startedAt: worker.started_at,
+                unitType: "starting",
+                unitId: "bootstrap",
+                unitStartedAt: worker.started_at,
+              })) {
+                lockHolderAlive = true;
+                break;
+              }
+            } catch {
+              // Ignore malformed worker rows or transient PID probe failures.
+            }
+          }
+        } catch {
+          // If worker lookup fails, continue with the stranded lock diagnosis.
+        }
         if (!lockHolderAlive) {
           issues.push({
             severity: "error",
@@ -402,7 +430,7 @@ export async function checkRuntimeHealth(
           });
 
           if (shouldFix("gitignore_missing_patterns")) {
-            ensureGitignore(basePath);
+            ensureGitignore(basePath, { manageGitignore });
             fixesApplied.push("added missing GSD runtime patterns to .gitignore");
           }
         }
@@ -434,6 +462,13 @@ export async function checkRuntimeHealth(
         if (shouldFix("failed_migration")) {
           if (recoverFailedMigration(basePath)) {
             fixesApplied.push("recovered failed migration (.gsd.migrating → .gsd)");
+          } else if (isCurrentGsdStateIntactForMigratingCleanup(basePath)) {
+            try {
+              rmSync(migratingPath, { recursive: true, force: true });
+              fixesApplied.push("removed stale .gsd.migrating orphan after validating current .gsd state");
+            } catch (err) {
+              fixesApplied.push(`failed to remove stale .gsd.migrating orphan at ${migratingPath}: ${err instanceof Error ? err.message : String(err)}`);
+            }
           }
         }
       }
@@ -470,7 +505,7 @@ export async function checkRuntimeHealth(
           });
 
           if (shouldFix("symlinked_gsd_unignored")) {
-            const modified = ensureGitignore(basePath);
+            const modified = ensureGitignore(basePath, { manageGitignore });
             if (modified) fixesApplied.push("added .gsd to .gitignore (symlinked external state)");
           }
         }

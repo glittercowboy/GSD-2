@@ -1,3 +1,5 @@
+// Project/App: GSD-2
+// File Purpose: Slice-cadence merge and milestone resquash git operations.
 /**
  * Slice-cadence collapse — #4765.
  *
@@ -40,6 +42,7 @@ import { logWarning } from "./workflow-logger.js";
 import { emitSliceMerged, emitMilestoneResquash } from "./worktree-telemetry.js";
 import { loadEffectiveGSDPreferences } from "./preferences.js";
 import { GIT_NO_PROMPT_ENV } from "./git-constants.js";
+import { getMilestone, getSlice, isDbAvailable } from "./gsd-db.js";
 
 /**
  * Auto-worktree milestone branch name. Must match autoWorktreeBranch() in
@@ -70,6 +73,50 @@ function cleanupMergeArtifacts(projectRoot: string): void {
   } catch (err) {
     logWarning("worktree", `merge artifact cleanup failed: ${err instanceof Error ? err.message : String(err)}`);
   }
+}
+
+function stripKnownIdPrefix(value: string | undefined | null, id: string): string | undefined {
+  const raw = String(value ?? "").trim();
+  if (!raw) return undefined;
+  const lower = raw.toLowerCase();
+  const idLower = id.toLowerCase();
+  if (lower.startsWith(`${idLower}:`)) return raw.slice(id.length + 1).trim() || undefined;
+  return raw;
+}
+
+function getSliceMergeNames(milestoneId: string, sliceId: string): {
+  milestoneTitle?: string;
+  sliceTitle?: string;
+} {
+  if (!isDbAvailable()) return {};
+  return {
+    milestoneTitle: stripKnownIdPrefix(getMilestone(milestoneId)?.title, milestoneId),
+    sliceTitle: stripKnownIdPrefix(getSlice(milestoneId, sliceId)?.title, sliceId),
+  };
+}
+
+function buildSliceMergeCommitMessage(milestoneId: string, sliceId: string, milestoneBranch: string): string {
+  const names = getSliceMergeNames(milestoneId, sliceId);
+  const sliceLabel = names.sliceTitle ?? sliceId;
+  const subject = `feat: ${sliceLabel} - ${sliceId} of ${milestoneId} (slice-cadence)`;
+  const body = [
+    `Slice: ${sliceId}${names.sliceTitle ? ` - ${names.sliceTitle}` : ""}`,
+    `Milestone: ${milestoneId}${names.milestoneTitle ? ` - ${names.milestoneTitle}` : ""}`,
+    `GSD-Slice: ${sliceId}`,
+    `GSD-Milestone: ${milestoneId}`,
+    `Branch: ${milestoneBranch}`,
+  ];
+  return `${subject}\n\n${body.join("\n")}`;
+}
+
+function buildMilestoneResquashCommitMessage(milestoneId: string, sliceCount: number): string {
+  const milestoneTitle = isDbAvailable()
+    ? stripKnownIdPrefix(getMilestone(milestoneId)?.title, milestoneId)
+    : undefined;
+  const subject = milestoneTitle
+    ? `feat: ${milestoneTitle} (${milestoneId}, ${sliceCount} slices re-squashed)`
+    : `feat: ${milestoneId} (${sliceCount} slices re-squashed)`;
+  return `${subject}\n\nMilestone: ${milestoneId}${milestoneTitle ? ` - ${milestoneTitle}` : ""}\nGSD-Milestone: ${milestoneId}`;
 }
 
 function advanceMilestoneBranch(
@@ -227,7 +274,7 @@ export function mergeSliceToMain(
     // Commit the squash with a slice-scoped message
     const commitSha = nativeCommit(
       projectRoot,
-      `gsd: merge ${sliceId} of ${milestoneId} (slice-cadence)`,
+      buildSliceMergeCommitMessage(milestoneId, sliceId, milestoneBranch),
     );
 
     // Advance the milestone branch to main so the next slice's commits start
@@ -327,7 +374,7 @@ export function resquashMilestoneOnMain(
 
     const newSha = nativeCommit(
       projectRoot,
-      `gsd: complete milestone ${milestoneId} (${sliceCount} slices re-squashed)`,
+      buildMilestoneResquashCommitMessage(milestoneId, sliceCount),
       { allowEmpty: true },
     );
 

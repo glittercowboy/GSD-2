@@ -1,91 +1,271 @@
 /**
- * Tests for the web auth token flow (web/lib/auth.ts).
- *
- * The auth module runs in the browser, so we verify the source code contains
- * the expected patterns for token extraction, persistence, and transmission.
+ * GSD2 Web auth token behavior tests.
  */
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 
-const projectRoot = process.cwd()
+type AuthModule = typeof import('../../../web/lib/auth.ts')
+type ProxyAuthModule = typeof import('../../../web/lib/proxy-auth.ts')
 
-// ─── Source contract tests ──────────────────────────────────────────────────
+type FakeWindow = {
+  location: {
+    hash: string
+    pathname: string
+    search: string
+  }
+  history: {
+    replaceState: (state: unknown, title: string, url?: string) => void
+  }
+  addEventListener: (event: string, listener: (event: { key: string; newValue: string | null }) => void) => void
+}
 
-const authSource = readFileSync(join(projectRoot, 'web', 'lib', 'auth.ts'), 'utf-8')
+type BrowserState = {
+  replaceCalls: string[]
+  storage: Map<string, string>
+  storageListeners: Array<(event: { key: string; newValue: string | null }) => void>
+  restore: () => void
+}
 
-test('auth.ts persists token to localStorage on extraction', () => {
-  assert.match(authSource, /localStorage\.setItem/, 'should persist token to localStorage after extracting from hash')
-})
+const originalWindow = (globalThis as { window?: unknown }).window
+const originalLocalStorage = (globalThis as { localStorage?: unknown }).localStorage
+const originalFetch = globalThis.fetch
 
-test('auth.ts falls back to localStorage when hash is absent', () => {
-  assert.match(authSource, /localStorage\.getItem/, 'should read from localStorage when URL hash is empty')
-})
+async function importAuth(caseName: string): Promise<AuthModule> {
+  return import(`../../../web/lib/auth.ts?case=${caseName}-${Date.now()}-${Math.random()}`)
+}
 
-test('auth.ts defines an auth storage key constant', () => {
-  assert.match(authSource, /AUTH_STORAGE_KEY/, 'should use a named constant for the localStorage key')
-})
+async function importProxyAuth(caseName: string): Promise<ProxyAuthModule> {
+  return import(`../../../web/lib/proxy-auth.ts?case=${caseName}-${Date.now()}-${Math.random()}`)
+}
 
-test('auth.ts clears the URL fragment after token extraction', () => {
-  assert.match(authSource, /replaceState/, 'should clear the hash from the address bar')
-})
+function installBrowserState(options: {
+  hash?: string
+  search?: string
+  storedToken?: string
+  throwOnGet?: boolean
+  throwOnSet?: boolean
+} = {}): BrowserState {
+  const storage = new Map<string, string>()
+  if (options.storedToken) storage.set('gsd-auth-token', options.storedToken)
 
-test('auth.ts wraps localStorage calls in try/catch for private browsing', () => {
-  // localStorage can throw in private browsing when quota is exceeded
-  const setItemIndex = authSource.indexOf('localStorage.setItem')
-  const getItemIndex = authSource.indexOf('localStorage.getItem')
-  assert.ok(setItemIndex > -1)
-  assert.ok(getItemIndex > -1)
-  // Both localStorage accesses should be inside try blocks
-  const beforeSetItem = authSource.slice(Math.max(0, setItemIndex - 200), setItemIndex)
-  const beforeGetItem = authSource.slice(Math.max(0, getItemIndex - 200), getItemIndex)
-  assert.match(beforeSetItem, /try\s*\{/, 'localStorage.setItem should be inside a try block')
-  assert.match(beforeGetItem, /try\s*\{/, 'localStorage.getItem should be inside a try block')
-})
+  const replaceCalls: string[] = []
+  const storageListeners: Array<(event: { key: string; newValue: string | null }) => void> = []
+  const fakeWindow: FakeWindow = {
+    location: {
+      hash: options.hash ?? '',
+      pathname: '/dashboard',
+      search: options.search ?? '',
+    },
+    history: {
+      replaceState: (_state, _title, url) => {
+        replaceCalls.push(url ?? '')
+      },
+    },
+    addEventListener: (event, listener) => {
+      if (event === 'storage') storageListeners.push(listener)
+    },
+  }
 
-// ─── sendBeacon auth token tests ────────────────────────────────────────────
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: fakeWindow,
+  })
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem(key: string): string | null {
+        if (options.throwOnGet) throw new Error('storage unavailable')
+        return storage.get(key) ?? null
+      },
+      setItem(key: string, value: string): void {
+        if (options.throwOnSet) throw new Error('storage unavailable')
+        storage.set(key, value)
+      },
+      removeItem(key: string): void {
+        storage.delete(key)
+      },
+    },
+  })
 
-const appShellSource = readFileSync(join(projectRoot, 'web', 'components', 'gsd', 'app-shell.tsx'), 'utf-8')
+  return {
+    replaceCalls,
+    storage,
+    storageListeners,
+    restore() {
+      Object.defineProperty(globalThis, 'window', {
+        configurable: true,
+        value: originalWindow,
+      })
+      Object.defineProperty(globalThis, 'localStorage', {
+        configurable: true,
+        value: originalLocalStorage,
+      })
+      globalThis.fetch = originalFetch
+    },
+  }
+}
 
-test('app-shell.tsx sendBeacon includes auth token as query parameter', () => {
-  // sendBeacon cannot set custom headers, so the token must be passed
-  // as a _token query parameter for the proxy to accept the request.
-  assert.match(appShellSource, /_token=/, 'sendBeacon URL should include _token query parameter')
-})
+test('getAuthToken extracts, persists, caches, and clears fragment token', async () => {
+  const browser = installBrowserState({ hash: '#token=abc123DEF456', search: '?view=dashboard' })
+  try {
+    const auth = await importAuth('fragment-token')
 
-test('app-shell.tsx sendBeacon does not send bare unauthenticated URL', () => {
-  // Every sendBeacon to /api/ should include the auth token
-  const beaconCalls = appShellSource.match(/sendBeacon\([^)]+\)/g) || []
-  for (const call of beaconCalls) {
-    if (call.includes('/api/')) {
-      // The URL should be constructed with the token, not a bare string literal
-      assert.ok(
-        !call.includes('"/api/shutdown"') && !call.includes("'/api/shutdown'"),
-        `sendBeacon call should not use a bare /api/ URL without auth: ${call}`
-      )
-    }
+    assert.equal(auth.getAuthToken(), 'abc123DEF456')
+    assert.equal(browser.storage.get('gsd-auth-token'), 'abc123DEF456')
+    assert.deepEqual(browser.replaceCalls, ['/dashboard?view=dashboard'])
+
+    ;(globalThis as unknown as { window: FakeWindow }).window.location.hash = ''
+    browser.storage.clear()
+    assert.equal(auth.getAuthToken(), 'abc123DEF456')
+  } finally {
+    browser.restore()
   }
 })
 
-// ─── proxy.ts contract tests ────────────────────────────────────────────────
+test('getAuthToken falls back to localStorage and ignores storage failures', async () => {
+  const storedBrowser = installBrowserState({ storedToken: 'f00d' })
+  try {
+    const auth = await importAuth('stored-token')
 
-const proxySource = readFileSync(join(projectRoot, 'web', 'proxy.ts'), 'utf-8')
+    assert.equal(auth.getAuthToken(), 'f00d')
+  } finally {
+    storedBrowser.restore()
+  }
 
-test('proxy.ts exports a function named proxy', () => {
-  assert.match(proxySource, /export function proxy/, 'must export "proxy" for Next.js to activate it')
+  const throwingBrowser = installBrowserState({ hash: '#token=badc0ffee', throwOnSet: true })
+  try {
+    const auth = await importAuth('storage-set-throws')
+
+    assert.equal(auth.getAuthToken(), 'badc0ffee')
+    assert.deepEqual(throwingBrowser.replaceCalls, ['/dashboard'])
+  } finally {
+    throwingBrowser.restore()
+  }
+
+  const unavailableBrowser = installBrowserState({ throwOnGet: true })
+  try {
+    const auth = await importAuth('storage-get-throws')
+
+    assert.equal(auth.getAuthToken(), null)
+  } finally {
+    unavailableBrowser.restore()
+  }
 })
 
-test('proxy.ts accepts _token query parameter as fallback authentication', () => {
-  assert.match(proxySource, /_token/, 'proxy should support _token query parameter for SSE/sendBeacon')
+test('storage events update auth headers and URL token parameters', async () => {
+  const browser = installBrowserState()
+  try {
+    const auth = await importAuth('storage-events')
+
+    assert.equal(auth.getAuthToken(), null)
+    assert.equal(browser.storageListeners.length, 1)
+
+    browser.storageListeners[0]({ key: 'gsd-auth-token', newValue: 'cafe42' })
+
+    assert.deepEqual(auth.authHeaders({ Accept: 'application/json' }), {
+      Accept: 'application/json',
+      Authorization: 'Bearer cafe42',
+    })
+    assert.equal(auth.appendAuthParam('/api/events'), '/api/events?_token=cafe42')
+    assert.equal(auth.appendAuthParam('/api/events?stream=1'), '/api/events?stream=1&_token=cafe42')
+  } finally {
+    browser.restore()
+  }
 })
 
-test('proxy.ts validates bearer token from Authorization header', () => {
-  assert.match(proxySource, /Bearer/, 'proxy should check Authorization: Bearer header')
+test('authFetch short-circuits missing tokens and preserves explicit Authorization headers', async () => {
+  const missingTokenBrowser = installBrowserState()
+  try {
+    const auth = await importAuth('missing-auth-fetch-token')
+    const response = await auth.authFetch('/api/status')
+
+    assert.equal(response.status, 401)
+    assert.deepEqual(await response.json(), { error: 'No auth token available' })
+  } finally {
+    missingTokenBrowser.restore()
+  }
+
+  const browser = installBrowserState({ hash: '#token=abc123' })
+  const calls: Array<{ input: RequestInfo | URL; authorization: string | null }> = []
+  try {
+    const auth = await importAuth('auth-fetch-token')
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const headers = new Headers(init?.headers)
+      calls.push({ input, authorization: headers.get('Authorization') })
+      return new Response('ok', { status: 200 })
+    }) as typeof fetch
+
+    const response = await auth.authFetch('/api/status', {
+      headers: { Authorization: 'Bearer caller-token' },
+    })
+
+    assert.equal(response.status, 200)
+    assert.deepEqual(calls, [{ input: '/api/status', authorization: 'Bearer caller-token' }])
+  } finally {
+    browser.restore()
+  }
 })
 
-test('proxy.ts skips auth when GSD_WEB_AUTH_TOKEN is not set', () => {
-  assert.match(proxySource, /GSD_WEB_AUTH_TOKEN/, 'proxy should read GSD_WEB_AUTH_TOKEN from env')
-  assert.match(proxySource, /NextResponse\.next\(\)/, 'proxy should pass through when no token is configured')
+test('proxy auth validates configured bearer and query-token authentication', async () => {
+  const previousEnv = {
+    token: process.env.GSD_WEB_AUTH_TOKEN,
+    host: process.env.GSD_WEB_HOST,
+    port: process.env.GSD_WEB_PORT,
+    origins: process.env.GSD_WEB_ALLOWED_ORIGINS,
+  }
+
+  try {
+    const { evaluateWebProxyAuth } = await importProxyAuth('auth-proxy')
+
+    delete process.env.GSD_WEB_AUTH_TOKEN
+    assert.deepEqual(evaluateWebProxyAuth(makeRequest('/api/status')), { kind: 'next' })
+
+    process.env.GSD_WEB_AUTH_TOKEN = 'expected'
+    process.env.GSD_WEB_HOST = '127.0.0.1'
+    process.env.GSD_WEB_PORT = '3888'
+    assert.deepEqual(evaluateWebProxyAuth(makeRequest('/not-api/status')), { kind: 'next' })
+    assert.equal(evaluateWebProxyAuth(makeRequest('/api/status')).status, 401)
+    assert.deepEqual(evaluateWebProxyAuth(makeRequest('/api/status', { authorization: 'Bearer expected' })), {
+      kind: 'next',
+    })
+    assert.deepEqual(evaluateWebProxyAuth(makeRequest('/api/status?_token=expected')), { kind: 'next' })
+    assert.equal(evaluateWebProxyAuth(makeRequest('/api/status?_token=wrong')).status, 401)
+
+    assert.equal(
+      evaluateWebProxyAuth(makeRequest('/api/status', {
+        authorization: 'Bearer expected',
+        origin: 'http://evil.test',
+      })).status,
+      403,
+    )
+
+    process.env.GSD_WEB_ALLOWED_ORIGINS = 'http://proxy.test'
+    assert.deepEqual(evaluateWebProxyAuth(makeRequest('/api/status', {
+      authorization: 'Bearer expected',
+      origin: 'http://proxy.test',
+    })), { kind: 'next' })
+  } finally {
+    restoreEnv('GSD_WEB_AUTH_TOKEN', previousEnv.token)
+    restoreEnv('GSD_WEB_HOST', previousEnv.host)
+    restoreEnv('GSD_WEB_PORT', previousEnv.port)
+    restoreEnv('GSD_WEB_ALLOWED_ORIGINS', previousEnv.origins)
+  }
 })
+
+function makeRequest(path: string, headers: Record<string, string> = {}) {
+  const url = new URL(`http://127.0.0.1:3888${path}`)
+  return {
+    pathname: url.pathname,
+    searchParams: url.searchParams,
+    headers: new Headers(headers),
+  }
+}
+
+function restoreEnv(key: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[key]
+    return
+  }
+  process.env[key] = value
+}

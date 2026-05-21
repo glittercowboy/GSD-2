@@ -15,18 +15,74 @@ import assert from "node:assert/strict";
 
 // ─── Extracted detection logic (mirrors headless.ts) ────────────────────────
 
-const TERMINAL_PREFIXES = ['auto-mode stopped', 'step-mode stopped']
+const PAUSED_PREFIXES = ['auto-mode paused', 'step-mode paused']
+const TERMINAL_PREFIXES = [
+  'auto-mode stopped',
+  'step-mode stopped',
+  'auto-mode complete',
+  'no active milestone',
+  'auto-mode idle',
+]
+
+function isManualResolutionNotification(message: string): boolean {
+  return (
+    message.includes('resolve manually and re-run /gsd auto') ||
+    message.includes('resolve conflicts manually and run /gsd auto to resume') ||
+    message.includes('resolve and run /gsd auto to resume')
+  )
+}
+
+function isNonBlockingPauseNotification(message: string): boolean {
+  return message.includes('idempotent advance: unit already active')
+}
+
+function isPauseNotification(message: string): boolean {
+  return PAUSED_PREFIXES.some((prefix) => message.startsWith(prefix))
+}
+
+function isPauseNotificationRequiringIntervention(message: string): boolean {
+  return isPauseNotification(message) && !isNonBlockingPauseNotification(message)
+}
+
+function getCommandBlockContent(event: Record<string, unknown>): string | null {
+  if (event.type !== 'message_start' && event.type !== 'message_end') return null
+  const message = event.message as Record<string, unknown> | undefined
+  if (message?.customType !== 'gsd-command-block') return null
+  return String(message.content ?? '').toLowerCase()
+}
+
+function isBlockingCommandBlock(event: Record<string, unknown>): boolean {
+  const content = getCommandBlockContent(event)
+  if (!content) return false
+  return (
+    (
+      content.includes('cannot start new workflow work') &&
+      content.includes('complete but not merged')
+    ) ||
+    content.includes('cannot run because the active milestone is blocked by validation')
+  )
+}
 
 function isTerminalNotification(event: Record<string, unknown>): boolean {
+  if (isBlockingCommandBlock(event)) return true
   if (event.type !== 'extension_ui_request' || event.method !== 'notify') return false
   const message = String(event.message ?? '').toLowerCase()
-  return TERMINAL_PREFIXES.some((prefix) => message.startsWith(prefix))
+  return (
+    TERMINAL_PREFIXES.some((prefix) => message.startsWith(prefix)) ||
+    isPauseNotification(message) ||
+    isManualResolutionNotification(message)
+  )
 }
 
 function isBlockedNotification(event: Record<string, unknown>): boolean {
+  if (isBlockingCommandBlock(event)) return true
   if (event.type !== 'extension_ui_request' || event.method !== 'notify') return false
   const message = String(event.message ?? '').toLowerCase()
-  return message.includes('blocked:')
+  return (
+    message.includes('blocked:') ||
+    isPauseNotificationRequiringIntervention(message) ||
+    isManualResolutionNotification(message)
+  )
 }
 
 const QUICK_COMMANDS = new Set([
@@ -45,6 +101,17 @@ function isQuickCommand(command: string, commandArgs: readonly string[] = []): b
 
 function makeNotify(message: string): Record<string, unknown> {
   return { type: 'extension_ui_request', method: 'notify', message }
+}
+
+function makeCommandBlock(content: string): Record<string, unknown> {
+  return {
+    type: 'message_start',
+    message: {
+      role: 'custom',
+      customType: 'gsd-command-block',
+      content,
+    },
+  }
 }
 
 // ─── isTerminalNotification ─────────────────────────────────────────────────
@@ -67,6 +134,38 @@ test("detects 'Auto-mode stopped (Milestone M001 complete).' as terminal", () =>
 
 test("detects 'Step-mode stopped.' as terminal", () => {
   assert.ok(isTerminalNotification(makeNotify("Step-mode stopped.")))
+})
+
+test("detects 'Auto-mode complete...' as terminal", () => {
+  assert.ok(isTerminalNotification(makeNotify('Auto-mode complete — all milestones complete.')))
+})
+
+test("detects 'No active milestone...' as terminal", () => {
+  assert.ok(isTerminalNotification(makeNotify('No active milestone in registry.')))
+})
+
+test("detects 'Auto-mode idle...' as terminal", () => {
+  assert.ok(isTerminalNotification(makeNotify('Auto-mode idle: no roadmap work items found.')))
+})
+
+test("detects 'Auto-mode paused.' as terminal", () => {
+  assert.ok(isTerminalNotification(makeNotify("Auto-mode paused (Escape). Type to interact, or /gsd auto to resume.")))
+})
+
+test("detects 'Step-mode paused.' as terminal", () => {
+  assert.ok(isTerminalNotification(makeNotify("Step-mode paused (Escape). Type to interact, or /gsd next to resume.")))
+})
+
+test("detects manual merge-resolution notification as terminal", () => {
+  assert.ok(isTerminalNotification(makeNotify("Survivor-branch finalization for M001 failed: merge conflict. Resolve manually and re-run /gsd auto.")))
+})
+
+test("detects unmerged milestone command block as terminal", () => {
+  assert.ok(isTerminalNotification(makeCommandBlock("/gsd auto cannot start new workflow work because M001 is complete but not merged.")))
+})
+
+test("detects validation-blocked command block as terminal", () => {
+  assert.ok(isTerminalNotification(makeCommandBlock("/gsd auto cannot run because the active milestone is blocked by validation.")))
 })
 
 // ─── False positives that previously triggered early exit (#879) ────────────
@@ -95,6 +194,10 @@ test("does NOT match 'Post-hook: applied 3 fix(es).'", () => {
   assert.ok(!isTerminalNotification(makeNotify("Post-hook: applied 3 fix(es).")))
 })
 
+test("detects idempotent auto-mode advance pause as terminal", () => {
+  assert.ok(isTerminalNotification(makeNotify("Auto-mode paused: idempotent advance: unit already active")))
+})
+
 test("does NOT match non-notify events", () => {
   assert.ok(!isTerminalNotification({ type: 'agent_end' }))
   assert.ok(!isTerminalNotification({ type: 'extension_ui_request', method: 'select', message: 'Auto-mode stopped.' }))
@@ -110,8 +213,26 @@ test("detects inline 'Blocked:' message", () => {
   assert.ok(isBlockedNotification(makeNotify("Blocked: no active milestone. Fix and run /gsd auto.")))
 })
 
+test("detects pause notifications as blocked in headless mode", () => {
+  assert.ok(isBlockedNotification(makeNotify("Auto-mode paused due to provider error: connection reset")))
+})
+
+test("detects manual merge-resolution notifications as blocked", () => {
+  assert.ok(isBlockedNotification(makeNotify("Merge conflict on milestone M001: src/conflict.js. Resolve conflicts manually and run /gsd auto to resume.")))
+  assert.ok(isBlockedNotification(makeNotify("Merge error on milestone M001: remote rejected push. Resolve and run /gsd auto to resume.")))
+})
+
+test("detects blocking command blocks as blocked", () => {
+  assert.ok(isBlockedNotification(makeCommandBlock("/gsd auto cannot start new workflow work because M001 is complete but not merged.")))
+  assert.ok(isBlockedNotification(makeCommandBlock("/gsd auto cannot run because the active milestone is blocked by validation.")))
+})
+
 test("does NOT match 'blocked' without colon (avoids false positives)", () => {
   assert.ok(!isBlockedNotification(makeNotify("The request was blocked by the firewall")))
+})
+
+test("does NOT match idempotent auto-mode advance pause as blocked", () => {
+  assert.ok(!isBlockedNotification(makeNotify("Auto-mode paused: idempotent advance: unit already active")))
 })
 
 // ─── isQuickCommand ─────────────────────────────────────────────────────────

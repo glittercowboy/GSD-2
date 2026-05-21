@@ -447,6 +447,13 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli", GoogleGe
 
 					// Not retryable or max retries exceeded
 					if (response.status === 404) {
+						if (isAntigravity) {
+							throw new Error(
+								`Antigravity API error (404): Model "${model.id}" was not found. ` +
+								`This model may have been removed or renamed in the Antigravity backend. ` +
+								`Please switch to a supported model (e.g., claude-opus-4-6-thinking or gemini-3.1-pro-high).`,
+							);
+						}
 						throw new Error(
 							`Cloud Code Assist API error (404): Model "${model.id}" was not found. ` +
 							`This model may not be available via Cloud Code Assist. ` +

@@ -3,6 +3,7 @@ import assert from "node:assert/strict"
 import { join } from "node:path"
 
 import {
+  buildSubprocessPrefixArgs,
   isUnderNodeModules,
   resolveSubprocessModule,
 } from "../../web/ts-subprocess-flags.ts"
@@ -118,40 +119,31 @@ test("resolveSubprocessModule strips .ts extension when building dist .js path",
 // Integration: bridge-service subprocess resolution pattern
 // ---------------------------------------------------------------------------
 
-test("bridge-service workspace-index subprocess uses compiled JS when under node_modules (source audit)", async () => {
-  // Verify bridge-service.ts calls resolveSubprocessModule for workspace-index
-  const { readFileSync } = await import("node:fs")
-  const bridgeSource = readFileSync(
-    join(process.cwd(), "src", "web", "bridge-service.ts"),
-    "utf-8",
-  )
-
-  assert.match(
-    bridgeSource,
-    /resolveSubprocessModule/,
-    "bridge-service.ts must use resolveSubprocessModule to resolve workspace-index path — " +
-      "hardcoded .ts paths fail with ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING on Node v24 (see #2279)",
+test("buildSubprocessPrefixArgs omits TS loaders when compiled JS was selected", () => {
+  assert.deepEqual(
+    buildSubprocessPrefixArgs(
+      "/usr/lib/node_modules/gsd-pi",
+      {
+        modulePath: "/usr/lib/node_modules/gsd-pi/dist/resources/extensions/gsd/workspace-index.js",
+        useCompiledJs: true,
+      },
+      "file:///loader.mjs",
+    ),
+    ["--input-type=module"],
   )
 })
 
-test("all web service files use resolveSubprocessModule instead of hardcoded .ts paths (source audit)", async () => {
-  const { readFileSync, readdirSync } = await import("node:fs")
+test("buildSubprocessPrefixArgs keeps TS loader path when source TS was selected", () => {
+  const args = buildSubprocessPrefixArgs(
+    "/home/user/projects/gsd",
+    {
+      modulePath: "/home/user/projects/gsd/src/resources/extensions/gsd/workspace-index.ts",
+      useCompiledJs: false,
+    },
+    "file:///loader.mjs",
+  )
 
-  const serviceFiles = readdirSync(join(process.cwd(), "src", "web"))
-    .filter((f: string) => f.endsWith("-service.ts"))
-
-  for (const file of serviceFiles) {
-    const source = readFileSync(join(process.cwd(), "src", "web", file), "utf-8")
-
-    // If the service file imports resolveTypeStrippingFlag it spawns subprocesses
-    // and must also use resolveSubprocessModule
-    if (source.includes("resolveTypeStrippingFlag")) {
-      assert.match(
-        source,
-        /resolveSubprocessModule/,
-        `${file} uses resolveTypeStrippingFlag but does not use resolveSubprocessModule — ` +
-          "subprocess .ts paths will fail under node_modules/ on Node v24 (#2279)",
-      )
-    }
-  }
+  assert.equal(args[0], "--import")
+  assert.equal(args[1], "file:///loader.mjs")
+  assert.equal(args.at(-1), "--input-type=module")
 })

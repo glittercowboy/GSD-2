@@ -43,6 +43,8 @@ export const CACHE_MAX = 50;
  *   - gsd_milestone_plan: alias for above
  *   - gsd_milestone_generate_id: generates milestone IDs (discuss.md multi-milestone)
  *   - gsd_generate_milestone_id: alias for above
+ *   - gsd_requirement_save: creates requirements during discuss
+ *   - gsd_save_requirement: alias for above
  *   - gsd_requirement_update: updates requirements during discuss
  *   - gsd_update_requirement: alias for above
  */
@@ -60,6 +62,8 @@ export const DISCUSS_TOOLS_ALLOWLIST: readonly string[] = [
   "gsd_milestone_generate_id",
   "gsd_generate_milestone_id",
   // Requirement updates
+  "gsd_requirement_save",
+  "gsd_save_requirement",
   "gsd_requirement_update",
   "gsd_update_requirement",
 ];

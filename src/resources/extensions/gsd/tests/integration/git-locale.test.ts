@@ -7,13 +7,13 @@ import assert from 'node:assert/strict';
  * English output, and that nativeMergeSquash passes the env to execFileSync.
  */
 
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 
 import { GIT_NO_PROMPT_ENV } from "../../git-constants.ts";
-import { nativeAddAllWithExclusions } from "../../native-git-bridge.ts";
+import { nativeAddAllWithExclusions, nativeMergeSquash } from "../../native-git-bridge.ts";
 import { RUNTIME_EXCLUSION_PATHS } from "../../git-service.ts";
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"], encoding: "utf-8" }).trim();
@@ -97,23 +97,34 @@ describe('git-locale', async () => {
 
   // ─── nativeMergeSquash: env is passed (merge-squash stderr is English) ─
 
-  test('nativeMergeSquash fallback uses GIT_NO_PROMPT_ENV', () => {
-    // We verify indirectly: the source code must pass env: GIT_NO_PROMPT_ENV.
-    // Read the source and check for the pattern. This is a static check.
-    const src = readFileSync(
-      join(import.meta.dirname, "../..", "native-git-bridge.ts"),
-      "utf-8"
-    );
+  test('nativeMergeSquash succeeds under non-English locale env', () => {
+    const repo = initTempRepo();
+    try {
+      const mainBranch = git(repo, "branch", "--show-current");
+      git(repo, "checkout", "-b", "feature");
+      createFile(repo, "src/feature.ts", "export const feature = true;");
+      git(repo, "add", "-A");
+      git(repo, "commit", "-m", "feat: add feature");
+      git(repo, "checkout", mainBranch);
 
-    // Find the nativeMergeSquash function and check it uses GIT_NO_PROMPT_ENV
-    const fnStart = src.indexOf("export function nativeMergeSquash");
-    assert.ok(fnStart !== -1, "nativeMergeSquash function exists in source");
+      const origLcAll = process.env.LC_ALL;
+      const origLang = process.env.LANG;
+      process.env.LANG = "de_DE.UTF-8";
+      delete process.env.LC_ALL;
+      try {
+        const result = nativeMergeSquash(repo, "feature");
+        assert.equal(result.success, true);
+      } finally {
+        if (origLcAll !== undefined) process.env.LC_ALL = origLcAll;
+        else delete process.env.LC_ALL;
+        if (origLang !== undefined) process.env.LANG = origLang;
+        else delete process.env.LANG;
+      }
 
-    const fnBody = src.slice(fnStart, src.indexOf("\nexport function", fnStart + 1));
-    const hasEnv = fnBody.includes("env: GIT_NO_PROMPT_ENV");
-    assert.ok(
-      hasEnv,
-      "nativeMergeSquash fallback must pass env: GIT_NO_PROMPT_ENV to execFileSync (#1997)"
-    );
+      const staged = git(repo, "diff", "--cached", "--name-only");
+      assert.ok(staged.includes("src/feature.ts"));
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
 });

@@ -156,9 +156,26 @@ import {
   EXIT_ERROR,
   EXIT_BLOCKED,
   EXIT_CANCELLED,
+  isBlockedNotification,
   isInteractiveHeadlessTool,
+  isTerminalNotification,
   shouldArmHeadlessIdleTimeout,
 } from '../headless-events.js'
+
+function makeNotify(message: string): Record<string, unknown> {
+  return { type: 'extension_ui_request', method: 'notify', message }
+}
+
+function makeCommandBlock(content: string): Record<string, unknown> {
+  return {
+    type: 'message_start',
+    message: {
+      role: 'custom',
+      customType: 'gsd-command-block',
+      content,
+    },
+  }
+}
 
 // ─── mapStatusToExitCode ─────────────────────────────────────────────────
 
@@ -186,12 +203,75 @@ test('mapStatusToExitCode: "blocked" returns EXIT_BLOCKED', () => {
   assert.equal(mapStatusToExitCode('blocked'), EXIT_BLOCKED)
 })
 
+test('mapStatusToExitCode: "paused" returns EXIT_BLOCKED', () => {
+  assert.equal(mapStatusToExitCode('paused'), EXIT_BLOCKED)
+})
+
 test('mapStatusToExitCode: "cancelled" returns EXIT_CANCELLED', () => {
   assert.equal(mapStatusToExitCode('cancelled'), EXIT_CANCELLED)
 })
 
 test('mapStatusToExitCode: unknown status returns EXIT_ERROR', () => {
   assert.equal(mapStatusToExitCode('unknown'), EXIT_ERROR)
+})
+
+test('isTerminalNotification: auto-mode pause notifications are terminal', () => {
+  assert.equal(isTerminalNotification(makeNotify('Auto-mode paused (Escape). Type to interact, or /gsd auto to resume.')), true)
+})
+
+test('isTerminalNotification: step-mode pause notifications are terminal', () => {
+  assert.equal(isTerminalNotification(makeNotify('Step-mode paused (Escape). Type to interact, or /gsd next to resume.')), true)
+})
+
+test('isTerminalNotification: idempotent advance pause notifications are terminal', () => {
+  assert.equal(isTerminalNotification(makeNotify('Auto-mode paused: idempotent advance: unit already active')), true)
+})
+
+test('isTerminalNotification: manual merge-resolution notifications are terminal', () => {
+  assert.equal(isTerminalNotification(makeNotify('Survivor-branch finalization for M001 failed: merge conflict. Resolve manually and re-run /gsd auto.')), true)
+})
+
+test('isTerminalNotification: unmerged milestone command blocks are terminal', () => {
+  assert.equal(
+    isTerminalNotification(makeCommandBlock('/gsd auto cannot start new workflow work because M001 is complete but not merged.')),
+    true,
+  )
+})
+
+test('isTerminalNotification: validation-blocked command blocks are terminal', () => {
+  assert.equal(
+    isTerminalNotification(makeCommandBlock('/gsd auto cannot run because the active milestone is blocked by validation.')),
+    true,
+  )
+})
+
+test('isBlockedNotification: pause notifications require intervention in headless mode', () => {
+  assert.equal(isBlockedNotification(makeNotify('Auto-mode paused (Escape). Type to interact, or /gsd auto to resume.')), true)
+  assert.equal(isBlockedNotification(makeNotify('Auto-mode paused due to provider error: connection reset')), true)
+})
+
+test('isBlockedNotification: idempotent advance pause notifications are not blocked', () => {
+  assert.equal(isBlockedNotification(makeNotify('Auto-mode paused: idempotent advance: unit already active')), false)
+})
+
+test('isBlockedNotification: manual merge-resolution notifications require intervention', () => {
+  assert.equal(isBlockedNotification(makeNotify('Merge conflict on milestone M001: src/conflict.js. Resolve conflicts manually and run /gsd auto to resume.')), true)
+  assert.equal(isBlockedNotification(makeNotify('Merge error on milestone M001: remote rejected push. Resolve and run /gsd auto to resume.')), true)
+})
+
+test('isBlockedNotification: blocking command blocks require intervention', () => {
+  assert.equal(
+    isBlockedNotification(makeCommandBlock('/gsd auto cannot start new workflow work because M001 is complete but not merged.')),
+    true,
+  )
+  assert.equal(
+    isBlockedNotification(makeCommandBlock('/gsd auto cannot run because the active milestone is blocked by validation.')),
+    true,
+  )
+})
+
+test('isBlockedNotification: avoids blocked text without blocked marker', () => {
+  assert.equal(isBlockedNotification(makeNotify('The request was blocked by the firewall')), false)
 })
 
 test('isInteractiveHeadlessTool: ask_user_questions is interactive', () => {

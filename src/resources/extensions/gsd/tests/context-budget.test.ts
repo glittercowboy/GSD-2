@@ -4,7 +4,7 @@
  * No I/O, no extension context, no global state.
  */
 
-import { describe, it } from "node:test";
+import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 
 import {
@@ -16,7 +16,16 @@ import {
   computeBudgets,
   truncateAtSectionBoundary,
   resolveExecutorContextWindow,
+  _resetEmpiricalCacheForTest,
 } from "../context-budget.js";
+
+// Reset the per-provider empirical chars-per-token cache before each test.
+// The hardcoded char-ratio assertions below assume the static fallback path
+// (3.5 / 4.0 chars/token) is used. Without this guard, a prior test that
+// warms tiktoken would populate the cache and silently break these tests.
+beforeEach(() => {
+  _resetEmpiricalCacheForTest();
+});
 
 import type { TokenProvider } from "../token-counter.js";
 

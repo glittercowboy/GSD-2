@@ -15,6 +15,13 @@ export interface CompactionSettings {
 	enabled?: boolean; // default: true
 	reserveTokens?: number; // default: 16384
 	keepRecentTokens?: number; // default: 20000
+	/**
+	 * Optional percent-of-context-window trigger (0 < value < 1). When set,
+	 * compaction fires at `contextWindow * thresholdPercent` and overrides
+	 * `reserveTokens`. Typically set as a runtime override by host integrations
+	 * (see `setCompactionThresholdOverride`) and not persisted by users directly.
+	 */
+	thresholdPercent?: number;
 }
 
 export interface BranchSummarySettings {
@@ -812,11 +819,42 @@ export class SettingsManager {
 		return this.settings.compaction?.keepRecentTokens ?? COMPACTION_KEEP_RECENT_TOKENS;
 	}
 
-	getCompactionSettings(): { enabled: boolean; reserveTokens: number; keepRecentTokens: number } {
+	getCompactionThresholdPercent(): number | undefined {
+		return this.settings.compaction?.thresholdPercent;
+	}
+
+	/**
+	 * Set or clear an in-memory compaction threshold-percent override.
+	 *
+	 * Applied to `this.settings` only; never persisted to disk. Pass `undefined`
+	 * to clear a previously set override (necessary for idempotent re-sync from
+	 * host integrations whose preference may have been removed).
+	 *
+	 * Direct mutation is used instead of `applyOverrides()` because deep-merge
+	 * semantics skip `undefined` values, which would prevent clearing.
+	 */
+	setCompactionThresholdOverride(percent: number | undefined): void {
+		if (!this.settings.compaction) {
+			this.settings.compaction = {};
+		}
+		if (percent === undefined) {
+			delete this.settings.compaction.thresholdPercent;
+		} else {
+			this.settings.compaction.thresholdPercent = percent;
+		}
+	}
+
+	getCompactionSettings(): {
+		enabled: boolean;
+		reserveTokens: number;
+		keepRecentTokens: number;
+		thresholdPercent?: number;
+	} {
 		return {
 			enabled: this.getCompactionEnabled(),
 			reserveTokens: this.getCompactionReserveTokens(),
 			keepRecentTokens: this.getCompactionKeepRecentTokens(),
+			thresholdPercent: this.getCompactionThresholdPercent(),
 		};
 	}
 

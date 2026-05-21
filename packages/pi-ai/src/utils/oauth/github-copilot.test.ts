@@ -1,25 +1,13 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { Api, Model } from "../../types.js";
 import type { OAuthCredentials } from "./types.js";
 import {
 	getGitHubCopilotBaseUrl,
 	githubCopilotOAuthProvider,
+	loginGitHubCopilot,
 	normalizeDomain,
 } from "./github-copilot.js";
-
-const __dirname = fileURLToPath(new URL(".", import.meta.url));
-const packageRoot = join(__dirname, "..", "..", "..");
-const sourceDir = existsSync(join(__dirname, "github-copilot.ts"))
-	? __dirname
-	: join(packageRoot, "src", "utils", "oauth");
-
-function readSourceFile(name: string): string {
-	return readFileSync(join(sourceDir, name), "utf-8");
-}
 
 function createModel(overrides: Partial<Model<Api>> = {}): Model<Api> {
 	return {
@@ -191,16 +179,62 @@ describe("GitHub Copilot OAuth — credential regression", () => {
 		assert.ok(githubCopilotOAuthProvider);
 	});
 
-	test("CLIENT_ID is plaintext (not base64)", () => {
-		const content = readSourceFile("github-copilot.ts");
-		assert.ok(content.includes('CLIENT_ID = "Iv1.b507a08c87ecfe98"'));
-		assert.ok(!content.includes("atob("));
-	});
+	test("device login sends the public OAuth client id without a client secret", async (t) => {
+		const calls: Array<{ url: string; init: RequestInit }> = [];
+		const originalFetch = globalThis.fetch;
+		t.after(() => {
+			globalThis.fetch = originalFetch;
+		});
 
-	test("security explanation comments are present", () => {
-		const content = readSourceFile("github-copilot.ts");
-		assert.ok(content.includes("NOTE: This credential is public"));
-		assert.ok(content.includes("obfuscated") || content.includes("security scanners"));
+		globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
+			const url = String(input);
+			calls.push({ url, init: init ?? {} });
+
+			if (url.endsWith("/login/device/code")) {
+				return Response.json({
+					device_code: "device-code",
+					user_code: "ABCD-EFGH",
+					verification_uri: "https://github.com/login/device",
+					interval: 1,
+					expires_in: 600,
+				});
+			}
+
+			if (url.endsWith("/login/oauth/access_token")) {
+				return Response.json({ access_token: "github-access-token" });
+			}
+
+			if (url.endsWith("/copilot_internal/v2/token")) {
+				return Response.json({
+					token: "tid=123;exp=1234567890;proxy-ep=proxy.individual.githubcopilot.com;",
+					expires_at: Math.floor(Date.now() / 1000) + 3600,
+				});
+			}
+
+			if (url.endsWith("/models")) {
+				return Response.json({ data: [] });
+			}
+
+			if (url.includes("/models/") && url.endsWith("/policy")) {
+				return Response.json({ ok: true });
+			}
+
+			throw new Error(`Unexpected fetch: ${url}`);
+		};
+
+		const credentials = await loginGitHubCopilot({
+			onPrompt: async () => "",
+			onAuth: () => {},
+		});
+
+		assert.equal(credentials.access, "tid=123;exp=1234567890;proxy-ep=proxy.individual.githubcopilot.com;");
+		const deviceCodeCall = calls.find((call) => call.url.endsWith("/login/device/code"));
+		assert.ok(deviceCodeCall, "device-code request should be sent");
+		const requestBody = deviceCodeCall.init.body;
+		assert.equal(typeof requestBody, "string");
+		const body = JSON.parse(requestBody as string) as Record<string, unknown>;
+		assert.equal(body.client_id, "Iv1.b507a08c87ecfe98");
+		assert.equal("client_secret" in body, false, "GitHub device flow must not send a client secret");
 	});
 });
 

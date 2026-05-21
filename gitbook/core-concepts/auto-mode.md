@@ -28,7 +28,9 @@ Plan → Execute (per task) → Complete → Reassess Roadmap → Next Slice
 
 ## State Authority
 
-The GSD database is the runtime source of truth for milestones, slices, tasks, requirements, decisions, summaries, and completion status. Markdown files in `.gsd/` are rendered projections for review, prompts, and git-friendly history; editing a projection does not override the database unless a GSD command imports or saves the change.
+The GSD database is the runtime source of truth for milestones, slices, tasks, requirements, summaries, and completion status. Durable decisions and project knowledge use the same database through the `memories` table: decisions are stored as `architecture` memories, and KNOWLEDGE patterns/lessons are stored as `pattern`/`gotcha` memories.
+
+Markdown files in `.gsd/` are rendered projections for review, prompts, and git-friendly history. `.gsd/DECISIONS.md` is projected from architecture memories, and the Patterns/Lessons sections of `.gsd/KNOWLEDGE.md` are projected from memory rows; editing those projections does not override the database unless a GSD command imports or saves the change. The Rules section of `KNOWLEDGE.md` remains manually authored and is preserved separately.
 
 In worktree mode, the project-root database and project-root `.gsd/` state remain authoritative. Worktree markdown projections are diagnostics, not state to sync back. Runtime state derivation does not silently rebuild from markdown when the database is unavailable. The legacy markdown fallback is only enabled with `GSD_ALLOW_MARKDOWN_DERIVE_FALLBACK=1` for tests and explicit recovery work.
 
@@ -100,22 +102,40 @@ Every task gets a clean AI context window. No accumulated garbage, no quality de
 
 ## Context Mode
 
-Context Mode is enabled by default for auto-mode runs. Each unit receives manifest-driven guidance to preserve the conversation window: use `gsd_exec` for noisy codebase scans, builds, tests, and diagnostics; use `gsd_exec_search` before repeating a prior sandboxed run; and use `gsd_resume` after compaction or session resume to read `.gsd/last-snapshot.md`.
+Context Mode is enabled by default for auto-mode runs. Eligible auto-mode units receive manifest-driven guidance to preserve the conversation window: use `gsd_exec` for noisy codebase scans, builds, tests, and diagnostics; use `gsd_exec_search` before repeating a prior sandboxed run; and use `gsd_resume` after compaction or session resume to read a prior compaction snapshot from `.gsd/last-snapshot.md` when one exists.
 
-`gsd_exec` writes full stdout/stderr and metadata under `.gsd/exec/`, then returns only a short digest to the agent. This keeps large command output out of the LLM context while preserving exact evidence on disk. Opt out with:
+`contextMode: triage` is used specifically for capture triage turns so they stay focused on classification and routing decisions instead of implementation work.
+
+`gsd_exec` writes capped stdout/stderr and metadata under `.gsd/exec/`; output may be truncated. It then returns only a short digest to the agent. This keeps large command output out of the LLM context while preserving exact evidence on disk. Opt out of Context Mode guidance, snapshot injection, `gsd_exec`, `gsd_exec_search`, and `gsd_resume` with:
 
 ```yaml
 context_mode:
   enabled: false
 ```
 
-You can also tune sandbox behavior with `context_mode.exec_timeout_ms`, `context_mode.exec_stdout_cap_bytes`, and `context_mode.exec_digest_chars`.
+You can also tune sandbox behavior with `context_mode.exec_timeout_ms`, `context_mode.exec_stdout_cap_bytes`, `context_mode.exec_digest_chars`, and `context_mode.exec_env_allowlist`.
 
 ## Runtime Tool Policy
 
 Every auto-mode unit declares a `ToolsPolicy` in its `UnitContextManifest`, and GSD enforces it before tool calls run. Execution units use `all` mode and can edit project files, run shell commands, and dispatch subagents. Most planning and discussion units use `planning` mode: read tools are allowed, writes are limited to `.gsd/`, bash must be read-only, and subagent dispatch is blocked. Selected planning and closeout units use `planning-dispatch` mode, which keeps the same source-write and bash restrictions but allows `subagent` dispatch for isolated recon, planning, or review work. Documentation units use `docs` mode, which also allows writes to the manifest's documentation globs such as `docs/**`, top-level `README*.md`, `CHANGELOG.md`, and top-level `*.md`.
 
+The sidecar unit types now have distinct manifest behavior: `triage-captures` runs in `contextMode: triage` with `planning`-mode tools (read-heavy, `.gsd/`-scoped writes, no subagent dispatch), while `quick-task` runs in `contextMode: execution` with `all`-mode tools so it can apply and verify small inline fixes.
+
 Policy violations return a hard block, so unsafe writes, unsafe bash, and subagent dispatch from non-dispatch planning units are stopped at runtime rather than handled as model instructions. In `planning-dispatch` units, prompts steer the parent agent toward read-only specialists such as `scout`, `planner`, `researcher`, `reviewer`, `security`, or `tester`; implementation-tier agents still belong in `execute-task`.
+
+## Pre-Dispatch Runtime Blocks
+
+Before auto mode launches a unit, the orchestration pipeline enforces runtime invariants in this order: reconcile state, choose the next unit, compile the unit tool contract, validate the worktree or unit root, then persist the runtime transition. A failure in any pre-dispatch step returns a `blocked` result before a worker session starts.
+
+| Block Reason | What It Means | Remediation |
+|--------------|---------------|-------------|
+| State reconciliation blocker | The authoritative database snapshot is already blocked, or state derivation found existing blockers. | Inspect `/gsd status`, `STATE.md`, and the database-backed blocker message; resolve the blocker or run the appropriate GSD recovery command before retrying `/gsd auto`. |
+| `unknown-unit-type` | Dispatch selected a unit with no registered `UnitContextManifest`. | Fix the unit registration or manifest mapping. Retrying without a code/config fix will select the same invalid unit. |
+| `missing-closeout-tool` | A closeout unit such as task, slice, milestone, UAT, or gate completion has no required workflow tool available. | Restore the missing `gsd_*` workflow tool registration or update the unit manifest/tool contract so the unit can durably save its result. |
+| `root-missing` / `root-not-directory` | A source-writing unit would run from a missing or invalid unit root. | Recreate or repair the milestone worktree/root, or clear an incorrect `GSD_UNIT_ROOT`, before launching another source-writing unit. |
+| `git-metadata-missing` | A source-writing unit root exists but is not a git worktree or repository root. | Run the unit from the project root or milestone worktree with valid `.git` metadata; recreate the worktree if it was deleted or partially copied. |
+
+Recovery classification treats deterministic policy, tool-schema, stale-worker, and invalid-worktree failures as non-transient stops. Provider failures still use provider-specific transient classification and may retry automatically, while verification drift and unknown runtime failures escalate for inspection because repeating the same dispatch can preserve the drift.
 
 ## Reactive Task Execution
 
@@ -191,6 +211,10 @@ verification_max_retries: 2    # max retry attempts
 
 If verification fails, the AI sees the output and attempts to fix the issues before advancing. This ensures quality gates are enforced mechanically.
 
+Commands must be directly runnable checks such as `npm run lint`, `npm run test`, or `python3 -m pytest`. GSD rejects shell composition and control syntax in verification commands, including pipes, redirects, semicolons, backticks, and command substitution, so a piped command like `python3 -m pytest 2>&1 | tail -5` must be replaced with the underlying test command.
+
+If no verification commands are configured and the task plan does not provide a `verify` command, GSD attempts project discovery. It checks `package.json` scripts first, then Python pytest markers through the `python-project` discovery source: a `tests/` directory containing files that match `test_*.py` or `*_test.py` at any nested depth, `pytest.ini`, or pytest configuration sections in `pyproject.toml` such as `[tool.pytest.ini_options]`; equivalent pytest markers under `[tool.pytest]`, `[tool.pytest.*]`, `[pytest]`, or `[tool:pytest]` are also treated as explicit pytest evidence.
+
 ## Slice Discussion Gate
 
 For projects requiring human review before each slice:
@@ -256,4 +280,6 @@ Two anomaly types surface from telemetry:
 - `worktree-orphan` — one per orphan reason-bucket
 - `worktree-unmerged-exit` — aggregate signal across the window
 
-For per-event detail (specific milestone IDs, timestamps, exit reasons) inspect `.gsd/journal/*.jsonl` directly.
+For per-event detail (specific milestone IDs, timestamps, exit reasons) inspect `.gsd/journal/*.jsonl` directly. `auto-exit` events now include:
+- `reason`: normalized bucket for stable analytics (`pause`, `stop`, `blocked`, `merge-conflict`, `merge-failed`, `slice-merge-conflict`, `provider-error`, `session-failed`, `stream-aborted`, `unit-aborted`, `verification-exhausted`, `all-complete`, `no-active-milestone`, `other`)
+- `rawReason`: original free-form reason text before normalization, preserved for debugging and audit trails

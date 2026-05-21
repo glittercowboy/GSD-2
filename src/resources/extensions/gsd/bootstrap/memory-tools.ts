@@ -1,3 +1,5 @@
+// Project/App: GSD-2
+// File Purpose: Registers memory-layer tools.
 // GSD2 — Memory tool registration
 //
 // Exposes the memory-layer tools (capture_thought, memory_query, gsd_graph)
@@ -7,12 +9,13 @@
 import { Type } from "@sinclair/typebox";
 import type { ExtensionAPI } from "@gsd/pi-coding-agent";
 
-import { ensureDbOpen } from "./dynamic-tools.js";
+import { ensureDbOpen, resolveCtxCwd } from "./dynamic-tools.js";
 import {
   executeGsdGraph,
   executeMemoryCapture,
   executeMemoryQuery,
 } from "../tools/memory-tools.js";
+
 
 export function registerMemoryTools(pi: ExtensionAPI): void {
   // ─── capture_thought ────────────────────────────────────────────────────
@@ -57,7 +60,7 @@ export function registerMemoryTools(pi: ExtensionAPI): void {
       ),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      const ok = await ensureDbOpen();
+      const ok = await ensureDbOpen(resolveCtxCwd(_ctx));
       if (!ok) {
         return {
           content: [{ type: "text" as const, text: "Error: GSD database is not available. Cannot capture memory." }],
@@ -108,7 +111,7 @@ export function registerMemoryTools(pi: ExtensionAPI): void {
       ),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      const ok = await ensureDbOpen();
+      const ok = await ensureDbOpen(resolveCtxCwd(_ctx));
       if (!ok) {
         return {
           content: [{ type: "text" as const, text: "Error: GSD database is not available. Cannot query memory." }],
@@ -149,7 +152,7 @@ export function registerMemoryTools(pi: ExtensionAPI): void {
       ], { description: "Only include edges with this relation type" })),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      const ok = await ensureDbOpen();
+      const ok = await ensureDbOpen(resolveCtxCwd(_ctx));
       if (!ok) {
         return {
           content: [{ type: "text" as const, text: "Error: GSD database is not available." }],

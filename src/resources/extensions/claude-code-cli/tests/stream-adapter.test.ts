@@ -1,3 +1,4 @@
+// GSD2 - Claude Code stream adapter regression tests
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -5,6 +6,8 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import {
 	makeStreamExhaustedErrorMessage,
+	isClaudeCodeAbortErrorMessage,
+	resolveClaudeCodeAbortedMessageText,
 	getResultErrorMessage,
 	makeAbortedMessage,
 	mergePendingToolCalls,
@@ -13,6 +16,7 @@ import {
 	buildPromptFromContext,
 	buildSdkQueryPrompt,
 	buildSdkOptions,
+	resolveClaudeCodeCwd,
 	createClaudeCodeCanUseToolHandler,
 	buildBashPermissionPattern,
 	buildBashPermissionPatternOptions,
@@ -20,6 +24,7 @@ import {
 	createClaudeCodeElicitationHandler,
 	extractImageBlocksFromContext,
 	extractToolResultsFromSdkUserMessage,
+	serverToolUseToToolCallLike,
 	getClaudeLookupCommand,
 	parseAskUserQuestionsElicitation,
 	parseTextInputElicitation,
@@ -50,6 +55,8 @@ const WORKFLOW_MCP_ENV_KEYS = [
 	"GSD_WORKFLOW_MCP_ARGS",
 	"GSD_WORKFLOW_MCP_ENV",
 	"GSD_WORKFLOW_MCP_CWD",
+	"GSD_PROJECT_ROOT",
+	"GSD_WORKFLOW_PROJECT_ROOT",
 ] as const;
 
 type WorkflowMcpEnvKey = (typeof WORKFLOW_MCP_ENV_KEYS)[number];
@@ -60,6 +67,9 @@ function setWorkflowMcpEnv(
 	const prev: Partial<Record<WorkflowMcpEnvKey, string | undefined>> = {};
 	for (const key of WORKFLOW_MCP_ENV_KEYS) {
 		prev[key] = process.env[key];
+		// Clear all managed keys so tests run in a clean env state.
+		// Keys present in `values` are set to the desired test value below.
+		delete process.env[key];
 	}
 	for (const [key, value] of Object.entries(values)) {
 		process.env[key] = value;
@@ -400,6 +410,36 @@ describe("stream-adapter — no transcript fabrication (#4102)", () => {
 });
 
 describe("stream-adapter — Claude Code external tool results", () => {
+	test("serverToolUseToToolCallLike preserves object input for extension tool_result routing", () => {
+		const toolCall = serverToolUseToToolCallLike({
+			id: "srv-1",
+			name: "workflow_gate",
+			input: { gateId: "Q3", verdict: "pass" },
+		});
+
+		assert.deepEqual(toolCall, {
+			type: "toolCall",
+			id: "srv-1",
+			name: "workflow_gate",
+			arguments: { gateId: "Q3", verdict: "pass" },
+		});
+	});
+
+	test("serverToolUseToToolCallLike wraps non-object input under input key", () => {
+		const toolCall = serverToolUseToToolCallLike({
+			id: "srv-2",
+			name: "workflow_gate",
+			input: "raw-value",
+		});
+
+		assert.deepEqual(toolCall, {
+			type: "toolCall",
+			id: "srv-2",
+			name: "workflow_gate",
+			arguments: { input: "raw-value" },
+		});
+	});
+
 	test("extractToolResultsFromSdkUserMessage maps tool_result content to tool payloads", () => {
 		const message: SDKUserMessage = {
 			type: "user",
@@ -669,6 +709,45 @@ describe("stream-adapter — session persistence (#2859)", () => {
 		assert.equal(options.model, "claude-sonnet-4-20250514");
 	});
 
+	test("buildSdkOptions prefers explicit cwd over process cwd for local SDK execution", () => {
+		const explicitCwd = "/tmp/gsd-session-root";
+		const options = buildSdkOptions("claude-sonnet-4-20250514", "hello world", undefined, { cwd: explicitCwd });
+		assert.equal(options.cwd, explicitCwd);
+	});
+
+	test("buildSdkOptions uses explicit cwd when auto-detecting workflow MCP launch config", () => {
+		const explicitCwd = realpathSync(mkdtempSync(join(tmpdir(), "claude-sdk-cwd-")));
+		const restore = setWorkflowMcpEnv({});
+		try {
+			delete process.env.GSD_WORKFLOW_MCP_COMMAND;
+			delete process.env.GSD_WORKFLOW_MCP_NAME;
+			delete process.env.GSD_WORKFLOW_MCP_ARGS;
+			delete process.env.GSD_WORKFLOW_MCP_ENV;
+			delete process.env.GSD_WORKFLOW_MCP_CWD;
+
+			const distDir = join(explicitCwd, "packages", "mcp-server", "dist");
+			mkdirSync(distDir, { recursive: true });
+			writeFileSync(join(distDir, "cli.js"), "#!/usr/bin/env node\n");
+
+			const options = buildSdkOptions("claude-sonnet-4-20250514", "hello world", undefined, { cwd: explicitCwd });
+			const mcpServers = options.mcpServers as Record<string, any>;
+			assert.equal(mcpServers["gsd-workflow"].cwd, explicitCwd);
+			assert.equal(mcpServers["gsd-workflow"].env.GSD_WORKFLOW_PROJECT_ROOT, explicitCwd);
+		} finally {
+			restore();
+			rmSync(explicitCwd, { recursive: true, force: true });
+		}
+	});
+
+	test("resolveClaudeCodeCwd falls back to process cwd when no stream cwd is provided", () => {
+		assert.equal(resolveClaudeCodeCwd(), process.cwd());
+		assert.equal(resolveClaudeCodeCwd({ cwd: "   " }), process.cwd());
+	});
+
+	test("resolveClaudeCodeCwd returns stream cwd when provided", () => {
+		assert.equal(resolveClaudeCodeCwd({ cwd: "/tmp/current-session" }), "/tmp/current-session");
+	});
+
 	test("buildSdkOptions enables betas for sonnet models", () => {
 		const sonnetOpts = buildSdkOptions("claude-sonnet-4-20250514", "test");
 		assert.ok(
@@ -932,6 +1011,39 @@ describe("stream-adapter — session persistence (#2859)", () => {
 			} else {
 				process.env.GSD_CLI_PATH = prevCliPath;
 			}
+		}
+	});
+
+	test("buildSdkOptions does not inject workflow MCP when already declared in project .mcp.json (avoids duplicate registration)", () => {
+		const restore = setWorkflowMcpEnv({
+			GSD_WORKFLOW_MCP_COMMAND: "node",
+			GSD_WORKFLOW_MCP_NAME: "gsd-workflow",
+			GSD_WORKFLOW_MCP_ARGS: JSON.stringify(["packages/mcp-server/dist/cli.js"]),
+			GSD_WORKFLOW_MCP_ENV: JSON.stringify({ GSD_CLI_PATH: "/tmp/gsd" }),
+			GSD_WORKFLOW_MCP_CWD: "/tmp/project",
+		});
+		const originalCwd = process.cwd();
+		const projectDir = mkdtempSync(join(tmpdir(), "claude-mcp-dup-"));
+		try {
+			// Simulate a project that already has gsd-workflow in its .mcp.json
+			writeFileSync(
+				join(projectDir, ".mcp.json"),
+				JSON.stringify({ mcpServers: { "gsd-workflow": { command: "node", args: ["old-cli.js"] }, "other-mcp": { command: "npx", args: ["other"] } } }),
+			);
+			process.chdir(projectDir);
+			const options = buildSdkOptions("claude-sonnet-4-20250514", "test");
+			// Should NOT inject gsd-workflow via mcpServers (project already has it)
+			assert.equal(options.mcpServers, undefined, "mcpServers should be omitted when workflow already in .mcp.json");
+			// But allowedTools should still include the workflow pattern
+			const allowedTools = options.allowedTools as string[];
+			assert.ok(allowedTools.includes("mcp__gsd-workflow__*"), "allowedTools must include workflow pattern even when not injected");
+			// AskUserQuestion should be disallowed (workflow is available via project config)
+			const disallowedTools = options.disallowedTools as string[];
+			assert.ok(disallowedTools.includes("AskUserQuestion"), "AskUserQuestion should be suppressed when workflow is available");
+		} finally {
+			process.chdir(originalCwd);
+			rmSync(projectDir, { recursive: true, force: true });
+			restore();
 		}
 	});
 
@@ -1212,6 +1324,21 @@ describe("stream-adapter — MCP elicitation bridge", () => {
 // ---------------------------------------------------------------------------
 
 describe("stream-adapter — abort classification (F2)", () => {
+	test("recognizes Claude Code SDK abort exceptions", () => {
+		assert.equal(isClaudeCodeAbortErrorMessage("Claude Code process aborted by user"), true);
+		assert.equal(isClaudeCodeAbortErrorMessage("Request aborted by user"), true);
+		assert.equal(isClaudeCodeAbortErrorMessage("AbortError: The operation was aborted"), true);
+		assert.equal(isClaudeCodeAbortErrorMessage("rate limit exceeded"), false);
+	});
+
+	test("does not misclassify non-user abort contexts", () => {
+		assert.equal(isClaudeCodeAbortErrorMessage("Job aborted due to timeout"), false);
+		assert.equal(isClaudeCodeAbortErrorMessage("Operation aborted: disk full"), false);
+		assert.equal(isClaudeCodeAbortErrorMessage("aborted by system cleanup"), false);
+		assert.equal(isClaudeCodeAbortErrorMessage("Database transaction aborted due to constraint violation"), false);
+		assert.equal(isClaudeCodeAbortErrorMessage("Connection aborted unexpectedly"), false);
+	});
+
 	test("makeAbortedMessage sets stopReason to 'aborted', not 'error'", () => {
 		const message = makeAbortedMessage("claude-sonnet-4-6", "");
 		assert.equal(message.stopReason, "aborted");
@@ -1228,6 +1355,24 @@ describe("stream-adapter — abort classification (F2)", () => {
 		const exhausted = makeStreamExhaustedErrorMessage("claude-sonnet-4-6", "");
 		assert.notEqual(aborted.stopReason, exhausted.stopReason);
 		assert.equal(exhausted.errorMessage, "stream_exhausted_without_result");
+	});
+
+	test("abort catch preserves SDK diagnostic text instead of partial output", () => {
+		const text = resolveClaudeCodeAbortedMessageText(
+			"Request aborted by user\nAPI Error: 529 overloaded",
+			"partial mid-stream text",
+		);
+
+		assert.equal(text, "Request aborted by user\nAPI Error: 529 overloaded");
+	});
+
+	test("abort catch falls back to partial output for bare abort markers", () => {
+		const text = resolveClaudeCodeAbortedMessageText(
+			"Request aborted by user",
+			"partial mid-stream text",
+		);
+
+		assert.equal(text, "partial mid-stream text");
 	});
 });
 
@@ -1392,8 +1537,8 @@ describe("stream-adapter — Windows Claude path lookup (#3770)", () => {
 	test("normalizeClaudePathForSdk swaps Windows shim paths to bundled cli.js", () => {
 		const shimPath = "C:\\Users\\djeff\\AppData\\Roaming\\npm\\claude";
 		const bundled = "C:\\repo\\node_modules\\@anthropic-ai\\claude-agent-sdk\\cli.js";
-		assert.equal(normalizeClaudePathForSdk(shimPath, "win32", bundled), bundled);
-		assert.equal(normalizeClaudePathForSdk("C:\\Program Files\\Claude\\claude.exe", "win32", bundled), "C:\\Program Files\\Claude\\claude.exe");
+		assert.equal(normalizeClaudePathForSdk(shimPath, "win32", bundled), "C:/repo/node_modules/@anthropic-ai/claude-agent-sdk/cli.js");
+		assert.equal(normalizeClaudePathForSdk("C:\\Program Files\\Claude\\claude.exe", "win32", bundled), "C:/Program Files/Claude/claude.exe");
 	});
 
 	test("resolveBundledClaudeCliPath returns a .js path when SDK package is present", () => {
