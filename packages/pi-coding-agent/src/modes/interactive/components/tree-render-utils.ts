@@ -1,3 +1,6 @@
+// Project/App: GSD-2
+// File Purpose: Shared tree and selector row rendering utilities.
+
 import { truncateToWidth } from "@gsd/pi-tui";
 import { theme } from "../theme/theme.js";
 

@@ -1,14 +1,15 @@
+// GSD-2 + packages/pi-coding-agent/src/modes/interactive/components/extension-selector.ts - Extension option selector.
 /**
  * Generic selector component for extensions.
  * Displays a list of string options with keyboard navigation.
  * Options starting with SEPARATOR_PREFIX are rendered as non-selectable group headers.
  */
 
-import { Container, getEditorKeybindings, Spacer, Text, type TUI } from "@gsd/pi-tui";
+import { Container, getEditorKeybindings, matchesKey, Spacer, Text, type TUI } from "@gsd/pi-tui";
 import { theme } from "../theme/theme.js";
 import { CountdownTimer } from "./countdown-timer.js";
 import { DynamicBorder } from "./dynamic-border.js";
-import { keyHint, rawKeyHint } from "./keybinding-hints.js";
+import { selectorFooter } from "./keybinding-hints.js";
 
 /** Prefix that marks an option as a non-selectable group header. */
 export const SEPARATOR_PREFIX = "───";
@@ -63,11 +64,7 @@ export class ExtensionSelectorComponent extends Container {
 		this.addChild(new Spacer(1));
 		this.addChild(
 			new Text(
-				rawKeyHint("↑↓", "navigate") +
-					"  " +
-					keyHint("selectConfirm", "select") +
-					"  " +
-					keyHint("selectCancel", "cancel"),
+				selectorFooter(),
 				1,
 				0,
 			),
@@ -121,7 +118,7 @@ export class ExtensionSelectorComponent extends Container {
 
 	handleInput(keyData: string): void {
 		const kb = getEditorKeybindings();
-		if (kb.matches(keyData, "selectUp") || keyData === "k") {
+		if (kb.matches(keyData, "selectUp") || matchesKey(keyData, "k")) {
 			let next = this.selectedIndex - 1;
 			if (next < 0) next = this.options.length - 1;
 			next = this.nextSelectable(next, -1);
@@ -130,7 +127,7 @@ export class ExtensionSelectorComponent extends Container {
 			}
 			this.selectedIndex = next;
 			this.updateList();
-		} else if (kb.matches(keyData, "selectDown") || keyData === "j") {
+		} else if (kb.matches(keyData, "selectDown") || matchesKey(keyData, "j")) {
 			let next = this.selectedIndex + 1;
 			if (next >= this.options.length) next = 0;
 			next = this.nextSelectable(next, 1);
@@ -139,7 +136,7 @@ export class ExtensionSelectorComponent extends Container {
 			}
 			this.selectedIndex = next;
 			this.updateList();
-		} else if (kb.matches(keyData, "selectConfirm") || keyData === "\n") {
+		} else if (kb.matches(keyData, "selectConfirm")) {
 			const selected = this.options[this.selectedIndex];
 			if (selected && !this.isSeparator(this.selectedIndex)) {
 				this.onSelectCallback(selected);

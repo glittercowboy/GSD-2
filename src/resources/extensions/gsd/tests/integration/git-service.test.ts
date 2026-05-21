@@ -2,7 +2,7 @@
 // File Purpose: Git service integration and commit-message tests.
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, symlinkSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, symlinkSync, readFileSync, chmodSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync, execSync } from "node:child_process";
@@ -23,7 +23,7 @@ import {
   type PreMergeCheckResult,
   type TaskCommitContext,
 } from "../../git-service.ts";
-import { nativeAddAllWithExclusions } from "../../native-git-bridge.ts";
+import { nativeAddAllWithExclusions, nativeHasChanges, _resetHasChangesCache } from "../../native-git-bridge.ts";
 function run(command: string, cwd: string): string {
   return execSync(command, { cwd, stdio: ["ignore", "pipe", "pipe"], encoding: "utf-8" }).trim();
 }
@@ -245,6 +245,27 @@ describe('git-service', async () => {
     assert.ok(subject.includes("Added auth BREAKING: injected trailer"), "control characters are flattened");
     assert.equal(subject.includes("\r"), false, "subject does not include carriage returns");
     assert.equal(subject.includes("\u0007"), false, "subject does not include control characters");
+  });
+
+  test('buildTaskCommitMessage truncates long ASCII subject to <=72 UTF-8 bytes', () => {
+    const msg = buildTaskCommitMessage({
+      taskId: "S01/T05",
+      taskTitle: "implement lint metadata",
+      oneLiner: "Added the core lint contract, seven-rule metadata catalogue, and parse-derived mechanical lint mappings with structured suggested_fix objects.",
+    });
+    const subject = msg.split("\n")[0] ?? "";
+    assert.ok(Buffer.byteLength(subject, "utf8") <= 72, "subject is capped at 72 UTF-8 bytes");
+  });
+
+  test('buildTaskCommitMessage truncates multibyte subject without breaking UTF-8 boundaries', () => {
+    const msg = buildTaskCommitMessage({
+      taskId: "S01/T06",
+      taskTitle: "implement emoji handling",
+      oneLiner: "Added emoji support 😀😀😀😀😀😀😀😀😀😀 with robust UTF-8 truncation guards for commit subject generation across locales.",
+    });
+    const subject = msg.split("\n")[0] ?? "";
+    assert.ok(Buffer.byteLength(subject, "utf8") <= 72, "multibyte subject is capped at 72 UTF-8 bytes");
+    assert.ok(subject.endsWith("..."), "truncated subject uses ASCII ellipsis");
   });
 
   {
@@ -631,6 +652,92 @@ describe('git-service', async () => {
     rmSync(repo, { recursive: true, force: true });
   });
 
+  test('GitServiceImpl: autoCommit retries once when pre-commit rewrites files', () => {
+    const repo = initTempRepo();
+    const svc = new GitServiceImpl(repo);
+
+    const hookPath = join(repo, ".git", "hooks", "pre-commit");
+    const countFile = join(repo, ".git", "pre-commit-count");
+    writeFileSync(
+      hookPath,
+      [
+        "#!/bin/sh",
+        `count_file="${countFile}"`,
+        "count=0",
+        "[ -f \"$count_file\" ] && count=$(cat \"$count_file\")",
+        "count=$((count + 1))",
+        "echo \"$count\" > \"$count_file\"",
+        "if [ \"$count\" -eq 1 ]; then",
+        "  printf 'export const fixed = true;\\n' > src/fix-me.ts",
+        "  exit 1",
+        "fi",
+        "exit 0",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    chmodSync(hookPath, 0o755);
+
+    createFile(repo, "src/fix-me.ts", "export const fixed = false;\n");
+    const msg = svc.autoCommit("execute-task", "M001/S01/T04");
+
+    assert.ok(msg !== null, "autoCommit succeeds after one retry for hook rewrites");
+    assert.equal(run("git rev-list --count HEAD", repo), "2", "exactly one new commit created");
+    assert.equal(readFileSync(join(repo, "src/fix-me.ts"), "utf-8"), "export const fixed = true;\n"); // allow-source-grep: verifies pre-commit output inside the temp repo fixture, not product source.
+    assert.equal(readFileSync(countFile, "utf-8").trim(), "2", "pre-commit hook ran twice");
+
+    rmSync(repo, { recursive: true, force: true });
+  });
+
+  test('GitServiceImpl: autoCommit retry preserves task-scoped staging', () => {
+    const repo = initTempRepo();
+    const svc = new GitServiceImpl(repo);
+
+    const hookPath = join(repo, ".git", "hooks", "pre-commit");
+    const countFile = join(repo, ".git", "pre-commit-count");
+    writeFileSync(
+      hookPath,
+      [
+        "#!/bin/sh",
+        `count_file="${countFile}"`,
+        "count=0",
+        "[ -f \"$count_file\" ] && count=$(cat \"$count_file\")",
+        "count=$((count + 1))",
+        "echo \"$count\" > \"$count_file\"",
+        "if [ \"$count\" -eq 1 ]; then",
+        "  printf 'export const fixed = true;\\n' > src/task.ts",
+        "  exit 1",
+        "fi",
+        "exit 0",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    chmodSync(hookPath, 0o755);
+
+    createFile(repo, "src/task.ts", "export const fixed = false;\n");
+    createFile(repo, "src/unrelated.ts", "export const unrelated = true;\n");
+
+    const msg = svc.autoCommit("execute-task", "M001/S01/T05", [], {
+      taskId: "S01/T05",
+      taskTitle: "update task file",
+      oneLiner: "Updated task file after hook rewrite",
+      keyFiles: ["src/task.ts"],
+    });
+
+    assert.ok(msg !== null, "autoCommit succeeds after retry with task-scoped staging");
+    assert.equal(readFileSync(countFile, "utf-8").trim(), "2", "pre-commit hook ran twice");
+
+    const committed = run("git show --name-only --format= HEAD", repo);
+    assert.ok(committed.includes("src/task.ts"), "task file is committed after retry");
+    assert.ok(!committed.includes("src/unrelated.ts"), "retry does not widen staging to unrelated dirty files");
+
+    const status = run("git status --porcelain", repo);
+    assert.ok(status.includes("src/unrelated.ts"), "unrelated dirty file remains in working tree");
+
+    rmSync(repo, { recursive: true, force: true });
+  });
+
   test('GitServiceImpl: task context keyFiles scope autoCommit staging', () => {
     const repo = initTempRepo();
     const svc = new GitServiceImpl(repo);
@@ -705,6 +812,33 @@ describe('git-service', async () => {
     assert.ok(
       committed.includes("src/actually-changed.ts"),
       "smartStage fallback stages real dirty files when scoped staging finds nothing",
+    );
+
+    rmSync(repo, { recursive: true, force: true });
+  });
+
+  // Regression: #5529. Some executors emit keyFiles relative to a monorepo
+  // subproject root (e.g. `src/...`) instead of the repo root
+  // (`frontend/src/...`). When none of those keyFiles exist at repo root,
+  // scoped staging must fall back to smartStage instead of failing the turn.
+  test('GitServiceImpl: repo-relative keyFiles mismatch falls back to smartStage', () => {
+    const repo = initTempRepo();
+    const svc = new GitServiceImpl(repo);
+
+    createFile(repo, "frontend/src/lib/onboarding-contract.ts", "export const contract = true;");
+
+    const msg = svc.autoCommit("execute-task", "M001/S01/T04", [], {
+      taskId: "S01/T04",
+      taskTitle: "fix scoped keyFiles path handling",
+      oneLiner: "Handled repo-relative keyFiles mismatch",
+      keyFiles: ["src/lib/onboarding-contract.ts"],
+    });
+    assert.ok(msg !== null, "autoCommit falls back to smartStage when scoped keyFiles are invalid at repo root");
+
+    const committed = run("git show --name-only --format= HEAD", repo);
+    assert.ok(
+      committed.includes("frontend/src/lib/onboarding-contract.ts"),
+      "smartStage fallback stages real dirty files when keyFiles are scoped to a subproject root",
     );
 
     rmSync(repo, { recursive: true, force: true });
@@ -1164,6 +1298,15 @@ describe('git-service', async () => {
 
     writeIntegrationBranch(repo, "M001", "gsd/full-project/new-app");
     assert.deepStrictEqual(readIntegrationBranch(repo, "M001"), null, "full-project branch is not recorded");
+
+    rmSync(repo, { recursive: true, force: true });
+  });
+
+  test('Integration branch: rejects milestone branches', () => {
+    const repo = initBranchTestRepo();
+
+    writeIntegrationBranch(repo, "M001", "milestone/M001");
+    assert.deepStrictEqual(readIntegrationBranch(repo, "M001"), null, "milestone branches are not recorded as integration branch");
 
     rmSync(repo, { recursive: true, force: true });
   });
@@ -1852,6 +1995,19 @@ describe('git-service', async () => {
     // No gsd snapshot commits in log
     const log = run("git log --oneline", repo);
     assert.ok(!log.includes("gsd snapshot"), "no gsd snapshot commits remain in history");
+
+    rmSync(repo, { recursive: true, force: true });
+  });
+
+  test('autoCommit: resets nativeHasChanges cache after successful commit', () => {
+    const repo = initTempRepo();
+    createFile(repo, "cache-reset.ts", "before");
+
+    _resetHasChangesCache();
+    const svc = new GitServiceImpl(repo);
+    const message = svc.autoCommit("execute-task", "S01/T-cache");
+    assert.ok(message !== null, "autoCommit should commit dirty changes");
+    assert.equal(nativeHasChanges(repo), false, "post-commit has-changes check should observe a clean tree");
 
     rmSync(repo, { recursive: true, force: true });
   });

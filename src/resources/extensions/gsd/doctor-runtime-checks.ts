@@ -15,8 +15,22 @@ import { readAllSessionStatuses, isSessionStale, removeSessionStatus } from "./s
 import { recoverFailedMigration } from "./migrate-external.js";
 import { splitCompletedKey } from "./forensics.js";
 import { findMilestoneIds } from "./milestone-ids.js";
+import { loadEffectiveGSDPreferences } from "./preferences.js";
 
 const MAX_UAT_ATTEMPTS = 3;
+
+function isCurrentGsdStateIntactForMigratingCleanup(basePath: string): boolean {
+  try {
+    const stateFile = resolveGsdRootFile(basePath, "STATE");
+    const milestonesPath = milestonesDir(basePath);
+    const dbPath = join(gsdRoot(basePath), "gsd.db");
+    const hasDbFile = existsSync(dbPath);
+    const hasNonEmptyDb = hasDbFile && statSync(dbPath).size > 0;
+    return existsSync(stateFile) && existsSync(milestonesPath) && hasNonEmptyDb;
+  } catch {
+    return false;
+  }
+}
 
 function hasAssessmentVerdict(basePath: string, mid: string, sid: string): boolean {
   const assessmentPath = join(gsdRoot(basePath), "milestones", mid, "slices", sid, `${sid}-ASSESSMENT.md`);
@@ -35,6 +49,8 @@ export async function checkRuntimeHealth(
   shouldFix: (code: DoctorIssueCode) => boolean,
 ): Promise<void> {
   const root = gsdRoot(basePath);
+  const gitPrefs = loadEffectiveGSDPreferences(basePath)?.preferences?.git;
+  const manageGitignore = gitPrefs?.manage_gitignore;
 
   // ── Stale crash lock ──────────────────────────────────────────────────
   // Phase C pt 2: the lock state lives in the workers + unit_dispatches
@@ -414,7 +430,7 @@ export async function checkRuntimeHealth(
           });
 
           if (shouldFix("gitignore_missing_patterns")) {
-            ensureGitignore(basePath);
+            ensureGitignore(basePath, { manageGitignore });
             fixesApplied.push("added missing GSD runtime patterns to .gitignore");
           }
         }
@@ -446,6 +462,13 @@ export async function checkRuntimeHealth(
         if (shouldFix("failed_migration")) {
           if (recoverFailedMigration(basePath)) {
             fixesApplied.push("recovered failed migration (.gsd.migrating → .gsd)");
+          } else if (isCurrentGsdStateIntactForMigratingCleanup(basePath)) {
+            try {
+              rmSync(migratingPath, { recursive: true, force: true });
+              fixesApplied.push("removed stale .gsd.migrating orphan after validating current .gsd state");
+            } catch (err) {
+              fixesApplied.push(`failed to remove stale .gsd.migrating orphan at ${migratingPath}: ${err instanceof Error ? err.message : String(err)}`);
+            }
           }
         }
       }
@@ -482,7 +505,7 @@ export async function checkRuntimeHealth(
           });
 
           if (shouldFix("symlinked_gsd_unignored")) {
-            const modified = ensureGitignore(basePath);
+            const modified = ensureGitignore(basePath, { manageGitignore });
             if (modified) fixesApplied.push("added .gsd to .gitignore (symlinked external state)");
           }
         }

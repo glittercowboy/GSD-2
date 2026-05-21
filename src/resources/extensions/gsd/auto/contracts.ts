@@ -3,6 +3,7 @@
 
 import type { GSDState } from "../types.js";
 import type { MinimalModelRegistry } from "../context-budget.js";
+import type { AutoSession } from "./session.js";
 
 export interface AutoSessionContext {
   basePath: string;
@@ -22,7 +23,10 @@ export interface AutoStatus {
 }
 
 export type AutoAdvanceResult =
+  | { kind: "started" }
+  | { kind: "resumed" }
   | { kind: "advanced"; unit: UnitRef; stateSnapshot: GSDState }
+  | { kind: "skipped"; reason: string; stateSnapshot?: GSDState }
   | { kind: "blocked"; reason: string; action: "pause" | "stop"; stateSnapshot?: GSDState }
   | { kind: "stopped"; reason: string; stateSnapshot?: GSDState }
   | { kind: "paused"; reason: string }
@@ -31,6 +35,8 @@ export type AutoAdvanceResult =
 export interface AutoOrchestrationModule {
   start(sessionContext: AutoSessionContext): Promise<AutoAdvanceResult>;
   advance(): Promise<AutoAdvanceResult>;
+  completeActiveUnit(unit: UnitRef): Promise<void>;
+  retryActiveUnit(unit: UnitRef): Promise<void>;
   resume(): Promise<AutoAdvanceResult>;
   stop(reason: string): Promise<AutoAdvanceResult>;
   getStatus(): AutoStatus;
@@ -39,6 +45,8 @@ export interface AutoOrchestrationModule {
 export interface DispatchAdapter {
   decideNextUnit(input: {
     stateSnapshot: GSDState;
+    /** Optional live session context, forwarded to dispatch rules that need session-derived state. */
+    session?: AutoSession;
     /** Mirrors `DispatchContext.structuredQuestionsAvailable` — "true"/"false" string per the dispatch contract. */
     structuredQuestionsAvailable?: "true" | "false";
     /** Session model context window in tokens, forwarded to the budget engine. */
@@ -52,6 +60,10 @@ export interface DispatchAdapter {
         kind: "blocked";
         reason: string;
         action: "pause" | "stop";
+      }
+    | {
+        kind: "skipped";
+        reason: string;
       }
     | {
         unitType: string;

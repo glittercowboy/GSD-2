@@ -18,6 +18,7 @@ import type { ProjectDetection, ProjectSignals } from "./detection.js";
 import { runSkillInstallStep } from "./skill-catalog.js";
 import { generateCodebaseMap, writeCodebaseMap } from "./codebase-generator.js";
 import { handlePrefsWizard, writePreferencesFile } from "./commands-prefs-wizard.js";
+import { loadEffectiveGSDPreferences } from "./preferences.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────────
 
@@ -304,8 +305,10 @@ export async function showProjectInit(
   // Ensure .gitignore only when git is active. A user who selected "Skip"
   // should not have git initialized or git-related files mutated later.
   if (shouldWriteGitFiles(gitEnabled)) {
-    ensureGitignore(basePath);
-    untrackRuntimeFiles(basePath);
+    const gitPrefs = loadEffectiveGSDPreferences(basePath)?.preferences?.git;
+    const manageGitignore = gitPrefs?.manage_gitignore;
+    ensureGitignore(basePath, { manageGitignore });
+    if (manageGitignore !== false) untrackRuntimeFiles(basePath);
   }
 
   // Create initial commit so git log and git worktree work immediately (#4530).
@@ -421,7 +424,13 @@ export async function handleReinit(
       {
         id: "prefs",
         label: "Re-configure preferences",
-        description: "Update project preferences without affecting milestones",
+        description: "Run the preferences wizard without affecting milestones",
+        recommended: true,
+      },
+      {
+        id: "skills",
+        label: "Suggest & install skills",
+        description: "Detect project type and offer matching skill packs",
         recommended: true,
       },
       {
@@ -434,7 +443,16 @@ export async function handleReinit(
   });
 
   if (choice === "prefs") {
-    ctx.ui.notify("Use /gsd prefs project to update project preferences.", "info");
+    await handlePrefsWizard(ctx, "project");
+    return;
+  }
+
+  if (choice === "skills") {
+    try {
+      await runSkillInstallStep(ctx, detection.projectSignals);
+    } catch {
+      // Non-fatal — suggestion/install failures should not break re-init flow
+    }
   }
 }
 

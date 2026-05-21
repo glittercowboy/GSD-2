@@ -110,8 +110,10 @@ test("Context Mode: every manifest declares the expected contextMode lane", () =
     "reassess-roadmap": "planning",
     "execute-task": "execution",
     "reactive-execute": "execution",
+    "quick-task": "execution",
     "run-uat": "verification",
     "gate-evaluate": "verification",
+    "triage-captures": "triage",
     "validate-milestone": "verification",
     "complete-slice": "verification",
     "complete-milestone": "verification",
@@ -175,6 +177,28 @@ test("#4782 phase 1: complete-milestone manifest declares slice-summary as excer
   );
 });
 
+test("closeout manifests keep broad narrative docs on-demand in standard mode", () => {
+  for (const unitType of ["validate-milestone", "complete-milestone"] as const) {
+    const m = UNIT_MANIFESTS[unitType];
+    assert.ok(
+      m.artifacts.onDemand.includes("project"),
+      `${unitType} should keep project narrative on-demand`,
+    );
+    assert.ok(
+      m.artifacts.onDemand.includes("milestone-context"),
+      `${unitType} should keep milestone context on-demand`,
+    );
+    assert.ok(
+      !m.artifacts.inline.includes("project"),
+      `${unitType} should not inline project narrative by default`,
+    );
+    assert.ok(
+      !m.artifacts.inline.includes("milestone-context"),
+      `${unitType} should not inline milestone context by default`,
+    );
+  }
+});
+
 // ─── v2 contract invariants (#4924) ──────────────────────────────────────
 
 test("#4924: computed + prepend ids (when declared) are non-empty strings", () => {
@@ -230,15 +254,22 @@ test("#4934: tools.mode is one of the declared policies", () => {
   }
 });
 
-test('#4934: only execution units and complete-milestone may use tools.mode "all"', () => {
-  const allowedAllUnits = new Set(["execute-task", "reactive-execute", "complete-milestone"]);
+test('#4934: only execution units, quick-task, and closeout units may use tools.mode "all"', () => {
+  const allowedAllUnits = new Set([
+    "execute-task",
+    "reactive-execute",
+    "quick-task",
+    "validate-milestone",
+    "complete-milestone",
+    "complete-slice",
+  ]);
   for (const [unitType, manifest] of Object.entries(UNIT_MANIFESTS)) {
     const mode = (manifest as { tools: { mode: string } }).tools.mode;
     if (mode === "all") {
       assert.ok(
         allowedAllUnits.has(unitType),
         `manifest "${unitType}" declares tools.mode = "all" but is not explicitly allowed. ` +
-        'Only execute-task, reactive-execute, and complete-milestone should have full source write access; ' +
+        'Only execute-task/reactive-execute, quick-task, and closeout units should have full source write access; ' +
         'planning/discuss/research units must use "planning" or "planning-dispatch" (or "docs" for rewrite-docs).',
       );
     }
@@ -272,6 +303,25 @@ test("#5453: complete-milestone uses all tools so bash verification is not plann
   }
 });
 
+test("#5731: validate-milestone and complete-slice use all tools so closeout verification is not planning-dispatch blocked", () => {
+  for (const unitType of ["validate-milestone", "complete-slice"] as const) {
+    const manifest = UNIT_MANIFESTS[unitType];
+    assert.strictEqual(manifest.tools.mode, "all");
+    const result = shouldBlockPlanningUnit(
+      "bash",
+      "go test -short -count=1 ./...",
+      process.cwd(),
+      unitType,
+      manifest.tools,
+    );
+    assert.strictEqual(
+      result.block,
+      false,
+      `${unitType} must allow verification bash commands: ${result.reason}`,
+    );
+  }
+});
+
 test("#5843: run-uat uses verification tools policy so build/test commands can run", () => {
   const manifest = UNIT_MANIFESTS["run-uat"];
 
@@ -301,18 +351,33 @@ test("#5843: run-uat uses verification tools policy so build/test commands can r
   assert.match(sourceWriteResult.reason!, /tools-policy "verification"/);
 });
 
+test("planning-dispatch hard block message omits internal tracker references", () => {
+  const manifest = UNIT_MANIFESTS["plan-slice"];
+  assert.strictEqual(manifest.tools.mode, "planning-dispatch");
+
+  const result = shouldBlockPlanningUnit(
+    "task",
+    "scout",
+    process.cwd(),
+    "plan-slice",
+    manifest.tools,
+  );
+
+  assert.strictEqual(result.block, true);
+  assert.ok(result.reason, "blocked dispatch should include a user-facing reason");
+  assert.doesNotMatch(result.reason!, /#[0-9]{3,}/);
+});
+
 test('planning-dispatch mode is reserved for slice-level decomposition and completion units', () => {
   const allowedDispatchUnits = new Set([
     "plan-slice",
     "research-slice",
     "refine-slice",
-    "complete-slice",
     "gate-evaluate",
     // Deep planning mode: research-project orchestrates 4 parallel research
     // subagents (stack/features/architecture/pitfalls). Subagent dispatch is
     // the unit's core mechanism — without it, the unit cannot do its job.
     "research-project",
-    "validate-milestone",
   ]);
   for (const [unitType, manifest] of Object.entries(UNIT_MANIFESTS)) {
     const mode = (manifest as { tools: { mode: string } }).tools.mode;

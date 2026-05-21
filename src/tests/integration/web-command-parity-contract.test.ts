@@ -1,3 +1,5 @@
+// Project/App: GSD-2
+// File Purpose: Browser slash command parity tests for built-in and GSD command routing.
 import test from "node:test"
 import assert from "node:assert/strict"
 
@@ -170,15 +172,17 @@ test("registered GSD command roots stay on the prompt/extension path", async () 
     assertPromptPassthrough(`/${root}`)
   }
 
-  // Bare /gsd passes through to bridge (equivalent to /gsd next)
+  // Bare /gsd passes through to the extension-owned Smart Entry wizard.
   const bareGsd = dispatchBrowserSlashCommand("/gsd")
   assert.equal(bareGsd.kind, "prompt", "bare /gsd should pass through to bridge")
   assert.equal(bareGsd.command.message, "/gsd", "bare /gsd should preserve exact input")
 })
 
 test("current GSD command family samples dispatch to correct outcomes after S02", async (t) => {
-  await t.test("/gsd (bare) still passes through to bridge", () => {
-    assertPromptPassthrough("/gsd")
+  await t.test("/gsd (bare) stays on Smart Entry prompt path", () => {
+    const outcome = dispatchBrowserSlashCommand("/gsd")
+    assert.equal(outcome.kind, "prompt", "bare /gsd should stay on the Smart Entry prompt path")
+    assert.equal(outcome.command.message, "/gsd", "bare /gsd should preserve exact input")
   })
 
   await t.test("/gsd status now dispatches to surface", () => {
@@ -289,10 +293,11 @@ test("every registered /gsd subcommand has an explicit browser dispatch outcome"
 })
 
 test("GSD dispatch edge cases", async (t) => {
-  await t.test("/gsd (bare, no subcommand) passes through to bridge", () => {
+  await t.test("/gsd (bare, no subcommand) passes through to Smart Entry instead of status", () => {
     const outcome = dispatchBrowserSlashCommand("/gsd")
     assert.equal(outcome.kind, "prompt")
     assert.equal(outcome.command.message, "/gsd")
+    assert.notEqual(outcome.kind, "surface", "bare /gsd must not open the status surface")
   })
 
   await t.test("/gsd help dispatches to local gsd_help action", () => {

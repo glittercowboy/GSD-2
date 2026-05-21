@@ -43,6 +43,7 @@ export async function showQueueReorder(
     const items = [...pending];
     let cursor = 0;
     let grabbed = false;
+    let scrollOffset = 0;
     let cachedLines: string[] | undefined;
     let validation: DependencyValidation;
 
@@ -154,8 +155,10 @@ export async function showQueueReorder(
 
       const ui = makeUI(theme, width);
       const lines: string[] = [];
+      const queueRows: string[] = [];
       const push = (...rows: string[][]) => { for (const r of rows) lines.push(...r); };
       const add = (s: string) => truncateToWidth(s, width);
+      let cursorQueueRow = 0;
 
       const headerText = grabbed ? "  Queue Reorder — Moving Item" : "  Queue Reorder";
       push(ui.bar(), ui.blank(), ui.header(headerText), ui.blank());
@@ -188,11 +191,13 @@ export async function showQueueReorder(
         const label = item.title && item.title !== item.id ? `${item.id}  ${item.title}` : item.id;
 
         if (isCursor && grabbed) {
-          lines.push(add(`  ${theme.fg("warning", `▸▸ ${num}. ${label}`)}`));
+          cursorQueueRow = queueRows.length;
+          queueRows.push(add(`  ${theme.fg("warning", `▸▸ ${num}. ${label}`)}`));
         } else if (isCursor) {
-          lines.push(add(`  ${theme.fg("accent", `${GLYPH.cursor} ${num}. ${label}`)}`));
+          cursorQueueRow = queueRows.length;
+          queueRows.push(add(`  ${theme.fg("accent", `${GLYPH.cursor} ${num}. ${label}`)}`));
         } else {
-          lines.push(add(`    ${theme.fg("text", `${num}. ${label}`)}`));
+          queueRows.push(add(`    ${theme.fg("text", `${num}. ${label}`)}`));
         }
 
         // depends_on annotations
@@ -201,36 +206,37 @@ export async function showQueueReorder(
           if (completedIds.has(dep)) continue;
           const pairKey = `${item.id}:${dep}`;
           if (violatedPairs.has(pairKey)) {
-            lines.push(add(`       ${theme.fg("warning", `${GLYPH.statusWarning} depends_on: ${dep} — auto-removed on confirm`)}`));
+            queueRows.push(add(`       ${theme.fg("warning", `${GLYPH.statusWarning} depends_on: ${dep} — auto-removed on confirm`)}`));
           } else if (redundantPairs.has(pairKey)) {
-            lines.push(add(`       ${theme.fg("dim", `↳ depends_on: ${dep} (redundant)`)}`));
+            queueRows.push(add(`       ${theme.fg("dim", `↳ depends_on: ${dep} (redundant)`)}`));
           } else {
-            lines.push(add(`       ${theme.fg("dim", `↳ depends_on: ${dep}`)}`));
+            queueRows.push(add(`       ${theme.fg("dim", `↳ depends_on: ${dep}`)}`));
           }
         }
 
         // Missing deps
         for (const v of validation.violations.filter(v => v.milestone === item.id && v.type === 'missing_dep')) {
-          lines.push(add(`       ${theme.fg("error", `${GLYPH.statusWarning} depends_on: ${v.dependsOn} (does not exist)`)}`));
+          queueRows.push(add(`       ${theme.fg("error", `${GLYPH.statusWarning} depends_on: ${v.dependsOn} (does not exist)`)}`));
         }
       }
 
       // Removed deps feedback
+      const trailingLines: string[] = [];
       if (removedDeps.length > 0) {
-        push(ui.blank());
+        trailingLines.push(...ui.blank());
         for (const r of removedDeps) {
-          lines.push(add(`  ${theme.fg("success", `${GLYPH.statusDone} Removed: ${r.milestone} depends_on ${r.dep}`)}`));
+          trailingLines.push(add(`  ${theme.fg("success", `${GLYPH.statusDone} Removed: ${r.milestone} depends_on ${r.dep}`)}`));
         }
       }
 
       // Circular warning
       const circ = validation.violations.find(v => v.type === 'circular');
       if (circ) {
-        push(ui.blank());
-        lines.push(add(`  ${theme.fg("error", `${GLYPH.statusWarning} ${circ.message}`)}`));
+        trailingLines.push(...ui.blank());
+        trailingLines.push(add(`  ${theme.fg("error", `${GLYPH.statusWarning} ${circ.message}`)}`));
       }
 
-      push(ui.blank());
+      trailingLines.push(...ui.blank());
 
       // Hints — context-sensitive based on grab state
       const hints: string[] = [];
@@ -250,7 +256,19 @@ export async function showQueueReorder(
       }
       hints.push("esc");
 
-      push(ui.hints(hints), ui.bar());
+      trailingLines.push(...ui.hints(hints), ...ui.bar());
+
+      const maxOverlayRows = Math.max(10, process.stdout.rows ? Math.floor(process.stdout.rows * 0.8) : 24);
+      const availableQueueRows = Math.max(1, maxOverlayRows - lines.length - trailingLines.length);
+      const maxScroll = Math.max(0, queueRows.length - availableQueueRows);
+      if (cursorQueueRow < scrollOffset) {
+        scrollOffset = cursorQueueRow;
+      } else if (cursorQueueRow >= scrollOffset + availableQueueRows) {
+        scrollOffset = cursorQueueRow - availableQueueRows + 1;
+      }
+      scrollOffset = Math.min(Math.max(scrollOffset, 0), maxScroll);
+
+      lines.push(...queueRows.slice(scrollOffset, scrollOffset + availableQueueRows), ...trailingLines);
 
       cachedLines = lines;
       return lines;

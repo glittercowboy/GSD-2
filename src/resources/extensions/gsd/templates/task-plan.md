@@ -57,6 +57,12 @@ skills_used:
 - {{howToVerifyThisTaskIsActuallyDone}}
 - {{commandToRun_OR_behaviorToCheck}}
 
+## Verify Rules
+
+- Use a real executable check, not prose.
+- If the check needs file-content assertions, write a `node:test` file and run it with `node --test` or a package test script.
+- Do not use inline `node -e` assertions for verification.
+
 ## Observability Impact
 
 <!-- OMIT THIS SECTION ENTIRELY for simple tasks that don't touch runtime boundaries,

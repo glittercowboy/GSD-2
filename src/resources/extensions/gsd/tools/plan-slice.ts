@@ -27,7 +27,10 @@ import { logWarning } from "../workflow-logger.js";
 import { validatePlanningPathScope } from "../planning-path-scope.js";
 import { checkFilePathConsistency, checkTaskOrdering } from "../pre-execution-checks.js";
 import type { TaskRow } from "../db-task-slice-rows.js";
-import { buildTaskFileName, gsdRoot, resolveTasksDir } from "../paths.js";
+import { buildTaskFileName, gsdProjectionRoot } from "../paths.js";
+import { loadEffectiveGSDPreferences } from "../preferences.js";
+import { createRepositoryRegistryFromPreferences, defaultRepositoryTargets, type RepositoryRegistry } from "../repository-registry.js";
+
 
 export interface PlanSliceTaskInput {
   taskId: string;
@@ -40,6 +43,7 @@ export interface PlanSliceTaskInput {
   expectedOutput: string[];
   observabilityImpact?: string;
   fullPlanMd?: string;
+  targetRepositories?: string[];
 }
 
 export interface PlanSliceParams {
@@ -55,6 +59,7 @@ export interface PlanSliceParams {
   integrationClosure?: string;
   /** @optional — omitted fields render as conservative defaults */
   observabilityImpact?: string;
+  targetRepositories?: string[];
   /** Optional caller-provided identity for audit trail */
   actorName?: string;
   /** Optional caller-provided reason this action was triggered */
@@ -66,6 +71,18 @@ export interface PlanSliceResult {
   sliceId: string;
   planPath: string;
   taskPlanPaths: string[];
+}
+
+function validateRepositoryTargetIds(
+  field: string,
+  value: unknown,
+): string[] | null {
+  if (value === undefined) return null;
+  const ids = validateStringArray(value, field);
+  if (ids.length === 0) throw new Error(`${field} must include at least one repository id when provided`);
+  const deduped = Array.from(new Set(ids.map((id) => id.trim()).filter(Boolean)));
+  if (deduped.length === 0) throw new Error(`${field} must include at least one repository id when provided`);
+  return deduped;
 }
 
 function validateTasks(value: unknown): PlanSliceTaskInput[] {
@@ -88,6 +105,7 @@ function validateTasks(value: unknown): PlanSliceTaskInput[] {
     const inputs = obj.inputs;
     const expectedOutput = obj.expectedOutput;
     const observabilityImpact = obj.observabilityImpact;
+    const targetRepositories = obj.targetRepositories;
 
     if (!isNonEmptyString(taskId)) throw new Error(`tasks[${index}].taskId must be a non-empty string`);
     if (seen.has(taskId)) throw new Error(`tasks[${index}].taskId must be unique`);
@@ -102,6 +120,10 @@ function validateTasks(value: unknown): PlanSliceTaskInput[] {
     if (observabilityImpact !== undefined && !isNonEmptyString(observabilityImpact)) {
       throw new Error(`tasks[${index}].observabilityImpact must be a non-empty string when provided`);
     }
+    const validatedTargetRepositories = validateRepositoryTargetIds(
+      `tasks[${index}].targetRepositories`,
+      targetRepositories,
+    );
 
     return {
       taskId,
@@ -113,6 +135,7 @@ function validateTasks(value: unknown): PlanSliceTaskInput[] {
       inputs: validatedInputs,
       expectedOutput: validatedExpectedOutput,
       observabilityImpact: typeof observabilityImpact === "string" ? observabilityImpact : "",
+      targetRepositories: validatedTargetRepositories ?? undefined,
     };
   });
 }
@@ -122,6 +145,11 @@ function validateParams(params: PlanSliceParams): PlanSliceParams {
   if (!isNonEmptyString(params?.sliceId)) throw new Error("sliceId is required");
   if (!isNonEmptyString(params?.goal)) throw new Error("goal is required");
 
+  const validatedTargetRepositories = validateRepositoryTargetIds(
+    "targetRepositories",
+    params.targetRepositories,
+  );
+
   return {
     ...params,
     // Keep optional enrichment fields empty when omitted. The renderer supplies
@@ -130,11 +158,51 @@ function validateParams(params: PlanSliceParams): PlanSliceParams {
     proofLevel: params.proofLevel ?? "",
     integrationClosure: params.integrationClosure ?? "",
     observabilityImpact: params.observabilityImpact ?? "",
+    targetRepositories: validatedTargetRepositories ?? undefined,
     tasks: validateTasks(params.tasks),
   };
 }
 
-function toTaskRows(params: PlanSliceParams): TaskRow[] {
+function loadRepositoryRegistry(basePath: string): RepositoryRegistry {
+  const loaded = loadEffectiveGSDPreferences(basePath);
+  return createRepositoryRegistryFromPreferences(basePath, loaded?.preferences);
+}
+
+function validateReferencedRepositories(
+  params: PlanSliceParams,
+  registry: RepositoryRegistry,
+  defaultTargets: string[],
+): string | null {
+  const known = new Set(registry.repositories.map((repo) => repo.id));
+
+  const missing: string[] = [];
+  const noteMissing = (id: string) => {
+    if (!known.has(id) && !missing.includes(id)) missing.push(id);
+  };
+
+  for (const id of params.targetRepositories ?? defaultTargets) noteMissing(id);
+  for (const task of params.tasks) {
+    for (const id of task.targetRepositories ?? params.targetRepositories ?? defaultTargets) noteMissing(id);
+  }
+
+  if (missing.length === 0) return null;
+  return `unknown targetRepositories: ${missing.join(", ")}. Declared repositories: ${Array.from(known).join(", ")}`;
+}
+
+function resolveAllowedRootsForPathScope(params: PlanSliceParams, registry: RepositoryRegistry, defaultTargets: string[]): string[] {
+  const requested = new Set<string>();
+  for (const id of params.targetRepositories ?? defaultTargets) requested.add(id);
+  for (const task of params.tasks) {
+    for (const id of task.targetRepositories ?? params.targetRepositories ?? defaultTargets) requested.add(id);
+  }
+  if (requested.size === 0) return [registry.projectRoot];
+  const roots = Array.from(requested)
+    .map((id) => registry.byId.get(id)?.root)
+    .filter((root): root is string => typeof root === "string");
+  return roots.length > 0 ? roots : [registry.projectRoot];
+}
+
+function toTaskRows(params: PlanSliceParams, defaultTargets: string[]): TaskRow[] {
   return params.tasks.map((task, index) => ({
     milestone_id: params.milestoneId,
     slice_id: params.sliceId,
@@ -160,6 +228,7 @@ function toTaskRows(params: PlanSliceParams): TaskRow[] {
     expected_output: task.expectedOutput,
     observability_impact: task.observabilityImpact ?? "",
     full_plan_md: task.fullPlanMd ?? "",
+    target_repositories: task.targetRepositories ?? params.targetRepositories ?? defaultTargets,
     sequence: index + 1,
     blocker_source: "",
     escalation_pending: 0,
@@ -169,8 +238,8 @@ function toTaskRows(params: PlanSliceParams): TaskRow[] {
   }));
 }
 
-function validateTaskPathsBeforePersist(params: PlanSliceParams, basePath: string): string | null {
-  const taskRows = toTaskRows(params);
+function validateTaskPathsBeforePersist(params: PlanSliceParams, basePath: string, defaultTargets: string[]): string | null {
+  const taskRows = toTaskRows(params, defaultTargets);
   const checks = [
     ...checkFilePathConsistency(taskRows, basePath),
     ...checkTaskOrdering(taskRows, basePath),
@@ -195,6 +264,21 @@ export async function handlePlanSlice(
     return { error: `validation failed: ${(err as Error).message}` };
   }
 
+  let repositoryRegistry: RepositoryRegistry;
+  try {
+    repositoryRegistry = loadRepositoryRegistry(basePath);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { error: `validation failed: ${message}` };
+  }
+  const defaultTargets = defaultRepositoryTargets(repositoryRegistry);
+  const repoValidationError = validateReferencedRepositories(params, repositoryRegistry, defaultTargets);
+  if (repoValidationError) {
+    return { error: `validation failed: ${repoValidationError}` };
+  }
+
+  const allowedAbsoluteRoots = resolveAllowedRootsForPathScope(params, repositoryRegistry, defaultTargets);
+
   const pathScopeError = validatePlanningPathScope(
     basePath,
     params.tasks.flatMap((task, index) => [
@@ -202,12 +286,13 @@ export async function handlePlanSlice(
       { field: `tasks[${index}].inputs`, values: task.inputs },
       { field: `tasks[${index}].expectedOutput`, values: task.expectedOutput },
     ]),
+    allowedAbsoluteRoots,
   );
   if (pathScopeError) {
     return { error: `validation failed: ${pathScopeError}` };
   }
 
-  const pathError = validateTaskPathsBeforePersist(params, basePath);
+  const pathError = validateTaskPathsBeforePersist(params, basePath, defaultTargets);
   if (pathError) {
     return { error: `pre-execution validation failed:\n${pathError}` };
   }
@@ -256,7 +341,6 @@ export async function handlePlanSlice(
       if (isDeferredStatus(parentSlice.status)) {
         updateSliceStatus(params.milestoneId, params.sliceId, "pending");
       }
-      setSliceSketchFlag(params.milestoneId, params.sliceId, false);
 
       upsertSlicePlanning(params.milestoneId, params.sliceId, {
         goal: params.goal,
@@ -264,6 +348,7 @@ export async function handlePlanSlice(
         proofLevel: params.proofLevel,
         integrationClosure: params.integrationClosure,
         observabilityImpact: params.observabilityImpact,
+        targetRepositories: params.targetRepositories ?? defaultTargets,
       });
 
       for (const taskId of omittedTaskIds) {
@@ -288,6 +373,7 @@ export async function handlePlanSlice(
           expectedOutput: task.expectedOutput,
           observabilityImpact: task.observabilityImpact ?? "",
           fullPlanMd: task.fullPlanMd,
+          targetRepositories: task.targetRepositories ?? params.targetRepositories ?? defaultTargets,
         });
       }
 
@@ -314,16 +400,16 @@ export async function handlePlanSlice(
   }
 
   try {
-    const tasksDir = resolveTasksDir(basePath, params.milestoneId, params.sliceId);
+    const tasksDir = join(gsdProjectionRoot(basePath), "milestones", params.milestoneId, "slices", params.sliceId, "tasks");
     for (const taskId of omittedTaskIds) {
-      if (!tasksDir) continue;
       const taskPlanPath = join(tasksDir, buildTaskFileName(taskId, "PLAN"));
       if (existsSync(taskPlanPath)) rmSync(taskPlanPath, { force: true });
-      const artifactPath = relative(gsdRoot(basePath), taskPlanPath).replace(/\\/g, "/");
+      const artifactPath = relative(gsdProjectionRoot(basePath), taskPlanPath).replace(/\\/g, "/");
       deleteArtifactByPath(artifactPath);
     }
 
     const renderResult = await renderPlanFromDb(basePath, params.milestoneId, params.sliceId);
+    setSliceSketchFlag(params.milestoneId, params.sliceId, false);
     invalidateStateCache();
     clearParseCache();
 

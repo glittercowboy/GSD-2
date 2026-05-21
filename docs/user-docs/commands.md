@@ -14,7 +14,7 @@
 | `/gsd discuss` | Discuss architecture and decisions (works alongside auto mode) |
 | `/gsd status` | Progress dashboard |
 | `/gsd widget` | Cycle dashboard widget: full / small / min / off |
-| `/gsd queue` | Queue and reorder future milestones (safe during auto mode) |
+| `/gsd queue` | Queue and reorder future milestones (`pending`, `queued`, and legacy `planned`; safe during auto mode) |
 | `/gsd capture` | Fire-and-forget thought capture (works during auto mode) |
 | `/gsd triage` | Manually trigger triage of pending captures |
 | `/gsd debug` | Create and inspect persistent /gsd debug sessions |
@@ -41,6 +41,8 @@
 | `/gsd logs` | Browse activity logs, debug logs, and metrics |
 | `/gsd remote` | Control remote auto-mode |
 | `/gsd help` | Categorized command reference with descriptions for all GSD subcommands |
+
+`/gsd discuss` supports optional direct targets: `/gsd discuss M014`, `/gsd discuss M014/S03`, `/gsd discuss --milestone M014`, and `/gsd discuss --slice M014/S03`.
 
 ## Visual Briefs
 
@@ -75,7 +77,7 @@ After writing the file, GSD attempts to open it in a browser using the local pla
 | `/gsd keys` | API key manager — list, add, remove, test, rotate, doctor |
 | `/gsd doctor` | Runtime health checks with auto-fix — issues surface in real time across widget, visualizer, and HTML reports (v2.40) |
 | `/gsd inspect` | Show SQLite DB diagnostics |
-| `/gsd init` | Project init wizard — detect, configure, bootstrap `.gsd/` |
+| `/gsd init` | Project init wizard — detect, configure, bootstrap `.gsd/`; if `.gsd/` already exists, opens an "Already Initialized" menu with `Re-configure preferences`, `Suggest & install skills`, or `Cancel` |
 | `/gsd setup` | Global setup status and configuration |
 | `/gsd skill-health` | Skill lifecycle dashboard — usage stats, success rates, token trends, staleness warnings |
 | `/gsd skill-health <name>` | Detailed view for a single skill |

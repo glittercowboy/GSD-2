@@ -16,6 +16,7 @@ import {
   buildPhaseHandoffOutcome,
   updateProgressWidget,
   setAutoOutcomeWidget,
+  setCompletionProgressWidget,
   getRoadmapSlicesSync,
   clearSliceProgressCache,
   getWidgetMode,
@@ -217,8 +218,34 @@ test("formatRuntimeHealthSignal surfaces idle recovery instead of generic progre
 
   assert.deepEqual(signal, {
     level: "yellow",
+    state: "recovering",
     summary: "Recovering",
     detail: "retry 1 after idle stall",
+  });
+});
+
+test("formatRuntimeHealthSignal describes provider idle without repeating waiting text", () => {
+  const signal = formatRuntimeHealthSignal({
+    version: 1,
+    unitType: "run-uat",
+    unitId: "M007/S01",
+    startedAt: 1_000,
+    updatedAt: 120_000,
+    phase: "dispatched",
+    wrapupWarningSent: false,
+    continueHereFired: false,
+    timeoutAt: null,
+    lastProgressAt: 1_000,
+    progressCount: 0,
+    lastProgressKind: "start",
+    recoveryAttempts: 0,
+  }, 121_000);
+
+  assert.deepEqual(signal, {
+    level: "yellow",
+    state: "waiting",
+    summary: "provider idle 2m",
+    detail: "last output 2m ago",
   });
 });
 
@@ -254,6 +281,52 @@ test("setAutoOutcomeWidget renders a durable next-action handoff", () => {
   assert.match(output, /Paused by user request/);
   assert.match(output, /researching M005\/S01/);
   assert.match(output, /\/gsd auto/);
+});
+
+test("setCompletionProgressWidget keeps terminal all-complete handoff in progress slot", () => {
+  const calls: Array<[string, unknown]> = [];
+  setCompletionProgressWidget(
+    {
+      hasUI: true,
+      ui: {
+        setWidget(key: string, factory: unknown) {
+          calls.push([key, factory]);
+        },
+        setHeader() {},
+        setStatus() {},
+      },
+    } as any,
+    {
+      milestoneId: "M007",
+      milestoneTitle: "Live Text Search",
+      oneLiner: "Completed the milestone.",
+      reason: "All milestones complete",
+      startedAt: Date.now() - 2_000,
+      totalCost: 31.06,
+      totalTokens: 3_600_000,
+      unitCount: 78,
+      completedSlices: 1,
+      totalSlices: 1,
+      allMilestonesComplete: true,
+      basePath: "/project/root",
+    },
+  );
+
+  assert.ok(
+    calls.some(([key, value]) => key === "gsd-outcome" && value === undefined),
+    "terminal completion should clear stale outcome widgets before rendering progress roll-up",
+  );
+  const progress = calls.filter(([key]) => key === "gsd-progress").at(-1);
+  assert.equal(typeof progress?.[1], "function", "terminal completion must install the final handoff in the progress slot");
+
+  const component = (progress?.[1] as any)(
+    { requestRender() {} },
+    { fg: (_color: string, text: string) => text, bold: (text: string) => text },
+  );
+  const output = component.render(120).join("\n");
+  assert.match(output, /All milestones complete/);
+  assert.match(output, /Review the roll-up/);
+  assert.doesNotMatch(output, /\/gsd auto to resume/);
 });
 
 test("buildPhaseHandoffOutcome summarizes the last phase result", () => {
@@ -323,6 +396,44 @@ test("updateProgressWidget preserves the phase handoff during session switching"
   assert.ok(
     !calls.some(([key, value]) => key === "gsd-outcome" && value === undefined),
     "handoff widget should stay visible until the next progress frame renders",
+  );
+});
+
+test("updateProgressWidget clears the phase handoff once active progress resumes", () => {
+  const calls: Array<[string, unknown]> = [];
+  updateProgressWidget(
+    {
+      hasUI: true,
+      ui: {
+        setWidget(key: string, factory: unknown) {
+          calls.push([key, factory]);
+        },
+        setHeader() {},
+        setStatus() {},
+      },
+    } as any,
+    "execute-task",
+    "M005/S01/T01",
+    {
+      phase: "executing",
+      activeSlice: { id: "S01", title: "Filter chip bar" },
+      activeTask: { id: "T01", title: "Add category filter" },
+    } as any,
+    {
+      getAutoStartTime: () => Date.now(),
+      isStepMode: () => false,
+      getCmdCtx: () => null,
+      getBasePath: () => "",
+      isVerbose: () => false,
+      isSessionSwitching: () => false,
+      getCurrentDispatchedModelId: () => null,
+    },
+  );
+
+  assert.ok(calls.some(([key]) => key === "gsd-progress"));
+  assert.ok(
+    calls.some(([key, value]) => key === "gsd-outcome" && value === undefined),
+    "handoff widget should clear once the active dashboard can render",
   );
 });
 
@@ -505,13 +616,84 @@ test("updateProgressWidget full mode keeps footer-owned signals out of auto deck
   assert.ok(installedWidget, "progress widget should be installed");
   const rendered = installedWidget.render(120).join("\n");
 
-  assert.match(rendered, /GSD\s+AUTO/);
+  assert.match(rendered, /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+GSD\s+·\s+AUTO\s+·\s+running/);
+  assert.doesNotMatch(rendered.split("\n")[1] ?? "", /M004\/S01\/T01/);
   assert.match(rendered, /Budget Tracking/);
   assert.match(rendered, /T01: Add repeat column via idempotent ALTER TABLE/);
   assert.match(rendered, /dashboard/);
   assert.doesNotMatch(rendered, /claude-sonnet-4-6/, "footer owns provider/model display");
   assert.doesNotMatch(rendered, /0\.2%|ctx|1\.0M/, "footer owns raw context meter display");
   assert.doesNotMatch(rendered, /\$/, "footer owns session cost display");
+});
+
+test("updateProgressWidget shows provider-waiting state consistently for auto and next modes", (t) => {
+  const dir = makeTempDir("auto-next-dashboard");
+  mkdirSync(join(dir, ".gsd"), { recursive: true });
+  const widgets: Array<{ render(width: number): string[]; dispose?: () => void }> = [];
+
+  t.after(() => {
+    for (const widget of widgets) widget.dispose?.();
+    _resetWidgetModeForTests();
+    clearSliceProgressCache();
+    cleanup(dir);
+  });
+
+  function renderDashboard(stepMode: boolean): string {
+    const holder: { widget?: { render(width: number): string[]; dispose?: () => void } } = {};
+    updateProgressWidget(
+      {
+        hasUI: true,
+        ui: {
+          setHeader() {},
+          setStatus() {},
+          setWidget(_key: string, factory: any) {
+            if (_key === "gsd-progress") {
+              const installed = factory(
+                { requestRender() {} },
+                { fg: (_color: string, text: string) => text, bold: (text: string) => text },
+              );
+              holder.widget = installed;
+              widgets.push(installed);
+            }
+          },
+        },
+      } as any,
+      "complete-slice",
+      "M003/S01",
+      {
+        phase: "summarizing",
+        activeMilestone: { id: "M003", title: "Inline editing" },
+        activeSlice: { id: "S01", title: "Inline Edit" },
+        activeTask: null,
+      } as any,
+      {
+        getAutoStartTime: () => Date.now() - 12_000,
+        isStepMode: () => stepMode,
+        getCmdCtx: () => null,
+        getBasePath: () => dir,
+        isVerbose: () => false,
+        isSessionSwitching: () => false,
+        getCurrentDispatchedModelId: () => null,
+      },
+    );
+
+    assert.ok(holder.widget, "progress widget should be installed");
+    return holder.widget.render(120).join("\n");
+  }
+
+  const autoRendered = renderDashboard(false);
+  const nextRendered = renderDashboard(true);
+
+  assert.match(autoRendered, /GSD\s+·\s+AUTO\s+·\s+running/);
+  assert.match(nextRendered, /GSD\s+·\s+NEXT\s+·\s+running/);
+  assert.doesNotMatch(autoRendered.split("\n")[1] ?? "", /completing M003\/S01/);
+  assert.doesNotMatch(nextRendered.split("\n")[1] ?? "", /completing M003\/S01/);
+  assert.doesNotMatch(autoRendered, /waiting on provider.*Waiting on provider/i);
+  assert.doesNotMatch(nextRendered, /waiting on provider.*Waiting on provider/i);
+  assert.match(autoRendered, /completing\s+M003\/S01/);
+  assert.match(nextRendered, /completing\s+M003\/S01/);
+  assert.doesNotMatch(autoRendered, /Working/);
+  assert.doesNotMatch(nextRendered, /Working/);
 });
 
 test("last commit refresh backs off cleanly when base path is not a git repo", (t) => {

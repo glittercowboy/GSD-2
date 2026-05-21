@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   getBudgetAlertLevel,
   getBudgetEnforcementAction,
+  getContextPauseAction,
   getNewBudgetAlertLevel,
 } from "../auto.js";
 
@@ -47,4 +48,15 @@ test("getBudgetEnforcementAction maps the configured ceiling behavior", () => {
   assert.equal(getBudgetEnforcementAction("warn", 1.0), "warn");
   assert.equal(getBudgetEnforcementAction("pause", 1.0), "pause");
   assert.equal(getBudgetEnforcementAction("halt", 1.0), "halt");
+});
+
+test("getContextPauseAction pauses at or above a percentage threshold", () => {
+  assert.equal(getContextPauseAction(undefined, 90), "none");
+  assert.equal(getContextPauseAction(null, 90), "none");
+  assert.equal(getContextPauseAction(89.9, 90), "none");
+  assert.equal(getContextPauseAction(90, 90), "pause");
+  assert.equal(getContextPauseAction(95, 90), "pause");
+  assert.equal(getContextPauseAction(95, 0), "none");
+  assert.equal(getContextPauseAction(0.75, 75), "pause");
+  assert.equal(getContextPauseAction(0.8, 0.75), "pause");
 });

@@ -18,8 +18,61 @@ import { handleShip } from "../../commands-ship.js";
 import { handleSessionReport } from "../../commands-session-report.js";
 import { handlePrBranch } from "../../commands-pr-branch.js";
 import { currentDirectoryRoot, projectRoot } from "../context.js";
+import { findUnmergedCompletedMilestones } from "../../unmerged-milestone-guard.js";
+import { mergeCompletedMilestone } from "../../parallel-merge.js";
+
+async function handleCompletedMilestoneRecovery(
+  phase: string,
+  ctx: ExtensionCommandContext,
+  basePath: string,
+): Promise<boolean> {
+  const tokens = phase.split(/\s+/).filter(Boolean);
+  const dispatchPhase = tokens[0] ?? "";
+  if (dispatchPhase !== "complete" && dispatchPhase !== "complete-milestone") return false;
+
+  const requestedMilestoneId = tokens[1];
+  const blockers = await findUnmergedCompletedMilestones(basePath);
+  const blocker = requestedMilestoneId
+    ? blockers.find((candidate) => candidate.milestoneId === requestedMilestoneId)
+    : blockers[0];
+  if (!blocker) return false;
+
+  ctx.ui.notify(
+    `Completing preserved milestone merge for ${blocker.milestoneId} from ${blocker.branch} into ${blocker.integrationBranch}.`,
+    "info",
+  );
+  const result = await mergeCompletedMilestone(basePath, blocker.milestoneId);
+  if (result.success) {
+    ctx.ui.notify(
+      `Milestone ${blocker.milestoneId} merged to ${blocker.integrationBranch}. Run /gsd again when ready.`,
+      "info",
+    );
+  } else {
+    ctx.ui.notify(
+      `Milestone ${blocker.milestoneId} merge recovery failed: ${result.error}`,
+      "error",
+    );
+  }
+  return true;
+}
 
 export async function handleOpsCommand(trimmed: string, ctx: ExtensionCommandContext, pi: ExtensionAPI): Promise<boolean> {
+  const directDispatchAlias = new Map<string, string>([
+    ["research-milestone", "research"],
+    ["research-slice", "research"],
+    ["plan-milestone", "plan"],
+    ["plan-slice", "plan"],
+    ["execute-task", "execute"],
+    ["complete-slice", "complete"],
+    ["validate-milestone", "validate-milestone"],
+    ["complete-milestone", "complete"],
+  ]);
+  const aliasPhase = directDispatchAlias.get(trimmed);
+  if (aliasPhase) {
+    await dispatchDirectPhase(ctx, pi, aliasPhase, projectRoot());
+    return true;
+  }
+
   if (trimmed === "init") {
     const { detectProjectState } = await import("../../detection.js");
     const { handleReinit, showProjectInit } = await import("../../init-wizard.js");
@@ -87,6 +140,11 @@ export async function handleOpsCommand(trimmed: string, ctx: ExtensionCommandCon
   }
   if (trimmed === "recover") {
     await handleRecover(ctx, projectRoot());
+    return true;
+  }
+  if (trimmed === "closeout" || trimmed.startsWith("closeout ")) {
+    const { handleCloseout } = await import("../../commands-closeout.js");
+    await handleCloseout(trimmed.replace(/^closeout\s*/, "").trim(), ctx, projectRoot());
     return true;
   }
   if (trimmed === "export" || trimmed.startsWith("export ")) {
@@ -182,10 +240,19 @@ Examples:
   if (trimmed === "dispatch" || trimmed.startsWith("dispatch ")) {
     const phase = trimmed.replace(/^dispatch\s*/, "").trim();
     if (!phase) {
-      ctx.ui.notify("Usage: /gsd dispatch <phase>  (research|plan|execute|complete|reassess|uat|replan)", "warning");
+      ctx.ui.notify("Usage: /gsd dispatch <phase>  (research|plan|execute|complete|validate|reassess|uat|replan)", "warning");
       return true;
     }
-    await dispatchDirectPhase(ctx, pi, phase, projectRoot());
+    const basePath = projectRoot();
+    if (await handleCompletedMilestoneRecovery(phase, ctx, basePath)) {
+      return true;
+    }
+    await dispatchDirectPhase(ctx, pi, phase, basePath);
+    return true;
+  }
+  if (trimmed === "verdict" || trimmed.startsWith("verdict ")) {
+    const { handleVerdict } = await import("../../commands-verdict.js");
+    await handleVerdict(trimmed.replace(/^verdict\s*/, "").trim(), ctx, projectRoot());
     return true;
   }
   if (trimmed === "notifications" || trimmed.startsWith("notifications ")) {

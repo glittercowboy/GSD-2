@@ -1,3 +1,5 @@
+// Project/App: GSD-2
+// File Purpose: Verifies auto-mode artifacts and manages recovery placeholders.
 /**
  * Auto-mode Recovery — artifact resolution, verification, blocker placeholders,
  * skip artifacts, merge state reconciliation,
@@ -13,7 +15,7 @@ import { appendEvent } from "./workflow-events.js";
 import { atomicWriteSync } from "./atomic-write.js";
 import { clearParseCache } from "./files.js";
 import { parseRoadmap as parseLegacyRoadmap, parsePlan as parseLegacyPlan } from "./parsers-legacy.js";
-import { isDbAvailable, getTask, getSlice, getSliceTasks, getPendingGates, updateTaskStatus, updateSliceStatus, insertSlice, getMilestone, refreshOpenDatabaseFromDisk, getCompletedMilestoneTaskFileHints, getMilestoneCommitAttributionShas, recordMilestoneCommitAttribution } from "./gsd-db.js";
+import { isDbAvailable, getTask, getSlice, getSliceTasks, getPendingGates, updateTaskStatus, updateSliceStatus, insertSlice, getMilestone, getMilestoneSlices, getLatestAssessmentByScope, updateMilestoneStatus, refreshOpenDatabaseFromDisk, getCompletedMilestoneTaskFileHints, getMilestoneCommitAttributionShas, recordMilestoneCommitAttribution } from "./gsd-db.js";
 import { isValidationTerminal } from "./state.js";
 import { getErrorMessage } from "./error-utils.js";
 import { logWarning, logError } from "./workflow-logger.js";
@@ -44,9 +46,11 @@ import {
   diagnoseExpectedArtifact,
 } from "./auto-artifact-paths.js";
 import { classifyMilestoneSummaryContent } from "./milestone-summary-classifier.js";
+import { hasVerdict } from "./verdict-parser.js";
 import { validateArtifact } from "./schemas/validate.js";
 import { getProjectResearchStatus } from "./project-research-policy.js";
 import { isGsdWorktreePath } from "./worktree-root.js";
+import { resolveCanonicalMilestoneRoot } from "./worktree-manager.js";
 
 // Re-export so existing consumers of auto-recovery.ts keep working.
 export { resolveExpectedArtifactPath, diagnoseExpectedArtifact };
@@ -80,6 +84,12 @@ export function diagnoseWorktreeIntegrityFailure(basePath: string): string | nul
   }
 }
 
+function resolveArtifactVerificationBase(unitId: string, base: string): string {
+  const { milestone } = parseUnitId(unitId);
+  if (!MILESTONE_ID_RE.test(milestone)) return base;
+  return resolveCanonicalMilestoneRoot(base, milestone);
+}
+
 export type ArtifactRecoveryDbRefreshResult =
   | { ok: true }
   | { ok: false; fatal: boolean; message: string; reason: string };
@@ -87,17 +97,93 @@ export type ArtifactRecoveryDbRefreshResult =
 export function refreshRecoveryDbForArtifact(
   unitType: string,
   unitId: string,
+  basePath: string,
 ): ArtifactRecoveryDbRefreshResult {
-  if (unitType !== "plan-slice" && unitType !== "execute-task") return { ok: true };
+  if (unitType !== "plan-slice" && unitType !== "execute-task" && unitType !== "complete-milestone") return { ok: true };
   if (!isDbAvailable()) return { ok: true };
 
   if (!refreshOpenDatabaseFromDisk()) {
     return {
       ok: false,
-      fatal: unitType === "execute-task",
+      fatal: unitType === "execute-task" || unitType === "complete-milestone",
       reason: `${unitType}-db-refresh-failed`,
       message: `Stuck recovery found ${unitType} ${unitId} artifacts, but the DB refresh failed.`,
     };
+  }
+
+  if (unitType === "complete-milestone") {
+    const { milestone: mid } = parseUnitId(unitId);
+    if (!mid) {
+      return {
+        ok: false,
+        fatal: true,
+        reason: "complete-milestone-invalid-unit-id",
+        message: `Stuck recovery found complete-milestone ${unitId} artifacts, but the unit id could not be parsed for DB reconciliation.`,
+      };
+    }
+
+    const milestone = getMilestone(mid);
+    if (!milestone) {
+      return {
+        ok: false,
+        fatal: true,
+        reason: "complete-milestone-artifact-db-missing",
+        message: `Stuck recovery found complete-milestone ${unitId} artifacts, but no matching DB milestone row exists after refresh.`,
+      };
+    }
+    if (isClosedStatus(milestone.status)) return { ok: true };
+
+    const validation = getLatestAssessmentByScope(mid, "milestone-validation");
+    if (validation?.status !== "pass") {
+      return {
+        ok: false,
+        fatal: true,
+        reason: "complete-milestone-validation-not-pass",
+        message: `Stuck recovery found complete-milestone ${unitId} artifacts, but milestone-validation is "${validation?.status ?? "absent"}" in the DB.`,
+      };
+    }
+
+    const slices = getMilestoneSlices(mid);
+    if (slices.length === 0) {
+      return {
+        ok: false,
+        fatal: true,
+        reason: "complete-milestone-slices-missing",
+        message: `Stuck recovery found complete-milestone ${unitId} artifacts, but no slices exist in the DB.`,
+      };
+    }
+    const openSlice = slices.find((slice) => !isClosedStatus(slice.status));
+    if (openSlice) {
+      return {
+        ok: false,
+        fatal: true,
+        reason: "complete-milestone-slice-open",
+        message: `Stuck recovery found complete-milestone ${unitId} artifacts, but slice ${openSlice.id} is still "${openSlice.status}" in the DB.`,
+      };
+    }
+    for (const slice of slices) {
+      const openTask = getSliceTasks(mid, slice.id).find((task) => !isClosedStatus(task.status));
+      if (openTask) {
+        return {
+          ok: false,
+          fatal: true,
+          reason: "complete-milestone-task-open",
+          message: `Stuck recovery found complete-milestone ${unitId} artifacts, but task ${slice.id}/${openTask.id} is still "${openTask.status}" in the DB.`,
+        };
+      }
+    }
+
+    if (hasImplementationArtifacts(basePath, mid) !== "present") {
+      return {
+        ok: false,
+        fatal: true,
+        reason: "complete-milestone-implementation-missing",
+        message: `Stuck recovery found complete-milestone ${unitId} artifacts, but implementation evidence is not present.`,
+      };
+    }
+
+    updateMilestoneStatus(mid, "complete", new Date().toISOString());
+    return { ok: true };
   }
 
   if (unitType !== "execute-task") return { ok: true };
@@ -201,9 +287,15 @@ export function hasImplementationArtifacts(basePath: string, milestoneId?: strin
     // Strategy: check `git diff --name-only` against the merge-base with the
     // main branch. This captures ALL files changed during the milestone's
     // lifetime while running on a milestone branch.
-    const integrationBranch = milestoneId
-      ? readIntegrationBranch(basePath, milestoneId) ?? detectMainBranch(basePath)
-      : detectMainBranch(basePath);
+    const recordedIntegrationBranch = milestoneId
+      ? readIntegrationBranch(basePath, milestoneId)
+      : null;
+    let integrationBranch: string;
+    if (recordedIntegrationBranch?.startsWith("milestone/")) {
+      integrationBranch = detectMainBranch(basePath);
+    } else {
+      integrationBranch = recordedIntegrationBranch ?? detectMainBranch(basePath);
+    }
     const currentBranch = getCurrentBranch(basePath);
     const branchDiff = getChangedFilesSinceBranch(basePath, integrationBranch);
     if (!branchDiff.ok) return "unknown";
@@ -217,6 +309,7 @@ export function hasImplementationArtifacts(basePath: string, milestoneId?: strin
         const milestoneEvidence = getChangedFilesFromMilestoneEvidence(basePath, milestoneId);
         if (!milestoneEvidence.ok) return "unknown";
         if (milestoneEvidence.matched) return classifyImplementationFiles(milestoneEvidence.files);
+        return "unknown";
       }
       if (currentBranch && currentBranch !== "HEAD") return "absent";
       return "unknown";
@@ -556,27 +649,55 @@ function commitMatchesMilestone(basePath: string, message: string, milestoneId: 
   // rather than Mxx/Sxx/Tyy. Bind those commits back to the milestone when
   // either the commit touched this milestone's artifacts, or — for projects
   // where .gsd/ is gitignored/external (#5033) — the message explicitly
-  // names the milestone or local GSD state proves the task belongs here.
+  // names the milestone, local GSD state proves the task belongs here, or the
+  // commit is implementation-bearing evidence itself (#5100).
   if (/^GSD-Task:\s*S[^/\s]+\/T\S+/m.test(message)) {
     if (files.some((file) => isMilestoneArtifactPath(file, milestoneId))) return true;
     if (commitMessageMentionsMilestone(message, milestoneId)) return true;
-    if (commitTaskTrailerBelongsToMilestone(basePath, message, milestoneId)) return true;
+    const taskTrailerOwnership = getTaskOwnershipStatus(basePath, message, milestoneId);
+    if (taskTrailerOwnership === true) return true;
+    if (taskTrailerOwnership === false) return false;
+    // taskTrailerOwnership === null: unknown ownership. Apply fallback only
+    // in this case to avoid cross-milestone attribution.
+    if (MILESTONE_ID_RE.test(milestoneId) && classifyImplementationFiles(files) === "present") return true;
   }
 
   return false;
 }
 
-function commitTaskTrailerBelongsToMilestone(basePath: string, message: string, milestoneId: string): boolean {
+/**
+ * Tri-state task ownership probe.
+ * true => DB or local files confirm this milestone owns the task.
+ * false => DB is available and this milestone is registered, but task is absent.
+ * null => ownership unknown (milestone not in DB yet, or no DB + no local files).
+ */
+function getTaskOwnershipStatus(
+  basePath: string,
+  message: string,
+  milestoneId: string,
+): true | false | null {
   const match = message.match(/^GSD-Task:\s*(S[^/\s]+)\/(T[^\s]+)/m);
-  if (!match) return false;
+  if (!match) return null;
   const [, sliceId, taskId] = match;
 
-  if (getTask(milestoneId, sliceId, taskId)) return true;
+  if (isDbAvailable()) {
+    if (!getMilestone(milestoneId)) return null;
+    return getTask(milestoneId, sliceId, taskId) ? true : false;
+  }
 
+  // DB unavailable: fallback to local task-file presence.
   const tasksDir = resolveTasksDir(basePath, milestoneId, sliceId);
-  if (!tasksDir) return false;
-  return existsSync(join(tasksDir, `${taskId}-PLAN.md`))
-    || existsSync(join(tasksDir, `${taskId}-SUMMARY.md`));
+  if (
+    tasksDir
+    && (
+      existsSync(join(tasksDir, `${taskId}-PLAN.md`))
+      || existsSync(join(tasksDir, `${taskId}-SUMMARY.md`))
+    )
+  ) {
+    return true;
+  }
+
+  return null;
 }
 
 function commitMessageMentionsMilestone(message: string, milestoneId: string): boolean {
@@ -768,7 +889,8 @@ export function verifyExpectedArtifact(
     }
   }
 
-  const absPath = resolveExpectedArtifactPath(unitType, unitId, base);
+  const artifactBase = resolveArtifactVerificationBase(unitId, base);
+  const absPath = resolveExpectedArtifactPath(unitType, unitId, artifactBase);
   // For unit types with no verifiable artifact (null path), the parent directory
   // is missing on disk — treat as stale completion state so the key gets evicted (#313).
   if (!absPath) {
@@ -776,7 +898,7 @@ export function verifyExpectedArtifact(
     return false;
   }
   if (!existsSync(absPath)) {
-    const worktreeFailure = diagnoseWorktreeIntegrityFailure(base);
+    const worktreeFailure = diagnoseWorktreeIntegrityFailure(artifactBase);
     if (worktreeFailure) {
       logError("recovery", `${worktreeFailure} Unit: ${unitType} ${unitId}.`);
       return false;
@@ -789,6 +911,14 @@ export function verifyExpectedArtifact(
     const validationContent = readFileSync(absPath, "utf-8");
     if (!isValidationTerminal(validationContent)) {
       logWarning("recovery", `verify-fail ${unitType} ${unitId}: validation not terminal (len=${validationContent.length}) at ${absPath}`);
+      return false;
+    }
+  }
+
+  if (unitType === "run-uat") {
+    const assessmentContent = readFileSync(absPath, "utf-8");
+    if (!hasVerdict(assessmentContent)) {
+      logWarning("recovery", `verify-fail ${unitType} ${unitId}: assessment missing verdict at ${absPath}`);
       return false;
     }
   }
@@ -837,9 +967,9 @@ export function verifyExpectedArtifact(
         }
 
         if (taskIds && taskIds.length > 0) {
-          const tasksDir = resolveTasksDir(base, mid, sid);
-          if (!tasksDir) {
-            logWarning("recovery", `verify-fail ${unitType} ${unitId}: resolveTasksDir returned null for ${mid}/${sid}`);
+          const tasksDir = join(dirname(absPath), "tasks");
+          if (!existsSync(tasksDir)) {
+            logWarning("recovery", `verify-fail ${unitType} ${unitId}: tasks dir missing at ${tasksDir}`);
             return false;
           }
           for (const tid of taskIds) {
@@ -946,7 +1076,8 @@ export function writeBlockerPlaceholder(
   base: string,
   reason: string,
 ): string | null {
-  const absPath = resolveExpectedArtifactPath(unitType, unitId, base);
+  const artifactBase = resolveArtifactVerificationBase(unitId, base);
+  const absPath = resolveExpectedArtifactPath(unitType, unitId, artifactBase);
   if (!absPath) return null;
   const dir = dirname(absPath);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
@@ -982,7 +1113,7 @@ export function writeBlockerPlaceholder(
     if (unitType === "execute-task" && mid && sid && tid) {
       try {
         updateTaskStatus(mid, sid, tid, "complete", ts);
-        const planPath = resolveSliceFile(base, mid, sid, "PLAN");
+        const planPath = resolveExpectedArtifactPath("plan-slice", `${mid}/${sid}`, artifactBase);
         if (planPath && existsSync(planPath)) {
           const planContent = readFileSync(planPath, "utf-8");
           const updatedPlan = planContent.replace(
@@ -1044,7 +1175,7 @@ export function buildLoopRemediationSteps(
     case "execute-task": {
       if (!mid || !sid || !tid) break;
       return [
-        `   1. Run \`gsd undo-task ${tid}\` to reset the task state`,
+        `   1. Run \`gsd undo-task ${mid}/${sid}/${tid}\` to reset the task state`,
         `   2. Resume auto-mode — it will re-execute the task`,
         `   3. If the task keeps failing, run \`gsd recover\` to rebuild DB state from disk`,
       ].join("\n");
@@ -1065,7 +1196,7 @@ export function buildLoopRemediationSteps(
     case "complete-slice": {
       if (!mid || !sid) break;
       return [
-        `   1. Run \`gsd reset-slice ${sid}\` to reset the slice and all its tasks`,
+        `   1. Run \`gsd reset-slice ${mid}/${sid}\` to reset the slice and all its tasks`,
         `   2. Resume auto-mode — it will re-execute incomplete tasks and re-complete the slice`,
         `   3. If the slice keeps failing, run \`gsd recover\` to rebuild DB state from disk`,
       ].join("\n");

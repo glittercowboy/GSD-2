@@ -177,3 +177,43 @@ test("checkAutoStartAfterDiscuss(basePath) selects the matching pending entry wh
     rmSync(projectB, { recursive: true, force: true });
   }
 });
+
+test("checkAutoStartAfterDiscuss can emit ready without scheduling auto-start", () => {
+  const base = mkdtempSync(join(tmpdir(), "gsd-auto-start-headless-owned-"));
+  let waitForIdleCalls = 0;
+  const notifications: string[] = [];
+  try {
+    const gsdDir = join(base, ".gsd");
+    const milestoneDir = join(gsdDir, "milestones", "M001");
+    mkdirSync(milestoneDir, { recursive: true });
+    writeFileSync(join(gsdDir, "PROJECT.md"), "# Project\n\n| M001 | First milestone | active |\n");
+    writeFileSync(join(gsdDir, "STATE.md"), "# State\n");
+    writeFileSync(join(milestoneDir, "M001-CONTEXT.md"), "# M001 Context\n");
+
+    clearPendingAutoStart();
+    setPendingAutoStart(base, {
+      basePath: base,
+      milestoneId: "M001",
+      startAuto: false,
+      ctx: {
+        waitForIdle: async () => {
+          waitForIdleCalls++;
+        },
+        ui: {
+          notify: (message: string) => {
+            notifications.push(message);
+          },
+        },
+      } as any,
+      pi: { setActiveTools: () => undefined, getActiveTools: () => [] } as any,
+    });
+
+    assert.equal(checkAutoStartAfterDiscuss(base), true);
+    assert.deepEqual(notifications, ["Milestone M001 ready."]);
+    assert.equal(waitForIdleCalls, 0, "headless-owned auto start must not schedule guided-flow auto");
+    assert.equal(getDiscussionMilestoneId(base), null, "ready handoff should still be cleared");
+  } finally {
+    clearPendingAutoStart();
+    rmSync(base, { recursive: true, force: true });
+  }
+});

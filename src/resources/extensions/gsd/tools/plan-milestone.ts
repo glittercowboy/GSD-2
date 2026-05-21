@@ -1,3 +1,6 @@
+// Project/App: GSD-2
+// File Purpose: Plans milestone roadmap state through DB-backed workflow tools.
+
 import { clearParseCache } from "../files.js";
 import { isClosedStatus } from "../status-guards.js";
 import { isNonEmptyString, validateStringArray, validateTitle } from "../validation.js";
@@ -277,6 +280,7 @@ export async function handlePlanMilestone(
       upsertMilestonePlanning(params.milestoneId, {
         title: params.title,
         status: params.status ?? "active",
+        depends_on: params.dependsOn ?? [],
         vision: params.vision,
         successCriteria: params.successCriteria,
         keyRisks: params.keyRisks,

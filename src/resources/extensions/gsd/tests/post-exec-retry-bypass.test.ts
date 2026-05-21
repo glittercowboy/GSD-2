@@ -19,6 +19,7 @@ import { AutoSession } from "../auto/session.ts";
 import { openDatabase, closeDatabase, insertMilestone, insertSlice, insertTask, _getAdapter } from "../gsd-db.ts";
 import { invalidateAllCaches } from "../cache.ts";
 import { _clearGsdRootCache } from "../paths.ts";
+import { initMetrics, resetMetrics } from "../metrics.ts";
 
 // ─── Test Fixtures ───────────────────────────────────────────────────────────
 
@@ -91,6 +92,7 @@ function cleanupTestEnvironment(): void {
   } catch {
     // Ignore
   }
+  resetMetrics();
   try {
     rmSync(tempDir, { recursive: true, force: true });
   } catch {
@@ -163,6 +165,34 @@ function createTaskWithoutVerify(): void {
       estimate: "1h",
       files: [],
       verify: "",
+      inputs: [],
+      expectedOutput: [],
+      observabilityImpact: "",
+    },
+    sequence: 0,
+  });
+}
+
+function createFailingVerifyTask(): void {
+  insertMilestone({ id: "M001" });
+  insertSlice({
+    id: "S01",
+    milestoneId: "M001",
+    title: "Test Slice",
+    risk: "low",
+  });
+
+  insertTask({
+    id: "T01",
+    sliceId: "S01",
+    milestoneId: "M001",
+    title: "Task with failing verification",
+    status: "pending",
+    planning: {
+      description: "Task with deterministic failing verification",
+      estimate: "1h",
+      files: [],
+      verify: "node -e \"process.exit(1)\"",
       inputs: [],
       expectedOutput: [],
       observabilityImpact: "",
@@ -289,6 +319,44 @@ describe("Post-execution blocking failure retry bypass", () => {
     // On success, retry count should be cleared
     assert.equal(result, "continue");
     assert.equal(s.verificationRetryCount.has("execute-task:M001/S01/T01"), false);
+  });
+
+  test("cost spike during verification retry is warning telemetry, not the pause reason", async () => {
+    createFailingVerifyTask();
+    writePreferences({
+      enhanced_verification: true,
+      enhanced_verification_post: false,
+      verification_auto_fix: true,
+      verification_max_retries: 2,
+      per_unit_cost_cap_usd: 10,
+    });
+    writeFileSync(
+      join(tempDir, ".gsd", "metrics.json"),
+      JSON.stringify({
+        version: 1,
+        projectStartedAt: Date.now(),
+        units: [
+          { type: "execute-task", id: "M001/S01/T01", startedAt: 1, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 1.48, toolCalls: 1, assistantMessages: 1 },
+          ...Array.from({ length: 9 }, (_, i) => ({ type: "execute-task", id: `M000/S00/T0${i}`, startedAt: 10 + i, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0.01, toolCalls: 1, assistantMessages: 1 })),
+        ],
+      }),
+      "utf-8",
+    );
+    initMetrics(tempDir);
+
+    const ctx = makeMockCtx();
+    const pi = makeMockPi();
+    const pauseAutoMock = mock.fn(async () => {});
+    const s = makeMockSession(tempDir, { type: "execute-task", id: "M001/S01/T01" });
+
+    const result = await runPostUnitVerification({ s, ctx, pi }, pauseAutoMock);
+
+    assert.equal(result, "retry");
+    assert.equal(pauseAutoMock.mock.callCount(), 0);
+    assert.equal(s.pendingVerificationRetry?.unitId, "M001/S01/T01");
+    const messages = ctx.ui.notify.mock.calls.map((c: { arguments: unknown[] }) => String(c.arguments[0]));
+    assert.ok(messages.some((m: string) => m.includes("cost spike detected") && m.includes("authoritative blocker")));
+    assert.ok(messages.some((m: string) => m.includes("Verification failed") && m.includes("auto-fix attempt 1/2")));
   });
 
   test("post-exec failure notification mentions cross-task consistency", async () => {

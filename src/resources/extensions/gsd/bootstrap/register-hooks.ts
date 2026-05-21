@@ -134,10 +134,38 @@ export const MINIMAL_AUTO_BASE_TOOL_NAMES = [
   "write",
 ] as const;
 
+const RUN_UAT_BROWSER_TOOL_NAMES = [
+  "browser_navigate",
+  "browser_click",
+  "browser_type",
+  "browser_fill_form",
+  "browser_click_ref",
+  "browser_fill_ref",
+  "browser_wait_for",
+  "browser_assert",
+  "browser_verify",
+  "browser_screenshot",
+  "browser_snapshot_refs",
+  "browser_find",
+  "browser_get_console_logs",
+  "browser_get_network_logs",
+  "browser_evaluate",
+  "browser_reload",
+  "browser_batch",
+  "browser_act",
+] as const;
+
 const AUTO_UNIT_SCOPED_TOOLS: Record<string, readonly string[]> = {
   "research-milestone": ["gsd_summary_save", "gsd_decision_save"],
   "plan-milestone": ["gsd_plan_milestone", "gsd_decision_save", "gsd_requirement_update"],
-  "discuss-milestone": ["gsd_summary_save", "gsd_decision_save", "gsd_requirement_save"],
+  "discuss-milestone": [
+    "gsd_summary_save",
+    "gsd_decision_save",
+    "gsd_requirement_save",
+    "gsd_requirement_update",
+    "gsd_plan_milestone",
+    "gsd_milestone_generate_id",
+  ],
   "validate-milestone": ["gsd_validate_milestone", "gsd_reassess_roadmap", "subagent"],
   "complete-milestone": ["gsd_complete_milestone", "subagent"],
   "research-slice": ["gsd_summary_save", "gsd_decision_save"],
@@ -149,7 +177,7 @@ const AUTO_UNIT_SCOPED_TOOLS: Record<string, readonly string[]> = {
   "execute-task": ["gsd_task_complete", "gsd_decision_save"],
   "execute-task-simple": ["gsd_task_complete", "gsd_decision_save"],
   "reactive-execute": ["gsd_task_complete", "gsd_decision_save"],
-  "run-uat": ["gsd_summary_save"],
+  "run-uat": ["gsd_summary_save", ...RUN_UAT_BROWSER_TOOL_NAMES],
   "gate-evaluate": ["gsd_save_gate_result"],
   "rewrite-docs": ["gsd_summary_save", "gsd_decision_save"],
   "workflow-preferences": ["gsd_summary_save"],
@@ -168,10 +196,41 @@ function isGsdManagedTool(name: string): boolean {
   return name.startsWith("gsd_") || name === "memory_query" || name === "capture_thought" || name === "gsd_graph";
 }
 
+/**
+ * Resolves requested tool names against active tools using exact and MCP-scoped matches.
+ *
+ * MCP-scoped names follow `mcp__<namespace>__<toolname>`.
+ * Example: if `requestedToolNames` contains `gsd_exec` and `activeToolNames` contains
+ * `mcp__gsd-workflow__gsd_exec`, the MCP-scoped active name is included in the result.
+ *
+ * Returns deduplicated active tool names that satisfy the requested base names.
+ */
+function resolveScopedToolNames(
+  activeToolNames: readonly string[],
+  requestedToolNames: readonly string[],
+): string[] {
+  const exact = new Set(activeToolNames);
+  const resolved = new Set<string>();
+
+  for (const requested of requestedToolNames) {
+    if (exact.has(requested)) resolved.add(requested);
+
+    for (const activeName of activeToolNames) {
+      if (!activeName.startsWith("mcp__")) continue;
+      const toolSeparator = activeName.indexOf("__", "mcp__".length);
+      if (toolSeparator < 0) continue;
+      if (activeName.slice(toolSeparator + 2) === requested) {
+        resolved.add(activeName);
+      }
+    }
+  }
+
+  return [...resolved];
+}
+
 export function buildMinimalGsdToolSet(activeToolNames: readonly string[]): string[] {
-  const active = new Set(activeToolNames);
   const preserved = activeToolNames.filter((name) => !isGsdManagedTool(name));
-  const minimal = MINIMAL_GSD_TOOL_NAMES.filter((name) => active.has(name));
+  const minimal = resolveScopedToolNames(activeToolNames, MINIMAL_GSD_TOOL_NAMES);
   return [...new Set([...preserved, ...minimal])];
 }
 
@@ -179,19 +238,17 @@ export function buildMinimalAutoGsdToolSet(
   activeToolNames: readonly string[],
   unitType: string | undefined,
 ): string[] {
-  const active = new Set(activeToolNames);
   const unitTools = unitType ? AUTO_UNIT_SCOPED_TOOLS[unitType] ?? [] : [];
   const autoBaseTools = new Set<string>(MINIMAL_AUTO_BASE_TOOL_NAMES);
   const preserved = activeToolNames.filter((name) => autoBaseTools.has(name));
-  const scoped = [...MINIMAL_GSD_TOOL_NAMES, ...unitTools].filter((name) => active.has(name));
+  const scoped = resolveScopedToolNames(activeToolNames, [...MINIMAL_GSD_TOOL_NAMES, ...unitTools]);
   return [...new Set([...preserved, ...scoped])];
 }
 
 export function buildMinimalGsdWorkflowToolSet(activeToolNames: readonly string[]): string[] {
-  const active = new Set(activeToolNames);
   const autoBaseTools = new Set<string>(MINIMAL_AUTO_BASE_TOOL_NAMES);
   const preserved = activeToolNames.filter((name) => autoBaseTools.has(name));
-  const scoped = WORKFLOW_GSD_TOOL_NAMES.filter((name) => active.has(name));
+  const scoped = resolveScopedToolNames(activeToolNames, WORKFLOW_GSD_TOOL_NAMES);
   return [...new Set([...preserved, ...scoped])];
 }
 
@@ -317,7 +374,7 @@ async function applyDisabledModelProviderPolicy(ctx: ExtensionContext): Promise<
 /**
  * Bridge `context_management.compaction_threshold_percent` from GSD preferences
  * into the agent's runtime compaction settings (#5475). The preference is
- * validated to (0.5, 0.95) at load time, but defense-in-depth normalization
+ * validated to [0.5, 0.95] at load time, but defense-in-depth normalization
  * here protects against a stale or hand-edited prefs file. Calling with
  * `undefined` clears any prior override so a removed preference does not leak.
  */
@@ -327,10 +384,11 @@ async function applyCompactionThresholdOverride(ctx: ExtensionContext): Promise<
     const prefs = loadEffectiveGSDPreferences();
     const raw = prefs?.preferences.context_management?.compaction_threshold_percent;
     const value =
-      typeof raw === "number" && Number.isFinite(raw) && raw > 0 && raw < 1 ? raw : undefined;
+      typeof raw === "number" && Number.isFinite(raw) && raw >= 0.5 && raw <= 0.95 ? raw : 0.6;
     ctx.setCompactionThresholdOverride(value);
   } catch {
-    // Non-fatal: leave any existing override in place.
+    // Non-fatal: use conservative default when preferences cannot be loaded.
+    ctx.setCompactionThresholdOverride(0.6);
   }
 }
 
@@ -508,6 +566,13 @@ export function registerHooks(
       const milestoneId = extractDepthVerificationMilestoneId(pendingApprovalGate);
       if (milestoneId) markDepthVerified(milestoneId, beforeAgentBasePath);
       clearPendingGate(beforeAgentBasePath);
+      if (isAutoPaused() && !isAutoActive()) {
+        const { resumeAutoAfterProviderDelay } = await import("./provider-error-resume.js");
+        void resumeAutoAfterProviderDelay(pi, ctx).catch((err) => {
+          const message = err instanceof Error ? err.message : String(err);
+          ctx.ui.notify(`Failed to resume auto-mode after approval: ${message}`, "warning");
+        });
+      }
     }
     clearDeferredApprovalGate(beforeAgentBasePath);
 
@@ -565,6 +630,11 @@ export function registerHooks(
     } finally {
       activateDeferredApprovalGate(contextBasePath(ctx));
     }
+  });
+
+  pi.on("message_end", async (event) => {
+    const { suppressTerminalDeletedWorktreeMessageEnd } = await import("./agent-end-recovery.js");
+    suppressTerminalDeletedWorktreeMessageEnd(event);
   });
 
   // Squash-merge quick-task branch back to the original branch after the
@@ -641,6 +711,7 @@ export function registerHooks(
     if (approvalQuestionAbortInFlight) return;
 
     const dash = getAutoRuntimeSnapshot();
+    if (dash.active) return;
     let unitType = dash.currentUnit?.type;
     let unitId = dash.currentUnit?.id;
 
@@ -807,11 +878,10 @@ export function registerHooks(
     // git.isolation=worktree but auto-mode hasn't created the milestone
     // worktree yet. Without this, writes silently orphan outside git history.
     if (isToolCallEventType("write", event) || isToolCallEventType("edit", event)) {
-      const wtBasePath = resolveWorktreeProjectRoot(dash.basePath ?? discussionBasePath);
       const wtGuard = shouldBlockWorktreeWrite(
         event.toolName,
         event.input.path,
-        wtBasePath,
+        dash.basePath ?? discussionBasePath,
         isAutoActive(),
         dash.currentUnit?.type,
       );

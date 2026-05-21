@@ -1,6 +1,6 @@
 // GSD Extension — Verification Gate
 // Pure functions for discovering and running verification commands.
-// Discovery order (D003): preference → task plan verify → package.json scripts.
+// Discovery order (D003): task plan verify → preference → package.json scripts.
 // First non-empty source wins.
 
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
@@ -41,32 +41,33 @@ const PACKAGE_SCRIPT_KEYS = ["typecheck", "lint", "test"] as const;
 
 /**
  * Discover verification commands using the first-non-empty-wins strategy (D003):
- *   1. Explicit preference commands
- *   2. Task plan verify field (split on &&)
+ *   1. Task plan verify field (split on && and newlines)
+ *   2. Explicit preference commands
  *   3. package.json scripts (typecheck, lint, test)
  *   4. Python pytest project markers
- *   5. None found
+ *   5. Dependency-free Node test files
+ *   6. None found
  */
 export function discoverCommands(options: DiscoverCommandsOptions): DiscoveredCommands {
-  // 1. Preference commands
+  // 1. Task plan verify field (commands are untrusted — sanitize)
+  if (options.taskPlanVerify && options.taskPlanVerify.trim()) {
+    const commands = options.taskPlanVerify
+      .split(/&&|\r?\n/)
+      .map(c => c.trim())
+      .filter(Boolean)
+      .filter(c => sanitizeCommand(c) !== null);
+    if (commands.length > 0) {
+      return { commands, source: "task-plan" };
+    }
+  }
+
+  // 2. Preference commands
   if (options.preferenceCommands && options.preferenceCommands.length > 0) {
     const filtered = options.preferenceCommands
       .map(c => c.trim())
       .filter(Boolean);
     if (filtered.length > 0) {
       return { commands: filtered, source: "preference" };
-    }
-  }
-
-  // 2. Task plan verify field (commands are untrusted — sanitize)
-  if (options.taskPlanVerify && options.taskPlanVerify.trim()) {
-    const commands = options.taskPlanVerify
-      .split("&&")
-      .map(c => c.trim())
-      .filter(Boolean)
-      .filter(c => sanitizeCommand(c) !== null);
-    if (commands.length > 0) {
-      return { commands, source: "task-plan" };
     }
   }
 
@@ -97,8 +98,30 @@ export function discoverCommands(options: DiscoverCommandsOptions): DiscoveredCo
     return { commands: [pythonCommand], source: "python-project" };
   }
 
-  // 5. Nothing found
+  const nodeTestCommand = discoverNodeTestFileCommand(options.cwd);
+  if (nodeTestCommand) {
+    return { commands: [nodeTestCommand], source: "node-test-file" };
+  }
+
+  // 6. Nothing found
   return { commands: [], source: "none" };
+}
+
+function discoverNodeTestFileCommand(cwd: string): string | null {
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(cwd, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+
+  const testFile = entries
+    .filter((entry) => entry.isFile())
+    .map((entry) => entry.name)
+    .filter((name) => /^test-[A-Za-z0-9._-]+\.js$|^[A-Za-z0-9._-]+\.test\.js$/.test(name))
+    .sort()[0];
+
+  return testFile ? `node ${testFile}` : null;
 }
 
 function discoverPythonPytestCommand(cwd: string): string | null {
@@ -201,8 +224,42 @@ export function formatFailureContext(result: VerificationResult): string {
 
 // ─── Gate Execution ─────────────────────────────────────────────────────────
 
-/** Characters that indicate shell injection when found in a command string. */
-const SHELL_INJECTION_PATTERN = /[;|`<>]|\$\(/;
+/** Characters that indicate shell control syntax when unquoted in a command string. */
+const UNQUOTED_SHELL_CONTROL_CHARS = new Set([";", "|", "<", ">"]);
+
+/** Returns true when command text contains unquoted shell control syntax. */
+function hasUnsafeShellSyntax(cmd: string): boolean {
+  // Command substitution remains unsafe even when quoted with double quotes.
+  if (cmd.includes("$(") || cmd.includes("`")) return true;
+
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+
+  for (const ch of cmd) {
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\" && !inSingle) {
+      escaped = true;
+      continue;
+    }
+    if (ch === "'" && !inDouble) {
+      inSingle = !inSingle;
+      continue;
+    }
+    if (ch === "\"" && !inSingle) {
+      inDouble = !inDouble;
+      continue;
+    }
+    if (!inSingle && !inDouble && UNQUOTED_SHELL_CONTROL_CHARS.has(ch)) {
+      return true;
+    }
+  }
+
+  return false;
+}
 
 /**
  * Known executable first-tokens that are safe to run.
@@ -210,6 +267,7 @@ const SHELL_INJECTION_PATTERN = /[;|`<>]|\$\(/;
  */
 const KNOWN_COMMAND_PREFIXES = new Set([
   "npm", "npx", "yarn", "pnpm", "bun", "bunx", "deno",
+  "uv",
   "node", "ts-node", "tsx", "tsc",
   "sh", "bash", "zsh",
   "echo", "cat", "ls", "test", "true", "false", "pwd", "env",
@@ -248,27 +306,30 @@ export function isLikelyCommand(cmd: string): boolean {
 
   const tokens = trimmed.split(/\s+/);
   const firstToken = tokens[0];
+  const effectiveFirstToken = firstToken === "!" ? (tokens[1] ?? "") : firstToken;
+  const effectiveTokens = firstToken === "!" ? tokens.slice(1) : tokens;
+  if (firstToken === "!" && effectiveTokens.length === 0) return false;
 
   // Known command prefix → definitely a command
-  if (KNOWN_COMMAND_PREFIXES.has(firstToken)) return true;
+  if (KNOWN_COMMAND_PREFIXES.has(effectiveFirstToken)) return true;
 
   // Path-like first token → command
-  if (firstToken.startsWith("/") || firstToken.startsWith("./") || firstToken.startsWith("../")) return true;
+  if (effectiveFirstToken.startsWith("/") || effectiveFirstToken.startsWith("./") || effectiveFirstToken.startsWith("../")) return true;
 
   // Has flag-like tokens → command
-  if (tokens.some(t => t.startsWith("-"))) return true;
+  if (effectiveTokens.some(t => t.startsWith("-"))) return true;
 
   // First token starts with uppercase + 4 or more words → prose
-  if (/^[A-Z]/.test(firstToken) && tokens.length >= 4) return false;
+  if (/^[A-Z]/.test(effectiveFirstToken) && effectiveTokens.length >= 4) return false;
 
   // Contains comma-space patterns (prose clause separators) → prose
   if (/,\s/.test(trimmed) && tokens.length >= 4) return false;
 
   // First token has uppercase letters and no path separators → prose
-  if (/[A-Z]/.test(firstToken) && !firstToken.includes("/")) return false;
+  if (/[A-Z]/.test(effectiveFirstToken) && !effectiveFirstToken.includes("/")) return false;
 
   // Non-ASCII prose with multiple words should not be executed as a command.
-  if (!/[A-Za-z0-9]/.test(firstToken) && tokens.length >= 4) return false;
+  if (!/[A-Za-z0-9]/.test(effectiveFirstToken) && effectiveTokens.length >= 4) return false;
 
   return true;
 }
@@ -278,7 +339,7 @@ export function isLikelyCommand(cmd: string): boolean {
  * Returns the command unchanged if safe, or null if suspicious.
  */
 export function validateVerificationCommand(cmd: string): { ok: true } | { ok: false; reason: string } {
-  if (SHELL_INJECTION_PATTERN.test(cmd)) {
+  if (hasUnsafeShellSyntax(cmd)) {
     return { ok: false, reason: "contains shell control syntax such as pipes, redirects, semicolons, backticks, or command substitution" };
   }
   if (!isLikelyCommand(cmd)) {
@@ -299,6 +360,34 @@ export interface RunVerificationGateOptions {
   taskPlanVerify?: string;
   /** Per-command timeout in ms. Defaults to 120 000 (2 minutes). */
   commandTimeoutMs?: number;
+}
+
+export interface VerificationTarget {
+  id: string;
+  cwd: string;
+  preferenceCommands?: string[];
+}
+
+// When targets use different discovery methods, return the highest-priority
+// source. Precedence: explicit preference > task-plan > package-json >
+// python-project. This avoids a misleading "mixed" label while still
+// surfacing that at least one authoritative source was active.
+function mergeDiscoverySource(
+  sources: VerificationResult["discoverySource"][],
+): VerificationResult["discoverySource"] {
+  if (sources.length === 0) return "none";
+  const first = sources[0];
+  if (sources.every((source) => source === first)) return first;
+  const precedence: VerificationResult["discoverySource"][] = [
+    "preference",
+    "task-plan",
+    "package-json",
+    "python-project",
+  ];
+  for (const source of precedence) {
+    if (sources.includes(source)) return source;
+  }
+  return "none";
 }
 
 /**
@@ -373,6 +462,51 @@ export function runVerificationGate(options: RunVerificationGateOptions): Verifi
     passed: checks.every(c => c.exitCode === 0),
     checks,
     discoverySource: source,
+    timestamp,
+  };
+}
+
+export function runVerificationGateForTargets(options: {
+  targets: VerificationTarget[];
+  preferenceCommands?: string[];
+  taskPlanVerify?: string;
+  commandTimeoutMs?: number;
+}): VerificationResult {
+  const timestamp = Date.now();
+  if (options.targets.length === 0) {
+    return {
+      passed: true,
+      checks: [],
+      discoverySource: "none",
+      timestamp,
+    };
+  }
+
+  const checks: VerificationCheck[] = [];
+  const sources: VerificationResult["discoverySource"][] = [];
+  let passed = true;
+
+  for (const target of options.targets) {
+    const result = runVerificationGate({
+      cwd: target.cwd,
+      preferenceCommands: options.preferenceCommands ?? target.preferenceCommands,
+      taskPlanVerify: options.taskPlanVerify,
+      commandTimeoutMs: options.commandTimeoutMs,
+    });
+    passed = passed && result.passed;
+    sources.push(result.discoverySource);
+    for (const check of result.checks) {
+      checks.push({
+        ...check,
+        command: target.id === "project" ? check.command : `[${target.id}] ${check.command}`,
+      });
+    }
+  }
+
+  return {
+    passed,
+    checks,
+    discoverySource: mergeDiscoverySource(sources),
     timestamp,
   };
 }

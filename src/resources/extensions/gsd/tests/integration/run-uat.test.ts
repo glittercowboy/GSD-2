@@ -1,3 +1,6 @@
+// Project/App: GSD-2
+// File Purpose: Integration tests for UAT mode extraction, dispatch, and prompt contracts.
+
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -7,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 
 import { extractUatType } from '../../files.ts';
 import { resolveSliceFile } from '../../paths.ts';
-import { checkNeedsRunUat } from '../../auto-prompts.ts';
+import { buildRunUatPrompt, checkNeedsRunUat } from '../../auto-prompts.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const worktreePromptsDir = join(__dirname, '../..', 'prompts');
@@ -49,6 +52,24 @@ function cleanup(base: string): void {
 
 function makeUatContent(mode: string): string {
   return `# UAT File\n\n## UAT Type\n\n- UAT mode: ${mode}\n- Some other bullet: value\n`;
+}
+
+function makeBrowserObservableUatContent(mode = 'artifact-driven'): string {
+  return [
+    '# UAT File',
+    '',
+    '## UAT Type',
+    '',
+    `- UAT mode: ${mode}`,
+    '',
+    '## Test Cases',
+    '',
+    '1. Open index.html in a browser',
+    '2. Add todos with distinct words',
+    '3. Type into the search box',
+    '4. Expected: only matching todos are visible',
+    '',
+  ].join('\n');
 }
 
 describe('run-uat', () => {
@@ -601,6 +622,65 @@ test('(s) ASSESSMENT without verdict does not skip UAT dispatch', async () => {
         { sliceId: 'S01', uatType: 'artifact-driven' },
         'ASSESSMENT without verdict should not suppress UAT dispatch',
       );
+    } finally {
+      cleanup(base);
+    }
+});
+
+test('(t) browser-observable UAT dispatches for final slice even when uat_dispatch is off', async () => {
+    const base = createFixtureBase();
+    try {
+      const roadmapDir = join(base, '.gsd', 'milestones', 'M001');
+      mkdirSync(roadmapDir, { recursive: true });
+      writeFileSync(
+        join(roadmapDir, 'M001-ROADMAP.md'),
+        [
+          '# M001: Test roadmap',
+          '',
+          '## Slices',
+          '',
+          '- [x] **S01: Only slice** `risk:low` `depends:[]`',
+          '',
+          '## Boundary Map',
+          '',
+        ].join('\n'),
+      );
+      writeSliceFile(base, 'M001', 'S01', 'UAT', makeBrowserObservableUatContent());
+
+      const state = {
+        activeMilestone: { id: 'M001', title: 'Test roadmap' },
+        activeSlice: null,
+        activeTask: null,
+        phase: 'validating-milestone',
+        recentDecisions: [],
+        blockers: [],
+        nextAction: 'Validate M001',
+        registry: [],
+      } as const;
+
+      const result = await checkNeedsRunUat(base, 'M001', state as any, {} as any);
+      assert.deepStrictEqual(
+        result,
+        { sliceId: 'S01', uatType: 'browser-executable' },
+        'browser-observable final-slice UAT must run before validation even when optional UAT dispatch is off',
+      );
+    } finally {
+      cleanup(base);
+    }
+});
+
+test('(u) run-uat prompt promotes artifact-driven browser specs to browser-executable mode', async () => {
+    const base = createFixtureBase();
+    try {
+      const uatRel = '.gsd/milestones/M001/slices/S01/S01-UAT.md';
+      const uatContent = makeBrowserObservableUatContent();
+      writeSliceFile(base, 'M001', 'S01', 'UAT', uatContent);
+
+      const prompt = await buildRunUatPrompt('M001', 'S01', uatRel, uatContent, base);
+
+      assert.match(prompt, /\*\*Detected UAT mode:\*\*\s*`browser-executable`/);
+      assert.match(prompt, /uatType: browser-executable/);
+      assert.match(prompt, /use browser tools/i);
     } finally {
       cleanup(base);
     }

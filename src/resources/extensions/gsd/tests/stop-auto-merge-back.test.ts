@@ -11,7 +11,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { _selectStopAutoWorktreeExit } from "../auto.ts";
+import { _resolveStopAutoMilestoneId, _selectStopAutoWorktreeExit } from "../auto.ts";
 
 test("#5576: stopAuto should check milestone completion status before choosing exit strategy", () => {
   assert.equal(
@@ -46,6 +46,18 @@ test("#5576: stopAuto does not merge a milestone already merged in phases", () =
   );
 });
 
+test("stopAuto preserves a complete milestone when merge cleanup is explicitly suppressed", () => {
+  assert.equal(
+    _selectStopAutoWorktreeExit({
+      currentMilestoneId: "M001",
+      milestoneComplete: true,
+      milestoneMergedInPhases: false,
+      preserveCompletedMilestoneBranch: true,
+    }),
+    "preserve",
+  );
+});
+
 test("#5576: stopAuto skips worktree teardown when no milestone is active", () => {
   assert.equal(
     _selectStopAutoWorktreeExit({
@@ -65,5 +77,19 @@ test("#5576: stopAuto returns none when phases are already merged even if milest
       milestoneMergedInPhases: true,
     }),
     "none",
+  );
+});
+
+test("#6273: stopAuto infers milestone id from milestone worktree path when session milestone id is missing", () => {
+  assert.equal(
+    _resolveStopAutoMilestoneId(null, "/repo/.gsd/worktrees/M001"),
+    "M001",
+  );
+});
+
+test("#6273: stopAuto does not infer non-milestone worktree names", () => {
+  assert.equal(
+    _resolveStopAutoMilestoneId(null, "/repo/.gsd/worktrees/feature-x"),
+    null,
   );
 });

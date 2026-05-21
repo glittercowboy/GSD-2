@@ -22,13 +22,13 @@ const LEAKING_GIT_ENV_VARS = [
 ] as const;
 
 function buildSafeParentEnv(): NodeJS.ProcessEnv {
-  const safe: NodeJS.ProcessEnv = {};
+  const safe: Record<string, string | undefined> = {};
   for (const [k, v] of Object.entries(process.env)) {
     if (!LEAKING_GIT_ENV_VARS.includes(k as (typeof LEAKING_GIT_ENV_VARS)[number])) {
       safe[k] = v;
     }
   }
-  return safe;
+  return safe as NodeJS.ProcessEnv;
 }
 
 /** Env overlay that suppresses interactive git credential prompts and git-svn noise. */

@@ -18,6 +18,9 @@ on:
       - 'LICENSE'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -154,7 +157,19 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          fetch-depth: 2
+          fetch-depth: 1
+
+      - name: Fetch diff base for lint scans
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ -n "${PR_BASE_SHA:-}" ]; then
+            git fetch --no-tags --depth=1 origin "$PR_BASE_SHA"
+            git update-ref "refs/remotes/origin/${BASE_REF:-main}" "$PR_BASE_SHA"
+          else
+            git fetch --no-tags --depth=1 origin main:refs/remotes/origin/main
+          fi
 
       - name: Scan for hardcoded secrets
         run: bash scripts/secret-scan.sh --diff origin/main
@@ -401,7 +416,7 @@ jobs:
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
           GSD_SKIP_RTK_INSTALL: '1'
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Build core
         run: npm run build:core

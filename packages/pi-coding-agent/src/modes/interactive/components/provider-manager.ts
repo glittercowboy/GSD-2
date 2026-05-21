@@ -1,3 +1,4 @@
+// GSD-2 + packages/pi-coding-agent/src/modes/interactive/components/provider-manager.ts - Provider management selector.
 /**
  * TUI component for managing provider configurations.
  * Shows providers with auth status, discovery support, and model counts.
@@ -7,6 +8,8 @@ import {
 	Container,
 	type Focusable,
 	getEditorKeybindings,
+	Key,
+	matchesKey,
 	Spacer,
 	Text,
 	type TUI,
@@ -194,12 +197,12 @@ export class ProviderManagerComponent extends Container implements Focusable {
 			} else {
 				this.onDone();
 			}
-		} else if (keyData === "d" || keyData === "D") {
+		} else if (matchesKey(keyData, "d") || matchesKey(keyData, Key.shift("d"))) {
 			const provider = this.providers[this.selectedIndex];
 			if (provider?.supportsDiscovery) {
 				this.onDiscover(provider.name);
 			}
-		} else if (keyData === "r" || keyData === "R") {
+		} else if (matchesKey(keyData, "r") || matchesKey(keyData, Key.shift("r"))) {
 			const provider = this.providers[this.selectedIndex];
 			if (provider?.hasAuth) {
 				if (this.confirmingRemove) {

@@ -98,6 +98,8 @@ function makeMockPi() {
     sendMessage: (...args: unknown[]) => {
       calls.push(args);
     },
+    getThinkingLevel: () => "off",
+    setThinkingLevel: () => {},
     calls,
   } as any;
 }

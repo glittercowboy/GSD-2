@@ -9,6 +9,21 @@ import { handleRate } from "../../commands-rate.js";
 import { guardRemoteSession, projectRoot } from "../context.js";
 import { findMilestoneIds } from "../../milestone-id-utils.js";
 
+async function hasUnresolvedCloseoutBlocker(ctx: ExtensionCommandContext, basePath: string): Promise<boolean> {
+  const { ensureDbOpen } = await import("../../bootstrap/dynamic-tools.js");
+  if (!(await ensureDbOpen(basePath))) return false;
+
+  const {
+    formatCloseoutAutoBlockMessage,
+    listUnresolvedCloseoutFailures,
+  } = await import("../../closeout-recovery.js");
+  const failures = listUnresolvedCloseoutFailures();
+  if (failures.length === 0) return false;
+
+  ctx.ui.notify(formatCloseoutAutoBlockMessage(failures.length), "error");
+  return true;
+}
+
 /**
  * Parse --yolo flag and optional file path from the auto command string.
  * Supports: `/gsd auto --yolo path/to/file.md` or `/gsd auto -y path/to/file.md`
@@ -54,17 +69,19 @@ export async function handleAutoCommand(trimmed: string, ctx: ExtensionCommandCo
     const debugMode = afterMilestone.includes("--debug");
     if (debugMode) enableDebug(projectRoot());
     if (!(await guardRemoteSession(ctx, pi))) return true;
+    const basePath = projectRoot();
+    if (await hasUnresolvedCloseoutBlocker(ctx, basePath)) return true;
 
     // Validate the milestone target exists and is not already complete.
     if (milestoneId) {
-      const allIds = findMilestoneIds(projectRoot());
+      const allIds = findMilestoneIds(basePath);
       if (!allIds.includes(milestoneId)) {
         ctx.ui.notify(`Milestone ${milestoneId} does not exist. Available: ${allIds.join(", ") || "(none)"}`, "error");
         return true;
       }
     }
 
-    startAutoDetached(ctx, pi, projectRoot(), verboseMode, {
+    startAutoDetached(ctx, pi, basePath, verboseMode, {
       step: true,
       milestoneLock: milestoneId,
     });
@@ -78,10 +95,12 @@ export async function handleAutoCommand(trimmed: string, ctx: ExtensionCommandCo
     const debugMode = afterMilestone.includes("--debug");
     if (debugMode) enableDebug(projectRoot());
     if (!(await guardRemoteSession(ctx, pi))) return true;
+    const basePath = projectRoot();
+    if (await hasUnresolvedCloseoutBlocker(ctx, basePath)) return true;
 
     // Validate the milestone target exists and is not already complete.
     if (milestoneId) {
-      const allIds = findMilestoneIds(projectRoot());
+      const allIds = findMilestoneIds(basePath);
       if (!allIds.includes(milestoneId)) {
         ctx.ui.notify(`Milestone ${milestoneId} does not exist. Available: ${allIds.join(", ") || "(none)"}`, "error");
         return true;
@@ -89,7 +108,7 @@ export async function handleAutoCommand(trimmed: string, ctx: ExtensionCommandCo
     }
 
     if (yoloSeedFile) {
-      const resolved = resolve(projectRoot(), yoloSeedFile);
+      const resolved = resolve(basePath, yoloSeedFile);
       if (!existsSync(resolved)) {
         ctx.ui.notify(`Yolo seed file not found: ${resolved}`, "error");
         return true;
@@ -103,13 +122,13 @@ export async function handleAutoCommand(trimmed: string, ctx: ExtensionCommandCo
       // then auto-mode starts automatically via checkAutoStartAfterDiscuss
       // when the LLM says "Milestone X ready."
       const { showHeadlessMilestoneCreation } = await import("../../guided-flow.js");
-      await showHeadlessMilestoneCreation(ctx, pi, projectRoot(), seedContent);
+      await showHeadlessMilestoneCreation(ctx, pi, basePath, seedContent);
     } else if (milestoneId) {
-      startAutoDetached(ctx, pi, projectRoot(), verboseMode, {
+      startAutoDetached(ctx, pi, basePath, verboseMode, {
         milestoneLock: milestoneId,
       });
     } else {
-      startAutoDetached(ctx, pi, projectRoot(), verboseMode);
+      startAutoDetached(ctx, pi, basePath, verboseMode);
     }
     return true;
   }
@@ -150,8 +169,9 @@ export async function handleAutoCommand(trimmed: string, ctx: ExtensionCommandCo
 
   if (trimmed === "") {
     if (!(await guardRemoteSession(ctx, pi))) return true;
-    const { showSmartEntry } = await import("../../guided-flow.js");
-    await showSmartEntry(ctx, pi, projectRoot(), { step: true });
+    if (await hasUnresolvedCloseoutBlocker(ctx, projectRoot())) return true;
+    const { showGsdHome } = await import("../../gsd-command-home.js");
+    await showGsdHome(ctx, pi, projectRoot());
     return true;
   }
 

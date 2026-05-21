@@ -1,3 +1,5 @@
+// Project/App: GSD-2
+// File Purpose: Resolves expected auto-mode artifact paths across project and worktree projections.
 // GSD Auto-mode — Artifact Path Resolution
 //
 // resolveExpectedArtifactPath and diagnoseExpectedArtifact moved here from
@@ -6,6 +8,9 @@
 
 import {
   gsdRoot,
+  gsdProjectionRoot,
+  resolveDir,
+  resolveFile,
   resolveMilestoneFile,
   resolveMilestonePath,
   resolveSliceFile,
@@ -24,9 +29,9 @@ function resolveMilestoneArtifactPath(
   mid: string,
   suffix: string,
 ): string | null {
-  const existing = resolveMilestoneFile(base, mid, suffix);
+  const existing = resolveProjectedMilestoneFile(base, mid, suffix) ?? resolveMilestoneFile(base, mid, suffix);
   if (existing) return existing;
-  const dir = resolveMilestonePath(base, mid);
+  const dir = resolveProjectedMilestonePath(base, mid) ?? resolveMilestonePath(base, mid);
   return dir ? join(dir, buildMilestoneFileName(mid, suffix)) : null;
 }
 
@@ -36,10 +41,38 @@ function resolveSliceArtifactPath(
   sid: string,
   suffix: string,
 ): string | null {
-  const existing = resolveSliceFile(base, mid, sid, suffix);
+  const existing = resolveProjectedSliceFile(base, mid, sid, suffix) ?? resolveSliceFile(base, mid, sid, suffix);
   if (existing) return existing;
-  const dir = resolveSlicePath(base, mid, sid);
+  const dir = resolveProjectedSlicePath(base, mid, sid) ?? resolveSlicePath(base, mid, sid);
   return dir ? join(dir, buildSliceFileName(sid, suffix)) : null;
+}
+
+function resolveProjectedMilestonePath(base: string, mid: string): string | null {
+  const milestonesDir = join(gsdProjectionRoot(base), "milestones");
+  const dir = resolveDir(milestonesDir, mid);
+  return dir ? join(milestonesDir, dir) : null;
+}
+
+function resolveProjectedMilestoneFile(base: string, mid: string, suffix: string): string | null {
+  const dir = resolveProjectedMilestonePath(base, mid);
+  if (!dir) return null;
+  const file = resolveFile(dir, mid, suffix);
+  return file ? join(dir, file) : null;
+}
+
+function resolveProjectedSlicePath(base: string, mid: string, sid: string): string | null {
+  const milestoneDir = resolveProjectedMilestonePath(base, mid);
+  if (!milestoneDir) return null;
+  const slicesDir = join(milestoneDir, "slices");
+  const dir = resolveDir(slicesDir, sid);
+  return dir ? join(slicesDir, dir) : null;
+}
+
+function resolveProjectedSliceFile(base: string, mid: string, sid: string, suffix: string): string | null {
+  const dir = resolveProjectedSlicePath(base, mid, sid);
+  if (!dir) return null;
+  const file = resolveFile(dir, sid, suffix);
+  return file ? join(dir, file) : null;
 }
 
 /**
@@ -98,7 +131,7 @@ export function resolveExpectedArtifactPath(
       return resolveSliceArtifactPath(base, mid, sid!, "ASSESSMENT");
     }
     case "execute-task": {
-      const dir = resolveSlicePath(base, mid, sid!);
+      const dir = resolveProjectedSlicePath(base, mid, sid!) ?? resolveSlicePath(base, mid, sid!);
       return dir && tid
         ? join(dir, "tasks", buildTaskFileName(tid, "SUMMARY"))
         : null;
