@@ -137,7 +137,11 @@ export class RuleRegistry {
     return {
       action: "stop",
       reason: `Unhandled phase "${ctx.state.phase}" — run /gsd doctor to diagnose.`,
-      level: "info",
+      // Must match the inline fallback at auto-dispatch.ts so the wired
+      // adapter maps "stop" → "pause" (recoverable) instead of a terminal
+      // stop. The two no-match fallbacks share the same reason string; their
+      // levels must agree. See issue #6423 for the symptom this caused.
+      level: "warning",
       matchedRule: "<no-match>",
     };
   }

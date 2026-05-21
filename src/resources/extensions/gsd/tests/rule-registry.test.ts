@@ -408,4 +408,24 @@ describe("RuleRegistry", () => {
     assert.deepStrictEqual(result.action, "stop", "result is a stop action");
     assert.deepStrictEqual(result.matchedRule, "<no-match>", "matchedRule is '<no-match>' on fallback");
   });
+
+  // Regression for #6423: the registry's no-match fallback must use
+  // level: "warning" so the wired adapter maps it to a recoverable "pause".
+  // The inline fallback at auto-dispatch.ts already uses "warning"; these
+  // two paths share the same reason string and must agree on level.
+  test("evaluateDispatch no-match fallback uses level: 'warning' (#6423)", async () => {
+    const rules: UnifiedRule[] = [
+      mockDispatchRule("only-planning", "planning"),
+    ];
+    const registry = new RuleRegistry(rules);
+    const ctx = makeContext("some-unknown-phase");
+    const result = await registry.evaluateDispatch(ctx);
+
+    assert.deepStrictEqual(result.action, "stop");
+    assert.deepStrictEqual(
+      (result as { level: string }).level,
+      "warning",
+      "no-match fallback must be 'warning' (not 'info') to remain recoverable in the wired adapter",
+    );
+  });
 });
