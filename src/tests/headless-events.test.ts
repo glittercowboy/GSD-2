@@ -223,6 +223,10 @@ test('isTerminalNotification: step-mode pause notifications are terminal', () =>
   assert.equal(isTerminalNotification(makeNotify('Step-mode paused (Escape). Type to interact, or /gsd next to resume.')), true)
 })
 
+test('isTerminalNotification: idempotent advance pause notifications are terminal', () => {
+  assert.equal(isTerminalNotification(makeNotify('Auto-mode paused: idempotent advance: unit already active')), true)
+})
+
 test('isTerminalNotification: manual merge-resolution notifications are terminal', () => {
   assert.equal(isTerminalNotification(makeNotify('Survivor-branch finalization for M001 failed: merge conflict. Resolve manually and re-run /gsd auto.')), true)
 })
@@ -244,6 +248,10 @@ test('isTerminalNotification: validation-blocked command blocks are terminal', (
 test('isBlockedNotification: pause notifications require intervention in headless mode', () => {
   assert.equal(isBlockedNotification(makeNotify('Auto-mode paused (Escape). Type to interact, or /gsd auto to resume.')), true)
   assert.equal(isBlockedNotification(makeNotify('Auto-mode paused due to provider error: connection reset')), true)
+})
+
+test('isBlockedNotification: idempotent advance pause notifications are not blocked', () => {
+  assert.equal(isBlockedNotification(makeNotify('Auto-mode paused: idempotent advance: unit already active')), false)
 })
 
 test('isBlockedNotification: manual merge-resolution notifications require intervention', () => {

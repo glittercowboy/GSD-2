@@ -11,7 +11,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { isMultiTurnHeadlessCommand } from '../headless.ts'
+import { buildHeadlessSlashCommand, isMultiTurnHeadlessCommand } from '../headless.ts'
 
 test('discuss is classified as multi-turn (#3547)', () => {
   assert.equal(isMultiTurnHeadlessCommand('discuss'), true)
@@ -37,4 +37,26 @@ test('single-turn commands are not multi-turn', () => {
       `${cmd} should not be multi-turn`,
     )
   }
+})
+
+test('new-milestone --auto marks the slash command for headless-owned auto start', () => {
+  assert.equal(
+    buildHeadlessSlashCommand({
+      command: 'new-milestone',
+      commandArgs: [],
+      auto: true,
+    }),
+    '/gsd new-milestone --headless-chain-auto',
+  )
+})
+
+test('new-milestone without --auto keeps the normal guided-flow auto handoff', () => {
+  assert.equal(
+    buildHeadlessSlashCommand({
+      command: 'new-milestone',
+      commandArgs: [],
+      auto: false,
+    }),
+    '/gsd new-milestone',
+  )
 })

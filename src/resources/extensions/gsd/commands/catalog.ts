@@ -93,6 +93,10 @@ export const TOP_LEVEL_SUBCOMMANDS: readonly GsdCommandDefinition[] = [
 
 const NESTED_COMPLETIONS: CompletionMap = {
   brief: VISUAL_BRIEF_MODES.map((mode) => ({ cmd: mode.mode, desc: mode.description })),
+  discuss: [
+    { cmd: "--milestone", desc: "Target a specific milestone by ID (e.g. --milestone M014)" },
+    { cmd: "--slice", desc: "Target a specific slice by ID (e.g. --slice M014/S03)" },
+  ],
   auto: [
     { cmd: "--verbose", desc: "Show detailed execution output" },
     { cmd: "--debug", desc: "Enable debug logging" },

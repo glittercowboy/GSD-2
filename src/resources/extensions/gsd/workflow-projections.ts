@@ -19,11 +19,13 @@ import type { VerificationEvidenceRow } from "./db-verification-evidence-rows.js
 import { atomicWriteSync } from "./atomic-write.js";
 import { join } from "node:path";
 import { mkdirSync, existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { logWarning } from "./workflow-logger.js";
 import { isClosedStatus } from "./status-guards.js";
 import { deriveState } from "./state.js";
 import type { GSDState } from "./types.js";
-import { renderRoadmapFromDb } from "./markdown-renderer.js";
+import { renderPlanFromDb, renderRoadmapFromDb } from "./markdown-renderer.js";
+import { readManifest } from "./workflow-manifest.js";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
 
@@ -240,11 +242,11 @@ export function renderSummaryContent(
 
   // ── Frontmatter (YAML list format, matches parseSummary() expectations) ──
   const keyFilesYaml = taskRow.key_files && taskRow.key_files.length > 0
-    ? `\n${taskRow.key_files.map(f => `  - ${f}`).join("\n")}`
-    : " []";
+    ? taskRow.key_files.map(f => `  - ${f}`).join("\n")
+    : "  - (none)";
   const keyDecisionsYaml = taskRow.key_decisions && taskRow.key_decisions.length > 0
-    ? `\n${taskRow.key_decisions.map(d => `  - ${d}`).join("\n")}`
-    : " []";
+    ? taskRow.key_decisions.map(d => `  - ${d}`).join("\n")
+    : "  - (none)";
 
   // Derive verification_result from evidence if available
   const evidenceList = evidence ?? [];
@@ -275,8 +277,10 @@ export function renderSummaryContent(
 id: ${taskRow.id}
 parent: ${sliceId}
 milestone: ${milestoneId}
-key_files:${keyFilesYaml}
-key_decisions:${keyDecisionsYaml}
+key_files:
+${keyFilesYaml}
+key_decisions:
+${keyDecisionsYaml}
 duration: ${taskRow.duration || ""}
 verification_result: ${verificationResult}
 completed_at: ${taskRow.completed_at || ""}
@@ -409,8 +413,22 @@ export async function renderStateProjection(basePath: string): Promise<void> {
     const state = await deriveState(basePath);
     const content = renderStateContent(state);
     const dir = join(basePath, ".gsd");
+    const statePath = join(dir, "STATE.md");
+    const milestoneTotal = state.progress?.milestones?.total ?? 0;
+    if (milestoneTotal === 0 && existsSync(statePath)) {
+      try {
+        const manifest = readManifest(basePath);
+        const existingContent = (await readFile(statePath, "utf-8")).trim();
+        if (Array.isArray(manifest?.milestones) && manifest.milestones.length > 0 && existingContent.length > 0) {
+          logWarning("projection", "renderStateProjection: refusing to overwrite non-empty STATE.md with empty state while manifest has milestones");
+          return;
+        }
+      } catch (err) {
+        logWarning("projection", `renderStateProjection: unable to inspect existing STATE.md guard, proceeding with write: ${(err as Error).message}`);
+      }
+    }
     mkdirSync(dir, { recursive: true });
-    atomicWriteSync(join(dir, "STATE.md"), content);
+    atomicWriteSync(statePath, content);
   } catch (err) {
     logWarning("projection", `renderStateProjection failed: ${(err as Error).message}`);
   }
@@ -533,7 +551,7 @@ export async function regenerateIfMissing(
   try {
     switch (fileType) {
       case "PLAN":
-        renderPlanProjection(basePath, milestoneId, sliceId);
+        await renderPlanFromDb(basePath, milestoneId, sliceId);
         return existsSync(filePath);
       case "ROADMAP":
         await renderRoadmapFromDb(basePath, milestoneId);
