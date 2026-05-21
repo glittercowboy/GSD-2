@@ -499,9 +499,9 @@ console.log('\n=== complete-task: minimal params (no keyFiles, keyDecisions, ver
     assertTrue(fs.existsSync(result.summaryPath), 'summary file should be written with minimal params');
     const summaryContent = fs.readFileSync(result.summaryPath, 'utf-8');
     assertMatch(summaryContent, /blocker_discovered:\s*false/, 'blocker_discovered should default to false');
-    assertMatch(summaryContent, /key_files:\s*\[\]/, 'key_files should render as an empty frontmatter list');
-    assertMatch(summaryContent, /key_decisions:\s*\[\]/, 'key_decisions should render as an empty frontmatter list');
-    assertTrue(!summaryContent.includes('  - (none)'), 'empty frontmatter lists should not render (none) as a list item');
+    assertMatch(summaryContent, /key_files:\n  - \(none\)/, 'empty key_files should use (none) sentinel for parseSummary compatibility');
+    assertMatch(summaryContent, /key_decisions:\n  - \(none\)/, 'empty key_decisions should use (none) sentinel for parseSummary compatibility');
+    assertTrue(summaryContent.includes('  - (none)'), 'empty frontmatter lists use (none) sentinel to preserve parseSummary key_files.length > 0 invariant');
   }
 
   cleanupDir(basePath);

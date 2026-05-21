@@ -68,6 +68,10 @@ function resolveGitWorkingTreeRoot(basePath: string): string | null {
   }
 }
 
+/**
+ * Build a repository registry with an implicit reserved "project" repository
+ * rooted at projectRoot. User-defined workspace repositories may not use id "project".
+ */
 export function createRepositoryRegistry(
   basePath: string,
   workspacePrefs?: WorkspacePreferences,
@@ -77,11 +81,12 @@ export function createRepositoryRegistry(
   const mode = workspacePrefs?.mode ?? "project";
   const repoMap = new Map<string, RegisteredRepository>();
 
-  // Seed an implicit "project" repository for backward compatibility in
-  // single-repo mode and as a workspace-root reference in parent mode.
-  // A user-defined workspace.repositories.project entry may override this;
-  // override is allowed but generally discouraged.
+  // "project" is reserved: always maps to projectRoot and cannot be overridden.
   repoMap.set("project", { id: "project", root: projectRoot });
+
+  if (workspacePrefs?.repositories && Object.hasOwn(workspacePrefs.repositories, "project")) {
+    throw new Error('workspace.repositories.project is reserved for the implicit project root repository');
+  }
 
   for (const [repoId, repoConfig] of Object.entries(workspacePrefs?.repositories ?? {})) {
     repoMap.set(repoId, resolveRepositoryRoot(projectRoot, repoId, repoConfig));

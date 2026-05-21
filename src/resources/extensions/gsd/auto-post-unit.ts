@@ -439,6 +439,30 @@ export function _shouldDispatchQuickTaskForTest(
     state.currentUnit.type !== "quick-task";
 }
 
+function isExecutionToolName(name: unknown): boolean {
+  if (typeof name !== "string") return false;
+  const normalized = name.trim().toLowerCase();
+  return normalized === "bash" || normalized === "gsd_exec";
+}
+
+export function _hasExecutionToolCallsInSessionForTest(entries: readonly unknown[]): boolean {
+  for (const entry of entries) {
+    const e = entry as any;
+    if (e?.type === "toolCall" && isExecutionToolName(e?.name ?? e?.toolName)) {
+      return true;
+    }
+
+    if (e?.type !== "message") continue;
+    const msg = e?.message;
+    if (!msg || msg.role !== "assistant" || !Array.isArray(msg.content)) continue;
+    for (const block of msg.content) {
+      if (block?.type !== "toolCall") continue;
+      if (isExecutionToolName(block?.toolName ?? block?.name)) return true;
+    }
+  }
+  return false;
+}
+
 export function shouldDeferCloseoutGitAction(unitType: string): boolean {
   return unitType === "execute-task";
 }
@@ -716,19 +740,49 @@ function artifactValidationKind(unitType: string): "project" | "requirements" | 
   return null;
 }
 
-function describeArtifactVerificationFailure(unitType: string, unitId: string, basePath: string): string {
+const TASK_COMPLETION_TOOL_NAMES = new Set(["gsd_task_complete", "gsd_complete_task"]);
+
+function hasTaskCompletionToolCall(agentEndMessages?: unknown[] | null): boolean {
+  if (!Array.isArray(agentEndMessages)) return false;
+  for (const rawMessage of agentEndMessages) {
+    if (!rawMessage || typeof rawMessage !== "object") continue;
+    const message = rawMessage as { content?: unknown };
+    if (!Array.isArray(message.content)) continue;
+    for (const rawPart of message.content) {
+      if (!rawPart || typeof rawPart !== "object") continue;
+      const part = rawPart as { type?: unknown; name?: unknown };
+      if (part.type !== "toolCall") continue;
+      const name = String(part.name ?? "").toLowerCase();
+      if (TASK_COMPLETION_TOOL_NAMES.has(name)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function describeArtifactVerificationFailure(
+  unitType: string,
+  unitId: string,
+  basePath: string,
+  agentEndMessages?: unknown[] | null,
+): string {
   const worktreeFailure = diagnoseWorktreeIntegrityFailure(basePath);
   if (worktreeFailure) {
     return `${worktreeFailure} Unit: ${unitType} ${unitId}.`;
   }
 
   const artifactPath = resolveExpectedArtifactPath(unitType, unitId, basePath);
+  const expected = diagnoseExpectedArtifact(unitType, unitId, basePath);
   if (!artifactPath) {
     return `Artifact verification failed: ${unitType} "${unitId}" has no resolvable artifact path.`;
   }
   const relPath = relative(basePath, artifactPath);
   if (!existsSync(artifactPath)) {
-    return `Artifact verification failed: ${relPath} was not found on disk after unit execution.`;
+    const completionToolHint = unitType === "execute-task" && !hasTaskCompletionToolCall(agentEndMessages)
+      ? " No completion tool call detected (`gsd_task_complete`/alias)."
+      : "";
+    return `Artifact verification failed: ${relPath} was not found on disk after unit execution${expected ? ` (${expected})` : ""}.${completionToolHint}`;
   }
 
   const validationKind = artifactValidationKind(unitType);
@@ -743,9 +797,9 @@ function describeArtifactVerificationFailure(unitType: string, unitId: string, b
     }
   }
 
-  const expected = diagnoseExpectedArtifact(unitType, unitId, basePath);
   return `Artifact verification failed: ${relPath} exists but did not satisfy the ${unitType} completion contract${expected ? ` (${expected})` : ""}.`;
 }
+export const _describeArtifactVerificationFailureForTest = describeArtifactVerificationFailure;
 
 async function repairCompleteSliceRoadmapProjection(
   unitType: string,
@@ -1344,11 +1398,23 @@ export async function postUnitPreVerification(pctx: PostUnitContext, opts?: PreV
                   mismatch.severity === "warning" && mismatch.actual === null
                 ));
                 if (missingCommandMismatches.length > 0) {
-                  logWarning("safety", `evidence mismatch: ${missingCommandMismatches.length} claimed command(s) not found in bash calls`);
+                  const entries = Array.isArray(opts?.agentEndMessages)
+                    ? opts.agentEndMessages
+                    : (ctx.sessionManager?.getEntries?.() ?? []);
+                  const hasSessionExecutionCalls = _hasExecutionToolCallsInSessionForTest(entries);
+                  if (hasSessionExecutionCalls) {
+                    debugLog("postUnit", {
+                      phase: "safety-evidence-xref",
+                      taskId: sTid,
+                      suppressedWarning: "evidence-empty-but-session-has-exec-calls",
+                    });
+                  } else {
+                    logWarning("safety", `evidence mismatch: ${missingCommandMismatches.length} claimed command(s) not found in bash calls`);
                   ctx.ui.notify(
                     `Safety: task ${sTid} claimed ${missingCommandMismatches.length} command(s) not found in recorded bash calls`,
                     "warning",
                   );
+                  }
                 }
 
                 const blockingMismatch = mismatches.find((mismatch) => mismatch.severity === "error");
@@ -1735,6 +1801,7 @@ export async function postUnitPreVerification(pctx: PostUnitContext, opts?: PreV
             s.currentUnit.type,
             s.currentUnit.id,
             verificationBasePath,
+            s.lastUnitAgentEndMessages,
           );
           if (attempt > MAX_ARTIFACT_VERIFICATION_RETRIES) {
             s.exhaustedVerificationUnits.add(retryKey);

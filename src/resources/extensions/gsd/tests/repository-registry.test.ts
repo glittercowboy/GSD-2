@@ -26,11 +26,14 @@ test("repository registry includes implicit project root and declared child repo
 
   assert.equal(registry.mode, "parent");
   assert.equal(registry.projectRoot, base);
+  assert.equal(registry.byId.size, 3);
   assert.equal(registry.byId.get("project")?.root, base);
   assert.equal(registry.byId.get("frontend")?.root, join(base, "frontend"));
   assert.equal(registry.byId.get("backend")?.root, join(base, "backend"));
   assert.deepEqual(registry.byId.get("frontend")?.verification, ["npm test"]);
+  assert.equal(registry.byId.get("frontend")?.role, "web UI");
   assert.equal(registry.byId.get("backend")?.commitPolicy, "skip");
+  assert.equal(registry.byId.get("backend")?.role, "API");
 });
 
 test("repository registry rejects repositories outside project root", (t) => {
@@ -48,6 +51,24 @@ test("repository registry rejects repositories outside project root", (t) => {
       },
     }),
     /outside project root/,
+  );
+});
+
+test('repository registry rejects explicit "project" repository id', (t) => {
+  const base = mkdtempSync(join(tmpdir(), "gsd-repo-registry-"));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  mkdirSync(join(base, ".gsd"), { recursive: true });
+
+  assert.throws(
+    () => createRepositoryRegistryFromPreferences(base, {
+      workspace: {
+        mode: "parent",
+        repositories: {
+          project: { path: "." },
+        },
+      },
+    }),
+    /reserved/,
   );
 });
 

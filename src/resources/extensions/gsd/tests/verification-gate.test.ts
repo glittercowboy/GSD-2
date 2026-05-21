@@ -483,7 +483,7 @@ describe("verification-gate: execution", () => {
     assert.ok(result.checks[2].stdout.includes("third"));
   });
 
-  test("gate execution uses cwd for spawnSync", () => {
+test("gate execution uses cwd for spawnSync", () => {
     // pwd should report the temp dir
     const result = runVerificationGate({
       cwd: tmp,
@@ -672,6 +672,14 @@ test("validateVerificationCommand allows semicolons inside quoted python -c code
 
 test("validateVerificationCommand rejects shell operators after single-quote backslash desync patterns", () => {
   const result = validateVerificationCommand("echo 'x\\'; ls");
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.match(result.reason, /shell control syntax/);
+  }
+});
+
+test("validateVerificationCommand rejects logical OR fallback syntax", () => {
+  const result = validateVerificationCommand("npm test || true");
   assert.equal(result.ok, false);
   if (!result.ok) {
     assert.match(result.reason, /shell control syntax/);
