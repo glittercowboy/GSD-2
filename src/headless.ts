@@ -83,6 +83,16 @@ export interface HeadlessOptions {
   bare?: boolean         // --bare: suppress CLAUDE.md/AGENTS.md, user skills, project preferences
 }
 
+const HEADLESS_CHAIN_AUTO_FLAG = '--headless-chain-auto'
+
+export function buildHeadlessSlashCommand(options: Pick<HeadlessOptions, 'command' | 'commandArgs' | 'auto'>): string {
+  const commandArgs = [...options.commandArgs]
+  if (options.command === 'new-milestone' && options.auto && !commandArgs.includes(HEADLESS_CHAIN_AUTO_FLAG)) {
+    commandArgs.push(HEADLESS_CHAIN_AUTO_FLAG)
+  }
+  return `/gsd ${options.command}${commandArgs.length > 0 ? ' ' + commandArgs.join(' ') : ''}`
+}
+
 /**
  * Commands classified as multi-turn in headless mode: they involve multiple
  * question rounds, codebase scanning, and artifact writing before the workflow
@@ -939,12 +949,11 @@ async function runHeadlessOnce(options: HeadlessOptions, restartCount: number): 
     })
   }
 
-  if (!options.json) {
-    process.stderr.write(`[headless] Running /gsd ${options.command}${options.commandArgs.length > 0 ? ' ' + options.commandArgs.join(' ') : ''}...\n`)
-  }
-
   // Send the command
-  const command = `/gsd ${options.command}${options.commandArgs.length > 0 ? ' ' + options.commandArgs.join(' ') : ''}`
+  const command = buildHeadlessSlashCommand(options)
+  if (!options.json) {
+    process.stderr.write(`[headless] Running ${command}...\n`)
+  }
   try {
     await client.prompt(command)
   } catch (err) {

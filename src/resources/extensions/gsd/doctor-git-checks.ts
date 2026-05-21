@@ -136,7 +136,9 @@ export async function checkGitHealth(
   if (isolationMode !== "none") {
   try {
     const worktrees = listWorktrees(basePath);
-    const milestoneWorktrees = worktrees.filter(wt => wt.branch.startsWith("milestone/"));
+    // Orphan entries are milestone branches with no backing worktree; they are
+    // handled by the stale milestone branch check below, not the worktree checks.
+    const milestoneWorktrees = worktrees.filter(wt => wt.branch.startsWith("milestone/") && !wt.orphan);
 
     // Load roadmap state once for cross-referencing
     const state = await deriveState(basePath);

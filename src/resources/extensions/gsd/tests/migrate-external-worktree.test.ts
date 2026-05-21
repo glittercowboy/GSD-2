@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execSync } from "node:child_process";
 
-import { migrateToExternalState } from "../migrate-external.ts";
+import { migrateToExternalState, recoverFailedMigration } from "../migrate-external.ts";
 
 function run(command: string, cwd: string): string {
   return execSync(command, {
@@ -80,6 +80,18 @@ describe("migrate-external worktree guard (#2970)", () => {
     );
   });
 
+  test("migrateToExternalState does not leave .gsd.migrating on failed migration", () => {
+    // Regression: #5571 — .gsd.migrating orphaned when cpSync succeeds but rmSync fails.
+    // Here we verify the invariant: after migrateToExternalState returns migrated:false,
+    // no .gsd.migrating exists in the worktree (which is always skipped by the guard).
+    const result = migrateToExternalState(worktreePath);
+    assert.equal(result.migrated, false);
+    assert.ok(
+      !existsSync(join(worktreePath, ".gsd.migrating")),
+      ".gsd.migrating must not be left behind after a skipped/failed migration"
+    );
+  });
+
   test("migrateToExternalState still works on main repo", () => {
     // Create a fresh temp repo to test main repo migration path
     const mainBase = realpathSync(mkdtempSync(join(tmpdir(), "gsd-migrate-main-")));
@@ -100,6 +112,54 @@ describe("migrate-external worktree guard (#2970)", () => {
       assert.equal(result.migrated, true, "should migrate on main repo");
     } finally {
       rmSync(mainBase, { recursive: true, force: true });
+    }
+  });
+});
+
+// Regression tests for #5571 — recoverFailedMigration handles orphaned .gsd.migrating
+describe("recoverFailedMigration (#5571)", () => {
+  test("returns false when .gsd.migrating does not exist", () => {
+    const base = mkdtempSync(join(tmpdir(), "gsd-recover-"));
+    try {
+      const result = recoverFailedMigration(base);
+      assert.equal(result, false, "should return false when no .gsd.migrating exists");
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test("returns false and leaves both dirs untouched when both .gsd and .gsd.migrating exist", () => {
+    const base = mkdtempSync(join(tmpdir(), "gsd-recover-ambiguous-"));
+    try {
+      mkdirSync(join(base, ".gsd"), { recursive: true });
+      mkdirSync(join(base, ".gsd.migrating"), { recursive: true });
+
+      const result = recoverFailedMigration(base);
+      assert.equal(result, false, "ambiguous state must not be auto-resolved");
+      assert.ok(existsSync(join(base, ".gsd")), ".gsd should remain");
+      assert.ok(existsSync(join(base, ".gsd.migrating")), ".gsd.migrating should remain");
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test("renames .gsd.migrating to .gsd and returns true when only .gsd.migrating exists", () => {
+    // This is the primary recovery path for issue #5571:
+    // cpSync succeeded (creating .gsd.migrating) but rmSync(localGsd) failed
+    // (EPERM file lock). The fix now cleans up .gsd.migrating in that path,
+    // but if cleanup also fails, recoverFailedMigration handles the next boot.
+    const base = mkdtempSync(join(tmpdir(), "gsd-recover-rename-"));
+    try {
+      mkdirSync(join(base, ".gsd.migrating"), { recursive: true });
+      writeFileSync(join(base, ".gsd.migrating", "PREFERENCES.md"), "# prefs\n", "utf-8");
+
+      const result = recoverFailedMigration(base);
+      assert.equal(result, true, "should rename .gsd.migrating to .gsd");
+      assert.ok(existsSync(join(base, ".gsd")), ".gsd should exist after recovery");
+      assert.ok(existsSync(join(base, ".gsd", "PREFERENCES.md")), "contents should be preserved");
+      assert.ok(!existsSync(join(base, ".gsd.migrating")), ".gsd.migrating should be gone");
+    } finally {
+      rmSync(base, { recursive: true, force: true });
     }
   });
 });

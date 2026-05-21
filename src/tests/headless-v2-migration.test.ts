@@ -38,7 +38,13 @@ function mapStatusToExitCode(status: string): number {
 // ─── Extracted terminal detection (mirrors headless-events.ts) ──────────────
 
 const PAUSED_PREFIXES = ['auto-mode paused', 'step-mode paused']
-const TERMINAL_PREFIXES = ['auto-mode stopped', 'step-mode stopped', ...PAUSED_PREFIXES]
+const TERMINAL_PREFIXES = [
+  'auto-mode stopped',
+  'step-mode stopped',
+  'auto-mode complete',
+  'no active milestone',
+  'auto-mode idle',
+]
 
 function isManualResolutionNotification(message: string): boolean {
   return (
@@ -46,6 +52,18 @@ function isManualResolutionNotification(message: string): boolean {
     message.includes('resolve conflicts manually and run /gsd auto to resume') ||
     message.includes('resolve and run /gsd auto to resume')
   )
+}
+
+function isNonBlockingPauseNotification(message: string): boolean {
+  return message.includes('idempotent advance: unit already active')
+}
+
+function isPauseNotification(message: string): boolean {
+  return PAUSED_PREFIXES.some((prefix) => message.startsWith(prefix))
+}
+
+function isPauseNotificationRequiringIntervention(message: string): boolean {
+  return isPauseNotification(message) && !isNonBlockingPauseNotification(message)
 }
 
 function getCommandBlockContent(event: Record<string, unknown>): string | null {
@@ -71,14 +89,22 @@ function isTerminalNotification(event: Record<string, unknown>): boolean {
   if (isBlockingCommandBlock(event)) return true
   if (event.type !== 'extension_ui_request' || event.method !== 'notify') return false
   const message = String(event.message ?? '').toLowerCase()
-  return TERMINAL_PREFIXES.some((prefix) => message.startsWith(prefix)) || isManualResolutionNotification(message)
+  return (
+    TERMINAL_PREFIXES.some((prefix) => message.startsWith(prefix)) ||
+    isPauseNotification(message) ||
+    isManualResolutionNotification(message)
+  )
 }
 
 function isBlockedNotification(event: Record<string, unknown>): boolean {
   if (isBlockingCommandBlock(event)) return true
   if (event.type !== 'extension_ui_request' || event.method !== 'notify') return false
   const message = String(event.message ?? '').toLowerCase()
-  return message.includes('blocked:') || PAUSED_PREFIXES.some((prefix) => message.startsWith(prefix)) || isManualResolutionNotification(message)
+  return (
+    message.includes('blocked:') ||
+    isPauseNotificationRequiringIntervention(message) ||
+    isManualResolutionNotification(message)
+  )
 }
 
 // ─── Mock RpcClient ─────────────────────────────────────────────────────────
@@ -317,6 +343,20 @@ test('v1 fallback: terminal notification still triggers completion', () => {
 
   handleEvent(
     { type: 'extension_ui_request', method: 'notify', id: 'n1', message: 'Auto-mode stopped — all slices complete' },
+    state,
+    client,
+  )
+
+  assert.equal(state.completed, true)
+  assert.equal(state.exitCode, EXIT_SUCCESS)
+})
+
+test('v1 fallback: auto-mode complete notification triggers completion', () => {
+  const client = new MockRpcClient()
+  const state: EventHandlerState = { completed: false, blocked: false, exitCode: -1, v2Enabled: false }
+
+  handleEvent(
+    { type: 'extension_ui_request', method: 'notify', id: 'n2', message: 'Auto-mode complete — all milestones complete.' },
     state,
     client,
   )

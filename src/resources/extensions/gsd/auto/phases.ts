@@ -50,7 +50,7 @@ import {
   formatForNotification,
   hasAnyIssues,
 } from "../workflow-logger.js";
-import { gsdRoot } from "../paths.js";
+import { gsdRoot, normalizeRealPath } from "../paths.js";
 import { atomicWriteSync } from "../atomic-write.js";
 import { verifyExpectedArtifact, diagnoseExpectedArtifact, buildLoopRemediationSteps, refreshRecoveryDbForArtifact } from "../auto-recovery.js";
 import { writeUnitRuntimeRecord } from "../unit-runtime.js";
@@ -59,6 +59,8 @@ import { getEligibleSlices } from "../slice-parallel-eligibility.js";
 import { isSliceParallelActive, startSliceParallel } from "../slice-parallel-orchestrator.js";
 import { isDbAvailable, getMilestoneSlices, getSlice, getTask, refreshOpenDatabaseFromDisk } from "../gsd-db.js";
 import { isClosedStatus } from "../status-guards.js";
+import { setRuntimeKv } from "../db/runtime-kv.js";
+import { getLatestForUnit } from "../db/unit-dispatches.js";
 import { reconcileBeforeSpawn } from "../state-reconciliation.js";
 import type { MinimalModelRegistry } from "../context-budget.js";
 import type { PostflightResult, PreflightResult } from "../clean-root-preflight.js";
@@ -88,6 +90,7 @@ import {
 } from "../root-write-leak-guard.js";
 
 export const STUCK_WINDOW_SIZE = 6;
+const STUCK_RECOVERY_ATTEMPTS_KEY = "stuck_recovery_attempts";
 
 // ─── Path Comparison Helper ───────────────────────────────────────────────
 /** Compare two paths for physical identity, tolerating trailing slashes and symlinks. */
@@ -99,6 +102,21 @@ function isIsolatedWorktreeSession(s: AutoSession): boolean {
   return Boolean(s.originalBasePath)
     && Boolean(s.basePath)
     && !isSamePathLocal(s.originalBasePath, s.basePath);
+}
+
+function persistStuckRecoveryAttempts(s: AutoSession, loopState: LoopState): void {
+  const scopeId = normalizeRealPath(
+    s.scope?.workspace.projectRoot ?? (s.originalBasePath || s.basePath),
+  );
+  if (!scopeId) return;
+  try {
+    setRuntimeKv("global", scopeId, STUCK_RECOVERY_ATTEMPTS_KEY, loopState.stuckRecoveryAttempts);
+  } catch (err) {
+    debugLog("autoLoop", {
+      phase: "save-stuck-state-failed",
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 async function applyVerificationRetryPolicy(
@@ -1103,6 +1121,7 @@ export async function runPreDispatch(
     s.unitLifetimeDispatches.clear();
     loopState.recentUnits.length = 0;
     loopState.stuckRecoveryAttempts = 0;
+    persistStuckRecoveryAttempts(s, loopState);
 
     // Worktree lifecycle on milestone transition — merge current, enter next.
     // #2909 / #5538-followup: preflight stash + always-on postflight pop.
@@ -1565,7 +1584,9 @@ export async function runDispatch(
   // Always record this dispatch in the sliding window and run detection so
   // Rules 1/3/4 can catch retry loops with repeated failure content (#5719).
   // Rules 2/2b suppress legitimate retry backoff through the dispatch ledger.
-  loopState.recentUnits.push({ key: derivedKey });
+  const latestDispatch = getLatestForUnit(derivedKey);
+  const recentError = latestDispatch?.error_summary ?? undefined;
+  loopState.recentUnits.push({ key: derivedKey, error: recentError });
   while (loopState.recentUnits.length > STUCK_WINDOW_SIZE) {
     loopState.recentUnits.shift();
   }
@@ -1586,6 +1607,7 @@ export async function runDispatch(
       if (loopState.stuckRecoveryAttempts === 0) {
         // Level 1: try verifying the artifact, then cache invalidation + retry
         loopState.stuckRecoveryAttempts++;
+        persistStuckRecoveryAttempts(s, loopState);
         const artifactExists = verifyExpectedArtifact(
           unitType,
           unitId,
@@ -1645,7 +1667,6 @@ export async function runDispatch(
               "info",
             );
             loopState.recentUnits.length = 0;
-            loopState.stuckRecoveryAttempts = 0;
             return { action: "continue" };
           }
           ctx.ui.notify(
@@ -1687,6 +1708,7 @@ export async function runDispatch(
         to: derivedKey,
       });
       loopState.stuckRecoveryAttempts = 0;
+      persistStuckRecoveryAttempts(s, loopState);
     }
   }
 
@@ -2380,14 +2402,23 @@ export async function runUnitPhase(
     if (errorCategory === "provider") {
       if (!s.paused) {
         const detail = unitResult.errorContext?.message ?? `Provider unavailable for ${unitType} ${unitId}`;
+        const isTransient = Boolean(unitResult.errorContext?.isTransient);
+        const retryAfterMs = unitResult.errorContext?.retryAfterMs ?? (isTransient ? 30_000 : undefined);
         await pauseAutoForProviderError(
           ctx.ui,
           detail,
           () => deps.pauseAuto(ctx, pi),
           {
             isRateLimit: false,
-            isTransient: Boolean(unitResult.errorContext?.isTransient),
-            retryAfterMs: unitResult.errorContext?.retryAfterMs,
+            isTransient,
+            retryAfterMs,
+            resume: isTransient
+              ? () => {
+                  void resumeAutoAfterProviderDelay(pi, ctx).catch((err) => {
+                    logWarning("engine", `Provider error auto-resume failed: ${err instanceof Error ? err.message : String(err)}`);
+                  });
+                }
+              : undefined,
           },
         );
       }

@@ -16,7 +16,13 @@ import assert from "node:assert/strict";
 // ─── Extracted detection logic (mirrors headless.ts) ────────────────────────
 
 const PAUSED_PREFIXES = ['auto-mode paused', 'step-mode paused']
-const TERMINAL_PREFIXES = ['auto-mode stopped', 'step-mode stopped', ...PAUSED_PREFIXES]
+const TERMINAL_PREFIXES = [
+  'auto-mode stopped',
+  'step-mode stopped',
+  'auto-mode complete',
+  'no active milestone',
+  'auto-mode idle',
+]
 
 function isManualResolutionNotification(message: string): boolean {
   return (
@@ -24,6 +30,18 @@ function isManualResolutionNotification(message: string): boolean {
     message.includes('resolve conflicts manually and run /gsd auto to resume') ||
     message.includes('resolve and run /gsd auto to resume')
   )
+}
+
+function isNonBlockingPauseNotification(message: string): boolean {
+  return message.includes('idempotent advance: unit already active')
+}
+
+function isPauseNotification(message: string): boolean {
+  return PAUSED_PREFIXES.some((prefix) => message.startsWith(prefix))
+}
+
+function isPauseNotificationRequiringIntervention(message: string): boolean {
+  return isPauseNotification(message) && !isNonBlockingPauseNotification(message)
 }
 
 function getCommandBlockContent(event: Record<string, unknown>): string | null {
@@ -49,14 +67,22 @@ function isTerminalNotification(event: Record<string, unknown>): boolean {
   if (isBlockingCommandBlock(event)) return true
   if (event.type !== 'extension_ui_request' || event.method !== 'notify') return false
   const message = String(event.message ?? '').toLowerCase()
-  return TERMINAL_PREFIXES.some((prefix) => message.startsWith(prefix)) || isManualResolutionNotification(message)
+  return (
+    TERMINAL_PREFIXES.some((prefix) => message.startsWith(prefix)) ||
+    isPauseNotification(message) ||
+    isManualResolutionNotification(message)
+  )
 }
 
 function isBlockedNotification(event: Record<string, unknown>): boolean {
   if (isBlockingCommandBlock(event)) return true
   if (event.type !== 'extension_ui_request' || event.method !== 'notify') return false
   const message = String(event.message ?? '').toLowerCase()
-  return message.includes('blocked:') || PAUSED_PREFIXES.some((prefix) => message.startsWith(prefix)) || isManualResolutionNotification(message)
+  return (
+    message.includes('blocked:') ||
+    isPauseNotificationRequiringIntervention(message) ||
+    isManualResolutionNotification(message)
+  )
 }
 
 const QUICK_COMMANDS = new Set([
@@ -110,6 +136,18 @@ test("detects 'Step-mode stopped.' as terminal", () => {
   assert.ok(isTerminalNotification(makeNotify("Step-mode stopped.")))
 })
 
+test("detects 'Auto-mode complete...' as terminal", () => {
+  assert.ok(isTerminalNotification(makeNotify('Auto-mode complete — all milestones complete.')))
+})
+
+test("detects 'No active milestone...' as terminal", () => {
+  assert.ok(isTerminalNotification(makeNotify('No active milestone in registry.')))
+})
+
+test("detects 'Auto-mode idle...' as terminal", () => {
+  assert.ok(isTerminalNotification(makeNotify('Auto-mode idle: no roadmap work items found.')))
+})
+
 test("detects 'Auto-mode paused.' as terminal", () => {
   assert.ok(isTerminalNotification(makeNotify("Auto-mode paused (Escape). Type to interact, or /gsd auto to resume.")))
 })
@@ -156,6 +194,10 @@ test("does NOT match 'Post-hook: applied 3 fix(es).'", () => {
   assert.ok(!isTerminalNotification(makeNotify("Post-hook: applied 3 fix(es).")))
 })
 
+test("detects idempotent auto-mode advance pause as terminal", () => {
+  assert.ok(isTerminalNotification(makeNotify("Auto-mode paused: idempotent advance: unit already active")))
+})
+
 test("does NOT match non-notify events", () => {
   assert.ok(!isTerminalNotification({ type: 'agent_end' }))
   assert.ok(!isTerminalNotification({ type: 'extension_ui_request', method: 'select', message: 'Auto-mode stopped.' }))
@@ -187,6 +229,10 @@ test("detects blocking command blocks as blocked", () => {
 
 test("does NOT match 'blocked' without colon (avoids false positives)", () => {
   assert.ok(!isBlockedNotification(makeNotify("The request was blocked by the firewall")))
+})
+
+test("does NOT match idempotent auto-mode advance pause as blocked", () => {
+  assert.ok(!isBlockedNotification(makeNotify("Auto-mode paused: idempotent advance: unit already active")))
 })
 
 // ─── isQuickCommand ─────────────────────────────────────────────────────────
