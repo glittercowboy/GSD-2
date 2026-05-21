@@ -238,6 +238,16 @@ export function snapshotUnitMetrics(
     const totalInput = tokens.cacheRead + tokens.input;
     unit.cacheHitRate = totalInput > 0 ? Math.round((tokens.cacheRead / totalInput) * 100) : 0;
   }
+  if (
+    unit.promptCharCount != null &&
+    unit.baselineCharCount != null &&
+    unit.baselineCharCount > 0
+  ) {
+    unit.compressionSavings = Math.max(
+      0,
+      Math.round(((unit.baselineCharCount - unit.promptCharCount) / unit.baselineCharCount) * 100),
+    );
+  }
 
   // ── Idempotency guard ──────────────────────────────────────────────────
   // Prevent duplicate metrics entries when multiple callers snapshot the
@@ -426,6 +436,16 @@ export function snapshotUnitMetricsByScope(
     const totalInput = tokens.cacheRead + tokens.input;
     unit.cacheHitRate = totalInput > 0 ? Math.round((tokens.cacheRead / totalInput) * 100) : 0;
   }
+  if (
+    unit.promptCharCount != null &&
+    unit.baselineCharCount != null &&
+    unit.baselineCharCount > 0
+  ) {
+    unit.compressionSavings = Math.max(
+      0,
+      Math.round(((unit.baselineCharCount - unit.promptCharCount) / unit.baselineCharCount) * 100),
+    );
+  }
 
   // Idempotency guard: update in-place on duplicate, append otherwise.
   const dupeIdx = scopedLedger.units.findIndex(
@@ -499,6 +519,14 @@ export interface ProjectTotals {
   apiRequests: number;
   totalTruncationSections: number;
   continueHereFiredCount: number;
+}
+
+export interface PromptSizeStats {
+  units: number;
+  averagePromptChars: number;
+  maxPromptChars: number;
+  averageBaselineChars: number | null;
+  averageCompressionSavings: number | null;
 }
 
 function emptyTokens(): TokenCounts {
@@ -595,6 +623,52 @@ export function getProjectTotals(units: UnitMetrics[]): ProjectTotals {
     if (u.continueHereFired) totals.continueHereFiredCount++;
   }
   return totals;
+}
+
+export function getPromptSizeStats(units: UnitMetrics[]): PromptSizeStats | null {
+  const promptUnits = units.filter(
+    (u) => typeof u.promptCharCount === "number" && Number.isFinite(u.promptCharCount) && u.promptCharCount > 0,
+  );
+  if (promptUnits.length === 0) return null;
+
+  let promptTotal = 0;
+  let maxPromptChars = 0;
+  let baselineTotal = 0;
+  let baselineCount = 0;
+  let savingsTotal = 0;
+  let savingsCount = 0;
+
+  for (const unit of promptUnits) {
+    const promptChars = unit.promptCharCount!;
+    promptTotal += promptChars;
+    maxPromptChars = Math.max(maxPromptChars, promptChars);
+
+    if (
+      typeof unit.baselineCharCount === "number" &&
+      Number.isFinite(unit.baselineCharCount) &&
+      unit.baselineCharCount > 0
+    ) {
+      baselineTotal += unit.baselineCharCount;
+      baselineCount++;
+      const savings = Math.max(0, ((unit.baselineCharCount - promptChars) / unit.baselineCharCount) * 100);
+      savingsTotal += savings;
+      savingsCount++;
+    } else if (
+      typeof unit.compressionSavings === "number" &&
+      Number.isFinite(unit.compressionSavings)
+    ) {
+      savingsTotal += Math.max(0, unit.compressionSavings);
+      savingsCount++;
+    }
+  }
+
+  return {
+    units: promptUnits.length,
+    averagePromptChars: Math.round(promptTotal / promptUnits.length),
+    maxPromptChars,
+    averageBaselineChars: baselineCount > 0 ? Math.round(baselineTotal / baselineCount) : null,
+    averageCompressionSavings: savingsCount > 0 ? Math.round(savingsTotal / savingsCount) : null,
+  };
 }
 
 // ─── Tier Aggregation ────────────────────────────────────────────────────────

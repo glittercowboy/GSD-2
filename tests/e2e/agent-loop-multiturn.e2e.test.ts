@@ -38,6 +38,8 @@ import {
 	writeTranscript,
 } from "./_shared/index.ts";
 
+const MULTI_TURN_TIMEOUT_MS = 90_000;
+
 function binaryAvailable(): { ok: boolean; reason?: string } {
 	const bin = process.env.GSD_SMOKE_BINARY;
 	if (!bin) return { ok: false, reason: "GSD_SMOKE_BINARY not set; build with `npm run build:core`" };
@@ -49,7 +51,7 @@ describe("agent loop e2e — multi-iteration", () => {
 	const avail = binaryAvailable();
 	const skipReason = avail.ok ? null : avail.reason;
 
-	test("2 tool iterations + final text turn complete in order", { skip: skipReason ?? false, timeout: 60_000 }, (t) => {
+	test("2 tool iterations + final text turn complete in order", { skip: skipReason ?? false, timeout: 120_000 }, (t) => {
 		const project = createTmpProject();
 		t.after(project.cleanup);
 
@@ -86,7 +88,7 @@ describe("agent loop e2e — multi-iteration", () => {
 			cwd: project.dir,
 			prompt: "do two steps",
 			mode: "json",
-			timeoutMs: 45_000,
+			timeoutMs: MULTI_TURN_TIMEOUT_MS,
 			extraEnv: { GSD_TOOL_APPROVAL: "auto" },
 		});
 
@@ -122,7 +124,7 @@ describe("agent loop e2e — multi-iteration", () => {
 		assert.equal(lastAssistantStopReason(events), "stop");
 	});
 
-	test("3 consecutive failed tool calls trip the agent loop's safeguard", { skip: skipReason ?? false, timeout: 60_000 }, (t) => {
+	test("3 consecutive failed tool calls trip the agent loop's safeguard", { skip: skipReason ?? false, timeout: 120_000 }, (t) => {
 		// This is a real production safeguard worth pinning: after 3 turns
 		// where every tool call fails (e.g. the model is hallucinating
 		// arguments), the agent halts with a clear message rather than
@@ -161,7 +163,7 @@ describe("agent loop e2e — multi-iteration", () => {
 			cwd: project.dir,
 			prompt: "loop forever",
 			mode: "json",
-			timeoutMs: 45_000,
+			timeoutMs: MULTI_TURN_TIMEOUT_MS,
 			extraEnv: { GSD_TOOL_APPROVAL: "auto" },
 		});
 

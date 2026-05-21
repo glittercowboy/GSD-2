@@ -15,9 +15,9 @@ import assert from 'node:assert/strict';
 
 import {
   type UnitMetrics,
-  type MetricsLedger,
   aggregateByModel,
   getProjectTotals,
+  getPromptSizeStats,
   formatTokenCount,
 } from "../metrics.js";
 // ─── Test helpers ─────────────────────────────────────────────────────────────
@@ -82,6 +82,25 @@ function renderCostBudgetLine(units: UnitMetrics[]): string | null {
     return parts.join(" · ");
   }
   return null;
+}
+
+function formatCharCount(chars: number): string {
+  if (chars >= 1_000_000) return `${(chars / 1_000_000).toFixed(2)}M chars`;
+  if (chars >= 1_000) return `${(chars / 1_000).toFixed(1)}k chars`;
+  return `${chars} chars`;
+}
+
+function renderPromptSizeLine(units: UnitMetrics[]): string | null {
+  const stats = getPromptSizeStats(units);
+  if (!stats) return null;
+  const parts = [
+    `avg prompt: ${formatCharCount(stats.averagePromptChars)}`,
+    `max: ${formatCharCount(stats.maxPromptChars)}`,
+  ];
+  if (stats.averageCompressionSavings != null) {
+    parts.push(`compression: ${stats.averageCompressionSavings}%`);
+  }
+  return parts.join(" · ");
 }
 
 /**
@@ -262,6 +281,18 @@ describe('dashboard-budget', () => {
     assert.doesNotMatch(line!, /truncated/, "cost budget continue-only: no truncation text");
     assert.match(line!, /1 continue-here fired/, "cost budget continue-only: shows count");
   }
+
+  test('Cost & Usage: prompt-size summary line', () => {
+    const units = [
+      makeUnit({ promptCharCount: 40_000, baselineCharCount: 80_000 }),
+      makeUnit({ promptCharCount: 20_000, baselineCharCount: 40_000 }),
+    ];
+    const line = renderPromptSizeLine(units);
+    assert.ok(line !== null, "prompt-size line rendered when prompt data exists");
+    assert.match(line!, /avg prompt: 30\.0k chars/, "prompt-size line shows average prompt size");
+    assert.match(line!, /max: 40\.0k chars/, "prompt-size line shows max prompt size");
+    assert.match(line!, /compression: 50%/, "prompt-size line shows average compression savings");
+  });
 
   // ─── Backward compat: no budget fields ────────────────────────────────────────
 

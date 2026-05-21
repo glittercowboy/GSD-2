@@ -1,3 +1,4 @@
+// GSD-2 + packages/pi-coding-agent/src/modes/interactive/components/config-selector.ts - Package resource selector.
 /**
  * TUI component for managing package resources (enable/disable)
  */
@@ -9,6 +10,7 @@ import {
 	type Focusable,
 	getEditorKeybindings,
 	Input,
+	Key,
 	matchesKey,
 	Spacer,
 	truncateToWidth,
@@ -400,7 +402,7 @@ class ResourceList implements Component, Focusable {
 			this.onExit?.();
 			return;
 		}
-		if (data === " " || kb.matches(data, "selectConfirm")) {
+		if (matchesKey(data, Key.space) || kb.matches(data, "selectConfirm")) {
 			const entry = this.filteredItems[this.selectedIndex];
 			if (entry?.type === "item") {
 				const newEnabled = !entry.item.enabled;

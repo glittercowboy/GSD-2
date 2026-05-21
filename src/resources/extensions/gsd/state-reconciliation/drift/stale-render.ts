@@ -9,7 +9,7 @@
 import {
   detectStaleRenders,
   renderPlanCheckboxes,
-  renderRoadmapCheckboxes,
+  renderRoadmapFromDb,
   renderSliceSummary,
   renderTaskSummary,
 } from "../../markdown-renderer.js";
@@ -70,7 +70,7 @@ async function repairStaleRenderFromBasePath(
         `stale-render drift: roadmap path missing milestone segment: ${record.renderPath}`,
       );
     }
-    await renderRoadmapCheckboxes(basePath, milestoneMatch[1]);
+    await renderRoadmapFromDb(basePath, milestoneMatch[1]);
     return;
   }
 

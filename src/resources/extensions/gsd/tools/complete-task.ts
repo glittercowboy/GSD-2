@@ -11,7 +11,6 @@
  */
 
 import { join } from "node:path";
-import { mkdirSync, existsSync } from "node:fs";
 
 import type { CompleteTaskParams } from "../types.js";
 import { isClosedStatus } from "../status-guards.js";
@@ -30,7 +29,8 @@ import {
   getPendingGatesForTurn,
 } from "../gsd-db.js";
 import { getGatesForTurn } from "../gate-registry.js";
-import { resolveTasksDir, clearPathCache } from "../paths.js";
+import { gsdProjectionRoot, clearPathCache } from "../paths.js";
+import { resolveCanonicalMilestoneRoot } from "../worktree-manager.js";
 import { checkOwnership, taskUnitKey } from "../unit-ownership.js";
 import { saveFile, clearParseCache } from "../files.js";
 import { invalidateStateCache } from "../state.js";
@@ -59,6 +59,23 @@ export interface CompleteTaskResult {
 }
 
 import type { TaskRow } from "../db-task-slice-rows.js";
+
+function taskSummaryPath(
+  basePath: string,
+  milestoneId: string,
+  sliceId: string,
+  taskId: string,
+): string {
+  return join(
+    gsdProjectionRoot(basePath),
+    "milestones",
+    milestoneId,
+    "slices",
+    sliceId,
+    "tasks",
+    `${taskId}-SUMMARY.md`,
+  );
+}
 
 /**
  * Map an execute-task-owned gate id to the CompleteTaskParams field whose
@@ -157,9 +174,11 @@ export async function handleCompleteTask(
     return { error: "milestoneId is required and must be a non-empty string" };
   }
 
+  const artifactBasePath = resolveCanonicalMilestoneRoot(basePath, params.milestoneId);
+
   // ── Ownership check (opt-in: only enforced when claim file exists) ──────
   const ownershipErr = checkOwnership(
-    basePath,
+    artifactBasePath,
     taskUnitKey(params.milestoneId, params.sliceId, params.taskId),
     params.actorName,
   );
@@ -239,12 +258,15 @@ export async function handleCompleteTask(
       return;
     }
 
-    // All guards passed — perform writes
+    // All guards passed — perform writes. Preserve existing slice planning
+    // metadata; completing a task must not reset title/risk/depends/demo.
     const taskRow = paramsToTaskRow(params, completedAt);
     summaryMd = renderSummaryContent(taskRow, params.sliceId, params.milestoneId, params.verificationEvidence ?? []);
 
     insertMilestone({ id: params.milestoneId, title: params.milestoneId });
-    insertSlice({ id: params.sliceId, milestoneId: params.milestoneId, title: params.sliceId });
+    if (!slice) {
+      insertSlice({ id: params.sliceId, milestoneId: params.milestoneId, title: params.sliceId });
+    }
     insertTask({
       id: params.taskId,
       sliceId: params.sliceId,
@@ -281,19 +303,12 @@ export async function handleCompleteTask(
     // superseded turn's earlier (real) call. Return a non-mutating success
     // so the stale LLM tool call unwinds cleanly. summaryPath is synthesized
     // from the existing on-disk layout; no file is written.
-    const tasksDir = resolveTasksDir(basePath, params.milestoneId, params.sliceId);
-    const staleSummaryPath = tasksDir
-      ? join(tasksDir, `${params.taskId}-SUMMARY.md`)
-      : join(
-          basePath,
-          ".gsd",
-          "milestones",
-          params.milestoneId,
-          "slices",
-          params.sliceId,
-          "tasks",
-          `${params.taskId}-SUMMARY.md`,
-        );
+    const staleSummaryPath = taskSummaryPath(
+      artifactBasePath,
+      params.milestoneId,
+      params.sliceId,
+      params.taskId,
+    );
     return {
       taskId: params.taskId,
       sliceId: params.sliceId,
@@ -311,24 +326,19 @@ export async function handleCompleteTask(
   let projectionStale = false;
 
   // Resolve and write summary to disk
-  let summaryPath: string;
-  const tasksDir = resolveTasksDir(basePath, params.milestoneId, params.sliceId);
-  if (tasksDir) {
-    summaryPath = join(tasksDir, `${params.taskId}-SUMMARY.md`);
-  } else {
-    // Tasks dir doesn't exist on disk yet — build path manually and ensure dirs
-    const gsdDir = join(basePath, ".gsd");
-    const manualTasksDir = join(gsdDir, "milestones", params.milestoneId, "slices", params.sliceId, "tasks");
-    mkdirSync(manualTasksDir, { recursive: true });
-    summaryPath = join(manualTasksDir, `${params.taskId}-SUMMARY.md`);
-  }
+  const summaryPath = taskSummaryPath(
+    artifactBasePath,
+    params.milestoneId,
+    params.sliceId,
+    params.taskId,
+  );
 
   try {
     await saveFile(summaryPath, summaryMd);
 
     // Toggle or regenerate the plan projection from DB. Missing projection
     // files are rebuilt by the renderer instead of being skipped.
-    await renderPlanCheckboxes(basePath, params.milestoneId, params.sliceId);
+    await renderPlanCheckboxes(artifactBasePath, params.milestoneId, params.sliceId);
   } catch (renderErr) {
     projectionStale = true;
     logWarning("projection", `complete_task projection write failed for ${params.milestoneId}/${params.sliceId}/${params.taskId}; DB completion remains committed`, {
@@ -390,7 +400,7 @@ export async function handleCompleteTask(
   // consistent "task not done" view so the loop re-dispatches the task.
   if (validatedEscalationArtifact) {
     try {
-      writeEscalationArtifact(basePath, validatedEscalationArtifact);
+      writeEscalationArtifact(artifactBasePath, validatedEscalationArtifact);
     } catch (escalationErr) {
       const msg = `complete-task escalation write failed for ${params.milestoneId}/${params.sliceId}/${params.taskId}: ${(escalationErr as Error).message}`;
       logWarning("tool", msg);
@@ -431,17 +441,17 @@ export async function handleCompleteTask(
   // Separate try/catch per step so a projection failure doesn't prevent
   // the event log entry (critical for worktree reconciliation).
   try {
-    await renderAllProjections(basePath, params.milestoneId);
+    await renderAllProjections(artifactBasePath, params.milestoneId);
   } catch (projErr) {
     logWarning("tool", `complete-task projection warning: ${(projErr as Error).message}`);
   }
   try {
-    writeManifest(basePath);
+    writeManifest(artifactBasePath);
   } catch (mfErr) {
     logWarning("tool", `complete-task manifest warning: ${(mfErr as Error).message}`);
   }
   try {
-    appendEvent(basePath, {
+    appendEvent(artifactBasePath, {
       cmd: "complete-task",
       params: { milestoneId: params.milestoneId, sliceId: params.sliceId, taskId: params.taskId },
       ts: new Date().toISOString(),

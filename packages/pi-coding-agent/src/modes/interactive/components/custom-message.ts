@@ -1,21 +1,23 @@
+// GSD-2 + packages/pi-coding-agent/src/modes/interactive/components/custom-message.ts - Extension custom message renderer.
+
 import type { TextContent } from "@gsd/pi-ai";
 import type { Component } from "@gsd/pi-tui";
-import { Box, Container, Markdown, type MarkdownTheme, Spacer, Text } from "@gsd/pi-tui";
+import { Box, Markdown, type MarkdownTheme, Spacer, Text } from "@gsd/pi-tui";
 import type { MessageRenderer } from "../../../core/extensions/types.js";
 import type { CustomMessage } from "../../../core/messages.js";
 import { getMarkdownTheme, theme } from "../theme/theme.js";
+import { CollapsibleMessageComponent } from "./collapsible-message.js";
 
 /**
  * Component that renders a custom message entry from extensions.
  * Uses distinct styling to differentiate from user messages.
  */
-export class CustomMessageComponent extends Container {
+export class CustomMessageComponent extends CollapsibleMessageComponent {
 	private message: CustomMessage<unknown>;
 	private customRenderer?: MessageRenderer;
 	private box: Box;
 	private customComponent?: Component;
 	private markdownTheme: MarkdownTheme;
-	private _expanded = false;
 
 	constructor(
 		message: CustomMessage<unknown>,
@@ -32,22 +34,10 @@ export class CustomMessageComponent extends Container {
 		// Create box with purple background (used for default rendering)
 		this.box = new Box(1, 1, (t) => theme.bg("customMessageBg", t));
 
-		this.rebuild();
+		this.rebuildContent();
 	}
 
-	setExpanded(expanded: boolean): void {
-		if (this._expanded !== expanded) {
-			this._expanded = expanded;
-			this.rebuild();
-		}
-	}
-
-	override invalidate(): void {
-		super.invalidate();
-		this.rebuild();
-	}
-
-	private rebuild(): void {
+	protected rebuildContent(): void {
 		// Remove previous content component
 		if (this.customComponent) {
 			this.removeChild(this.customComponent);
@@ -58,7 +48,7 @@ export class CustomMessageComponent extends Container {
 		// Try custom renderer first - it handles its own styling
 		if (this.customRenderer) {
 			try {
-				const component = this.customRenderer(this.message, { expanded: this._expanded }, theme);
+				const component = this.customRenderer(this.message, { expanded: this.expanded }, theme);
 				if (component) {
 					// Custom renderer provides its own styled component
 					this.customComponent = component;

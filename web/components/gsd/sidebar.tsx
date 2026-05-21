@@ -1,5 +1,8 @@
 "use client"
 
+// Project/App: GSD-2
+// File Purpose: Browser sidebar and milestone navigation with workflow controls.
+
 import { useMemo, useState, useSyncExternalStore } from "react"
 import {
   ChevronRight,
@@ -348,6 +351,7 @@ export function MilestoneExplorer({ isConnecting = false, width, onCollapse }: {
     commandInFlight: workspace.commandInFlight,
     bootStatus: workspace.bootStatus,
     hasMilestones: milestones.length > 0,
+    stepMode: auto?.stepMode ?? false,
     projectDetectionKind: workspace.boot?.projectDetection?.kind ?? null,
   })
 
@@ -643,6 +647,7 @@ export function CollapsedMilestoneSidebar({ onExpand }: { onExpand: () => void }
     commandInFlight: workspace.commandInFlight,
     bootStatus: workspace.bootStatus,
     hasMilestones: milestones.length > 0,
+    stepMode: auto?.stepMode ?? false,
     projectDetectionKind: workspace.boot?.projectDetection?.kind ?? null,
   })
 

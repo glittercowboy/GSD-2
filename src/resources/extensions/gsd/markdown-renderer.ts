@@ -32,7 +32,7 @@ import {
   resolveMilestoneFile,
   resolveSliceFile,
   resolveSlicePath,
-  resolveTasksDir,
+  gsdProjectionRoot,
   gsdRoot,
   buildTaskFileName,
   buildSliceFileName,
@@ -48,7 +48,11 @@ import { clearPathCache } from "./paths.js";
  * E.g. "/project/.gsd/milestones/M001/M001-ROADMAP.md" → "milestones/M001/M001-ROADMAP.md"
  */
 function toArtifactPath(absPath: string, basePath: string): string {
-  const root = gsdRoot(basePath);
+  const projectionRoot = gsdProjectionRoot(basePath);
+  const projectionRel = relative(projectionRoot, absPath);
+  const root = projectionRel && !projectionRel.startsWith("..") && !projectionRel.startsWith("/")
+    ? projectionRoot
+    : gsdRoot(basePath);
   const rel = relative(root, absPath);
   // Normalize to forward slashes for consistent DB keys
   return rel.replace(/\\/g, "/");
@@ -374,10 +378,9 @@ export async function renderPlanFromDb(
     throw new Error(`no tasks found for ${milestoneId}/${sliceId}`);
   }
 
-  const slicePath = resolveSlicePath(basePath, milestoneId, sliceId)
-    ?? join(gsdRoot(basePath), "milestones", milestoneId, "slices", sliceId);
-  const absPath = resolveSliceFile(basePath, milestoneId, sliceId, "PLAN")
-    ?? join(slicePath, `${sliceId}-PLAN.md`);
+  const slicePath = join(gsdProjectionRoot(basePath), "milestones", milestoneId, "slices", sliceId);
+  mkdirSync(slicePath, { recursive: true });
+  const absPath = join(slicePath, `${sliceId}-PLAN.md`);
   const artifactPath = toArtifactPath(absPath, basePath);
   const sliceGates = getGateResults(milestoneId, sliceId, "slice");
   const content = renderSlicePlanMarkdown(slice, tasks, sliceGates);
@@ -408,8 +411,7 @@ export async function renderTaskPlanFromDb(
     throw new Error(`task ${milestoneId}/${sliceId}/${taskId} not found`);
   }
 
-  const tasksDir = resolveTasksDir(basePath, milestoneId, sliceId)
-    ?? join(gsdRoot(basePath), "milestones", milestoneId, "slices", sliceId, "tasks");
+  const tasksDir = join(gsdProjectionRoot(basePath), "milestones", milestoneId, "slices", sliceId, "tasks");
   mkdirSync(tasksDir, { recursive: true });
   const absPath = join(tasksDir, buildTaskFileName(taskId, "PLAN"));
   const artifactPath = toArtifactPath(absPath, basePath);
@@ -452,11 +454,9 @@ export async function renderRoadmapFromDb(
 // ─── Roadmap Checkbox Rendering ───────────────────────────────────────────
 
 /**
- * Render roadmap checkbox states from DB.
- *
- * For each slice in the milestone, sets [x] if status === 'complete',
- * [ ] otherwise. Handles bidirectional updates (can uncheck previously
- * checked slices if DB says pending).
+ * Compatibility wrapper for legacy callers that used to patch roadmap
+ * checkboxes in-place. Roadmaps are now regenerated from DB rows so stale
+ * artifact content cannot preserve old titles/dependencies.
  *
  * @returns true if the roadmap was written, false on skip/error
  */
@@ -472,48 +472,7 @@ export async function renderRoadmapCheckboxes(
     return false;
   }
 
-  const absPath = resolveMilestoneFile(basePath, milestoneId, "ROADMAP");
-  const artifactPath = absPath ? toArtifactPath(absPath, basePath) : null;
-
-  // Load content from DB; regenerate from DB rows when the artifact is absent.
-  let content: string | null = null;
-  if (artifactPath) {
-    content = loadArtifactContent(artifactPath);
-  }
-
-  if (!content) {
-    await renderRoadmapFromDb(basePath, milestoneId);
-    return true;
-  }
-
-  // Apply checkbox patches for each slice
-  let updated = content;
-  for (const slice of slices) {
-    const isDone = isClosedStatus(slice.status);
-    const sid = slice.id;
-
-    if (isDone) {
-      // Set [x]: replace "- [ ] **S01:" with "- [x] **S01:"
-      updated = updated.replace(
-        new RegExp(`^(\\s*-\\s+)\\[ \\]\\s+\\*\\*${sid}:`, "m"),
-        `$1[x] **${sid}:`,
-      );
-    } else {
-      // Set [ ]: replace "- [x] **S01:" with "- [ ] **S01:"
-      updated = updated.replace(
-        new RegExp(`^(\\s*-\\s+)\\[x\\]\\s+\\*\\*${sid}:`, "mi"),
-        `$1[ ] **${sid}:`,
-      );
-    }
-  }
-
-  if (!absPath) return false;
-
-  await writeAndStore(absPath, artifactPath!, updated, {
-    artifact_type: "ROADMAP",
-    milestone_id: milestoneId,
-  });
-
+  await renderRoadmapFromDb(basePath, milestoneId);
   return true;
 }
 
@@ -786,11 +745,12 @@ export function detectStaleRenders(basePath: string): StaleEntry[] {
   const _require = createRequire(import.meta.url);
   let parseRoadmap: Function, parsePlan: Function;
   try {
-    const m = _require("./parsers-legacy.ts");
+    // Prefer compiled JS for packaged/runtime installs; TS exists only in source/dev contexts.
+    const m = _require("./parsers-legacy.js");
     parseRoadmap = m.parseRoadmap; parsePlan = m.parsePlan;
   } catch (e) {
-    logWarning("renderer", `parsers-legacy.ts require failed, falling back to .js: ${(e as Error).message}`);
-    const m = _require("./parsers-legacy.js");
+    logWarning("renderer", `parsers-legacy.js require failed, falling back to .ts: ${(e as Error).message}`);
+    const m = _require("./parsers-legacy.ts");
     parseRoadmap = m.parseRoadmap; parsePlan = m.parsePlan;
   }
 

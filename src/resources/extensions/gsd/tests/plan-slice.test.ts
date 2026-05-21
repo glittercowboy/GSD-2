@@ -2,7 +2,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, readFileSync, existsSync, writeFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -88,6 +88,8 @@ test('handlePlanSlice writes slice/task planning state and renders plan artifact
     assert.equal(tasks[0]?.title, 'Write slice handler');
     assert.equal(tasks[0]?.description, 'Implement the slice planning handler.');
     assert.equal(tasks[1]?.estimate, '30m');
+    assert.deepEqual(slice?.target_repositories, ['project']);
+    assert.deepEqual(tasks[0]?.target_repositories, ['project']);
 
     const planPath = join(base, '.gsd', 'milestones', 'M001', 'slices', 'S02', 'S02-PLAN.md');
     assert.ok(existsSync(planPath), 'slice plan should be rendered to disk');
@@ -100,6 +102,164 @@ test('handlePlanSlice writes slice/task planning state and renders plan artifact
     assert.ok(existsSync(taskPlanPath), 'task plan should be rendered to disk');
     const taskPlan = parseTaskPlanFile(readFileSync(taskPlanPath, 'utf-8'));
     assert.deepEqual(taskPlan.frontmatter.skills_used, []);
+  } finally {
+    cleanup(base);
+  }
+});
+
+test('handlePlanSlice persists explicit slice/task target repositories', async () => {
+  const base = makeTmpBase();
+  openDatabase(join(base, '.gsd', 'gsd.db'));
+
+  try {
+    seedParentSlice();
+    const params = validParams();
+    const result = await handlePlanSlice({
+      ...params,
+      targetRepositories: ['project'],
+      tasks: [
+        { ...params.tasks[0], targetRepositories: ['project'] },
+        { ...params.tasks[1], targetRepositories: ['project'] },
+      ],
+    }, base);
+    assert.ok(!('error' in result), `unexpected error: ${'error' in result ? result.error : ''}`);
+
+    const slice = getSlice('M001', 'S02');
+    const task = getTask('M001', 'S02', 'T01');
+    assert.deepEqual(slice?.target_repositories, ['project']);
+    assert.deepEqual(task?.target_repositories, ['project']);
+  } finally {
+    cleanup(base);
+  }
+});
+
+test('handlePlanSlice rejects unknown target repositories', async () => {
+  const base = makeTmpBase();
+  openDatabase(join(base, '.gsd', 'gsd.db'));
+
+  try {
+    seedParentSlice();
+    const result = await handlePlanSlice({
+      ...validParams(),
+      targetRepositories: ['frontend'],
+    }, base);
+    assert.ok('error' in result);
+    assert.match(result.error, /validation failed: unknown targetRepositories:/);
+    assert.equal(getSliceTasks('M001', 'S02').length, 0, 'invalid target repositories must not persist');
+  } finally {
+    cleanup(base);
+  }
+});
+
+test('handlePlanSlice enforces absolute path scope to declared target repositories', async () => {
+  const base = makeTmpBase();
+  openDatabase(join(base, '.gsd', 'gsd.db'));
+
+  try {
+    seedParentSlice();
+    mkdirSync(join(base, 'frontend'), { recursive: true });
+    mkdirSync(join(base, 'backend'), { recursive: true });
+    writeFileSync(
+      join(base, '.gsd', 'PREFERENCES.md'),
+      [
+        '---',
+        'workspace:',
+        '  mode: parent',
+        '  repositories:',
+        '    frontend:',
+        '      path: frontend',
+        '    backend:',
+        '      path: backend',
+        '---',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const badPath = join(base, 'backend', 'src', 'server.ts');
+    const result = await handlePlanSlice({
+      ...validParams(),
+      targetRepositories: ['frontend'],
+      tasks: [
+        {
+          ...validParams().tasks[0],
+          files: [badPath],
+          targetRepositories: ['frontend'],
+        },
+      ],
+    }, base);
+
+    assert.ok('error' in result);
+    assert.match(result.error, /outside allowed repository roots/);
+    assert.equal(getSliceTasks('M001', 'S02').length, 0, 'invalid scoped path must not persist');
+  } finally {
+    cleanup(base);
+  }
+});
+
+test('handlePlanSlice rejects relative traversal outside declared target repositories', async () => {
+  const base = makeTmpBase();
+  openDatabase(join(base, '.gsd', 'gsd.db'));
+
+  try {
+    seedParentSlice();
+    mkdirSync(join(base, 'frontend'), { recursive: true });
+    mkdirSync(join(base, 'backend'), { recursive: true });
+    writeFileSync(
+      join(base, '.gsd', 'PREFERENCES.md'),
+      [
+        '---',
+        'workspace:',
+        '  mode: parent',
+        '  repositories:',
+        '    frontend:',
+        '      path: frontend',
+        '    backend:',
+        '      path: backend',
+        '---',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const result = await handlePlanSlice({
+      ...validParams(),
+      targetRepositories: ['frontend'],
+      tasks: [
+        {
+          ...validParams().tasks[0],
+          files: ['../sibling-repo/src/server.ts'],
+          targetRepositories: ['frontend'],
+        },
+      ],
+    }, base);
+
+    assert.ok('error' in result);
+    assert.match(result.error, /outside allowed repository roots/);
+    assert.equal(getSliceTasks('M001', 'S02').length, 0, 'relative traversal outside scope must not persist');
+  } finally {
+    cleanup(base);
+  }
+});
+
+test('handlePlanSlice renders plan artifacts under worktree-local .gsd while using project DB', async () => {
+  const base = makeTmpBase();
+  const worktree = join(base, '.gsd', 'worktrees', 'M001');
+  mkdirSync(join(worktree, '.gsd'), { recursive: true });
+  mkdirSync(join(worktree, 'src', 'resources', 'extensions', 'gsd', 'tools'), { recursive: true });
+  writeFileSync(join(worktree, 'src', 'resources', 'extensions', 'gsd', 'tools', 'plan-milestone.ts'), '// fixture\n', 'utf-8');
+  writeFileSync(join(worktree, 'src', 'resources', 'extensions', 'gsd', 'tools', 'plan-task.ts'), '// fixture\n', 'utf-8');
+  openDatabase(join(base, '.gsd', 'gsd.db'));
+
+  try {
+    seedParentSlice();
+
+    const result = await handlePlanSlice(validParams(), worktree);
+    assert.ok(!('error' in result), `unexpected error: ${'error' in result ? result.error : ''}`);
+
+    const worktreePlan = join(worktree, '.gsd', 'milestones', 'M001', 'slices', 'S02', 'S02-PLAN.md');
+    const projectPlan = join(base, '.gsd', 'milestones', 'M001', 'slices', 'S02', 'S02-PLAN.md');
+    assert.ok(existsSync(worktreePlan), 'slice plan should be rendered to worktree-local .gsd');
+    assert.ok(!existsSync(projectPlan), 'slice plan should not be rendered to project .gsd');
+    assert.equal(result.planPath, realpathSync(worktreePlan));
   } finally {
     cleanup(base);
   }
@@ -144,11 +304,33 @@ test('handlePlanSlice clears sketch flag so DB-derived state leaves refining', a
     const result = await handlePlanSlice(validParams(), base);
     assert.ok(!('error' in result), `unexpected error: ${'error' in result ? result.error : ''}`);
     assert.equal(getSlice('M001', 'S02')?.is_sketch, 0, 'planned slice must no longer be treated as a sketch');
+    assert.equal(getSlice('M001', 'S02')?.goal, 'Persist slice planning through the DB.');
 
     invalidateStateCache();
     const after = await deriveState(base);
     assert.notEqual(after.phase, 'refining');
     assert.equal(after.progress?.tasks?.total, 2);
+  } finally {
+    cleanup(base);
+  }
+});
+
+test('handlePlanSlice preserves sketch flag when render fails before artifacts exist', async () => {
+  const base = makeTmpBase();
+  openDatabase(join(base, '.gsd', 'gsd.db'));
+
+  try {
+    insertMilestone({ id: 'M001', title: 'Milestone', status: 'active' });
+    insertSlice({ id: 'S02', milestoneId: 'M001', title: 'Planning slice', status: 'pending', demo: 'Rendered plans exist.', isSketch: true });
+
+    const sliceDir = join(base, '.gsd', 'milestones', 'M001', 'slices', 'S02');
+    rmSync(sliceDir, { recursive: true, force: true });
+    writeFileSync(sliceDir, 'not a directory', 'utf-8');
+
+    const result = await handlePlanSlice(validParams(), base);
+    assert.ok('error' in result);
+    assert.match(result.error, /render failed:/);
+    assert.equal(getSlice('M001', 'S02')?.is_sketch, 1, 'sketch flag must stay set when plan artifacts could not render');
   } finally {
     cleanup(base);
   }
@@ -242,7 +424,7 @@ test('handlePlanSlice rejects absolute task IO paths outside the active worktree
     }, base);
 
     assert.ok('error' in result);
-    assert.match(result.error, /validation failed: tasks\[0\]\.inputs contains absolute path outside working directory/);
+    assert.match(result.error, /validation failed: tasks\[0\]\.inputs contains path outside allowed repository roots/);
     assert.equal(getSliceTasks('M001', 'S02').length, 0, 'invalid planning IO must not persist tasks');
   } finally {
     cleanup(base);

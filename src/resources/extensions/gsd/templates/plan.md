@@ -131,14 +131,15 @@
 
   Verify field rules:
   - MUST be a mechanically executable command: `npm test`, `grep -q "pattern" file`, `test -f path`
-  - MUST NOT use shell pipes, redirects, semicolons, backticks, command substitution, or output trimming
+  - MUST NOT use shell pipes, redirects, semicolons, backticks, command substitution, output trimming, or grep regex alternation with `|`
+  - MUST NOT use inline `node -e` assertions for verification; put assertions in a real test file and run it with `node --test` or a package test script
   - For content/document tasks: verify file existence, section count, YAML validity, or word count
     NOT exact phrasing, specific formulas, or "zero TBD" aspirational criteria
   - If no command can verify the output, write: "Manual review — file exists and is non-empty"
   - BAD: `python3 -m pytest tests/ -q --tb=short 2>&1 | tail -5`
   - BAD: "Sections 3.1 and 3.2 exist with exact formulas. Zero TBD/TODO."
   - GOOD: `python3 -m pytest tests/ -q --tb=short`
-  - GOOD: `grep -c "^## " doc.md` returns >= 4 (4+ sections), `! grep -q "TBD\|TODO" doc.md`
+  - GOOD: `node --test tests/verify-doc.test.js`, `grep -q "Required heading" doc.md`, `test -s doc.md`
 
   Integration closure rule:
   - At least one slice in any multi-boundary milestone should perform real composition/wiring, not just contract hardening

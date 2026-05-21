@@ -59,8 +59,8 @@ function seed(base: string, mid: string): void {
     demo: "",
     sequence: 1,
   });
-  // Seed PROJECT.md so inlineProjectFromDb resolves — the run-uat manifest
-  // declares "project" as the third inline artifact (#4925 review).
+  // Seed PROJECT.md so the run-uat prompt can advertise the on-demand path
+  // without inlining the full project body.
   insertArtifact({
     path: "PROJECT.md",
     artifact_type: "project",
@@ -71,7 +71,7 @@ function seed(base: string, mid: string): void {
   });
 }
 
-test("#4782 phase 3: buildRunUatPrompt inlines slice UAT, slice summary, project via composer", async (t) => {
+test("#4782 phase 3: buildRunUatPrompt inlines UAT and keeps summary/project context compact", async (t) => {
   const base = makeBase();
   t.after(() => cleanup(base));
   invalidateAllCaches();
@@ -98,14 +98,14 @@ test("#4782 phase 3: buildRunUatPrompt inlines slice UAT, slice summary, project
   assert.match(prompt, /## Context Mode/);
   assert.match(prompt, /verification lane/);
 
-  // Artifacts from the manifest inline list, in declared order:
-  // slice-uat → slice-summary → project (#4925 review).
+  // Context appears in dependency order: UAT body, compact slice-summary
+  // excerpt, then on-demand project context.
   const uatIdx = prompt.indexOf("### S01 UAT");
-  const summaryIdx = prompt.indexOf("### S01 Summary");
-  const projectIdx = prompt.indexOf("### Project");
+  const summaryIdx = prompt.indexOf("### S01 Summary (excerpt)");
+  const projectIdx = prompt.indexOf("### On-demand Project Context");
   assert.ok(uatIdx > -1, "slice UAT block missing");
-  assert.ok(summaryIdx > -1, "slice summary block missing");
-  assert.ok(projectIdx > -1, "project block missing — manifest declares project as 3rd inline");
+  assert.ok(summaryIdx > -1, "slice summary excerpt missing");
+  assert.ok(projectIdx > -1, "project on-demand block missing");
   assert.ok(
     uatIdx < summaryIdx && summaryIdx < projectIdx,
     `manifest order violated: uat (${uatIdx}) < summary (${summaryIdx}) < project (${projectIdx})`,
@@ -116,11 +116,13 @@ test("#4782 phase 3: buildRunUatPrompt inlines slice UAT, slice summary, project
   assert.match(prompt, /fresh in-memory snapshot/);
   assert.ok(!prompt.includes("stale on-disk body"), "resolver re-read disk instead of using uatContent snapshot");
 
-  // Summary body content inlined
-  assert.match(prompt, /What Happened[\s\S]*Ship/);
+  // Summary excerpt is present, but full body narrative is not.
+  assert.match(prompt, /One-liner/);
+  assert.ok(!prompt.includes("## What Happened\nShip."), "run-uat should not inline full slice summary body");
 
-  // Project body content inlined
-  assert.match(prompt, /Run-UAT composer fixture project/);
+  // Project path is advertised on-demand; full project body is not inlined.
+  assert.match(prompt, /\.gsd\/PROJECT\.md/);
+  assert.ok(!prompt.includes("Run-UAT composer fixture project"), "run-uat should not inline full project context");
 });
 
 test("#4782 phase 3: buildRunUatPrompt omits optional slice summary when file is missing", async (t) => {
@@ -140,10 +142,9 @@ test("#4782 phase 3: buildRunUatPrompt omits optional slice summary when file is
   assert.match(prompt, /### S01 UAT/);
   // No empty "S01 Summary" section — section body would be blank without a file
   assert.ok(!prompt.includes("### S01 Summary"));
-  // Project still present (third inline artifact, not optional) and follows
-  // UAT directly with the skipped summary collapsed (#4925 review).
+  // Project on-demand context still follows UAT with the skipped summary collapsed.
   const uatIdx = prompt.indexOf("### S01 UAT");
-  const projectIdx = prompt.indexOf("### Project");
+  const projectIdx = prompt.indexOf("### On-demand Project Context");
   assert.ok(projectIdx > uatIdx, `project must follow UAT when summary is omitted (uat=${uatIdx}, project=${projectIdx})`);
   // No double separator from a skipped block
   assert.ok(!prompt.includes("---\n\n---"));

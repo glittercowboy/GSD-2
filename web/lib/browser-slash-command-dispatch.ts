@@ -1,3 +1,5 @@
+// Project/App: GSD-2
+// File Purpose: Route browser slash commands to local surfaces, RPC calls, or extension prompts.
 import { BUILTIN_SLASH_COMMANDS } from "../../packages/pi-coding-agent/src/core/slash-commands.ts"
 
 export type BrowserSlashCommandSurface =
@@ -169,7 +171,8 @@ function dispatchGSDSubcommand(
   const subcommand = spaceIndex === -1 ? trimmedArgs : trimmedArgs.slice(0, spaceIndex)
   const subArgs = spaceIndex === -1 ? "" : trimmedArgs.slice(spaceIndex + 1).trim()
 
-  // Bare `/gsd` — equivalent to `/gsd next`, pass through to bridge
+  // Bare `/gsd` opens the extension-owned Smart Entry wizard. Keep it on the
+  // bridge path so it never aliases to browser-native `/gsd status`.
   if (!subcommand) {
     return {
       kind: "prompt",

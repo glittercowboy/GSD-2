@@ -903,6 +903,62 @@ test('── markdown-renderer: missing artifact regenerates from DB without imp
   }
 });
 
+test('── markdown-renderer: stale roadmap artifact regenerates from DB rows ──', async () => {
+  const tmpDir = makeTmpDir();
+  const dbPath = path.join(tmpDir, '.gsd', 'gsd.db');
+  openDatabase(dbPath);
+  clearAllCaches();
+
+  try {
+    scaffoldDirs(tmpDir, 'M001', ['S01']);
+
+    insertMilestone({ id: 'M001', title: 'Test', status: 'active' });
+    insertSlice({
+      id: 'S01',
+      milestoneId: 'M001',
+      title: 'Planned Slice',
+      risk: 'high',
+      depends: ['S00'],
+      demo: 'planned result',
+      status: 'complete',
+    });
+
+    const roadmapPath = path.join(tmpDir, '.gsd', 'milestones', 'M001', 'M001-ROADMAP.md');
+    const staleContent = makeRoadmapContent([
+      { id: 'S01', title: 'Stale Artifact Title', done: false },
+    ]) + '\n\nSTALE_ARTIFACT_SENTINEL';
+    fs.writeFileSync(roadmapPath, staleContent);
+    insertArtifact({
+      path: 'milestones/M001/M001-ROADMAP.md',
+      artifact_type: 'ROADMAP',
+      milestone_id: 'M001',
+      slice_id: null,
+      task_id: null,
+      full_content: staleContent,
+    });
+    clearAllCaches();
+
+    const ok = await renderRoadmapCheckboxes(tmpDir, 'M001');
+    assert.ok(ok, 'render succeeds by regenerating stale roadmap artifact from DB');
+
+    const rendered = fs.readFileSync(roadmapPath, 'utf-8');
+    assert.ok(!rendered.includes('STALE_ARTIFACT_SENTINEL'), 'stale artifact-only content is not preserved');
+    assert.ok(!rendered.includes('Stale Artifact Title'), 'stale artifact title is not preserved');
+
+    clearAllCaches();
+    const parsed = parseRoadmap(rendered);
+    const s01 = parsed.slices.find(s => s.id === 'S01');
+    assert.ok(s01, 'S01 parsed from regenerated roadmap');
+    assert.ok(s01!.done, 'S01 is checked from DB completion status');
+    assert.deepStrictEqual(s01!.title, 'Planned Slice', 'S01 title comes from DB');
+    assert.deepStrictEqual(s01!.risk, 'high', 'S01 risk comes from DB');
+    assert.deepStrictEqual(s01!.depends, ['S00'], 'S01 dependencies come from DB');
+  } finally {
+    closeDatabase();
+    cleanupDir(tmpDir);
+  }
+});
+
 // ═══════════════════════════════════════════════════════════════════════════
 // stderr warnings (graceful degradation diagnostics)
 // ═══════════════════════════════════════════════════════════════════════════

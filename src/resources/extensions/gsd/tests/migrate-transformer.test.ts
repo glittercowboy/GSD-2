@@ -174,6 +174,34 @@ test('Scenario 1: Flat single-milestone', () => {
   assert.deepStrictEqual(result.milestones[0]?.boundaryMap, [], 'flat: boundaryMap defaults to empty');
 });
 
+test('Scenario 1b: Letter-suffixed plan numbers stay ordered and mapped', () => {
+  const project = emptyProject({
+    roadmap: flatRoadmap([
+      roadmapEntry(3, 'type-safety'),
+    ]),
+    phases: {
+      '3-type-safety': makePhase('3-type-safety', 3, 'type-safety', {
+        plans: {
+          '03': makePlan('03'),
+          '03b': makePlan('03b'),
+          '04': makePlan('04'),
+        },
+        summaries: {
+          '03b': makeSummary('03b'),
+        },
+      }),
+    },
+  });
+
+  const result = transformToGSD(project);
+  const tasks = result.milestones[0]?.slices[0]?.tasks ?? [];
+
+  assert.deepStrictEqual(tasks.length, 3, 'letter plan: all plans become tasks');
+  assert.deepStrictEqual(tasks.map((task) => task.id), ['T01', 'T02', 'T03'], 'letter plan: task IDs remain sequential');
+  assert.deepStrictEqual(tasks[1]?.title, '00 03b', 'letter plan: 03b sorts between 03 and 04');
+  assert.deepStrictEqual(tasks[1]?.done, true, 'letter plan: matching 03b summary marks task done');
+});
+
 // ─── Scenario 2: Multi-Milestone (2 milestones with independent numbering) ──
 
 test('Scenario 2: Multi-milestone', () => {

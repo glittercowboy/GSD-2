@@ -17,6 +17,7 @@ import {
   loadGlobalGSDPreferences,
   loadProjectGSDPreferences,
   loadEffectiveGSDPreferences,
+  normalizePreferencesShape,
   resolveAllSkillReferences,
 } from "./preferences.js";
 import { loadFile, saveFile, splitFrontmatter, parseFrontmatterMap } from "./files.js";
@@ -43,10 +44,10 @@ function tryParseNumber(val: string): number | null {
   return !isNaN(n) && isFinite(n) ? n : null;
 }
 
-/** Parse a string as a number in the 0–100 range, or return null on failure. */
+/** Parse a string as 0 or a whole percentage in the 1–100 range, or return null on failure. */
 function tryParsePercentage(val: string): number | null {
   const n = Number(val);
-  return !isNaN(n) && n >= 0 && n <= 100 ? n : null;
+  return !isNaN(n) && (n === 0 || (n >= 1 && n <= 100)) ? n : null;
 }
 
 // ─── Prompt helpers (reduce boilerplate across configure* functions) ─────────
@@ -587,10 +588,18 @@ async function configureModels(ctx: ExtensionCommandContext, prefs: Record<strin
   const models: Record<string, unknown> = (prefs.models as Record<string, unknown>) ?? {};
 
   const availableModels = ctx.modelRegistry.getAvailable();
-  if (availableModels.length > 0) {
+  // Call getAllWithDiscovered as a method so `this` stays bound to the
+  // registry — invoking a detached reference loses `this` and the method's
+  // internal `this.models` access throws.
+  const registry = ctx.modelRegistry as { getAllWithDiscovered?: () => typeof availableModels };
+  const availableProviders = new Set(availableModels.map((m) => m.provider));
+  const selectableModels = typeof registry.getAllWithDiscovered === "function"
+    ? registry.getAllWithDiscovered().filter((m) => availableProviders.has(m.provider))
+    : availableModels;
+  if (selectableModels.length > 0) {
     // Group models by provider, sorted alphabetically
-    const byProvider = new Map<string, typeof availableModels>();
-    for (const m of availableModels) {
+    const byProvider = new Map<string, typeof selectableModels>();
+    for (const m of selectableModels) {
       let group = byProvider.get(m.provider);
       if (!group) {
         group = [];
@@ -1044,7 +1053,7 @@ async function configureBudget(ctx: ExtensionCommandContext, prefs: Record<strin
         prefs.context_pause_threshold = parsed;
       }
     } else if (val) {
-      ctx.ui.notify(`Invalid context pause threshold "${val}" — must be 0-100. Keeping previous value.`, "warning");
+      ctx.ui.notify(`Invalid context pause threshold "${val}" — use 0 to disable or 1-100 percent. Keeping previous value.`, "warning");
     }
   }
 }
@@ -1199,7 +1208,7 @@ async function configureContextCodebase(ctx: ExtensionCommandContext, prefs: Rec
   const maskTurns = await promptInteger(ctx, "Observation mask turns (1–50)", cm.observation_mask_turns, "8");
   if (maskTurns !== undefined && maskTurns !== "clear") cm.observation_mask_turns = maskTurns;
   else if (maskTurns === "clear") delete cm.observation_mask_turns;
-  const thresh = await promptNumber(ctx, "Compaction threshold percent (0.5–0.95)", cm.compaction_threshold_percent, "0.70");
+  const thresh = await promptNumber(ctx, "Compaction threshold percent (0.5–0.95)", cm.compaction_threshold_percent, "0.60");
   if (thresh !== undefined && thresh !== "clear") cm.compaction_threshold_percent = thresh;
   else if (thresh === "clear") delete cm.compaction_threshold_percent;
   const toolMax = await promptInteger(ctx, "Tool result max chars (200–10000)", cm.tool_result_max_chars, "800");
@@ -1563,8 +1572,12 @@ export async function handlePrefsWizard(
   // Order: existing-on-disk values, overlaid with prefill (caller's seeded answers).
   // Callers like /gsd init pass freshly-collected init answers as prefill so the
   // wizard menu shows them populated and writeable in one place.
+  // `normalizePreferencesShape` tolerates a missing preferences file, a malformed
+  // wrapper (`{ preferences: undefined }`), or a bare prefs object so the wizard
+  // never reaches the category menu with a half-formed root. See issue: /gsd setup
+  // prefs crashed with "Cannot read properties of undefined (reading 'models')".
   const prefs: Record<string, unknown> = {
-    ...(existing?.preferences ?? {}),
+    ...normalizePreferencesShape(existing),
     ...(prefill ?? {}),
   };
 

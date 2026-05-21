@@ -1,6 +1,11 @@
+// Project/App: GSD-2
+// File Purpose: User message selector for branching from prior user turns.
+
 import { type Component, Container, getEditorKeybindings, Spacer, Text, truncateToWidth } from "@gsd/pi-tui";
 import { theme } from "../theme/theme.js";
 import { DynamicBorder } from "./dynamic-border.js";
+import { selectorFooter } from "./keybinding-hints.js";
+import { renderCursor } from "./tree-render-utils.js";
 
 interface UserMessageItem {
 	id: string; // Entry ID in the session
@@ -30,10 +35,11 @@ class UserMessageList implements Component {
 	}
 
 	render(width: number): string[] {
+		const safeWidth = Math.max(0, width);
 		const lines: string[] = [];
 
 		if (this.messages.length === 0) {
-			lines.push(theme.fg("muted", "  No user messages found"));
+			lines.push(theme.fg("muted", truncateToWidth("  No user messages found", safeWidth, "")));
 			return lines;
 		}
 
@@ -53,24 +59,27 @@ class UserMessageList implements Component {
 			const normalizedMessage = message.text.replace(/\n/g, " ").trim();
 
 			// First line: cursor + message
-			const cursor = isSelected ? theme.fg("accent", "› ") : "  ";
-			const maxMsgWidth = width - 2; // Account for cursor (2 chars)
+			const cursor = renderCursor(isSelected);
+			const maxMsgWidth = Math.max(0, safeWidth - 2); // Account for cursor (2 chars)
 			const truncatedMsg = truncateToWidth(normalizedMessage, maxMsgWidth);
 			const messageLine = cursor + (isSelected ? theme.bold(truncatedMsg) : truncatedMsg);
 
-			lines.push(messageLine);
+			lines.push(truncateToWidth(messageLine, safeWidth, ""));
 
 			// Second line: metadata (position in history)
 			const position = i + 1;
 			const metadata = `  Message ${position} of ${this.messages.length}`;
-			const metadataLine = theme.fg("muted", metadata);
+			const metadataLine = theme.fg("muted", truncateToWidth(metadata, safeWidth, ""));
 			lines.push(metadataLine);
 			lines.push(""); // Blank line between messages
 		}
 
 		// Add scroll indicator if needed
 		if (startIndex > 0 || endIndex < this.messages.length) {
-			const scrollInfo = theme.fg("muted", `  (${this.selectedIndex + 1}/${this.messages.length})`);
+			const scrollInfo = theme.fg(
+				"muted",
+				truncateToWidth(`  (${this.selectedIndex + 1}/${this.messages.length})`, safeWidth, ""),
+			);
 			lines.push(scrollInfo);
 		}
 
@@ -129,6 +138,7 @@ export class UserMessageSelectorComponent extends Container {
 
 		// Add bottom border
 		this.addChild(new Spacer(1));
+		this.addChild(new Text(selectorFooter(), 1, 0));
 		this.addChild(new DynamicBorder());
 
 		// Auto-cancel if no messages — invoke synchronously via microtask

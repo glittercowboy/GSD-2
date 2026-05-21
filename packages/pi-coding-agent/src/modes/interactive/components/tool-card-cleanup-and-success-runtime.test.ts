@@ -58,6 +58,35 @@ describe("Extension warning notifications", () => {
 			);
 		}
 	});
+
+	it("preserves explicit ANSI styling in info notifications", () => {
+		const chat = new Container();
+		const styled = "\x1b[32mStyled external notice\x1b[0m";
+		const result = renderExtensionNotifyInChat(chat, styled, "info");
+		const rendered = chat.render(80).join("\n");
+
+		assert.equal(result.rendered, true);
+		assert.match(rendered, /\x1b\[32mStyled external notice\x1b\[0m/);
+		assert.equal(stripAnsi(rendered).includes("Styled external notice"), true);
+	});
+
+	it("colors GSD status-card notifications with the interactive theme", () => {
+		const chat = new Container();
+		const card = [
+			"    ╭─ ✓ Verification Gate",
+			"       2/2 checks passed",
+			"    ╰────────────────────────────────────────",
+			"       Continue: /gsd next",
+		].join("\n");
+		const result = renderExtensionNotifyInChat(chat, card, "info");
+		const rendered = chat.render(100).join("\n");
+
+		assert.equal(result.rendered, true);
+		assert.ok(rendered.includes(theme.fg("success", theme.bold("✓ Verification Gate"))));
+		assert.ok(rendered.includes(theme.fg("borderAccent", "╭─")));
+		assert.ok(rendered.includes(theme.fg("success", "/gsd next")));
+		assert.match(stripAnsi(rendered), /2\/2 checks passed/);
+	});
 });
 
 describe("Blocking error banner", () => {

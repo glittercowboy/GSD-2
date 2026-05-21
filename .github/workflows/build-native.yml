@@ -15,6 +15,10 @@ on:
           - "false"
           - "true"
 
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   build:
     strategy:
@@ -98,7 +102,8 @@ jobs:
   publish:
     needs: build
     if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.publish == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # npm trusted publishing requires GitHub-hosted runners for OIDC.
+    runs-on: ubuntu-latest
     name: Publish platform packages
 
     steps:
@@ -108,7 +113,12 @@ jobs:
         with:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
-          cache: "npm"
+          package-manager-cache: false
+
+      - name: Verify trusted publishing toolchain
+        run: |
+          node -e "const [major, minor] = process.versions.node.split('.').map(Number); if (major < 22 || (major === 22 && minor < 14)) { throw new Error('Trusted publishing requires Node >= 22.14.0'); }"
+          node -e "const v=require('child_process').execSync('npm --version',{encoding:'utf8'}).trim().split('.').map(Number); if (v[0] < 11 || (v[0] === 11 && v[1] < 5) || (v[0] === 11 && v[1] === 5 && v[2] < 1)) { throw new Error('Trusted publishing requires npm >= 11.5.1'); }"
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -141,20 +151,20 @@ jobs:
           fi
 
       - name: Publish platform packages
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           for platform in darwin-arm64 darwin-x64 linux-x64-gnu linux-arm64-gnu win32-x64-msvc; do
             echo "Publishing @gsd-build/engine-${platform}..."
             cd "native/npm/${platform}"
-            OUTPUT=$(npm publish --access public ${{ steps.version-check.outputs.tag_flag }} 2>&1) && echo "$OUTPUT" || {
+            if OUTPUT=$(npm publish --access public ${{ steps.version-check.outputs.tag_flag }} 2>&1); then
+              echo "$OUTPUT"
+            else
               if echo "$OUTPUT" | grep -q "cannot publish over the previously published"; then
                 echo "Already published, skipping"
               else
                 echo "::error::Failed to publish ${platform}: $OUTPUT"
                 exit 1
               fi
-            }
+            fi
             cd "$GITHUB_WORKSPACE"
           done
 
@@ -210,18 +220,18 @@ jobs:
         run: npm run validate-pack
 
       - name: Publish main package
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           # --ignore-scripts: skip prepublishOnly since we built explicitly above
-          OUTPUT=$(npm publish --ignore-scripts ${{ steps.version-check.outputs.tag_flag }} 2>&1) && echo "$OUTPUT" || {
+          if OUTPUT=$(npm publish --ignore-scripts ${{ steps.version-check.outputs.tag_flag }} 2>&1); then
+            echo "$OUTPUT"
+          else
             if echo "$OUTPUT" | grep -q "cannot publish over the previously published\|You cannot publish over"; then
               echo "Already published, skipping"
             else
               echo "$OUTPUT"
               exit 1
             fi
-          }
+          fi
 
       - name: Post-publish smoke test
         run: |

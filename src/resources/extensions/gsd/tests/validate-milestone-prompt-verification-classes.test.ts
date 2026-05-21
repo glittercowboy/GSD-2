@@ -1,3 +1,6 @@
+// Project/App: GSD-2
+// File Purpose: Prompt contract tests for milestone validation verification-class evidence.
+
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";

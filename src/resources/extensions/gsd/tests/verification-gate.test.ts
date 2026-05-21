@@ -22,7 +22,7 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { discoverCommands, runVerificationGate, formatFailureContext, captureRuntimeErrors, runDependencyAudit, isLikelyCommand, validateVerificationCommand } from "../verification-gate.ts";
+import { discoverCommands, runVerificationGate, runVerificationGateForTargets, formatFailureContext, captureRuntimeErrors, runDependencyAudit, isLikelyCommand, validateVerificationCommand } from "../verification-gate.ts";
 import type { CaptureRuntimeErrorsOptions, DependencyAuditOptions } from "../verification-gate.ts";
 import { validatePreferences } from "../preferences.ts";
 
@@ -81,7 +81,7 @@ describe("verification-gate: discovery", () => {
     assert.equal(result.source, "package-json");
   });
 
-  test("first-non-empty-wins — preference beats task plan and package.json", () => {
+  test("first-non-empty-wins — task plan beats preference and package.json", () => {
     writeFileSync(
       join(tmp, "package.json"),
       JSON.stringify({ scripts: { lint: "eslint ." } }),
@@ -91,8 +91,8 @@ describe("verification-gate: discovery", () => {
       taskPlanVerify: "npm run lint",
       cwd: tmp,
     });
-    assert.deepStrictEqual(result.commands, ["custom-check"]);
-    assert.equal(result.source, "preference");
+    assert.deepStrictEqual(result.commands, ["npm run lint"]);
+    assert.equal(result.source, "task-plan");
   });
 
   test("task plan verify beats package.json", () => {
@@ -187,6 +187,21 @@ describe("verification-gate: discovery", () => {
     assert.deepStrictEqual(result.commands, ["npm run test"]);
   });
 
+  test("non-ASCII prose taskPlanVerify is rejected, falls through to package.json", () => {
+    writeFileSync(
+      join(tmp, "package.json"),
+      JSON.stringify({ scripts: { test: "vitest" } }),
+    );
+    const result = discoverCommands({
+      // Chinese prose: "All commands output one line of JSONL; go test ./... passes"
+      taskPlanVerify: "所有 命令 输出 一行 JSONL go test ./... 通过",
+      cwd: tmp,
+    });
+    // Non-ASCII prose should be rejected, so it falls through to package.json
+    assert.equal(result.source, "package-json");
+    assert.deepStrictEqual(result.commands, ["npm run test"]);
+  });
+
   test("prose taskPlanVerify with no package.json → source none", () => {
     const result = discoverCommands({
       taskPlanVerify: "Verify the output matches expected format and all fields are present",
@@ -216,6 +231,24 @@ describe("verification-gate: discovery", () => {
     assert.deepStrictEqual(result.commands, ["npm run test"]);
   });
 
+  test("taskPlanVerify splits newline-delimited commands", () => {
+    const result = discoverCommands({
+      taskPlanVerify: "npm run lint\nnpm run test",
+      cwd: tmp,
+    });
+    assert.equal(result.source, "task-plan");
+    assert.deepStrictEqual(result.commands, ["npm run lint", "npm run test"]);
+  });
+
+  test("taskPlanVerify keeps bash negation commands", () => {
+    const result = discoverCommands({
+      taskPlanVerify: "! grep 'needle' file.txt\nnpm run test",
+      cwd: tmp,
+    });
+    assert.equal(result.source, "task-plan");
+    assert.deepStrictEqual(result.commands, ["! grep 'needle' file.txt", "npm run test"]);
+  });
+
   test("taskPlanVerify rejects piped pytest command", () => {
     const result = discoverCommands({
       taskPlanVerify: "python3 -m pytest tests/ -q --tb=short 2>&1 | tail -5",
@@ -237,6 +270,26 @@ name = "sample"
 pythonpath = ["."]
 `,
     );
+
+    const result = discoverCommands({ cwd: tmp });
+
+    assert.equal(result.source, "python-project");
+    assert.deepStrictEqual(result.commands, ["python3 -m pytest"]);
+  });
+
+  test("dependency-free Node project with root test file discovers node test command", () => {
+    writeFileSync(join(tmp, "test-todo-cli.js"), "require('node:test')('ok', () => {});\n");
+
+    const result = discoverCommands({ cwd: tmp });
+
+    assert.equal(result.source, "node-test-file");
+    assert.deepStrictEqual(result.commands, ["node test-todo-cli.js"]);
+  });
+
+  test("dependency-free Node test discovery is lower priority than Python pytest", () => {
+    mkdirSync(join(tmp, "tests"), { recursive: true });
+    writeFileSync(join(tmp, "tests", "test_sample.py"), "def test_sample():\n    assert True\n");
+    writeFileSync(join(tmp, "sample.test.js"), "require('node:test')('ok', () => {});\n");
 
     const result = discoverCommands({ cwd: tmp });
 
@@ -325,13 +378,13 @@ describe("verification-gate: execution", () => {
       cwd: tmp,
       preferenceCommands: ["echo hello", "echo world"],
     });
-    assert.equal(result.passed, true);
     assert.equal(result.checks.length, 2);
     assert.equal(result.discoverySource, "preference");
     assert.equal(result.checks[0].exitCode, 0);
     assert.equal(result.checks[1].exitCode, 0);
     assert.ok(result.checks[0].stdout.includes("hello"));
     assert.ok(result.checks[1].stdout.includes("world"));
+    assert.equal(result.passed, true);
     assert.equal(typeof result.timestamp, "number");
   });
 
@@ -441,6 +494,49 @@ describe("verification-gate: execution", () => {
     // The stdout should contain the tmp dir path (resolving symlinks)
     assert.ok(result.checks[0].stdout.trim().length > 0, "pwd should produce output");
   });
+
+  test("multi-target execution runs verification in each repository root", () => {
+    const frontend = join(tmp, "frontend");
+    const backend = join(tmp, "backend");
+    mkdirSync(frontend, { recursive: true });
+    mkdirSync(backend, { recursive: true });
+
+    const result = runVerificationGateForTargets({
+      targets: [
+        { id: "frontend", cwd: frontend },
+        { id: "backend", cwd: backend },
+      ],
+      preferenceCommands: ["pwd"],
+    });
+
+    assert.equal(result.checks.length, 2);
+    assert.equal(result.checks[0].command, "[frontend] pwd");
+    assert.equal(result.checks[1].command, "[backend] pwd");
+    assert.ok(result.checks[0].stdout.includes("frontend"));
+    assert.ok(result.checks[1].stdout.includes("backend"));
+    assert.equal(result.discoverySource, "preference");
+  });
+
+  test("multi-target execution falls back to per-repo package.json discovery", () => {
+    const frontend = join(tmp, "frontend");
+    const backend = join(tmp, "backend");
+    mkdirSync(frontend, { recursive: true });
+    mkdirSync(backend, { recursive: true });
+    writeFileSync(join(frontend, "package.json"), JSON.stringify({ scripts: { test: "echo front-ok" } }), "utf-8");
+    writeFileSync(join(backend, "package.json"), JSON.stringify({ scripts: { test: "echo back-ok" } }), "utf-8");
+
+    const result = runVerificationGateForTargets({
+      targets: [
+        { id: "frontend", cwd: frontend },
+        { id: "backend", cwd: backend },
+      ],
+    });
+
+    assert.equal(result.checks.length, 2);
+    assert.equal(result.checks[0].command, "[frontend] npm run test");
+    assert.equal(result.checks[1].command, "[backend] npm run test");
+    assert.equal(result.discoverySource, "package-json");
+  });
 });
 
 // ─── Preference Validation Tests ─────────────────────────────────────────────
@@ -515,6 +611,7 @@ test("isLikelyCommand: known command prefixes are accepted", () => {
   assert.equal(isLikelyCommand("cargo test"), true);
   assert.equal(isLikelyCommand("go test ./..."), true);
   assert.equal(isLikelyCommand("make test"), true);
+  assert.equal(isLikelyCommand("uv run pytest"), true);
 });
 
 test("isLikelyCommand: path-like first tokens are accepted", () => {
@@ -555,9 +652,26 @@ test("isLikelyCommand: short lowercase tokens without flags are accepted (could 
   assert.equal(isLikelyCommand("mycheck"), true);
 });
 
+test("isLikelyCommand: bash negation with known command is accepted", () => {
+  assert.equal(isLikelyCommand("! grep needle file.txt"), true);
+});
+
 test("validateVerificationCommand rejects shell control syntax", () => {
   assert.deepEqual(validateVerificationCommand("python3 -m pytest tests/ -q --tb=short").ok, true);
   const result = validateVerificationCommand("python3 -m pytest tests/ -q --tb=short 2>&1 | tail -5");
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.match(result.reason, /shell control syntax/);
+  }
+});
+
+test("validateVerificationCommand allows semicolons inside quoted python -c code", () => {
+  const result = validateVerificationCommand("uv run python3 -c \"import yaml; yaml.safe_load('x: 1')\"");
+  assert.equal(result.ok, true);
+});
+
+test("validateVerificationCommand rejects shell operators after single-quote backslash desync patterns", () => {
+  const result = validateVerificationCommand("echo 'x\\'; ls");
   assert.equal(result.ok, false);
   if (!result.ok) {
     assert.match(result.reason, /shell control syntax/);

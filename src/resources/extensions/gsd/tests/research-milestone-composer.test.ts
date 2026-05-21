@@ -79,16 +79,13 @@ test("#4782 phase 3: buildResearchMilestonePrompt emits milestone-context then r
     `milestone-context (${contextIdx}) must precede research template (${researchIdx})`);
 });
 
-test("#4782 phase 3: buildResearchMilestonePrompt preserves manifest order across optional artifacts (#4925 review)", async (t) => {
+test("buildResearchMilestonePrompt keeps broad project docs on-demand", async (t) => {
   const base = makeBase();
   t.after(() => cleanup(base));
   invalidateAllCaches();
 
   seed(base, "M001");
   writeFileSync(join(base, ".gsd", "milestones", "M001", "M001-CONTEXT.md"), "# M001 Context\n");
-  // Seed PROJECT.md into the artifacts table so inlineProjectFromDb resolves
-  // to a non-null body. Lets us verify the project block sits between
-  // milestone-context and the templates block per manifest order.
   insertArtifact({
     path: "PROJECT.md",
     artifact_type: "project",
@@ -97,18 +94,39 @@ test("#4782 phase 3: buildResearchMilestonePrompt preserves manifest order acros
     task_id: null,
     full_content: "# Project\n\nResearch composer fixture project.\n",
   });
+  insertArtifact({
+    path: "REQUIREMENTS.md",
+    artifact_type: "requirements",
+    milestone_id: null,
+    slice_id: null,
+    task_id: null,
+    full_content: "# Requirements\n\nResearch composer fixture requirements.\n",
+  });
+  insertArtifact({
+    path: "DECISIONS.md",
+    artifact_type: "decisions",
+    milestone_id: null,
+    slice_id: null,
+    task_id: null,
+    full_content: "# Decisions\n\nResearch composer fixture decisions.\n",
+  });
 
   const prompt = await buildResearchMilestonePrompt("M001", "Research Test", base);
 
-  // Manifest-declared order: milestone-context, project, requirements, decisions, templates.
   const contextIdx = prompt.indexOf("### Milestone Context");
-  const projectIdx = prompt.indexOf("### Project");
   const researchIdx = prompt.indexOf("### Output Template: Research");
+  const onDemandIdx = prompt.indexOf("### On-demand Planning Context");
   assert.ok(contextIdx > -1, "milestone-context block missing");
-  assert.ok(projectIdx > -1, "project block missing — seed should have populated it");
   assert.ok(researchIdx > -1, "research template block missing");
+  assert.ok(onDemandIdx > -1, "on-demand planning context missing");
   assert.ok(
-    contextIdx < projectIdx && projectIdx < researchIdx,
-    `manifest order violated: milestone-context (${contextIdx}) < project (${projectIdx}) < research-template (${researchIdx})`,
+    contextIdx < researchIdx && researchIdx < onDemandIdx,
+    `manifest order violated: milestone-context (${contextIdx}) < research-template (${researchIdx}) < on-demand (${onDemandIdx})`,
   );
+  assert.doesNotMatch(prompt, /Research composer fixture project/);
+  assert.doesNotMatch(prompt, /Research composer fixture requirements/);
+  assert.doesNotMatch(prompt, /Research composer fixture decisions/);
+  assert.match(prompt, /`\.gsd\/PROJECT\.md`/);
+  assert.match(prompt, /`\.gsd\/REQUIREMENTS\.md`/);
+  assert.match(prompt, /`\.gsd\/DECISIONS\.md`/);
 });

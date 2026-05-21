@@ -103,7 +103,7 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 	const widgetState = new Map<string, { content: unknown; options?: ExtensionWidgetOptions }>();
 	let footerFactory: Parameters<ExtensionUIContext["setFooter"]>[0] | undefined;
 	let headerFactory: Parameters<ExtensionUIContext["setHeader"]>[0] | undefined;
-	let workingMessageState: string | undefined;
+	let workingMessageState: string | null | undefined;
 	let titleState: string | undefined;
 	let editorTextState: string | undefined;
 
@@ -266,7 +266,7 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 			});
 		},
 
-		setWorkingMessage(message?: string): void {
+		setWorkingMessage(message?: string | null): void {
 			workingMessageState = message;
 			void withEmbeddedUiContext((ui) => {
 				ui.setWorkingMessage(message);

@@ -82,6 +82,13 @@ test('planning-unit: allows edit to .gsd/ via relative path', () => {
   assert.strictEqual(r.block, false);
 });
 
+test('planning-unit: allows canonical project .gsd writes from worktree-isolated base path', () => {
+  const worktreeBase = join(BASE, '.gsd', 'worktrees', 'M001');
+  const canonicalCaptures = join(BASE, '.gsd', 'CAPTURES.md');
+  const r = shouldBlockPlanningUnit('edit', canonicalCaptures, worktreeBase, 'triage-captures', PLANNING);
+  assert.strictEqual(r.block, false);
+});
+
 test('planning-unit: rejects sibling directory that prefixes ".gsd"', () => {
   // <BASE>/.gsd-snapshot/x.md must NOT slip through a naive startsWith check.
   const r = shouldBlockPlanningUnit(
@@ -114,6 +121,11 @@ test('planning-unit: allows read-only bash (git log)', () => {
 
 test('planning-unit: allows read-only bash (cat)', () => {
   const r = shouldBlockPlanningUnit('bash', 'cat README.md', BASE, 'plan-milestone', PLANNING);
+  assert.strictEqual(r.block, false);
+});
+
+test('planning-unit: allows read-only bash prefixed with cd', () => {
+  const r = shouldBlockPlanningUnit('bash', 'cd .gsd && cat PROJECT.md', BASE, 'plan-slice', PLANNING_DISPATCH);
   assert.strictEqual(r.block, false);
 });
 

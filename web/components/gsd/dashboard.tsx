@@ -1,5 +1,8 @@
 "use client"
 
+// Project/App: GSD-2
+// File Purpose: Browser dashboard for live GSD workspace progress and actions.
+
 import { useEffect, useState, useCallback } from "react"
 import {
   Activity,
@@ -176,6 +179,7 @@ export function Dashboard({ onSwitchView, onExpandTerminal }: DashboardProps = {
     commandInFlight: state.commandInFlight,
     bootStatus: state.bootStatus,
     hasMilestones: (workspace?.milestones.length ?? 0) > 0,
+    stepMode: auto?.stepMode ?? false,
     projectDetectionKind: boot?.projectDetection?.kind ?? null,
   })
 

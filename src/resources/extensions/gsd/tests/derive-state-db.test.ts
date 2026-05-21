@@ -902,6 +902,55 @@ describe('derive-state-db', async () => {
     }
   });
 
+  test('derive-state-db: needs-attention with all slices done returns blocked', async () => {
+    const base = createFixtureBase();
+    try {
+      const doneRoadmap = `# M001: Needs Attention
+
+**Vision:** Test needs-attention loop guard.
+
+## Slices
+
+- [x] **S01: Done Slice** \`risk:low\` \`depends:[]\`
+  > After this: Done.
+`;
+      writeFile(base, 'milestones/M001/M001-ROADMAP.md', doneRoadmap);
+      writeFile(base, 'milestones/M001/M001-VALIDATION.md',
+        '---\nverdict: needs-attention\nremediation_round: 0\n---\n\n# Validation\nNeeds attention.');
+
+      invalidateStateCache();
+      const fileState = await _deriveStateImpl(base);
+
+      openDatabase(':memory:');
+      insertMilestone({ id: 'M001', title: 'Needs Attention', status: 'active' });
+      insertSlice({ id: 'S01', milestoneId: 'M001', title: 'Done Slice', status: 'complete', risk: 'low', depends: [] });
+      insertAssessment({
+        path: 'milestones/M001/M001-VALIDATION.md',
+        milestoneId: 'M001',
+        status: 'needs-attention',
+        scope: 'milestone-validation',
+        fullContent: 'verdict: needs-attention',
+      });
+
+      invalidateStateCache();
+      const dbState = await deriveStateFromDb(base);
+
+      assert.deepStrictEqual(dbState.phase, 'blocked', 'needs-attention-db: phase is blocked');
+      assert.deepStrictEqual(dbState.phase, fileState.phase, 'needs-attention-db: phase matches filesystem');
+      assert.deepStrictEqual(dbState.activeMilestone?.id, 'M001', 'needs-attention-db: activeMilestone is M001');
+      assert.deepStrictEqual(dbState.registry[0]?.status, 'active', 'needs-attention-db: milestone stays active, not parked');
+      assert.ok(
+        dbState.blockers.some(b => b.includes('needs-attention') && b.includes('/gsd park M001')),
+        'needs-attention-db: blocker explains explicit park or override paths',
+      );
+
+      closeDatabase();
+    } finally {
+      closeDatabase();
+      cleanup(base);
+    }
+  });
+
   // ─── Test 15: Completing-milestone — terminal validation, no summary ──
   test('derive-state-db: completing-milestone via DB', async () => {
     const base = createFixtureBase();

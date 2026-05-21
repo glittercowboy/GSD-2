@@ -127,6 +127,14 @@ class SessionSelectorHeader implements Component {
 
 	invalidate(): void {}
 
+	/**
+	 * Clear any pending auto-hide timeout when the header is removed, so it
+	 * cannot fire requestRender() after the component is gone.
+	 */
+	dispose(): void {
+		this.clearStatusTimeout();
+	}
+
 	render(width: number): string[] {
 		const title = this.scope === "current" ? "Resume Session (Current Folder)" : "Resume Session (All)";
 		const leftText = theme.bold(title);

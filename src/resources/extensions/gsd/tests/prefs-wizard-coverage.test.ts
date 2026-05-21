@@ -25,7 +25,7 @@ const PREF_SAMPLE_VALUES: Record<string, unknown> = {
   unique_milestone_ids: true,
   budget_ceiling: 12.5,
   budget_enforcement: "warn",
-  context_pause_threshold: 0.8,
+  context_pause_threshold: 80,
   notifications: {
     enabled: true,
     on_complete: true,
@@ -58,6 +58,7 @@ const PREF_SAMPLE_VALUES: Record<string, unknown> = {
   verification_commands: ["npm test"],
   verification_auto_fix: true,
   verification_max_retries: 1,
+  per_unit_cost_cap_usd: 5,
   search_provider: "web",
   context_selection: "auto",
   widget_mode: "small",
@@ -86,6 +87,17 @@ const PREF_SAMPLE_VALUES: Record<string, unknown> = {
   context_window_override: 128000,
   context_mode: { enabled: true },
   planning_depth: "deep",
+  claude_code_mcp: { per_model: { "claude-haiku": { allowed_servers: ["gsd-workflow"] } } },
+  workspace: {
+    mode: "parent",
+    repositories: {
+      frontend: {
+        path: "frontend",
+        role: "web UI",
+        verification: ["npm test"],
+      },
+    },
+  },
 };
 
 test("prefs wizard save path preserves every known preference key", async () => {
@@ -140,4 +152,71 @@ test("category summaries expose the wizard menu surface for configured prefs", (
   assert.match(summaries.models, /phase/);
   assert.match(summaries.integrations, /remote: C123/);
   assert.match(summaries.verification, /1 cmd/);
+});
+
+test("models wizard offers discovered models for enabled providers", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "gsd-prefs-wizard-"));
+  const prefsPath = join(dir, "PREFERENCES.md");
+  const choices = [
+    "Models",
+    "local (2 models)",
+    "discovered-model",
+    "(keep current)",
+    "(keep current)",
+    "(keep current)",
+    "(keep current)",
+    "(keep current)",
+    "(keep current)",
+    "(keep current)",
+  ];
+  const ctx = {
+    // `getAllWithDiscovered` reads `this._all` so the wizard must call it as a
+    // method — invoking a detached reference would lose `this` and throw,
+    // mirroring the real ModelRegistry implementation.
+    modelRegistry: {
+      _all: [
+        { provider: "local", id: "baseline-model" },
+        { provider: "local", id: "discovered-model" },
+        { provider: "disabled", id: "hidden-model" },
+      ],
+      getAvailable() {
+        return [{ provider: "local", id: "baseline-model" }];
+      },
+      getAllWithDiscovered() {
+        return this._all;
+      },
+    },
+    ui: {
+      notify() {},
+      select: async (label: string, options: string[]) => {
+        const choice = choices.shift();
+        if (!choice && label === "GSD Preferences") return "── Save & Exit ──";
+        if (!choice && options.includes("(keep current)")) return "(keep current)";
+        if (!choice && options.includes("Done")) return "Done";
+        assert.ok(choice, `Unexpected prompt: ${label}`);
+        if (choice === "Models") {
+          const modelsOption = options.find((option) => option.startsWith("Models"));
+          assert.ok(modelsOption, "Expected Models category option");
+          return modelsOption;
+        }
+        assert.ok(options.includes(choice), `"${choice}" must be offered by "${label}"`);
+        assert.ok(!options.includes("hidden-model"), "models from disabled providers must not be offered");
+        return choice;
+      },
+      input: async () => null,
+    },
+    waitForIdle: async () => {},
+    reload: async () => {},
+  } as any;
+
+  try {
+    await handlePrefsWizard(ctx, "project", {}, { pathOverride: prefsPath });
+
+    assert.equal(choices.length, 0, "Expected all queued wizard choices to be consumed");
+    const saved = readFileSync(prefsPath, "utf-8");
+    assert.match(saved, /research:\s+local\/discovered-model/);
+    assert.doesNotMatch(saved, /hidden-model/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

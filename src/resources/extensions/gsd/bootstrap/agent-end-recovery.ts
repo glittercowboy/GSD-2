@@ -51,7 +51,15 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export function _hasEmptyAgentEndContent(content: unknown): boolean {
-  return content == null || (Array.isArray(content) && content.length === 0);
+  if (content == null) return true;
+  if (!Array.isArray(content)) return false;
+  if (content.length === 0) return true;
+  return content.every((block) => {
+    if (!block || typeof block !== "object") return true;
+    const typedBlock = block as { type?: unknown; text?: unknown };
+    if (typedBlock.type !== "text") return false;
+    return typeof typedBlock.text !== "string" || typedBlock.text.trim() === "";
+  });
 }
 
 /**
@@ -98,6 +106,14 @@ export function _buildAbortedPauseContext(lastMsg: { errorMessage?: unknown }): 
 export function isUserInitiatedAbortMessage(message: string | undefined | null): boolean {
   if (!message) return false;
   return /\b(?:claude code process aborted by user|request aborted by user|process aborted by user)\b/i.test(message);
+}
+
+export function shouldDeferTransientErrorToCoreRetry(
+  cls: ErrorClass,
+  rawErrorMsg: string,
+): boolean {
+  if (!isTransient(cls) || cls.kind === "rate-limit") return false;
+  return !/retry failed after \d+ attempts:/i.test(rawErrorMsg);
 }
 
 function isBareClaudeCodeSessionSwitchAbortMarker(message: string | undefined | null): boolean {
@@ -210,6 +226,34 @@ export function isTerminalDeletedWorktreeProviderError(
   return /[/\\]\.gsd[/\\](?:projects[/\\][^/\\]+[/\\])?worktrees[/\\][^/\\\s"']+/i.test(message);
 }
 
+type MessageEndLike = {
+  message: unknown;
+};
+
+export function suppressTerminalDeletedWorktreeMessageEnd(event: MessageEndLike): boolean {
+  const message = event.message as {
+    role?: unknown;
+    stopReason?: unknown;
+    errorMessage?: unknown;
+    content?: unknown;
+  };
+  if (!isAutoCompletionStopInProgress()) return false;
+  if (message?.role !== "assistant" || message.stopReason !== "error") return false;
+
+  const rawErrorMsg = message.errorMessage ? String(message.errorMessage) : "";
+  const displayMsg = resolveAgentEndErrorDisplay(rawErrorMsg, message.content);
+  if (!isTerminalDeletedWorktreeProviderError(`${rawErrorMsg}\n${displayMsg}`)) return false;
+
+  message.stopReason = "completed";
+  message.errorMessage = undefined;
+  message.content = [];
+  logWarning(
+    "bootstrap",
+    `Suppressing stale deleted-worktree provider error during terminal completion reroot: ${displayMsg || rawErrorMsg}`,
+  );
+  return true;
+}
+
 async function pauseTransientWithBackoff(
   cls: ErrorClass,
   pi: ExtensionAPI,
@@ -308,9 +352,22 @@ export async function handleAgentEnd(
   }
 
   if (isBareClaudeCodeStreamAbortPlaceholder(lastMsg)) {
-    // The Claude Code adapter can emit this placeholder after a prior turn has
-    // already completed and the next unit is active. It has no user/provider
-    // diagnostic value and must not cancel the newly-dispatched unit.
+    if (isSessionSwitchAbortGraceActive()) {
+      // Old turn leaking through after a session switch — drop it.
+      return;
+    }
+
+    // Mid-unit stream abort with no diagnostic. Treat as non-fatal so the loop
+    // can continue, but surface it to the user and resolve the in-flight unit.
+    ctx.ui.notify("Claude Code stream aborted mid-unit (no diagnostic). Continuing.", "warning");
+    try {
+      resetRetryState(retryState);
+      resolveAgentEnd(event);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      ctx.ui.notify(`Auto-mode error after stream-abort placeholder: ${message}. Stopping auto-mode.`, "error");
+      try { await pauseAuto(ctx, pi); } catch (e) { logWarning("bootstrap", `pauseAuto failed after stream-abort placeholder: ${(e as Error).message}`); }
+    }
     return;
   }
 
@@ -488,7 +545,20 @@ export async function handleAgentEnd(
     // Core retries transient failures in-session after this handler.
     // Keep that behavior for non-rate-limit classes to avoid pause/retry races,
     // but let rate-limit continue into model fallback logic below (#4373).
-    if (isTransient(cls) && cls.kind !== "rate-limit") {
+    if (shouldDeferTransientErrorToCoreRetry(cls, rawErrorMsg)) {
+      return;
+    }
+
+    if (cls.kind === "tool-schema") {
+      await pauseAutoForProviderError(ctx.ui, errorDetail, () => pauseAuto(ctx, pi, {
+        message: `Tool schema error${errorDetail}`,
+        category: "tool-schema",
+        isTransient: false,
+      }), {
+        isRateLimit: false,
+        isTransient: false,
+        retryAfterMs: 0,
+      });
       return;
     }
 

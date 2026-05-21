@@ -60,6 +60,10 @@ function writeRequirements(base: string, content: string): void {
   writeFileSync(join(base, '.gsd', 'REQUIREMENTS.md'), content);
 }
 
+function writeDecisions(base: string, content: string): void {
+  writeFileSync(join(base, '.gsd', 'DECISIONS.md'), content);
+}
+
 function cleanup(base: string): void {
   rmSync(base, { recursive: true, force: true });
 }
@@ -172,6 +176,35 @@ describe('derive-state', async () => {
       assert.deepStrictEqual(state.activeTask?.id, 'T01', 'activeTask id is T01');
       assert.deepStrictEqual(state.progress?.tasks?.done, 0, 'tasks done = 0');
       assert.deepStrictEqual(state.progress?.tasks?.total, 2, 'tasks total = 2');
+    } finally {
+      cleanup(base);
+    }
+  });
+
+  test('loads recent decisions from DECISIONS.md table', async () => {
+    const base = createFixtureBase();
+    try {
+      writeRoadmap(base, 'M001', `# M001: Test Milestone
+
+**Vision:** Test decisions projection.
+
+## Slices
+
+- [ ] **S01: Test Slice** \`risk:low\` \`depends:[]\`
+  > After this: Slice is done.
+`);
+      writeDecisions(base, `# Decisions
+
+| # | When/Context | Scope | Decision | Choice | Rationale | Revisable? | Made By |
+|---|---|---|---|---|---|---|---|
+| D001 | M001/S01 | architecture | Use queue worker | yes | Needed for scale | yes | agent |
+| D002 | M001/S01 | pattern | Prefer explicit cache key | yes | Prevent stale state | yes | agent |
+`);
+
+      const state = await deriveState(base);
+      assert.deepStrictEqual(state.recentDecisions.length, 2, 'two decisions loaded');
+      assert.ok(state.recentDecisions[0]?.includes('D001'), 'includes first decision id');
+      assert.ok(state.recentDecisions[1]?.includes('D002'), 'includes second decision id');
     } finally {
       cleanup(base);
     }
@@ -311,6 +344,36 @@ Continue from step 2.
       );
       assert.deepStrictEqual(state.registry.length, 1, 'complete: registry has 1 entry');
       assert.deepStrictEqual(state.registry[0]?.status, 'complete', 'complete: registry[0] status is complete');
+    } finally {
+      cleanup(base);
+    }
+  });
+
+  test('needs-attention validation with all slices done → blocked', async () => {
+    const base = createFixtureBase();
+    try {
+      writeRoadmap(base, 'M001', `# M001: Needs Attention
+
+**Vision:** Test needs-attention phase.
+
+## Slices
+
+- [x] **S01: Done Slice** \`risk:low\` \`depends:[]\`
+  > After this: Done.
+`);
+
+      writeMilestoneValidation(base, 'M001', 'needs-attention');
+
+      const state = await deriveState(base);
+
+      assert.deepStrictEqual(state.phase, 'blocked', 'needs-attention: phase is blocked');
+      assert.deepStrictEqual(state.activeMilestone?.id, 'M001', 'needs-attention: activeMilestone is M001');
+      assert.deepStrictEqual(state.activeSlice, null, 'needs-attention: activeSlice is null');
+      assert.ok(
+        state.blockers.some(b => b.includes('needs-attention') && b.includes('/gsd park M001')),
+        'needs-attention: blocker explains explicit resolution paths',
+      );
+      assert.deepStrictEqual(state.registry[0]?.status, 'active', 'needs-attention: milestone remains active');
     } finally {
       cleanup(base);
     }

@@ -1,6 +1,9 @@
+// Project/App: GSD-2
+// File Purpose: Regression tests for the context-mode gsd_exec sandbox.
+
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -87,15 +90,15 @@ test('runExecSandbox: forwards only allowlisted env vars', async () => {
   const base = freshBase();
   try {
     const result = await runExecSandbox(
-      { runtime: 'bash', script: 'echo PATH=$PATH SECRET=$GSD_TEST_SECRET' },
+      { runtime: 'bash', script: 'echo PATH=$PATH BLOCKED=$GSD_TEST_BLOCKED_VALUE' },
       baseOpts(base, {
         env_allowlist: [],
-        env: { PATH: '/usr/bin:/bin', HOME: '/tmp', GSD_TEST_SECRET: 'should-be-blocked' },
+        env: { PATH: '/usr/bin:/bin', HOME: '/tmp', GSD_TEST_BLOCKED_VALUE: 'blocked-value' },
       }),
     );
     const stdout = readFileSync(result.stdout_path, 'utf-8');
     assert.ok(stdout.includes('PATH=/usr/bin:/bin'), 'PATH forwarded');
-    assert.ok(!stdout.includes('should-be-blocked'), 'non-allowlisted var blocked');
+    assert.ok(!stdout.includes('blocked-value'), 'non-allowlisted var blocked');
   } finally {
     cleanup(base);
   }
@@ -111,6 +114,23 @@ test('runExecSandbox: node runtime executes JS', async () => {
     assert.equal(result.exit_code, 0);
     assert.ok(result.digest.includes('node-ok:3'));
   } finally {
+    cleanup(base);
+  }
+});
+
+test('runExecSandbox: rewrites NUL redirects for bash on Windows', async () => {
+  const originalPlatform = process.platform;
+  Object.defineProperty(process, 'platform', { value: 'win32' });
+  const base = freshBase();
+  try {
+    const result = await runExecSandbox(
+      { runtime: 'bash', script: 'echo should-not-create-file > NUL' },
+      baseOpts(base),
+    );
+    assert.equal(result.exit_code, 0);
+    assert.equal(existsSync(join(base, 'NUL')), false, 'must not materialize a literal NUL file');
+  } finally {
+    Object.defineProperty(process, 'platform', { value: originalPlatform });
     cleanup(base);
   }
 });
@@ -230,6 +250,118 @@ test('executeGsdExec: rejects empty script', async () => {
     );
     assert.equal(result.isError, true);
     assert.equal((result.details as { error?: string }).error, 'invalid_params');
+  } finally {
+    cleanup(base);
+  }
+});
+
+test('executeGsdExec: rejects original-root scripts from milestone worktrees', async () => {
+  const base = freshBase();
+  try {
+    const originalRoot = join(base, 'project');
+    const worktree = join(originalRoot, '.gsd', 'worktrees', 'M004');
+    mkdirSync(worktree, { recursive: true });
+
+    const result = await executeGsdExec(
+      { runtime: 'bash', script: `cd ${originalRoot} && node todo.js --help` },
+      { baseDir: worktree, preferences: { context_mode: { enabled: true } } },
+    );
+
+    assert.equal(result.isError, true);
+    assert.equal((result.details as { error?: string }).error, 'invalid_params');
+    assert.match(
+      (result.details as { detail?: string }).detail ?? '',
+      /original project root/,
+    );
+  } finally {
+    cleanup(base);
+  }
+});
+
+test('executeGsdExec: rejects macOS /var alias of original root from milestone worktrees', async () => {
+  const originalRoot = '/var/folders/example/project';
+  const realpathedWorktree = '/private/var/folders/example/project/.gsd/worktrees/M004';
+
+  const result = await executeGsdExec(
+    { runtime: 'bash', script: `cd ${originalRoot} && node todo.js --help` },
+    { baseDir: realpathedWorktree, preferences: { context_mode: { enabled: true } } },
+  );
+
+  assert.equal(result.isError, true);
+  assert.equal((result.details as { error?: string }).error, 'invalid_params');
+  assert.match(
+    (result.details as { detail?: string }).detail ?? '',
+    /original project root/,
+  );
+});
+
+test('executeGsdExec: rejects original-root traversal after shell boolean operators', async () => {
+  const base = freshBase();
+  try {
+    const originalRoot = join(base, 'project');
+    const worktree = join(originalRoot, '.gsd', 'worktrees', 'M004');
+    mkdirSync(worktree, { recursive: true });
+
+    const scripts = [
+      'echo hi && cd ../../.. && pwd',
+      'true || cd ../../..',
+    ];
+
+    for (const script of scripts) {
+      const result = await executeGsdExec(
+        { runtime: 'bash', script },
+        { baseDir: worktree, preferences: { context_mode: { enabled: true } } },
+      );
+      assert.equal(result.isError, true);
+      assert.equal((result.details as { error?: string }).error, 'invalid_params');
+      assert.match((result.details as { detail?: string }).detail ?? '', /original project root/);
+    }
+  } finally {
+    cleanup(base);
+  }
+});
+
+test('executeGsdExec: allows active worktree paths from milestone worktrees', async () => {
+  const base = freshBase();
+  try {
+    const originalRoot = join(base, 'project');
+    const worktree = join(originalRoot, '.gsd', 'worktrees', 'M004');
+    mkdirSync(worktree, { recursive: true });
+
+    const result = await executeGsdExec(
+      { runtime: 'bash', script: `cd ${worktree} && pwd` },
+      { baseDir: worktree, preferences: { context_mode: { enabled: true } } },
+    );
+
+    assert.equal(result.isError, false);
+    assert.equal(result.details.exit_code, 0);
+  } finally {
+    cleanup(base);
+  }
+});
+
+test('executeGsdExec: rejects relative traversal to original root from milestone worktree', async () => {
+  const base = freshBase();
+  try {
+    const originalRoot = join(base, 'project');
+    const worktree = join(originalRoot, '.gsd', 'worktrees', 'M004');
+    mkdirSync(worktree, { recursive: true });
+
+    const scripts = [
+      'cd ../../.. && pwd',
+      "node -e \"process.chdir('../../..'); console.log(process.cwd())\"",
+      "node -e \"const p = require('node:path'); process.chdir(p.join(process.cwd(), '../../..')); console.log(process.cwd())\"",
+    ];
+
+    for (const script of scripts) {
+      const result = await executeGsdExec(
+        { runtime: 'bash', script },
+        { baseDir: worktree, preferences: { context_mode: { enabled: true } } },
+      );
+      assert.equal(result.isError, true, `expected script to be rejected: ${script}`);
+      assert.equal((result.details as { error?: string }).error, 'invalid_params');
+      assert.match((result.details as { detail?: string }).detail ?? '', /original project root/);
+    }
   } finally {
     cleanup(base);
   }

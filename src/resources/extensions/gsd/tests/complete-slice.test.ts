@@ -13,9 +13,11 @@ import {
   getSlice,
   updateSliceStatus,
   getSliceTasks,
+  setSliceSummaryMd,
   SCHEMA_VERSION,
 } from '../gsd-db.ts';
 import { handleCompleteSlice } from '../tools/complete-slice.ts';
+import { parseRoadmap } from '../parsers-legacy.ts';
 import type { CompleteSliceParams } from '../types.ts';
 
 const { assertEq, assertTrue, assertMatch, report } = createTestContext();
@@ -193,8 +195,8 @@ console.log('\n=== complete-slice: handler happy path ===');
 
   // Set up DB state: milestone, slices (S01 + S02), 2 complete tasks
   insertMilestone({ id: 'M001' });
-  insertSlice({ id: 'S01', milestoneId: 'M001' });
-  insertSlice({ id: 'S02', milestoneId: 'M001', title: 'Second Slice' });
+  insertSlice({ id: 'S01', milestoneId: 'M001', title: 'Test Slice', risk: 'high', depends: ['S00'], demo: 'basic functionality works', sequence: 1 });
+  insertSlice({ id: 'S02', milestoneId: 'M001', title: 'Second Slice', risk: 'low', depends: ['S01'], demo: 'advanced stuff', sequence: 2 });
   insertTask({ id: 'T01', sliceId: 'S01', milestoneId: 'M001', status: 'complete', title: 'Task 1' });
   insertTask({ id: 'T02', sliceId: 'S01', milestoneId: 'M001', status: 'complete', title: 'Task 2' });
 
@@ -239,10 +241,20 @@ console.log('\n=== complete-slice: handler happy path ===');
     const roadmapContent = fs.readFileSync(roadmapPath, 'utf-8');
     assertMatch(roadmapContent, /- \[x\] \*\*S01:/, 'completed S01 should be a checked checkbox list item');
     assertMatch(roadmapContent, /- \[ \] \*\*S02:/, 'pending S02 should be an unchecked checkbox list item');
+    const parsedRoadmap = parseRoadmap(roadmapContent);
+    const roadmapS01 = parsedRoadmap.slices.find(s => s.id === 'S01');
+    assertTrue(roadmapS01 !== undefined, 'S01 should parse from regenerated roadmap');
+    assertEq(roadmapS01!.title, 'Test Slice', 'roadmap should preserve planned S01 title');
+    assertEq(roadmapS01!.risk, 'high', 'roadmap should preserve planned S01 risk');
+    assertEq(roadmapS01!.depends, ['S00'], 'roadmap should preserve planned S01 dependencies');
 
     // (d) Verify full_summary_md and full_uat_md stored in DB for D004 recovery
     const sliceAfter = getSlice('M001', 'S01');
     assertTrue(sliceAfter !== null, 'slice should exist in DB after handler');
+    assertEq(sliceAfter!.title, 'Test Slice', 'complete-slice should preserve existing slice title');
+    assertEq(sliceAfter!.risk, 'high', 'complete-slice should preserve existing slice risk');
+    assertEq(sliceAfter!.depends, ['S00'], 'complete-slice should preserve existing slice dependencies');
+    assertEq(sliceAfter!.demo, 'basic functionality works', 'complete-slice should preserve existing slice demo');
     assertTrue(sliceAfter!.full_summary_md.length > 0, 'full_summary_md should be non-empty in DB');
     assertMatch(sliceAfter!.full_summary_md, /id: S01/, 'full_summary_md should contain frontmatter');
     assertTrue(sliceAfter!.full_uat_md.length > 0, 'full_uat_md should be non-empty in DB');
@@ -345,11 +357,11 @@ console.log('\n=== complete-slice: handler idempotency ===');
   const dbPath = tempDbPath();
   openDatabase(dbPath);
 
-  const { basePath, roadmapPath } = createTempProject();
+  const { basePath } = createTempProject();
 
   // Set up DB state
   insertMilestone({ id: 'M001' });
-  insertSlice({ id: 'S01', milestoneId: 'M001' });
+  insertSlice({ id: 'S01', milestoneId: 'M001', title: 'Test Slice', risk: 'medium', depends: [], demo: 'basic functionality works', sequence: 1 });
   insertTask({ id: 'T01', sliceId: 'S01', milestoneId: 'M001', status: 'complete', title: 'Task 1' });
 
   const params = makeValidSliceParams();
@@ -358,17 +370,78 @@ console.log('\n=== complete-slice: handler idempotency ===');
   const r1 = await handleCompleteSlice(params, basePath);
   assertTrue(!('error' in r1), 'first call should succeed');
 
-  // Second call — state machine guard rejects (slice is already complete)
-  const r2 = await handleCompleteSlice(params, basePath);
-  assertTrue('error' in r2, 'second call should return error (slice already complete)');
-  if ('error' in r2) {
-    assertMatch(r2.error, /already complete/, 'error should mention already complete');
+  if ('error' in r1) {
+    cleanupDir(basePath);
+    cleanup(dbPath);
+    throw new Error('first completion unexpectedly failed');
+  }
+  const summaryBefore = fs.readFileSync(r1.summaryPath, 'utf-8');
+
+  // Second call — healthy duplicates unwind as non-mutating success.
+  const r2 = await handleCompleteSlice(
+    { ...params, oneLiner: 'This duplicate payload should not rewrite completed history' },
+    basePath,
+  );
+  assertTrue(!('error' in r2), 'second call should return duplicate success');
+  if (!('error' in r2)) {
+    assertEq(r2.duplicate, true, 'second call should be marked duplicate');
+    assertEq(
+      fs.readFileSync(r2.summaryPath, 'utf-8'),
+      summaryBefore,
+      'healthy duplicate should not rewrite the existing summary',
+    );
   }
 
   // Verify only 1 slice row (not duplicated)
   const adapter = _getAdapter()!;
   const sliceRows = adapter.prepare("SELECT * FROM slices WHERE milestone_id = 'M001' AND id = 'S01'").all();
   assertEq(sliceRows.length, 1, 'should have exactly 1 slice row after calls');
+
+  cleanupDir(basePath);
+  cleanup(dbPath);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// complete-slice: Handler repairs already-complete slice with stale roadmap
+// ═══════════════════════════════════════════════════════════════════════════
+
+console.log('\n=== complete-slice: handler repairs stale duplicate roadmap ===');
+{
+  const dbPath = tempDbPath();
+  openDatabase(dbPath);
+
+  const { basePath, roadmapPath } = createTempProject();
+
+  insertMilestone({ id: 'M001' });
+  insertSlice({ id: 'S01', milestoneId: 'M001', title: 'Test Slice', risk: 'medium', depends: [], demo: 'basic functionality works', sequence: 1 });
+  insertTask({ id: 'T01', sliceId: 'S01', milestoneId: 'M001', status: 'complete', title: 'Task 1' });
+
+  const params = makeValidSliceParams();
+  const r1 = await handleCompleteSlice(params, basePath);
+  assertTrue(!('error' in r1), 'first completion should succeed');
+  if ('error' in r1) {
+    cleanupDir(basePath);
+    cleanup(dbPath);
+    throw new Error('first completion unexpectedly failed');
+  }
+
+  fs.writeFileSync(
+    roadmapPath,
+    fs.readFileSync(roadmapPath, 'utf-8').replace('- [x] **S01:', '- [ ] **S01:'),
+    'utf-8',
+  );
+  const staleRoadmap = parseRoadmap(fs.readFileSync(roadmapPath, 'utf-8'));
+  assertEq(staleRoadmap.slices.find(s => s.id === 'S01')?.done, false, 'fixture roadmap should be stale before repair');
+
+  const r2 = await handleCompleteSlice(params, basePath);
+  assertTrue(!('error' in r2), 'duplicate completion should repair stale artifacts instead of erroring');
+  if (!('error' in r2)) {
+    assertEq(r2.duplicate, true, 'repair result should be marked duplicate');
+    const repairedRoadmap = fs.readFileSync(roadmapPath, 'utf-8');
+    assertMatch(repairedRoadmap, /- \[x\] \*\*S01:/, 'duplicate completion should re-render roadmap as checked');
+    assertTrue(fs.existsSync(r2.summaryPath), 'summary should still exist after repair');
+    assertTrue(fs.existsSync(r2.uatPath), 'UAT should still exist after repair');
+  }
 
   cleanupDir(basePath);
   cleanup(dbPath);
@@ -401,6 +474,60 @@ console.log('\n=== complete-slice: handler with missing roadmap ===');
   if (!('error' in result)) {
     assertTrue(fs.existsSync(result.summaryPath), 'summary should be written even without roadmap');
     assertTrue(fs.existsSync(result.uatPath), 'UAT should be written even without roadmap');
+  }
+
+  cleanupDir(basePath);
+  cleanup(dbPath);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// complete-slice: backfills omitted requirements from rendered summary
+// ═══════════════════════════════════════════════════════════════════════════
+
+console.log('\n=== complete-slice: backfills omitted requirements from rendered summary ===');
+{
+  const dbPath = tempDbPath();
+  openDatabase(dbPath);
+
+  const { basePath } = createTempProject();
+
+  insertMilestone({ id: 'M001' });
+  insertSlice({ id: 'S01', milestoneId: 'M001' });
+  insertTask({ id: 'T01', sliceId: 'S01', milestoneId: 'M001', status: 'complete', title: 'Task 1' });
+
+  const seedParams = makeValidSliceParams();
+  const seeded = await handleCompleteSlice(seedParams, basePath);
+  assertTrue(!('error' in seeded), 'seed completion should succeed');
+  if ('error' in seeded) {
+    cleanupDir(basePath);
+    cleanup(dbPath);
+    throw new Error('seed completion unexpectedly failed');
+  }
+
+  const seededSummary = fs.readFileSync(seeded.summaryPath, 'utf-8');
+  transaction(() => {
+    updateSliceStatus('M001', 'S01', 'pending', undefined);
+    setSliceSummaryMd('M001', 'S01', seededSummary, '');
+  });
+
+  const backfillParams = makeValidSliceParams();
+  delete (backfillParams as Partial<CompleteSliceParams>).requirementsAdvanced;
+  delete (backfillParams as Partial<CompleteSliceParams>).requirementsValidated;
+  delete (backfillParams as Partial<CompleteSliceParams>).requirementsInvalidated;
+  const backfilled = await handleCompleteSlice(backfillParams as CompleteSliceParams, basePath);
+  assertTrue(!('error' in backfilled), 'backfill completion should succeed');
+  if (!('error' in backfilled)) {
+    const summary = fs.readFileSync(backfilled.summaryPath, 'utf-8');
+    assertMatch(summary, /## Requirements Advanced/, 'summary should include advanced requirements heading');
+    assertMatch(summary, /- R001 — Handler validates task completion/, 'advanced requirement should be backfilled from summary markdown');
+
+    const sliceAfterBackfill = getSlice('M001', 'S01');
+    assertTrue(sliceAfterBackfill !== null, 'slice should exist after backfill');
+    assertMatch(
+      sliceAfterBackfill!.full_summary_md,
+      /- R001 — Handler validates task completion/,
+      'DB full_summary_md should persist the backfilled advanced requirement',
+    );
   }
 
   cleanupDir(basePath);

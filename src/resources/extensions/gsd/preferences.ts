@@ -55,6 +55,8 @@ export type {
   UokTurnActionMode,
   UokPreferences,
   CodebaseMapPreferences,
+  ClaudeCodeMcpPerModelEntry,
+  ClaudeCodeMcpConfig,
   GSDPreferences,
   LoadedGSDPreferences,
   SkillResolution,
@@ -99,6 +101,9 @@ export {
   resolveDisabledModelProvidersFromPreferences,
 } from "./preferences-models.js";
 
+// ─── Re-exports: MCP ────────────────────────────────────────────────────────
+export { resolveModelMcpConfig } from "./preferences-mcp.js";
+
 // ─── Path Constants & Getters ───────────────────────────────────────────────
 
 function globalPreferencesPath(): string {
@@ -133,6 +138,36 @@ export function getProjectGSDPreferencesPath(basePath?: string): string {
   return projectPreferencesPath(basePath);
 }
 
+
+/**
+ * Normalize a value loaded from disk (or passed from another component) into
+ * a plain, mutable bare preferences object.
+ *
+ * Accepts:
+ *   - a `LoadedGSDPreferences` wrapper (`{ path, scope, preferences, ... }`)
+ *   - a bare `GSDPreferences` object
+ *   - `null` / `undefined` / any malformed value
+ *
+ * Returns a fresh `Record<string, unknown>` so callers may spread additional
+ * values without mutating the input. This is the single boundary the
+ * preferences wizard funnels existing-on-disk data through, so missing or
+ * partially-formed preference shapes can no longer reach code that assumes
+ * a fully-populated wrapper.
+ */
+export function normalizePreferencesShape(
+  loaded: unknown,
+): Record<string, unknown> {
+  if (!loaded || typeof loaded !== "object") return {};
+  const obj = loaded as Record<string, unknown>;
+  // Wrapper shape (`LoadedGSDPreferences`) carries the nested preferences
+  // under a `.preferences` key. Bare `GSDPreferences` never declares one
+  // (see preferences-types.ts), so the presence of that key is a reliable
+  // discriminator. Tolerate `preferences: undefined` by falling through to
+  // the empty-object return below.
+  const candidate = "preferences" in obj ? obj.preferences : obj;
+  if (!candidate || typeof candidate !== "object") return {};
+  return { ...(candidate as Record<string, unknown>) };
+}
 // ─── Loading ────────────────────────────────────────────────────────────────
 
 export function loadGlobalGSDPreferences(): LoadedGSDPreferences | null {
@@ -373,6 +408,10 @@ export function applyModeDefaults(mode: WorkflowMode, prefs: GSDPreferences): GS
 
 function mergePreferences(base: GSDPreferences, override: GSDPreferences): GSDPreferences {
   return {
+    // Preserve validated preference keys that do not need custom merge logic.
+    // The explicit fields below still own defaults, arrays, and deep merges.
+    ...base,
+    ...override,
     version: override.version ?? base.version,
     mode: override.mode ?? base.mode,
     always_use_skills: mergeStringLists(base.always_use_skills, override.always_use_skills),
@@ -480,6 +519,7 @@ function mergePreferences(base: GSDPreferences, override: GSDPreferences): GSDPr
       : undefined,
     language: override.language ?? base.language,
     planning_depth: override.planning_depth ?? base.planning_depth,
+    workspace: override.workspace ?? base.workspace,
   };
 }
 

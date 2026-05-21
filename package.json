@@ -1,6 +1,6 @@
 {
   "name": "gsd-pi",
-  "version": "2.82.0",
+  "version": "3.0.0",
   "description": "GSD — Get Shit Done coding agent",
   "license": "MIT",
   "repository": {
@@ -107,7 +107,7 @@
     "docker:build-builder": "docker build --target builder -t ghcr.io/gsd-build/gsd-ci-builder .",
     "prepublishOnly": "npm run sync-pkg-version && npm run sync-platform-versions && node scripts/prepublish-check.mjs && npm run build && npm run typecheck:extensions && npm run validate-pack",
     "test:live-regression": "node --experimental-strip-types tests/live-regression/run.ts",
-    "test:e2e": "node --experimental-strip-types --test \"tests/e2e/*.e2e.test.ts\"",
+    "test:e2e": "node --experimental-strip-types --test --test-concurrency=1 \"tests/e2e/*.e2e.test.ts\"",
     "test:e2e:windows-smoke": "node --experimental-strip-types --test tests/e2e/sanity.e2e.test.ts tests/e2e/migration.e2e.test.ts tests/e2e/native-abi.e2e.test.ts",
     "test:e2e:docker": "node --experimental-strip-types --test \"tests/e2e/docker/**/*.e2e.test.ts\""
   },
@@ -148,6 +148,7 @@
   "devDependencies": {
     "@types/node": "^24.12.0",
     "@types/picomatch": "^4.0.2",
+    "@types/proper-lockfile": "^4.1.4",
     "c8": "^11.0.0",
     "cross-env": "^7.0.3",
     "esbuild": "^0.25.12",

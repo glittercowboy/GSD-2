@@ -14,12 +14,14 @@
  */
 
 import type { ExtensionContext, ExtensionAPI } from "@gsd/pi-coding-agent";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { resolveSliceFile, resolveSlicePath, resolveMilestoneFile } from "./paths.js";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { gsdProjectionRoot, resolveSliceFile, resolveSlicePath, resolveMilestoneFile } from "./paths.js";
+import { resolveCanonicalMilestoneRoot } from "./worktree-manager.js";
 import { parseUnitId } from "./unit-id.js";
 import { isDbAvailable, getTask, getSliceTasks, getMilestoneSlices } from "./gsd-db.js";
 import type { TaskRow } from "./db-task-slice-rows.js";
 import { loadEffectiveGSDPreferences } from "./preferences.js";
+import type { GSDPreferences } from "./preferences-types.js";
 import { extractVerdict } from "./verdict-parser.js";
 import { isClosedStatus } from "./status-guards.js";
 import { loadFile } from "./files.js";
@@ -27,20 +29,29 @@ import { parseRoadmap } from "./parsers-legacy.js";
 import { isMilestoneComplete } from "./state.js";
 import {
   runVerificationGate,
+  runVerificationGateForTargets,
   formatFailureContext,
   captureRuntimeErrors,
   runDependencyAudit,
 } from "./verification-gate.js";
+import type { VerificationTarget } from "./verification-gate.js";
 import { writeVerificationJSON, type PostExecutionCheckJSON, type EvidenceJSON } from "./verification-evidence.js";
 import { logWarning } from "./workflow-logger.js";
 import { runPostExecutionChecks, type PostExecutionResult } from "./post-execution-checks.js";
 import type { AutoSession } from "./auto/session.js";
+import type { ErrorContext } from "./auto/types.js";
 import type { VerificationResult as VerificationGateResult } from "./types.js";
 import { join } from "node:path";
 import { resolveUokFlags } from "./uok/flags.js";
 import { UokGateRunner } from "./uok/gate-runner.js";
 import { verificationRetryKey } from "./auto/verification-retry-policy.js";
 import { decideVerificationVerdict } from "./verification-verdict.js";
+import { createRepositoryRegistryFromPreferences, defaultRepositoryTargets } from "./repository-registry.js";
+import type { SliceRow } from "./db-task-slice-rows.js";
+import { getSlice } from "./gsd-db.js";
+import { getLedger } from "./metrics.js";
+import { getUnitCostSpikeAction } from "./auto-budget.js";
+import { formatPostUnitStatusCard } from "./auto-status-message.js";
 
 export interface VerificationContext {
   s: AutoSession;
@@ -49,13 +60,133 @@ export interface VerificationContext {
 }
 
 export type VerificationResult = "continue" | "retry" | "pause";
+type PauseAutoFn = (ctx?: ExtensionContext, pi?: ExtensionAPI, errorContext?: ErrorContext) => Promise<void>;
+
+function getCurrentUnitCostStats(unitId: string): { unitCostUsd: number; rollingAvgUsd: number } {
+  const ledger = getLedger();
+  if (!ledger || !Array.isArray(ledger.units) || ledger.units.length === 0) {
+    return { unitCostUsd: 0, rollingAvgUsd: 0 };
+  }
+  let unitCostUsd = 0;
+  let totalCost = 0;
+  let totalUnits = 0;
+  for (const unit of ledger.units) {
+    const cost = typeof unit?.cost === "number" ? unit.cost : 0;
+    if (!Number.isFinite(cost) || cost < 0) continue;
+    totalCost += cost;
+    totalUnits++;
+    if (unit?.id === unitId) unitCostUsd += cost;
+  }
+  return {
+    unitCostUsd,
+    rollingAvgUsd: totalUnits > 0 ? totalCost / totalUnits : 0,
+  };
+}
+
+
+function resolveVerificationTargets(
+  basePath: string,
+  prefs: GSDPreferences | undefined,
+  task: TaskRow | null,
+  slice: SliceRow | null,
+): VerificationTarget[] {
+  const registry = createRepositoryRegistryFromPreferences(basePath, prefs);
+  const defaultTargets = defaultRepositoryTargets(registry);
+  const taskTargetRepositories = task?.target_repositories?.length ? task.target_repositories : null;
+  const sliceTargetRepositories = slice?.target_repositories?.length ? slice.target_repositories : null;
+  const explicitIds = taskTargetRepositories ?? sliceTargetRepositories ?? null;
+  const explicitTargetsRequested = Boolean(explicitIds);
+  const requestedIds = explicitIds ?? defaultTargets;
+
+  const targets: VerificationTarget[] = [];
+  const seen = new Set<string>();
+  for (const id of requestedIds) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const repo = registry.byId.get(id);
+    if (!repo) {
+      logWarning("engine", `verification: requested repository "${id}" not found; available: ${Array.from(registry.byId.keys()).join(", ")}`);
+      continue;
+    }
+    targets.push({
+      id: repo.id,
+      cwd: repo.root,
+      // Top-level verification commands override per-repo defaults.
+      preferenceCommands: prefs?.verification_commands?.length
+        ? undefined
+        : repo.verification,
+    });
+  }
+
+  if (!explicitTargetsRequested && targets.length === 0) {
+    const project = registry.byId.get("project");
+    if (project) targets.push({ id: "project", cwd: project.root });
+  }
+  return targets;
+}
+
+function hasExplicitVerificationTargets(task: TaskRow | null, slice: SliceRow | null): boolean {
+  return Boolean(task?.target_repositories?.length || slice?.target_repositories?.length);
+}
+
+function messagesMentionTool(messages: unknown[] | null | undefined, toolName: string): boolean {
+  if (!Array.isArray(messages)) return false;
+  try {
+    return JSON.stringify(messages).includes(toolName);
+  } catch {
+    return false;
+  }
+}
+
+function unitActivityMentionsTool(basePath: string, unitType: string, unitId: string, toolName: string): boolean {
+  const safeUnitId = unitId.replace(/\//g, "-");
+  const activityDir = join(basePath, ".gsd", "activity");
+  if (!existsSync(activityDir)) return false;
+
+  try {
+    for (const entry of readdirSync(activityDir, { withFileTypes: true })) {
+      if (!entry.isFile()) continue;
+      if (!entry.name.endsWith(`${unitType}-${safeUnitId}.jsonl`)) continue;
+      if (readFileSync(join(activityDir, entry.name), "utf-8").includes(toolName)) return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+function hasRoadmapReassessmentArtifact(basePath: string, milestoneId: string): boolean {
+  const slicesDir = join(basePath, ".gsd", "milestones", milestoneId, "slices");
+  if (!existsSync(slicesDir)) return false;
+
+  try {
+    for (const entry of readdirSync(slicesDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      if (existsSync(join(slicesDir, entry.name, `${entry.name}-ASSESSMENT.md`))) return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+function hasReassessmentEvidence(s: AutoSession, milestoneId: string): boolean {
+  if (!s.currentUnit) return false;
+  const toolName = "gsd_reassess_roadmap";
+  const roots = [...new Set([s.basePath, s.canonicalProjectRoot].filter(Boolean))];
+  return messagesMentionTool(s.lastUnitAgentEndMessages, toolName)
+    || roots.some((root) => unitActivityMentionsTool(root, s.currentUnit!.type, s.currentUnit!.id, toolName))
+    || roots.some((root) => hasRoadmapReassessmentArtifact(root, milestoneId));
+}
+
 
 /**
  * Post-unit guard for `validate-milestone` units (#4094).
  *
- * When validate-milestone writes verdict=needs-remediation, the agent is
- * expected to also call gsd_reassess_roadmap in the same turn to add
- * remediation slices. If they don't, the state machine re-derives
+ * When validate-milestone writes verdict=needs-attention, human review is
+ * required and auto-mode must pause. When it writes verdict=needs-remediation,
+ * the agent is expected to also call gsd_reassess_roadmap in the same turn to
+ * add remediation slices. If they don't, the state machine re-derives
  * `phase: validating-milestone` indefinitely (all slices still complete +
  * verdict still needs-remediation), wasting ~3 dispatches before the stuck
  * detector fires.
@@ -66,7 +197,7 @@ export type VerificationResult = "continue" | "retry" | "pause";
  */
 async function runValidateMilestonePostCheck(
   vctx: VerificationContext,
-  pauseAuto: (ctx?: ExtensionContext, pi?: ExtensionAPI) => Promise<void>,
+  pauseAuto: PauseAutoFn,
 ): Promise<VerificationResult> {
   const { s, ctx, pi } = vctx;
   const prefs = loadEffectiveGSDPreferences()?.preferences;
@@ -105,13 +236,90 @@ async function runValidateMilestonePostCheck(
   const { milestone: mid } = parseUnitId(s.currentUnit.id);
   if (!mid) return "continue";
 
-  const validationFile = resolveMilestoneFile(s.basePath, mid, "VALIDATION");
-  if (!validationFile) return "continue";
+  const retryKey = verificationRetryKey(s.currentUnit.type, s.currentUnit.id);
+  const clearValidationRetry = (): void => {
+    s.pendingVerificationRetry = null;
+    s.verificationRetryCount.delete(retryKey);
+    s.verificationRetryFailureHashes.delete(retryKey);
+  };
+
+  const setToolFailureRetry = (message: string): VerificationResult => {
+    const attempt = (s.verificationRetryCount.get(retryKey) ?? 0) + 1;
+    s.verificationRetryCount.set(retryKey, attempt);
+    s.pendingVerificationRetry = {
+      unitId: s.currentUnit!.id,
+      failureContext: message,
+      attempt,
+    };
+    return "retry";
+  };
+
+  const reassessmentInvalidatedValidation = async (): Promise<boolean> => {
+    if (!hasReassessmentEvidence(s, mid)) return false;
+    const incompleteSliceCount = await countIncompleteSlices(s.canonicalProjectRoot, mid);
+    const hasAssessmentArtifact = [s.basePath, s.canonicalProjectRoot]
+      .some((root) => hasRoadmapReassessmentArtifact(root, mid));
+    return incompleteSliceCount > 0 || hasAssessmentArtifact;
+  };
+
+  const validationBasePath = resolveCanonicalMilestoneRoot(s.basePath, mid);
+  const validationFile = join(
+    gsdProjectionRoot(validationBasePath),
+    "milestones",
+    mid,
+    `${mid}-VALIDATION.md`,
+  );
+  if (!validationFile) {
+    if (await reassessmentInvalidatedValidation()) {
+      clearValidationRetry();
+      return "continue";
+    }
+    return setToolFailureRetry(
+      "You must call gsd_validate_milestone to persist the validation results. No VALIDATION.md was created.",
+    );
+  }
 
   const validationContent = await loadFile(validationFile);
-  if (!validationContent) return "continue";
+  if (!validationContent) {
+    if (await reassessmentInvalidatedValidation()) {
+      clearValidationRetry();
+      return "continue";
+    }
+    return setToolFailureRetry(
+      "You must call gsd_validate_milestone to persist the validation results. VALIDATION.md exists but is empty.",
+    );
+  }
 
   const verdict = extractVerdict(validationContent);
+  if (verdict === "needs-attention") {
+    ctx.ui.notify(
+      `Milestone ${mid} validation returned verdict=needs-attention. Pausing for human review.`,
+      "error",
+    );
+    process.stderr.write(
+      [
+        `validate-milestone: pausing — verdict=needs-attention for ${mid}.`,
+        `Review details with /gsd status.`,
+        `After fixing the issue, run /gsd validate-milestone.`,
+        `To accept the finding, run /gsd verdict pass --rationale "why this is okay".`,
+        `To defer it, run /gsd park ${mid}.`,
+        "",
+      ].join("\n"),
+    );
+    await persistMilestoneValidationGate(
+      "manual-attention",
+      "manual-attention",
+      "needs-attention verdict requires human review",
+      `Milestone ${mid} validation returned needs-attention`,
+      mid,
+    );
+    await pauseAuto(ctx, pi, {
+      message: `Milestone ${mid} validation needs attention.`,
+      category: "unknown",
+    });
+    return "pause";
+  }
+
   if (verdict !== "needs-remediation") {
     await persistMilestoneValidationGate(
       "pass",
@@ -154,7 +362,10 @@ async function runValidateMilestonePostCheck(
     `No incomplete slices found for ${mid} while verdict=needs-remediation`,
     mid,
   );
-  await pauseAuto(ctx, pi);
+  await pauseAuto(ctx, pi, {
+    message: `Milestone ${mid} validation needs remediation but no remediation slices were added.`,
+    category: "unknown",
+  });
   return "pause";
 }
 
@@ -197,7 +408,7 @@ async function countIncompleteSlices(basePath: string, milestoneId: string): Pro
  */
 export async function runPostUnitVerification(
   vctx: VerificationContext,
-  pauseAuto: (ctx?: ExtensionContext, pi?: ExtensionAPI) => Promise<void>,
+  pauseAuto: PauseAutoFn,
 ): Promise<VerificationResult> {
   const { s, ctx, pi } = vctx;
 
@@ -221,18 +432,38 @@ export async function runPostUnitVerification(
     // Read task plan verify field
     const { milestone: mid, slice: sid, task: tid } = parseUnitId(s.currentUnit.id);
     let taskPlanVerify: string | undefined;
+    let taskRow: TaskRow | null = null;
+    let sliceRow: SliceRow | null = null;
     if (mid && sid && tid) {
       if (isDbAvailable()) {
-        taskPlanVerify = getTask(mid, sid, tid)?.verify;
+        taskRow = getTask(mid, sid, tid);
+        sliceRow = getSlice(mid, sid);
+        taskPlanVerify = taskRow?.verify;
       }
       // When DB unavailable, taskPlanVerify stays undefined — gate runs without task-specific checks
     }
 
-    const result = runVerificationGate({
-      cwd: s.basePath,
-      preferenceCommands: prefs?.verification_commands,
-      taskPlanVerify,
-    });
+    const verificationTargets = resolveVerificationTargets(s.basePath, prefs, taskRow, sliceRow);
+    const explicitVerificationTargetsRequested = hasExplicitVerificationTargets(taskRow, sliceRow);
+    if (explicitVerificationTargetsRequested && verificationTargets.length === 0) {
+      logWarning("engine", "verification: explicit target_repositories requested but no repositories resolved");
+      await pauseAuto(ctx, pi, {
+        message: "Verification failed: no runnable host-owned verification checks were discovered.",
+        category: "unknown",
+      });
+      return "pause";
+    }
+    const result = verificationTargets.length <= 1
+      ? runVerificationGate({
+        cwd: verificationTargets[0]?.cwd ?? s.basePath,
+        preferenceCommands: prefs?.verification_commands ?? verificationTargets[0]?.preferenceCommands,
+        taskPlanVerify,
+      })
+      : runVerificationGateForTargets({
+        targets: verificationTargets,
+        preferenceCommands: prefs?.verification_commands,
+        taskPlanVerify,
+      });
 
     // Capture runtime errors
     const runtimeErrors = await captureRuntimeErrors();
@@ -304,11 +535,11 @@ export async function runPostUnitVerification(
       const passCount = result.checks.filter((c) => c.exitCode === 0).length;
       const total = result.checks.length;
       if (result.passed) {
-        ctx.ui.notify(`Verification gate: ${passCount}/${total} checks passed`);
+        ctx.ui.notify(formatPostUnitStatusCard("✓ Verification Gate", `${passCount}/${total} checks passed`));
       } else {
         const failures = result.checks.filter((c) => c.exitCode !== 0);
         const failNames = failures.map((f) => f.command).join(", ");
-        ctx.ui.notify(`Verification gate: FAILED — ${failNames}`);
+        ctx.ui.notify(formatPostUnitStatusCard("✕ Verification Gate", `FAILED — ${failNames}`));
         process.stderr.write(
           `verification-gate: ${total - passCount}/${total} checks failed\n`,
         );
@@ -376,8 +607,7 @@ export async function runPostUnitVerification(
 
       if (enhancedEnabled && postEnabled && isDbAvailable()) {
         try {
-          // Get the completed task from DB
-          const taskRow = getTask(mid, sid, tid);
+          // Reuse the already-loaded task row for post-execution checks.
           if (taskRow && taskRow.key_files && taskRow.key_files.length > 0) {
             // Get all tasks in the slice
             const allTasks = getSliceTasks(mid, sid);
@@ -568,7 +798,10 @@ export async function runPostUnitVerification(
         "error",
       );
       process.stderr.write(`verification-gate: ${verdict.failureContext}\n`);
-      await pauseAuto(ctx, pi);
+      await pauseAuto(ctx, pi, {
+        message: "Verification failed: no runnable host-owned verification checks were discovered.",
+        category: "unknown",
+      });
       return "pause";
     } else if (postExecBlockingFailure) {
       // Post-execution failures are cross-task consistency issues — retrying the same task won't fix them.
@@ -580,9 +813,37 @@ export async function runPostUnitVerification(
         `Post-execution checks failed — cross-task consistency issue detected, pausing for human review`,
         "error",
       );
-      await pauseAuto(ctx, pi);
+      await pauseAuto(ctx, pi, {
+        message: "Post-execution checks failed: cross-task consistency issue detected.",
+        category: "unknown",
+      });
       return "pause";
     } else if (autoFixEnabled && attempt + 1 <= maxRetries) {
+      const { unitCostUsd, rollingAvgUsd } = getCurrentUnitCostStats(s.currentUnit.id);
+      const perUnitCapUsd =
+        typeof prefs?.per_unit_cost_cap_usd === "number" && Number.isFinite(prefs.per_unit_cost_cap_usd) && prefs.per_unit_cost_cap_usd > 0
+          ? prefs.per_unit_cost_cap_usd
+          : 5.0;
+      if (unitCostUsd >= perUnitCapUsd) {
+        s.verificationRetryCount.delete(retryKey);
+        s.verificationRetryFailureHashes.delete(retryKey);
+        s.pendingVerificationRetry = null;
+        ctx.ui.notify(
+          `Unit ${s.currentUnit.id} hit per-unit cap $${perUnitCapUsd.toFixed(2)} — pausing auto-mode.`,
+          "error",
+        );
+        await pauseAuto(ctx, pi, {
+          message: `Verification failed and unit ${s.currentUnit.id} hit per-unit cap $${perUnitCapUsd.toFixed(2)}.`,
+          category: "unknown",
+        });
+        return "pause";
+      }
+      if (getUnitCostSpikeAction(unitCostUsd, rollingAvgUsd, 3.0) === "pause") {
+        ctx.ui.notify(
+          `Unit ${s.currentUnit.id} cost spike detected (${unitCostUsd.toFixed(2)} vs avg ${rollingAvgUsd.toFixed(2)}) during verification retry; keeping verification failure as the authoritative blocker.`,
+          "warning",
+        );
+      }
       const nextAttempt = attempt + 1;
       s.verificationRetryCount.set(retryKey, nextAttempt);
       s.pendingVerificationRetry = {
@@ -617,7 +878,10 @@ export async function runPostUnitVerification(
         `Verification gate FAILED after ${attempt} ${attempt === 1 ? "retry" : "retries"} (${exhaustedSummary}) — pausing for human review`,
         "error",
       );
-      await pauseAuto(ctx, pi);
+      await pauseAuto(ctx, pi, {
+        message: `Verification gate failed after ${attempt} ${attempt === 1 ? "retry" : "retries"} (${exhaustedSummary}).`,
+        category: "unknown",
+      });
       return "pause";
     }
   } catch (err) {
@@ -626,7 +890,10 @@ export async function runPostUnitVerification(
       `Verification gate errored before producing an authoritative verdict: ${(err as Error).message}`,
       "error",
     );
-    await pauseAuto(ctx, pi);
+    await pauseAuto(ctx, pi, {
+      message: `Verification gate errored before producing an authoritative verdict: ${(err as Error).message}`,
+      category: "unknown",
+    });
     return "pause";
   }
 }

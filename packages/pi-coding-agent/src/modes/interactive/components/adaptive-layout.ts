@@ -5,7 +5,7 @@ import { style, truncateToWidth, type Component } from "@gsd/pi-tui";
 import type { TuiAdaptiveMode, TuiMode } from "../tui-mode.js";
 import { resolveTuiMode } from "../tui-mode.js";
 import { theme, type ThemeColor } from "../theme/theme.js";
-import { alignRight, breakpoint, keyValue, roundedPanel } from "./tui-style-kit.js";
+import { rightAlign, breakpoint, keyValue, roundedPanel } from "./transcript-design.js";
 
 export interface AdaptiveLayoutState {
 	override: TuiAdaptiveMode;
@@ -59,17 +59,17 @@ export class AdaptiveLayoutComponent implements Component {
 					keyValue("Next", next, "surfaceAccent"),
 				]
 			: [
-					alignRight(
+					rightAlign(
 						keyValue("Status", phase, "modeWorkflow"),
 						keyValue("Tools", tools, state.activeToolCount > 0 ? "toolRunning" : "toolMuted"),
 						Math.max(1, width - 2),
 					),
-					alignRight(
+					rightAlign(
 						keyValue("Session", state.sessionName ?? "current", "text"),
 						keyValue("Path", this.basename(state.cwd), "text"),
 						Math.max(1, width - 2),
 					),
-					alignRight(
+					rightAlign(
 						keyValue("Next", next, "surfaceAccent"),
 						keyValue("Mode", modeLabel, "modeWorkflow"),
 						Math.max(1, width - 2),

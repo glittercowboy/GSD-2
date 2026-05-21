@@ -1,3 +1,6 @@
+// Project/App: GSD-2
+// File Purpose: Validates planning and task template quality-gate content.
+
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,11 +30,14 @@ console.log("\n=== Level 1: Templates contain quality gate headings ===");
   const plan = loadTemplate("plan");
   assertTrue(plan.includes("## Threat Surface"), "plan.md contains ## Threat Surface");
   assertTrue(plan.includes("## Requirement Impact"), "plan.md contains ## Requirement Impact");
+  assertTrue(plan.includes("node --test"), "plan.md instructs using node --test for verification");
 
   const taskPlan = loadTemplate("task-plan");
   assertTrue(taskPlan.includes("## Failure Modes"), "task-plan.md contains ## Failure Modes");
   assertTrue(taskPlan.includes("## Load Profile"), "task-plan.md contains ## Load Profile");
   assertTrue(taskPlan.includes("## Negative Tests"), "task-plan.md contains ## Negative Tests");
+  assertTrue(taskPlan.includes("node --test"), "task-plan.md instructs using node --test for verification");
+  assertTrue(taskPlan.includes("node -e"), "task-plan.md mentions inline node -e as disallowed guidance");
 
   const sliceSummary = loadTemplate("slice-summary");
   assertTrue(sliceSummary.includes("## Operational Readiness"), "slice-summary.md contains ## Operational Readiness");
