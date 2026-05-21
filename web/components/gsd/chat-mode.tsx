@@ -1,5 +1,8 @@
 "use client"
 
+// Project/App: GSD-2
+// File Purpose: Browser chat mode shell with workflow actions and bridge-backed input.
+
 import Image from "next/image"
 import { useEffect, useRef, useCallback, useState, useMemo, KeyboardEvent, DragEvent, ClipboardEvent } from "react"
 import { MessagesSquare, SendHorizonal, Check, Eye, EyeOff, Play, Loader2, Milestone, X, MessageCircle, FileEdit, FilePlus, Terminal, ChevronDown, ChevronRight, MoreHorizontal, Zap, Square, Pause, BarChart3, LayoutGrid, ListOrdered, History, Compass, PenLine, Inbox, SkipForward, Undo2, BookOpen, Settings, SlidersHorizontal, Stethoscope, FileOutput, Trash2, Globe, type LucideIcon } from "lucide-react"
@@ -179,6 +182,7 @@ function ChatModeHeader({ onPrimaryAction, onSecondaryAction }: ChatModeHeaderPr
     commandInFlight: state.commandInFlight,
     bootStatus: state.bootStatus,
     hasMilestones: (workspace?.milestones.length ?? 0) > 0,
+    stepMode: auto?.stepMode ?? false,
     projectDetectionKind: boot?.projectDetection?.kind ?? null,
   })
 
@@ -2037,6 +2041,7 @@ export function ChatPane({ className, onOpenAction }: ChatPaneProps) {
     commandInFlight: state.commandInFlight,
     bootStatus: state.bootStatus,
     hasMilestones: (state.boot?.workspace?.milestones.length ?? 0) > 0,
+    stepMode: state.boot?.auto?.stepMode ?? false,
     projectDetectionKind: state.boot?.projectDetection?.kind ?? null,
   })
 

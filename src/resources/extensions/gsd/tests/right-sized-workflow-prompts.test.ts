@@ -93,6 +93,27 @@ test("plan-milestone prompt keeps normal guidance for typed projects", async () 
   }
 });
 
+test("plan-milestone standard prompt keeps project and decisions on-demand", async () => {
+  const base = makeRepo({
+    "package.json": "{\"scripts\":{\"test\":\"node --test\"}}\n",
+    "src/index.js": "console.log('ok');\n",
+    ".gsd/PROJECT.md": "# Project\n\nPlan broad project body.\n",
+    ".gsd/REQUIREMENTS.md": "# Requirements\n\nPlan requirement body.\n",
+    ".gsd/DECISIONS.md": "# Decisions\n\nPlan decision body.\n",
+  });
+  try {
+    const prompt = await buildPlanMilestonePrompt("M001", "Update app", base, "standard");
+    assert.match(prompt, /### On-demand Planning Context/);
+    assert.match(prompt, /`\.gsd\/PROJECT\.md`/);
+    assert.match(prompt, /`\.gsd\/DECISIONS\.md`/);
+    assert.match(prompt, /Plan requirement body/);
+    assert.doesNotMatch(prompt, /Plan broad project body/);
+    assert.doesNotMatch(prompt, /Plan decision body/);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
 test("workflow docs no longer contain blanket 4-10 slice guidance", () => {
   const docs = readFileSync(join(process.cwd(), "src", "resources", "GSD-WORKFLOW.md"), "utf-8");
   assert.doesNotMatch(docs, /4-10 slices/);

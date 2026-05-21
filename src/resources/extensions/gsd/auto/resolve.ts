@@ -23,6 +23,9 @@ import { bumpTurnGeneration } from "./turn-epoch.js";
 let _currentResolve: ((result: UnitResult) => void) | null = null;
 let _sessionSwitchInFlight = false;
 let _pendingSwitchCancellation: { errorContext?: ErrorContext } | null = null;
+let _sessionSwitchAbortGraceUntil = 0;
+
+const DEFAULT_SESSION_SWITCH_ABORT_GRACE_MS = 2_000;
 
 // ─── Setters (needed for cross-module mutation) ─────────────────────────────
 
@@ -32,6 +35,21 @@ export function _setCurrentResolve(fn: ((result: UnitResult) => void) | null): v
 
 export function _setSessionSwitchInFlight(v: boolean): void {
   _sessionSwitchInFlight = v;
+}
+
+export function _markSessionSwitchAbortGraceWindow(durationMs = DEFAULT_SESSION_SWITCH_ABORT_GRACE_MS): void {
+  _sessionSwitchAbortGraceUntil = Math.max(
+    _sessionSwitchAbortGraceUntil,
+    Date.now() + durationMs,
+  );
+}
+
+export function _clearSessionSwitchAbortGraceWindow(): void {
+  _sessionSwitchAbortGraceUntil = 0;
+}
+
+export function isSessionSwitchAbortGraceActive(now = Date.now()): boolean {
+  return now < _sessionSwitchAbortGraceUntil;
 }
 
 export function _clearCurrentResolve(): void {
@@ -142,6 +160,7 @@ export function _resetPendingResolve(): void {
   _currentResolve = null;
   _sessionSwitchInFlight = false;
   _pendingSwitchCancellation = null;
+  _sessionSwitchAbortGraceUntil = 0;
 }
 
 export function _hasPendingResolveForTest(): boolean {

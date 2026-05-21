@@ -66,6 +66,12 @@ export function appKeyHint(keybindings: KeybindingsManager, action: AppAction, d
 	return theme.fg("dim", appKey(keybindings, action)) + theme.fg("muted", ` ${description}`);
 }
 
+/** Standard selector footer used by interactive list dialogs. */
+export function selectorFooter(confirmLabel = "select", cancelLabel = "cancel"): string {
+	const sep = theme.fg("dim", "  ·  ");
+	return rawKeyHint("↑↓", "navigate") + sep + keyHint("selectConfirm", confirmLabel) + sep + keyHint("selectCancel", cancelLabel);
+}
+
 /**
  * Format a raw key string with description (for non-configurable keys like ↑↓).
  *

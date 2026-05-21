@@ -12,6 +12,8 @@
 | `GSD_FETCH_ALLOWED_URLS` | (none) | Comma-separated hostnames exempt from internal URL blocking. |
 | `GSD_ALLOWED_COMMAND_PREFIXES` | (built-in) | Comma-separated command prefixes allowed for value resolution. |
 | `GSD_WEB_PROJECT_CWD` | — | Default project path for `gsd --web` when `?project=` is not specified. |
+| `PI_DISABLE_SYNC_OUTPUT` | (unset) | Set to literal `1` to disable synchronized terminal output mode in the TUI on non-Windows platforms. By default synchronized output is enabled on macOS/Linux and always disabled on Windows. |
+| `PI_TOKEN_AUDIT` | (unset) | Set to literal `1` to emit metadata-only provider-boundary prompt/tool audit JSONL on stderr. Other values are ignored. |
 | `PI_TOKEN_TELEMETRY` | (unset) | Set to literal `1` to emit opt-in per-call token telemetry as JSONL on stderr. Other values are ignored. |
 
 ## LLM Provider Keys
@@ -53,6 +55,18 @@
 | `CONTEXT7_API_KEY` | Context7 documentation lookup |
 | `DISCORD_BOT_TOKEN` | Discord remote questions |
 | `TELEGRAM_BOT_TOKEN` | Telegram remote questions |
+
+## Token Audit
+
+Set `PI_TOKEN_AUDIT=1` to emit metadata-only audit records for each provider attempt. Audit output is for prompt-size investigation: it reports section sizes, message/tool counts, cache-neutral character totals, and largest message/tool summaries after context transforms and final tool filtering. It does not log raw prompt text, tool result text, user text, system prompt text, or tool schemas.
+
+```bash
+PI_TOKEN_AUDIT=1 gsd headless --json auto \
+  > gsd-events.jsonl \
+  2> token-audit.jsonl
+```
+
+Audit records use `type: "token_audit"` for Pi's normalized context and `type: "token_audit_provider_payload"` for the final provider payload around `before_provider_request` hooks. Use the provider-payload records to verify the exact message and tool surface sent to the model.
 
 ## Token Telemetry
 

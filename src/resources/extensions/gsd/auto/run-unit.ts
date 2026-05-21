@@ -14,6 +14,7 @@ import type { UnitResult } from "./types.js";
 import {
   _clearCurrentResolve,
   _consumePendingSwitchCancellation,
+  _markSessionSwitchAbortGraceWindow,
   _setCurrentResolve,
   _setSessionSwitchInFlight,
 } from "./resolve.js";
@@ -24,7 +25,31 @@ import {
 import { debugLog } from "../debug-logger.js";
 import { logWarning, logError } from "../workflow-logger.js";
 import { resolveAutoSupervisorConfig } from "../preferences.js";
-import { formatAutoUnitWorkingMessage } from "../working-output-messages.js";
+import { readUnitRuntimeRecord, type AutoUnitRuntimeRecord } from "../unit-runtime.js";
+
+const UNIT_FAILSAFE_BUFFER_MS = 30_000;
+const UNIT_FAILSAFE_RECHECK_MS = 30_000;
+
+export function shouldDeferUnitFailsafeTimeout(
+  runtime: AutoUnitRuntimeRecord | null,
+  opts: {
+    nowMs: number;
+    currentUnitStartedAt?: number;
+    freshProgressMs: number;
+  },
+): boolean {
+  if (!runtime) return false;
+  if (opts.currentUnitStartedAt === undefined) return false;
+  if (runtime.startedAt !== opts.currentUnitStartedAt) return false;
+  if (runtime.lastProgressAt <= 0) return false;
+  const progressAgeMs = opts.nowMs - runtime.lastProgressAt;
+  if (progressAgeMs < 0) return false;
+  if (progressAgeMs > opts.freshProgressMs) return false;
+  if (runtime.phase === "recovered") return true;
+  if (runtime.lastProgressKind.includes("recovery")) return true;
+  if (runtime.recoveryAttempts && runtime.recoveryAttempts > 0) return true;
+  return progressAgeMs >= 0 && progressAgeMs <= opts.freshProgressMs;
+}
 
 // Tracks the latest session-switch attempt so a late timeout settlement from an
 // older runUnit() call cannot clear the guard for a newer one.
@@ -48,45 +73,24 @@ export async function runUnit(
 ): Promise<UnitResult> {
   debugLog("runUnit", { phase: "start", unitType, unitId });
 
-  // Ensure cwd matches basePath BEFORE newSession() captures it. The new
-  // session reads process.cwd() during construction to anchor its tool
-  // runtime and system prompt; if cwd has drifted (async_bash, background
-  // jobs, prior unit cleanup), the session would otherwise be rooted to
-  // the wrong directory. Must be synchronous — no awaits between chdir
-  // and newSession (#1389, #4762 follow-up).
-  try {
-    if (process.cwd() !== s.basePath) {
-      process.chdir(s.basePath);
-    }
-  } catch (e) {
-    const msg = `Failed to chdir to basePath before newSession (basePath: ${s.basePath}): ${String(e)}`;
-    logWarning("engine", msg, { basePath: s.basePath, error: String(e) });
-    return {
-      status: "cancelled",
-      errorContext: {
-        message: msg,
-        category: "session-failed",
-        isTransient: true,
-      },
-    };
-  }
-
   // ── Session creation with timeout ──
   debugLog("runUnit", { phase: "session-create", unitType, unitId });
 
   let sessionResult: { cancelled: boolean };
   let sessionTimeoutHandle: ReturnType<typeof setTimeout> | undefined;
   const mySessionSwitchGeneration = ++sessionSwitchGeneration;
-  // #3731: Cancellation controller for newSession(). When the session-creation
-  // timeout fires, we abort this controller so that the still-in-flight
-  // newSession() discards itself after await this.abort() completes, preventing
-  // it from capturing the (now-root) process.cwd() and rebuilding the tool
-  // runtime with the wrong cwd.
+  // #3731: Cancellation controller for newSession(). When session creation
+  // times out, abort before a late session switch can rebuild the tool runtime
+  // against a stale workspace root.
   const sessionAbortController = new AbortController();
   _setSessionSwitchInFlight(true);
   try {
-    const sessionPromise = s.cmdCtx!.newSession({ abortSignal: sessionAbortController.signal }).finally(() => {
+    const sessionPromise = s.cmdCtx!.newSession({
+      abortSignal: sessionAbortController.signal,
+      workspaceRoot: s.basePath,
+    }).finally(() => {
       if (sessionSwitchGeneration === mySessionSwitchGeneration) {
+        _markSessionSwitchAbortGraceWindow();
         _setSessionSwitchInFlight(false);
       }
     });
@@ -150,6 +154,7 @@ export async function runUnit(
   // ── Create the agent_end promise (per-unit one-shot) ──
   // This happens after newSession completes so session-switch agent_end events
   // from the previous session cannot resolve the new unit.
+  _markSessionSwitchAbortGraceWindow();
   _setSessionSwitchInFlight(false);
   const unitPromise = new Promise<UnitResult>((resolve) => {
     _setCurrentResolve(resolve);
@@ -204,15 +209,19 @@ export async function runUnit(
   debugLog("runUnit", { phase: "send-message", unitType, unitId });
 
   const requestDispatchedAt = Date.now();
-  ctx.ui.setWorkingMessage?.(formatAutoUnitWorkingMessage(unitType, unitId));
+  ctx.ui.setWorkingMessage?.(null);
 
   // ── Await agent_end with absolute timeout (H4 fix) ──
   // If supervision fails to resolve unitPromise within 30s, treat as cancelled.
   // Without this, a crashed agent that never emits agent_end hangs the loop (#3161).
   const supervisor = resolveAutoSupervisorConfig();
   const UNIT_HARD_TIMEOUT_MS = Math.max(
-    30_000,
-    ((supervisor.hard_timeout_minutes ?? 30) * 60 * 1000) + 30_000,
+    UNIT_FAILSAFE_BUFFER_MS,
+    ((supervisor.hard_timeout_minutes ?? 30) * 60 * 1000) + UNIT_FAILSAFE_BUFFER_MS,
+  );
+  const freshProgressMs = Math.max(
+    UNIT_FAILSAFE_BUFFER_MS,
+    ((supervisor.idle_timeout_minutes ?? 10) * 60 * 1000) + UNIT_FAILSAFE_BUFFER_MS,
   );
   let unitTimeoutHandle: ReturnType<typeof setTimeout> | undefined;
   let result: UnitResult;
@@ -224,9 +233,45 @@ export async function runUnit(
 
     debugLog("runUnit", { phase: "awaiting-agent-end", unitType, unitId });
     const timeoutResult = new Promise<UnitResult>((resolve) => {
-      unitTimeoutHandle = setTimeout(() => {
+      const settleOrDefer = () => {
+        let runtime: AutoUnitRuntimeRecord | null;
+        try {
+          runtime = readUnitRuntimeRecord(s.basePath, unitType, unitId);
+        } catch (error) {
+          debugLog("runUnit", {
+            phase: "unit-failsafe-runtime-read-failed",
+            unitType,
+            unitId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          resolve({
+            status: "cancelled",
+            errorContext: {
+              message: "Unit hard timeout — supervision may have failed; runtime progress could not be read",
+              category: "timeout",
+              isTransient: true,
+            },
+          });
+          return;
+        }
+        if (shouldDeferUnitFailsafeTimeout(runtime, {
+          nowMs: Date.now(),
+          currentUnitStartedAt: s.currentUnit?.startedAt,
+          freshProgressMs,
+        })) {
+          debugLog("runUnit", {
+            phase: "unit-failsafe-deferred",
+            unitType,
+            unitId,
+            runtimePhase: runtime?.phase,
+            lastProgressKind: runtime?.lastProgressKind,
+          });
+          unitTimeoutHandle = setTimeout(settleOrDefer, UNIT_FAILSAFE_RECHECK_MS);
+          return;
+        }
         resolve({ status: "cancelled", errorContext: { message: "Unit hard timeout — supervision may have failed", category: "timeout", isTransient: true } });
-      }, UNIT_HARD_TIMEOUT_MS);
+      };
+      unitTimeoutHandle = setTimeout(settleOrDefer, UNIT_HARD_TIMEOUT_MS);
     });
     result = await runWithTurnGeneration(capturedTurnGen, () =>
       Promise.race([unitPromise, timeoutResult]),

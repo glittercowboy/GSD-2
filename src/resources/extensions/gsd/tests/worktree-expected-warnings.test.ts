@@ -1,38 +1,39 @@
-/**
- * worktree-expected-warnings.test.ts — #3665
- *
- * Verify that auto-worktree.ts and worktree-manager.ts suppress expected
- * ENOENT and EISDIR conditions instead of logging misleading warnings.
- */
+// GSD-2 — Expected worktree condition warning suppression tests.
 
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const autoWorktreeFile = join(__dirname, "..", "auto-worktree.ts");
-const worktreeManagerFile = join(__dirname, "..", "worktree-manager.ts");
+import { _isExpectedWorktreeUnlinkError } from "../auto-worktree.ts";
+import { resolveGitDir } from "../worktree-manager.ts";
 
 describe("worktree expected-condition warning suppression (#3665)", () => {
-  const autoSource = readFileSync(autoWorktreeFile, "utf-8");
-
-  test("auto-worktree.ts checks for ENOENT before logging unlink warning", () => {
-    assert.match(autoSource, /code\s*!==\s*["']ENOENT["']/);
+  test("known unlink races are classified as expected", () => {
+    assert.equal(_isExpectedWorktreeUnlinkError("ENOENT"), true);
+    assert.equal(_isExpectedWorktreeUnlinkError("EISDIR"), true);
+    assert.equal(_isExpectedWorktreeUnlinkError("EACCES"), false);
   });
 
-  test("auto-worktree.ts checks for EISDIR before logging unlink warning", () => {
-    assert.match(autoSource, /code\s*!==\s*["']EISDIR["']/);
+  test("resolveGitDir returns .git directory without reading it as a file", () => {
+    const base = mkdtempSync(join(tmpdir(), "gsd-resolve-gitdir-"));
+    try {
+      mkdirSync(join(base, ".git"), { recursive: true });
+      assert.equal(resolveGitDir(base), join(base, ".git"));
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
   });
 
-  test("auto-worktree.ts references issue #3597", () => {
-    assert.match(autoSource, /#3597/);
-  });
-
-  const managerSource = readFileSync(worktreeManagerFile, "utf-8");
-
-  test("worktree-manager.ts checks isDirectory() before reading .git file", () => {
-    assert.match(managerSource, /lstatSync\(gitPath\)\.isDirectory\(\)/);
+  test("resolveGitDir resolves worktree .git file targets", () => {
+    const base = mkdtempSync(join(tmpdir(), "gsd-resolve-worktree-gitdir-"));
+    try {
+      mkdirSync(join(base, ".gitdir"), { recursive: true });
+      writeFileSync(join(base, ".git"), "gitdir: .gitdir\n");
+      assert.equal(resolveGitDir(base), resolve(base, ".gitdir"));
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
   });
 });

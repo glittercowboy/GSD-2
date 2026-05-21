@@ -8,6 +8,7 @@ import {
 	formatSessionStatsLines,
 	getBashExitCode,
 	getBashOutput,
+	getContextUsageDisplay,
 	getSessionCost,
 	getSessionTotalTokens,
 } from "../src/rpc-display.ts";
@@ -33,6 +34,10 @@ test("session stats display helpers consume canonical token and cost fields", ()
 
 	assert.equal(getSessionTotalTokens(stats), 185);
 	assert.equal(getSessionCost(stats), 0.1234);
+	assert.deepEqual(getContextUsageDisplay(stats), {
+		percent: null,
+		text: "Context unknown",
+	});
 	assert.deepEqual(formatSessionStatsLines(stats), [
 		"Input tokens: 100",
 		"Output tokens: 50",

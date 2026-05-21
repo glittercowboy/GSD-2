@@ -1,6 +1,9 @@
+// Project/App: GSD-2
+// File Purpose: Plans milestone roadmap state through DB-backed workflow tools.
+
 import { clearParseCache } from "../files.js";
 import { isClosedStatus } from "../status-guards.js";
-import { isNonEmptyString, validateStringArray } from "../validation.js";
+import { isNonEmptyString, validateStringArray, validateTitle } from "../validation.js";
 import {
   transaction,
   getMilestone,
@@ -148,6 +151,8 @@ function validateSlices(value: unknown): PlanMilestoneSliceInput[] {
     if (seen.has(sliceId)) throw new Error(`slices[${index}].sliceId must be unique`);
     seen.add(sliceId);
     if (!isNonEmptyString(title)) throw new Error(`slices[${index}].title must be a non-empty string`);
+    const titleIssue = validateTitle(title);
+    if (titleIssue) throw new Error(`slices[${index}].title is invalid: ${titleIssue}`);
     if (!isNonEmptyString(risk)) throw new Error(`slices[${index}].risk must be a non-empty string`);
     if (!Array.isArray(depends) || depends.some((item) => !isNonEmptyString(item))) {
       throw new Error(`slices[${index}].depends must be an array of non-empty strings`);
@@ -190,6 +195,8 @@ function validateParams(params: PlanMilestoneParams): PlanMilestoneParams {
   if (!isNonEmptyString(params?.milestoneId)) throw new Error("milestoneId is required");
   if (!isNonEmptyString(params?.title)) throw new Error("title is required");
   if (!isNonEmptyString(params?.vision)) throw new Error("vision is required");
+  const milestoneTitleIssue = validateTitle(params.title);
+  if (milestoneTitleIssue) throw new Error(`title is invalid: ${milestoneTitleIssue}`);
 
   return {
     ...params,
@@ -273,6 +280,7 @@ export async function handlePlanMilestone(
       upsertMilestonePlanning(params.milestoneId, {
         title: params.title,
         status: params.status ?? "active",
+        depends_on: params.dependsOn ?? [],
         vision: params.vision,
         successCriteria: params.successCriteria,
         keyRisks: params.keyRisks,

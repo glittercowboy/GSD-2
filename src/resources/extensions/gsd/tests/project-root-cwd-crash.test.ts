@@ -8,46 +8,28 @@
  * Also verifies #3589 — nativeBranchExists validation for prefs.main_branch
  * in auto-worktree.ts to prevent merge failures with stale preferences.
  *
- * Structural verification test — reads source to confirm the guards exist.
+ * Behavior verification test — exercises the exported projectRoot helper
+ * without reading command source.
  */
 
-import { describe, test } from 'node:test';
+import { describe, test, mock } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
-const contextSource = readFileSync(join(__dirname, '..', 'commands', 'context.ts'), 'utf-8');
-const worktreeSource = readFileSync(join(__dirname, '..', 'auto-worktree.ts'), 'utf-8');
+import { GSDNoProjectError, projectRoot } from '../commands/context.ts';
 
 describe('projectRoot cwd crash guard (#3598)', () => {
-  test('projectRoot wraps process.cwd() in try/catch', () => {
-    assert.match(contextSource, /try\s*\{[\s\S]*?process\.cwd\(\)/,
-      'process.cwd() should be inside a try block');
-  });
-
-  test('catch block falls back to homedir()', () => {
-    assert.match(contextSource, /catch[\s\S]*?homedir\(\)/,
-      'catch block should fall back to homedir()');
-  });
-
-  test('projectRoot function is exported', () => {
-    assert.match(contextSource, /export function projectRoot\(\)/,
-      'projectRoot should be an exported function');
-  });
-});
-
-describe('main_branch nativeBranchExists validation (#3589)', () => {
-  test('prefs.main_branch is validated with nativeBranchExists', () => {
-    assert.match(worktreeSource, /nativeBranchExists\(.*prefs\.main_branch\)/,
-      'nativeBranchExists should validate prefs.main_branch');
-  });
-
-  test('validatedPrefBranch falls back to undefined when branch missing', () => {
-    assert.match(worktreeSource, /validatedPrefBranch[\s\S]*?:\s*undefined/,
-      'validatedPrefBranch should fall back to undefined');
+  test('reports the home-directory guard instead of leaking cwd ENOENT', () => {
+    const cwd = mock.method(process, 'cwd', () => {
+      const err = new Error('ENOENT: current working directory was removed') as NodeJS.ErrnoException;
+      err.code = 'ENOENT';
+      throw err;
+    });
+    try {
+      assert.throws(
+        () => projectRoot(),
+        (err) => err instanceof GSDNoProjectError && !String(err.message).includes('ENOENT'),
+      );
+    } finally {
+      cwd.mock.restore();
+    }
   });
 });

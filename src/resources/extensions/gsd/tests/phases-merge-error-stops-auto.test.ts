@@ -2,96 +2,125 @@
  * phases-merge-error-stops-auto.test.ts — Regression test for #2766.
  *
  * When mergeAndExit throws a non-MergeConflictError, the auto loop must
- * stop instead of continuing with unmerged work. This test verifies that
- * all catch blocks in auto/phases.ts that handle mergeAndExit errors
- * call stopAuto and return { action: "break" } for non-conflict errors.
+ * halt instead of continuing with unmerged work. A merge failure is a
+ * recoverable human checkpoint, so the loop pauses (resumable via
+ * `/gsd auto`) rather than hard-stopping. This test verifies the catch
+ * block in auto/phases.ts calls pauseAuto and returns { action: "break" }
+ * for non-conflict errors.
  */
 
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { createTestContext } from "./test-helpers.ts";
+import { runPreDispatch } from "../auto/phases.ts";
 
 const { assertTrue, report } = createTestContext();
 
-const phasesPath = join(import.meta.dirname, "..", "auto", "phases.ts");
-const phasesSrc = readFileSync(phasesPath, "utf-8");
-
 console.log("\n=== #2766: Non-MergeConflictError stops auto mode ===");
 
-// ── Test 1: every mergeAndExit call site has a catch (mergeErr) block ──
+const notifications: Array<{ message: string; level?: string }> = [];
+const calls: string[] = [];
+const basePath = "/tmp/gsd-test";
+const ic = {
+  ctx: {
+    ui: {
+      notify(message: string, level?: string) {
+        notifications.push({ message, level });
+      },
+    },
+  },
+  pi: {},
+  s: {
+    basePath,
+    originalBasePath: basePath,
+    canonicalProjectRoot: basePath,
+    resourceVersionOnStart: "test",
+    currentMilestoneId: "M001",
+    currentUnit: null,
+    milestoneMergedInPhases: false,
+  },
+  prefs: undefined,
+  iteration: 1,
+  flowId: "test-flow",
+  nextSeq: () => 1,
+  deps: {
+    checkResourcesStale() {
+      return null;
+    },
+    invalidateAllCaches() {
+      calls.push("invalidate");
+    },
+    async preDispatchHealthGate() {
+      calls.push("health");
+      return { proceed: true, fixesApplied: [] };
+    },
+    async deriveState(projectRoot: string) {
+      calls.push(`derive:${projectRoot}`);
+      return {
+        phase: "complete",
+        activeMilestone: { id: "M001", title: "Milestone one" },
+        activeSlice: null,
+        activeTask: null,
+        registry: [{ id: "M001", status: "complete" }],
+        nextAction: "complete",
+      };
+    },
+    syncCmuxSidebar() {
+      calls.push("sync-sidebar");
+    },
+    setActiveMilestoneId(_basePath: string, mid: string) {
+      calls.push(`set-active:${mid}`);
+    },
+    reconcileMergeState() {
+      calls.push("reconcile");
+      return "clean";
+    },
+    preflightCleanRoot() {
+      calls.push("preflight");
+      return { ok: true, stashPushed: true, stashMarker: "marker" };
+    },
+    postflightPopStash() {
+      calls.push("postflight");
+      return { ok: true, needsManualRecovery: false };
+    },
+    lifecycle: {
+      exitMilestone() {
+        calls.push("merge");
+        return {
+          ok: false,
+          reason: "teardown-failed",
+          cause: new Error("remote rejected push"),
+        };
+      },
+    },
+    async stopAuto(_ctx: unknown, _pi: unknown, reason?: string) {
+      calls.push(`stop:${reason}`);
+    },
+    async pauseAuto(
+      _ctx: unknown,
+      _pi: unknown,
+      errorContext?: { message: string },
+    ) {
+      calls.push(`pause:${errorContext?.message}`);
+    },
+  },
+} as any;
 
-// Count all mergeAndExit catch blocks by finding "} catch (mergeErr)" patterns
-const mergeAndExitCallCount = [...phasesSrc.matchAll(/\.mergeAndExit\(/g)].length;
-const mergeErrCatchCount = [...phasesSrc.matchAll(/\} catch \(mergeErr\)/g)].length;
-assertTrue(
-  mergeErrCatchCount === mergeAndExitCallCount && mergeAndExitCallCount > 0,
-  `every mergeAndExit call site has a catch (mergeErr) block (calls=${mergeAndExitCallCount}, catches=${mergeErrCatchCount})`,
-);
+const result = await runPreDispatch(ic, {
+  recentUnits: [],
+  stuckRecoveryAttempts: 0,
+  consecutiveFinalizeTimeouts: 0,
+});
 
-// ── Test 2: Every mergeErr catch block handles non-MergeConflictError ───
-
-// Find each catch block and verify it has the non-conflict error handling pattern
-const catchPattern = /\} catch \(mergeErr\) \{/g;
-let match;
-let blocksWithNonConflictHandling = 0;
-let blocksTotal = 0;
-
-while ((match = catchPattern.exec(phasesSrc)) !== null) {
-  blocksTotal++;
-  // Look at the ~800 chars after the catch to find both the MergeConflictError
-  // instanceof check AND the non-conflict handling
-  const afterCatch = phasesSrc.slice(match.index, match.index + 1200);
-
-  const hasInstanceofCheck = afterCatch.includes("instanceof MergeConflictError");
-  const hasNonConflictStop = afterCatch.includes('reason: "merge-failed"');
-  const hasStopAuto = afterCatch.includes("stopAuto");
-  const hasLogError = afterCatch.includes("logError");
-
-  if (hasInstanceofCheck && hasNonConflictStop && hasStopAuto && hasLogError) {
-    blocksWithNonConflictHandling++;
-  }
+assertTrue(result.action === "break", "non-conflict merge error returns break");
+if (result.action === "break") {
+  assertTrue(result.reason === "merge-failed", "non-conflict merge error uses merge-failed reason");
 }
-
 assertTrue(
-  blocksWithNonConflictHandling === blocksTotal && blocksTotal >= 3,
-  `all ${blocksTotal} mergeAndExit catch blocks stop auto on non-conflict errors (${blocksWithNonConflictHandling}/${blocksTotal})`,
+  calls.join(" > ") === "invalidate > health > derive:/tmp/gsd-test > sync-sidebar > set-active:M001 > reconcile > preflight > merge > postflight > pause:Merge error on milestone M001: remote rejected push. Resolve and run /gsd auto to resume.",
+  `pre-dispatch pauses immediately after non-conflict merge failure (${calls.join(" > ")})`,
 );
-
-// ── Test 3: Non-conflict handler returns break (does not continue) ──────
-
-// Verify the pattern: after the MergeConflictError instanceof block,
-// the non-conflict path returns { action: "break", reason: "merge-failed" }
-const mergeFailedReasons = [...phasesSrc.matchAll(/reason: "merge-failed"/g)].length;
 assertTrue(
-  mergeFailedReasons >= 3,
-  `all catch blocks return reason: "merge-failed" (found ${mergeFailedReasons}, expected >= 3)`,
-);
-
-// ── Test 4: Non-conflict handler notifies user ──────────────────────────
-
-// Each non-conflict block should call ctx.ui.notify with error severity
-const notifyErrorPattern = /Merge failed:.*Resolve and run \/gsd auto to resume/g;
-const notifyCount = [...phasesSrc.matchAll(notifyErrorPattern)].length;
-assertTrue(
-  notifyCount >= 3,
-  `all catch blocks notify user about merge failure (found ${notifyCount}, expected >= 3)`,
-);
-
-// ── Test 5: logError replaces logWarning for non-conflict merge errors ──
-
-// The old code used logWarning — verify logError is used instead
-const logWarningMergePattern = /logWarning\(.*Milestone merge failed with non-conflict error/g;
-const logWarningCount = [...phasesSrc.matchAll(logWarningMergePattern)].length;
-assertTrue(
-  logWarningCount === 0,
-  "logWarning is no longer used for non-conflict merge errors (replaced by logError)",
-);
-
-const logErrorMergePattern = /logError\(.*Milestone merge failed with non-conflict error/g;
-const logErrorCount = [...phasesSrc.matchAll(logErrorMergePattern)].length;
-assertTrue(
-  logErrorCount >= 3,
-  `logError is used for non-conflict merge errors (found ${logErrorCount}, expected >= 3)`,
+  notifications.some((n) => n.level === "error" && n.message.includes("Merge error on milestone M001: remote rejected push")),
+  "user is notified with an error that the merge failed",
 );
 
 report();

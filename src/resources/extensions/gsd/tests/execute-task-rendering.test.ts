@@ -39,6 +39,7 @@ test("execute-task prompt renders compact execution and completion gates", async
     taskPlanPath: ".gsd/milestones/M001/slices/S01/tasks/T01-PLAN.md",
     priorTaskLines: "- None",
     skillActivation: "Load relevant skills.",
+    inlinedTemplates: "### Output Template: Task Summary\nSource: `templates/task-summary.md`",
     templatesDir: join(fixtureRoot, "templates"),
     taskSummaryTemplatePath: "C:\\Users\\Test\\.gsd\\agent\\extensions\\gsd\\templates\\task-summary.md",
     verificationBudget: "~10K chars",
@@ -46,12 +47,14 @@ test("execute-task prompt renders compact execution and completion gates", async
   });
 
   assert.match(prompt, /You execute\./);
-  assert.match(prompt, /Call `memory_query`/);
+  assert.match(prompt, /Call `memory_query`.*only when no injected memory block exists/s);
   assert.match(prompt, /Before any `Write` that creates an artifact or output file/);
   assert.match(prompt, /Build real behavior/);
   assert.match(prompt, /Background process rule/);
   assert.match(prompt, /blocker_discovered: true/);
-  assert.match(prompt, /C:\\Users\\Test\\.gsd\\agent\\extensions\\gsd\\templates\\task-summary\.md/);
+  assert.match(prompt, /Use the inlined Task Summary template below/);
+  assert.match(prompt, /Read `C:\\Users\\Test\\.gsd\\agent\\extensions\\gsd\\templates\\task-summary\.md` only if the inlined template is absent or visibly truncated/);
+  assert.match(prompt, /### Output Template: Task Summary/);
   assert.doesNotMatch(prompt, /\{\{templatesDir\}\}\/task-summary\.md/);
   assert.match(prompt, /Call `gsd_task_complete`/);
   assert.match(prompt, /Do not run git commands/);

@@ -28,6 +28,17 @@ It checks file structure, referential integrity, completion state consistency, g
     **Fix:** Check the task plan for clarity. Refine it manually, then `/gsd auto`.
   </Accordion>
 
+  <Accordion title="Auto mode pauses after a timeout or finalize failure">
+    **Symptoms:** Auto mode reports a hard timeout, finalize timeout, or post-unit closeout failure.
+
+    **What to inspect:**
+    - `.gsd/runtime/<unit-type>/<unit-id>.json` for recovery progress markers and timeout phase
+    - `.gsd/journal/` for `post-unit-finalize-start`, `post-unit-finalize-end`, and `iteration-end`
+    - `.gsd/git-action-failures.log` for timestamped failed git closeout actions (`commit` or `merge`) and the exact git error
+
+    **Fix:** If recovery is still progressing, resume with `/gsd auto`. If finalize stopped on git closeout, inspect `.gsd/git-action-failures.log`, fix the git issue, then resume.
+  </Accordion>
+
   <Accordion title="command not found: gsd">
     **Cause:** npm's global bin directory isn't in `$PATH`.
 
@@ -71,6 +82,12 @@ It checks file structure, referential integrity, completion state consistency, g
 
   <Accordion title="Git merge conflicts on .gsd/ files">
     GSD auto-resolves conflicts on `.gsd/` runtime files. For code conflicts, the LLM attempts resolution. If that fails, resolve manually.
+  </Accordion>
+
+  <Accordion title="Startup warns that memory consolidation is incomplete">
+    **Cause:** The ADR-013 preflight scanner found active `decisions` rows or `.gsd/KNOWLEDGE.md` rows that do not yet have matching entries in the canonical `memories` table.
+
+    **Fix:** Run `/gsd doctor` to inspect the counts and sample rows. Complete the decisions or KNOWLEDGE.md backfill before cutover; do not delete legacy knowledge files or database rows just to silence the warning.
   </Accordion>
 
   <Accordion title="EBUSY / EPERM / EACCES on Windows">

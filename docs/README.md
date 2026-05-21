@@ -24,12 +24,14 @@ Simplified Chinese translation: [`zh-CN/`](./zh-CN/).
 | [Cost Management](./user-docs/cost-management.md) | Budget ceilings, cost tracking, projections, and enforcement modes |
 | [Git Strategy](./user-docs/git-strategy.md) | Worktree isolation, branching model, and merge behavior |
 | [Parallel Orchestration](./user-docs/parallel-orchestration.md) | Run multiple milestones simultaneously with worker isolation and coordination |
+| [Subagents](./user-docs/subagents.md) | Delegate, inspect, and resume isolated child-agent runs |
 | [Working in Teams](./user-docs/working-in-teams.md) | Unique milestone IDs, `.gitignore` setup, and shared planning artifacts |
 | [Skills](./user-docs/skills.md) | Bundled skills, skill discovery, and custom skill authoring |
 | [Migration from v1](./user-docs/migration.md) | Migrating `.planning` directories from the original GSD |
 | [Troubleshooting](./user-docs/troubleshooting.md) | Common issues, `/gsd doctor` (real-time visibility v2.40), `/gsd forensics` (full debugger v2.40), and recovery procedures |
 | [Web Interface](./user-docs/web-interface.md) | Browser-based project management with `gsd --web` (v2.41) |
 | [VS Code Extension](../vscode-extension/README.md) | Chat participant, sidebar dashboard, and RPC integration for VS Code |
+| [Release Notes](../CHANGELOG.md) | Current v2.81 release notes and full version history |
 
 ## Architecture & Internals
 

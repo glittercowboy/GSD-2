@@ -1,20 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { OAuthCredentials } from "./types.js";
 import { geminiCliOAuthProvider } from "./google-gemini-cli.js";
-
-const __dirname = fileURLToPath(new URL(".", import.meta.url));
-const packageRoot = join(__dirname, "..", "..", "..");
-const sourceDir = existsSync(join(__dirname, "google-gemini-cli.ts"))
-	? __dirname
-	: join(packageRoot, "src", "utils", "oauth");
-
-function readSourceFile(name: string): string {
-	return readFileSync(join(sourceDir, name), "utf-8");
-}
 
 describe("Gemini CLI OAuth — provider structure", () => {
 	test("has correct id and name", () => {
@@ -65,20 +52,29 @@ describe("Gemini CLI OAuth — credential regression", () => {
 		assert.ok(geminiCliOAuthProvider);
 	});
 
-	test("CLIENT_ID and CLIENT_SECRET are plaintext", () => {
-		const content = readSourceFile("google-gemini-cli.ts");
-		assert.ok(
-			content.includes(
-				'CLIENT_ID = "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com"',
-			),
-		);
-		assert.ok(content.includes('CLIENT_SECRET = "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"'));
-		assert.ok(!content.includes("atob("));
-	});
+	test("refreshToken sends the desktop OAuth client credentials to Google", async (t) => {
+		const calls: RequestInit[] = [];
+		const originalFetch = globalThis.fetch;
+		t.after(() => {
+			globalThis.fetch = originalFetch;
+		});
+		globalThis.fetch = async (_input: string | URL | Request, init?: RequestInit) => {
+			calls.push(init ?? {});
+			return Response.json({ access_token: "new-access-token", expires_in: 3600 });
+		};
 
-	test("security explanation comments are present", () => {
-		const content = readSourceFile("google-gemini-cli.ts");
-		assert.ok(content.includes("NOTE: These credentials are public"));
-		assert.ok(content.includes("obfuscated") || content.includes("security scanners"));
+		const credentials = await geminiCliOAuthProvider.refreshToken({
+			access: "old-access-token",
+			refresh: "refresh-token",
+			expires: Date.now() + 3600000,
+			projectId: "test-project-456",
+		});
+
+		assert.equal(credentials.access, "new-access-token");
+		assert.equal(credentials.projectId, "test-project-456");
+		assert.ok(calls[0]?.body instanceof URLSearchParams);
+		const body = calls[0].body;
+		assert.equal(body.get("client_id"), "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com");
+		assert.equal(body.get("client_secret"), "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");
 	});
 });

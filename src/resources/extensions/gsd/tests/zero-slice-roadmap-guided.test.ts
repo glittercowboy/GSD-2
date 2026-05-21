@@ -1,19 +1,25 @@
-/**
- * Regression test for #3441: guided flow must treat a roadmap with zero
- * parseable slices the same as no roadmap — offer "Create roadmap" not "Go auto".
- */
+// GSD-2 — Guided roadmap slice detection regression tests.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 
-test("guided-flow checks roadmap slice count before offering auto (#3441)", () => {
-  const src = readFileSync(
-    join(import.meta.dirname, "..", "guided-flow.ts"),
-    "utf-8",
+import { _roadmapHasParseableSlicesForTest } from "../guided-flow.ts";
+
+test("guided flow treats placeholder roadmaps with zero slices as not runnable", () => {
+  assert.equal(
+    _roadmapHasParseableSlicesForTest("# M001 Roadmap\n\nPlanning notes only.\n"),
+    false,
   );
-  assert.ok(
-    src.includes("roadmapHasSlices") || src.includes("parseRoadmapSlices"),
-    "Guided flow must parse roadmap for slices before deciding which options to show",
+});
+
+test("guided flow accepts roadmaps with parseable slices", () => {
+  assert.equal(
+    _roadmapHasParseableSlicesForTest([
+      "# M001 Roadmap",
+      "",
+      "## Slices",
+      "- [ ] **S01: First slice** `risk:low` `depends:[]`",
+    ].join("\n")),
+    true,
   );
 });

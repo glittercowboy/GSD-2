@@ -34,6 +34,8 @@ test("guided project prompt renders compact interview and artifact guidance", as
   assert.match(prompt, /depth_verification_project_confirm/);
   assert.match(prompt, /artifact_type: "PROJECT"/);
   assert.match(prompt, /omit `milestone_id`/);
+  assert.match(prompt, /do not write the projection directly/i);
+  assert.doesNotMatch(prompt, /then write `.gsd\/PROJECT\.md`/);
   assert.match(prompt, /Do NOT use `artifact_type: "CONTEXT"` and do NOT pass `milestone_id: "PROJECT"`/);
   assert.match(prompt, /\*\*Complexity:\*\* simple/);
   assert.match(prompt, /\*\*Complexity:\*\* complex/);

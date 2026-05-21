@@ -7,29 +7,47 @@
  *   /gsd mcp             — Overview of all servers (alias: /gsd mcp status)
  *   /gsd mcp status      — Same as bare /gsd mcp
  *   /gsd mcp check <srv> — Detailed status for a specific server
+ *   /gsd mcp test <srv>  — Test handshake + tools/list for a server
+ *   /gsd mcp enable <srv> / disable <srv> — Toggle local server exposure
+ *   /gsd mcp import <srv> [as <name>] — Copy a discovered server into local config
  *   /gsd mcp init [dir]  — Write project-local GSD workflow MCP config
  */
 
 import type { ExtensionCommandContext } from "@gsd/pi-coding-agent";
 
-import { existsSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 
 import { ensureProjectWorkflowMcpConfig } from "./mcp-project-config.js";
-import { gsdHome } from "./gsd-home.js";
+import {
+  deleteProjectLocalMcpServer,
+  readMcpManagementStatus,
+  setProjectLocalMcpServerDisabled,
+  testMcpServerConnection,
+  upsertProjectLocalMcpServer,
+  type ManagedMcpConnectionTestResult,
+  type ManagedMcpTransport,
+} from "../mcp-client/manager.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export interface McpServerStatus {
   name: string;
-  transport: "stdio" | "http" | "unknown";
+  transport: ManagedMcpTransport;
   connected: boolean;
   toolCount: number;
   error: string | undefined;
+  disabled?: boolean;
+  sourcePath?: string;
+  envWarnings?: string[];
 }
 
 export interface McpServerDetail extends McpServerStatus {
   tools: string[];
+}
+
+export function hasHostMcpTool(systemPrompt: string, serverName: string): boolean {
+  const marker = `mcp__${serverName}__`;
+  return systemPrompt.includes(marker);
 }
 
 export function formatMcpInitResult(
@@ -54,65 +72,6 @@ export function formatMcpInitResult(
   ].join("\n");
 }
 
-// ─── Config reader (standalone — does not import mcp-client internals) ──────
-
-interface McpServerRawConfig {
-  name: string;
-  transport: "stdio" | "http" | "unknown";
-  command?: string;
-  args?: string[];
-  url?: string;
-}
-
-function readMcpConfigs(): McpServerRawConfig[] {
-  const servers: McpServerRawConfig[] = [];
-  const seen = new Set<string>();
-  const configPaths = [
-    join(process.cwd(), ".mcp.json"),
-    join(process.cwd(), ".gsd", "mcp.json"),
-    join(gsdHome(), "mcp.json"),
-  ];
-
-  for (const configPath of configPaths) {
-    try {
-      if (!existsSync(configPath)) continue;
-      const raw = readFileSync(configPath, "utf-8");
-      const data = JSON.parse(raw) as Record<string, unknown>;
-      const mcpServers = (data.mcpServers ?? data.servers) as
-        | Record<string, Record<string, unknown>>
-        | undefined;
-      if (!mcpServers || typeof mcpServers !== "object") continue;
-
-      for (const [name, config] of Object.entries(mcpServers)) {
-        if (seen.has(name)) continue;
-        seen.add(name);
-
-        const hasCommand = typeof config.command === "string";
-        const hasUrl = typeof config.url === "string";
-        const transport: McpServerRawConfig["transport"] = hasCommand
-          ? "stdio"
-          : hasUrl
-            ? "http"
-            : "unknown";
-
-        servers.push({
-          name,
-          transport,
-          ...(hasCommand && {
-            command: config.command as string,
-            args: Array.isArray(config.args) ? (config.args as string[]) : undefined,
-          }),
-          ...(hasUrl && { url: config.url as string }),
-        });
-      }
-    } catch {
-      // Non-fatal — config file may not exist or be malformed
-    }
-  }
-
-  return servers;
-}
-
 // ─── Formatters (exported for testing) ──────────────────────────────────────
 
 export function formatMcpStatusReport(servers: McpServerStatus[]): string {
@@ -129,17 +88,21 @@ export function formatMcpStatusReport(servers: McpServerStatus[]): string {
   const lines: string[] = [`MCP Server Status — ${servers.length} server(s)\n`];
 
   for (const s of servers) {
-    const icon = s.error ? "✗" : s.connected ? "✓" : "○";
-    const status = s.error
+    const icon = s.disabled ? "⊘" : s.error ? "✗" : s.connected ? "✓" : "○";
+    const status = s.disabled
+      ? "disabled"
+      : s.error
       ? `error: ${s.error}`
       : s.connected
         ? `connected — ${s.toolCount} tools`
         : "disconnected";
-    lines.push(`  ${icon} ${s.name} (${s.transport}) — ${status}`);
+    const warningText = s.envWarnings?.length ? ` — ${s.envWarnings.length} warning(s)` : "";
+    lines.push(`  ${icon} ${s.name} (${s.transport}) — ${status}${warningText}`);
   }
 
   lines.push("");
   lines.push("Use /gsd mcp check <server> for details on a specific server.");
+  lines.push("Use /gsd mcp test <server> to verify handshake and tool discovery.");
   lines.push("Use mcp_discover to connect and list tools for a server.");
 
   return lines.join("\n");
@@ -149,8 +112,11 @@ export function formatMcpServerDetail(server: McpServerDetail): string {
   const lines: string[] = [`MCP Server: ${server.name}\n`];
 
   lines.push(`  Transport: ${server.transport}`);
+  if (server.sourcePath) lines.push(`  Source:    ${server.sourcePath}`);
 
-  if (server.error) {
+  if (server.disabled) {
+    lines.push(`  Status:    disabled`);
+  } else if (server.error) {
     lines.push(`  Status:    error`);
     lines.push(`  Error:     ${server.error}`);
   } else if (server.connected) {
@@ -169,7 +135,35 @@ export function formatMcpServerDetail(server: McpServerDetail): string {
     lines.push(`  Run mcp_discover("${server.name}") to connect and list tools.`);
   }
 
+  if (server.envWarnings?.length) {
+    lines.push("");
+    lines.push("  Warnings:");
+    for (const warning of server.envWarnings) {
+      lines.push(`    - ${warning}`);
+    }
+  }
+
   return lines.join("\n");
+}
+
+export function formatMcpConnectionTestResult(result: ManagedMcpConnectionTestResult): string {
+  if (result.ok) {
+    return [
+      `MCP test passed for ${result.server}.`,
+      "",
+      `Transport: ${result.transport}`,
+      `Tools:     ${result.toolCount}`,
+      ...(result.tools.length > 0 ? ["", "Available tools:", ...result.tools.map((tool) => `  - ${tool}`)] : []),
+    ].join("\n");
+  }
+
+  return [
+    `MCP test failed for ${result.server}.`,
+    "",
+    `Transport: ${result.transport}`,
+    `Error:     ${result.error ?? "Unknown error"}`,
+    ...(result.warnings.length > 0 ? ["", "Warnings:", ...result.warnings.map((warning) => `  - ${warning}`)] : []),
+  ].join("\n");
 }
 
 // ─── Command handler ────────────────────────────────────────────────────────
@@ -183,7 +177,9 @@ export async function handleMcpStatus(
 ): Promise<void> {
   const trimmed = args.trim();
   const lowered = trimmed.toLowerCase();
-  const configs = readMcpConfigs();
+  const management = readMcpManagementStatus({ includeDisabled: true });
+  const configs = management.servers;
+  const systemPrompt = ctx.getSystemPrompt();
 
   // /gsd mcp init [dir]
   if (!lowered || lowered === "status") {
@@ -199,6 +195,97 @@ export async function handleMcpStatus(
         `Failed to prepare MCP config for ${targetPath}: ${err instanceof Error ? err.message : String(err)}`,
         "error",
       );
+    }
+    return;
+  }
+
+  // /gsd mcp test <server>
+  if (lowered.startsWith("test ")) {
+    const serverName = trimmed.slice("test ".length).trim();
+    const result = await testMcpServerConnection(serverName);
+    ctx.ui.notify(formatMcpConnectionTestResult(result), result.ok ? "info" : "warning");
+    return;
+  }
+
+  // /gsd mcp disable <server>
+  if (lowered.startsWith("disable ")) {
+    const serverName = trimmed.slice("disable ".length).trim();
+    try {
+      const updated = setProjectLocalMcpServerDisabled(serverName, true);
+      ctx.ui.notify(`Disabled MCP server "${updated.name}" in ${updated.sourcePath}.`, "info");
+    } catch (err) {
+      ctx.ui.notify(err instanceof Error ? err.message : String(err), "warning");
+    }
+    return;
+  }
+
+  // /gsd mcp enable <server>
+  if (lowered.startsWith("enable ")) {
+    const serverName = trimmed.slice("enable ".length).trim();
+    try {
+      const updated = setProjectLocalMcpServerDisabled(serverName, false);
+      ctx.ui.notify(`Enabled MCP server "${updated.name}" in ${updated.sourcePath}.`, "info");
+    } catch (err) {
+      ctx.ui.notify(err instanceof Error ? err.message : String(err), "warning");
+    }
+    return;
+  }
+
+  // /gsd mcp delete <server> --confirm
+  if (lowered.startsWith("delete ")) {
+    const raw = trimmed.slice("delete ".length).trim();
+    const confirmed = /\s--confirm$/.test(raw) || raw === "--confirm";
+    const serverName = raw.replace(/\s--confirm$/, "").trim();
+    if (!confirmed || !serverName) {
+      ctx.ui.notify(`Usage: /gsd mcp delete <server> --confirm`, "warning");
+      return;
+    }
+    try {
+      deleteProjectLocalMcpServer(serverName);
+      ctx.ui.notify(`Deleted local MCP server "${serverName}".`, "info");
+    } catch (err) {
+      ctx.ui.notify(err instanceof Error ? err.message : String(err), "warning");
+    }
+    return;
+  }
+
+  // /gsd mcp import <server> [as <name>]
+  if (lowered.startsWith("import ")) {
+    const raw = trimmed.slice("import ".length).trim();
+    const match = raw.match(/^(.*?)\s+as\s+(.+)$/i);
+    const sourceName = (match?.[1] ?? raw).trim();
+    const nextName = (match?.[2] ?? sourceName).trim();
+    const source = configs.find((config) => config.name === sourceName);
+    if (!source) {
+      const available = configs.map((config) => config.name).join(", ") || "(none)";
+      ctx.ui.notify(`Unknown MCP server: "${sourceName}"\n\nAvailable: ${available}`, "warning");
+      return;
+    }
+    if (source.transport === "unsupported") {
+      ctx.ui.notify(`Cannot import "${sourceName}" because transport is unsupported.`, "warning");
+      return;
+    }
+    try {
+      const saved = upsertProjectLocalMcpServer({
+        name: nextName,
+        transport: source.transport,
+        command: source.command,
+        args: source.args,
+        env: source.env,
+        cwd: source.cwd,
+        url: source.url,
+        headers: source.headers,
+        oauth: source.oauth,
+        disabled: source.disabled,
+        importedFrom: {
+          name: source.name,
+          sourcePath: source.sourcePath,
+          sourceTool: source.sourceKind,
+        },
+      });
+      ctx.ui.notify(`Imported MCP server "${source.name}" as "${saved.name}" into ${saved.sourcePath}.`, "info");
+    } catch (err) {
+      ctx.ui.notify(err instanceof Error ? err.message : String(err), "warning");
     }
     return;
   }
@@ -233,6 +320,7 @@ export async function handleMcpStatus(
     } catch {
       // mcp-client may not expose status helpers — that's fine
     }
+    if (!connected && !error && hasHostMcpTool(systemPrompt, serverName)) connected = true;
 
     ctx.ui.notify(
       formatMcpServerDetail({
@@ -242,6 +330,9 @@ export async function handleMcpStatus(
         toolCount: toolNames.length,
         tools: toolNames,
         error,
+        disabled: config.disabled,
+        sourcePath: config.sourcePath,
+        envWarnings: config.envWarnings,
       }),
       "info",
     );
@@ -270,6 +361,7 @@ export async function handleMcpStatus(
       } catch {
         // Fall back to unknown state
       }
+      if (!connected && !error && hasHostMcpTool(systemPrompt, config.name)) connected = true;
 
       statuses.push({
         name: config.name,
@@ -277,18 +369,33 @@ export async function handleMcpStatus(
         connected,
         toolCount,
         error,
+        disabled: config.disabled,
+        sourcePath: config.sourcePath,
+        envWarnings: config.envWarnings,
       });
     }
 
-    ctx.ui.notify(formatMcpStatusReport(statuses), "info");
+    const warningLines = [
+      ...management.warnings,
+      ...management.duplicates.map((dup) => `Duplicate "${dup.name}" from ${dup.shadowedSourcePath} is shadowed by ${dup.keptSourcePath}.`),
+    ];
+    const report = warningLines.length > 0
+      ? `${formatMcpStatusReport(statuses)}\n\nConfig warnings:\n${warningLines.map((line) => `  - ${line}`).join("\n")}`
+      : formatMcpStatusReport(statuses);
+    ctx.ui.notify(report, "info");
     return;
   }
 
   // Unknown subcommand
   ctx.ui.notify(
-    "Usage: /gsd mcp [status|check <server>|init [dir]]\n\n" +
+    "Usage: /gsd mcp [status|check <server>|test <server>|enable <server>|disable <server>|delete <server> --confirm|import <server> [as <name>]|init [dir]]\n\n" +
     "  status           Show all MCP server statuses (default)\n" +
     "  check <server>   Detailed status for a specific server\n" +
+    "  test <server>    Verify MCP handshake and tools/list\n" +
+    "  enable <server>  Enable a local GSD-managed server\n" +
+    "  disable <server> Disable a local GSD-managed server\n" +
+    "  delete <server> --confirm  Delete a local GSD-managed server\n" +
+    "  import <server> [as <name>] Copy a discovered server to .gsd/mcp.json\n" +
     "  init [dir]       Write .mcp.json for the local GSD workflow MCP server",
     "warning",
   );

@@ -4,6 +4,13 @@
 import type { GSDProject } from './types.js';
 import type { MigrationPreview } from './writer.js';
 
+function countCanonicalDecisionRows(content: string): number {
+  return content
+    .split('\n')
+    .filter((line) => /^\|\s*D\d+\s*\|/.test(line.trim()))
+    .length;
+}
+
 /**
  * Compute pre-write statistics from a GSDProject without performing I/O.
  * Used to show the user what a migration will produce before writing anything.
@@ -36,6 +43,9 @@ export function generatePreview(project: GSDProject): MigrationPreview {
   }
 
   return {
+    decisions: {
+      total: countCanonicalDecisionRows(project.decisionsContent),
+    },
     milestoneCount: project.milestones.length,
     totalSlices,
     totalTasks,

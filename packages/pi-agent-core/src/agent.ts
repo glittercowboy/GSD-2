@@ -14,9 +14,11 @@ import {
 	type ThinkingBudgets,
 	type Transport,
 } from "@gsd/pi-ai";
+import { randomUUID } from "crypto";
 import { agentLoop, agentLoopContinue, ZERO_USAGE } from "./agent-loop.js";
 import type {
 	AgentContext,
+	AgentAbortOrigin,
 	AgentEvent,
 	AgentLoopConfig,
 	AgentMessage,
@@ -51,6 +53,11 @@ export interface AgentOptions {
 	 * Use for context pruning, injecting external context, etc.
 	 */
 	transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
+
+	/**
+	 * Optional final tool filter applied immediately before each provider call.
+	 */
+	filterTools?: AgentLoopConfig["filterTools"];
 
 	/**
 	 * Steering mode: "all" = send all steering messages at once, "one-at-a-time" = one per turn
@@ -142,8 +149,10 @@ export class Agent {
 
 	private listeners = new Set<(e: AgentEvent) => void>();
 	private abortController?: AbortController;
+	private abortOrigin?: AgentAbortOrigin;
 	private convertToLlm: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
 	private transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
+	private filterTools?: AgentLoopConfig["filterTools"];
 	private steeringQueue: QueueEntry[] = [];
 	private followUpQueue: QueueEntry[] = [];
 	private steeringMode: "all" | "one-at-a-time";
@@ -166,6 +175,7 @@ export class Agent {
 		this._state = { ...this._state, ...opts.initialState };
 		this.convertToLlm = opts.convertToLlm || defaultConvertToLlm;
 		this.transformContext = opts.transformContext;
+		this.filterTools = opts.filterTools;
 		this.steeringMode = opts.steeringMode || "one-at-a-time";
 		this.followUpMode = opts.followUpMode || "one-at-a-time";
 		this.streamFn = opts.streamFn || streamSimple;
@@ -382,7 +392,8 @@ export class Agent {
 		this._state.messages = [];
 	}
 
-	abort() {
+	abort(origin: AgentAbortOrigin = "unknown") {
+		this.abortOrigin = origin;
 		this.abortController?.abort();
 	}
 
@@ -476,6 +487,8 @@ export class Agent {
 		const model = this._state.model;
 		if (!model) throw new Error("No model configured");
 
+		const turnId = randomUUID();
+		const sessionId = this._sessionId;
 		this._state.activeInferenceModel = model;
 
 		this.runningPrompt = new Promise<void>((resolve) => {
@@ -509,6 +522,7 @@ export class Agent {
 			maxRetryDelayMs: this._maxRetryDelayMs,
 			convertToLlm: this.convertToLlm,
 			transformContext: this.transformContext,
+			filterTools: this.filterTools,
 			getApiKey: this.getApiKey,
 			getSteeringMessages: async () => {
 				if (skipInitialSteeringPoll) {
@@ -531,31 +545,32 @@ export class Agent {
 				: agentLoopContinue(context, config, this.abortController.signal, this.streamFn);
 
 			for await (const event of stream) {
+				const stampedEvent = this.stampEvent(event, sessionId, turnId);
 				// Update internal state based on events
-				switch (event.type) {
+				switch (stampedEvent.type) {
 					case "message_start":
 					case "message_update":
-						partial = event.message;
-						this._state.streamMessage = event.message;
+						partial = stampedEvent.message;
+						this._state.streamMessage = stampedEvent.message;
 						break;
 
 					case "message_end":
 						partial = null;
 						this._state.streamMessage = null;
-						this.appendMessage(event.message);
+						this.appendMessage(stampedEvent.message);
 						break;
 
 					case "tool_execution_start":
-						this._updatePendingToolCalls("add", event.toolCallId);
+						this._updatePendingToolCalls("add", stampedEvent.toolCallId);
 						break;
 
 					case "tool_execution_end":
-						this._updatePendingToolCalls("delete", event.toolCallId);
+						this._updatePendingToolCalls("delete", stampedEvent.toolCallId);
 						break;
 
 					case "turn_end":
-						if (event.message.role === "assistant" && (event.message as any).errorMessage) {
-							this._state.error = (event.message as any).errorMessage;
+						if (stampedEvent.message.role === "assistant" && (stampedEvent.message as any).errorMessage) {
+							this._state.error = (stampedEvent.message as any).errorMessage;
 						}
 						break;
 
@@ -566,7 +581,7 @@ export class Agent {
 				}
 
 				// Emit to listeners
-				this.emit(event);
+				this.emit(stampedEvent);
 			}
 
 			// Handle any remaining partial message
@@ -600,16 +615,42 @@ export class Agent {
 
 			this.appendMessage(errorMsg);
 			this._state.error = err?.message || String(err);
-			this.emit({ type: "agent_end", messages: [errorMsg] });
+			const agentEndEvent: AgentEvent = {
+				type: "agent_end",
+				messages: [errorMsg],
+				sessionId,
+				turnId,
+			};
+			if (this.abortController?.signal.aborted) {
+				agentEndEvent.abortOrigin = this.abortOrigin ?? "unknown";
+			}
+			this.emit(agentEndEvent);
 		} finally {
 			this._state.isStreaming = false;
 			this._state.streamMessage = null;
 			this._state.pendingToolCalls = new Set<string>();
 			this._state.activeInferenceModel = undefined;
+			this.abortOrigin = undefined;
 			this.abortController = undefined;
 			this.resolveRunningPrompt?.();
 			this.runningPrompt = undefined;
 			this.resolveRunningPrompt = undefined;
+		}
+	}
+
+	private stampEvent(event: AgentEvent, sessionId: string | undefined, turnId: string): AgentEvent {
+		switch (event.type) {
+			case "agent_start":
+			case "agent_end":
+			case "turn_start":
+			case "turn_end":
+			case "message_start":
+			case "message_update":
+			case "message_end":
+			case "tool_execution_start":
+			case "tool_execution_update":
+			case "tool_execution_end":
+				return { ...event, sessionId, turnId };
 		}
 	}
 

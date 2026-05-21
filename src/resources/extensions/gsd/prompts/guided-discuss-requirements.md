@@ -1,6 +1,6 @@
 **Working directory:** `{{workingDirectory}}`. All file reads, writes, and shell commands MUST operate relative to this directory. Do NOT `cd` elsewhere. For `.gsd` files, use absolute paths rooted at `{{workingDirectory}}`, not `Glob`.
 
-Discuss **project-level requirements**. Read `.gsd/PROJECT.md` first; it is authoritative for vision, core value, anti-goals, and milestone sequence. Requirements must trace to it. Ask capability gray areas, then write `.gsd/REQUIREMENTS.md` using v2 `R###` format and the **Requirements** template.
+Discuss **project-level requirements**. Read `.gsd/PROJECT.md` first; it is the rendered project artifact for vision, core value, anti-goals, and milestone sequence. Requirements must trace to it. Ask capability gray areas, then persist requirements with `gsd_requirement_save` and render `.gsd/REQUIREMENTS.md` through `gsd_summary_save` using v2 `R###` format and the **Requirements** template.
 
 This runs once after `discuss-project` and before milestone work, creating the capability contract for milestones, slices, and verification.
 
@@ -25,7 +25,7 @@ Before your first action, print this banner verbatim in chat:
 3. If `.gsd/REQUIREMENTS.md` exists, read it as the working set.
 
 **Shape-dependent cadence:**
-- **`simple`**: one fast pass. Extract from PROJECT.md, ask 1-2 plain-text clarifiers only when class/status is ambiguous, then write REQUIREMENTS.md.
+- **`simple`**: one fast pass. Extract from PROJECT.md, ask 1-2 plain-text clarifiers only when class/status is ambiguous, then persist requirements through the DB-backed tools.
 - **`complex`**: multi-round questioning with structured 3-4-option questions where alternatives matter.
 
 ---
@@ -81,7 +81,7 @@ Before the wrap-up gate, verify: every milestone has an Active requirement; Core
 
 If they adjust, absorb and re-verify.
 
-**CRITICAL — Confirmation gate:** Do not write final REQUIREMENTS.md until explicit confirmation. Never rationalize past it.
+**CRITICAL — Confirmation gate:** Do not persist final REQUIREMENTS content until explicit confirmation. Never rationalize past it.
 
 ---
 

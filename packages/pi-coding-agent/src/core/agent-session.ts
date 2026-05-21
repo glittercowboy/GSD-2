@@ -1,3 +1,4 @@
+// GSD2 - Agent session lifecycle and workspace runtime coordination
 /**
  * AgentSession - Core abstraction for agent lifecycle and session management.
  *
@@ -17,6 +18,7 @@ import { readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type {
 	Agent,
+	AgentAbortOrigin,
 	AgentEvent,
 	AgentMessage,
 	AgentState,
@@ -167,6 +169,8 @@ export interface AgentSessionConfig {
 	baseToolsOverride?: Record<string, AgentTool>;
 	/** Mutable ref used by Agent to access the current ExtensionRunner */
 	extensionRunnerRef?: { current?: ExtensionRunner };
+	/** Mutable ref used by providers to access the current workspace root. */
+	workspaceRootRef?: { current: string };
 	/** Optional: check if the claude-code CLI provider is ready (installed + authed).
 	 * Passed through to RetryHandler for third-party block recovery (#3772). */
 	isClaudeCodeReady?: () => boolean;
@@ -284,6 +288,7 @@ export class AgentSession {
 	private _baseToolRegistry: Map<string, AgentTool> = new Map();
 	private _cwd: string;
 	private _extensionRunnerRef?: { current?: ExtensionRunner };
+	private _workspaceRootRef?: { current: string };
 	private _initialActiveToolNames?: string[];
 	private _baseToolsOverride?: Record<string, AgentTool>;
 	private _extensionUIContext?: ExtensionUIContext;
@@ -305,6 +310,8 @@ export class AgentSession {
 
 	// Base system prompt (without extension appends) - used to apply fresh appends each turn
 	private _baseSystemPrompt = "";
+	// Optional prompt-only skill catalog filter. Skills remain loaded and invocable by name.
+	private _visibleSkillNames: Set<string> | undefined = undefined;
 
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
@@ -321,6 +328,10 @@ export class AgentSession {
 			this._modelRegistry,
 		);
 		this._extensionRunnerRef = config.extensionRunnerRef;
+		this._workspaceRootRef = config.workspaceRootRef;
+		if (this._workspaceRootRef) {
+			this._workspaceRootRef.current = this._cwd;
+		}
 		this._initialActiveToolNames = config.initialActiveToolNames;
 		this._baseToolsOverride = config.baseToolsOverride;
 
@@ -348,7 +359,7 @@ export class AgentSession {
 			emit: (event) => this._emit(event),
 			disconnectFromAgent: () => this._disconnectFromAgent(),
 			reconnectToAgent: () => this._reconnectToAgent(),
-			abort: () => this.abort(),
+			abort: () => this.abort({ origin: "user" }),
 		});
 
 		// Always subscribe to agent events for internal handling
@@ -655,11 +666,21 @@ export class AgentSession {
 
 		if (event.type === "agent_start") {
 			this._turnIndex = 0;
-			await extensionRunner.emit({ type: "agent_start" });
+			await extensionRunner.emit({
+				type: "agent_start",
+				sessionId: event.sessionId,
+				turnId: event.turnId,
+			});
 		} else if (event.type === "agent_end") {
 			this._processingAgentEnd = true;
 			try {
-				await extensionRunner.emit({ type: "agent_end", messages: event.messages });
+				await extensionRunner.emit({
+					type: "agent_end",
+					messages: event.messages,
+					sessionId: event.sessionId,
+					turnId: event.turnId,
+					abortOrigin: event.abortOrigin,
+				});
 				// `stop` fires on true quiescence: the agent cleanly completed and is now
 				// waiting for the user. Use the last assistant message's stopReason to
 				// distinguish clean completion from error/cancellation.
@@ -672,7 +693,13 @@ export class AgentSession {
 								? "error"
 								: "completed"
 						: "completed";
-				await extensionRunner.emitStop({ reason: stopReason, lastMessage: last });
+				await extensionRunner.emitStop({
+					reason: stopReason,
+					lastMessage: last,
+					sessionId: event.sessionId,
+					turnId: event.turnId,
+					abortOrigin: event.abortOrigin,
+				});
 			} finally {
 				this._processingAgentEnd = false;
 			}
@@ -681,6 +708,8 @@ export class AgentSession {
 				type: "turn_start",
 				turnIndex: this._turnIndex,
 				timestamp: Date.now(),
+				sessionId: event.sessionId,
+				turnId: event.turnId,
 			};
 			await extensionRunner.emit(extensionEvent);
 		} else if (event.type === "turn_end") {
@@ -689,6 +718,8 @@ export class AgentSession {
 				turnIndex: this._turnIndex,
 				message: event.message,
 				toolResults: event.toolResults,
+				sessionId: event.sessionId,
+				turnId: event.turnId,
 			};
 			await extensionRunner.emit(extensionEvent);
 			this._turnIndex++;
@@ -696,6 +727,8 @@ export class AgentSession {
 			const extensionEvent: MessageStartEvent = {
 				type: "message_start",
 				message: event.message,
+				sessionId: event.sessionId,
+				turnId: event.turnId,
 			};
 			await extensionRunner.emit(extensionEvent);
 		} else if (event.type === "message_update") {
@@ -703,12 +736,16 @@ export class AgentSession {
 				type: "message_update",
 				message: event.message,
 				assistantMessageEvent: event.assistantMessageEvent,
+				sessionId: event.sessionId,
+				turnId: event.turnId,
 			};
 			await extensionRunner.emit(extensionEvent);
 		} else if (event.type === "message_end") {
 			const extensionEvent: MessageEndEvent = {
 				type: "message_end",
 				message: event.message,
+				sessionId: event.sessionId,
+				turnId: event.turnId,
 			};
 			await extensionRunner.emit(extensionEvent);
 		} else if (event.type === "tool_execution_start") {
@@ -865,6 +902,25 @@ export class AgentSession {
 		// Rebuild base system prompt with new tool set
 		this._baseSystemPrompt = this._rebuildSystemPrompt(validToolNames);
 		this.agent.setSystemPrompt(this._baseSystemPrompt);
+	}
+
+	/**
+	 * Set or clear a prompt-only filter for the <available_skills> catalog.
+	 *
+	 * This does not unload skills or disable the Skill tool. It only controls
+	 * which loaded skills are advertised in the system prompt on rebuild.
+	 */
+	setVisibleSkillsByName(skillNames: string[] | undefined): void {
+		this._visibleSkillNames = skillNames === undefined
+			? undefined
+			: new Set(skillNames.map((name) => name.trim().toLowerCase()).filter(Boolean));
+		this._baseSystemPrompt = this._rebuildSystemPrompt(this.getActiveToolNames());
+		this.agent.setSystemPrompt(this._baseSystemPrompt);
+	}
+
+	/** Get the current prompt-only skill catalog filter, if one is active. */
+	getVisibleSkillNames(): string[] | undefined {
+		return this._visibleSkillNames ? [...this._visibleSkillNames] : undefined;
 	}
 
 	/** Whether compaction or branch summarization is currently running */
@@ -1045,6 +1101,9 @@ export class AgentSession {
 		return buildSystemPrompt({
 			cwd: this._cwd,
 			skills: loadedSkills,
+			skillFilter: this._visibleSkillNames
+				? (skill) => this._visibleSkillNames!.has(skill.name.trim().toLowerCase())
+				: undefined,
 			contextFiles: loadedContextFiles,
 			customPrompt: loaderSystemPrompt,
 			appendSystemPrompt,
@@ -1572,9 +1631,9 @@ export class AgentSession {
 	/**
 	 * Abort current operation and wait for agent to become idle.
 	 */
-	async abort(): Promise<void> {
+	async abort(options?: { origin?: AgentAbortOrigin }): Promise<void> {
 		this._retryHandler.abortRetry();
-		this.agent.abort();
+		this.agent.abort(options?.origin);
 		await this.agent.waitForIdle();
 		// Ensure agent_end is emitted even when abort interrupts a tool call (#1414).
 		// The agent may go idle without emitting agent_end if the abort happens
@@ -1588,6 +1647,8 @@ export class AgentSession {
 				await this._extensionRunner.emit({
 					type: "agent_end",
 					messages,
+					sessionId: this.sessionId,
+					abortOrigin: options?.origin,
 				});
 				const last = messages[messages.length - 1];
 				const stopReason: "completed" | "cancelled" | "error" | "blocked" =
@@ -1598,7 +1659,12 @@ export class AgentSession {
 								? "error"
 								: "completed"
 						: "cancelled";
-				await this._extensionRunner.emitStop({ reason: stopReason, lastMessage: last });
+				await this._extensionRunner.emitStop({
+					reason: stopReason,
+					lastMessage: last,
+					sessionId: this.sessionId,
+					abortOrigin: options?.origin,
+				});
 			} finally {
 				this._processingAgentEnd = wasProcessingAgentEnd;
 			}
@@ -1631,7 +1697,7 @@ export class AgentSession {
 			await this.agent.waitForIdle();
 			return;
 		}
-		await this.abort();
+		await this.abort({ origin: "session-transition" });
 	}
 
 	/**
@@ -1645,6 +1711,8 @@ export class AgentSession {
 	async newSession(options?: {
 		parentSession?: string;
 		setup?: (sessionManager: SessionManager) => Promise<void>;
+		/** Explicit workspace root for the new session/tool runtime. */
+		workspaceRoot?: string;
 		/** See ExtensionCommandContext.newSession for docs (#3731). */
 		abortSignal?: AbortSignal;
 	}): Promise<boolean> {
@@ -1666,10 +1734,10 @@ export class AgentSession {
 		try {
 			await this._settleCurrentTurnForSessionTransition();
 
-			// #3731: If the caller aborted (e.g. runUnit() timed out and restored cwd to
-			// project root), discard this session before capturing process.cwd() and
-			// rebuilding the tool runtime. Without this check, the late newSession()
-			// would rebuild tools with root cwd, breaking worktree isolation.
+			// #3731: If the caller aborted (e.g. runUnit() timed out while the
+			// worktree was being torn down), discard this session before rebuilding
+			// the tool runtime. Without this check, the late newSession() could
+			// rebuild tools with a stale workspace root.
 			if (options?.abortSignal?.aborted) {
 				return false;
 			}
@@ -1679,15 +1747,21 @@ export class AgentSession {
 		} finally {
 			this._sessionSwitchPending = false;
 		}
-		// Update cwd to current process directory — auto-mode may have chdir'd
-		// into a worktree since the original session was created.
+		// Update the workspace root for the new tool runtime. Auto-mode passes
+		// this explicitly so session routing does not depend on global
+		// process.cwd() after worktree merge/teardown. Other callers keep the
+		// historical default.
 		const previousCwd = this._cwd;
-		this._cwd = process.cwd();
+		this._cwd = options?.workspaceRoot ?? process.cwd();
+		if (this._workspaceRootRef) {
+			this._workspaceRootRef.current = this._cwd;
+		}
 		this.sessionManager.newSession({ parentSession: options?.parentSession });
 		this.agent.sessionId = this.sessionManager.getSessionId();
 		this._steeringMessages = [];
 		this._followUpMessages = [];
 		this._pendingNextTurnMessages = [];
+		this._visibleSkillNames = undefined;
 
 		this.sessionManager.appendThinkingLevelChange(this.thinkingLevel);
 
@@ -1871,7 +1945,7 @@ export class AgentSession {
 
 		if (isChanging) {
 			this.sessionManager.appendThinkingLevelChange(effectiveLevel);
-			if (this.supportsThinking() || effectiveLevel !== "off") {
+			if (effectiveLevel !== "off") {
 				this.settingsManager.setDefaultThinkingLevel(effectiveLevel);
 			}
 			this._emitSessionStateChanged("set_thinking_level");
@@ -2185,6 +2259,8 @@ export class AgentSession {
 				getActiveTools: () => this.getActiveToolNames(),
 				getAllTools: () => this.getAllTools(),
 				setActiveTools: (toolNames) => this.setActiveToolsByName(toolNames),
+				getVisibleSkills: () => this.getVisibleSkillNames(),
+				setVisibleSkills: (skillNames) => this.setVisibleSkillsByName(skillNames),
 				refreshTools: () => this._refreshToolRegistry(),
 				getCommands,
 				setModel: async (model, options) => {
@@ -2198,7 +2274,7 @@ export class AgentSession {
 			{
 				getModel: () => this.model,
 				isIdle: () => !this.isStreaming,
-				abort: () => this.abort(),
+				abort: () => this.abort({ origin: "user" }),
 				hasPendingMessages: () => this.pendingMessageCount > 0,
 				shutdown: () => {
 					this._extensionShutdownHandler?.();
@@ -2353,6 +2429,7 @@ export class AgentSession {
 		this.settingsManager.reload();
 		resetApiProviders();
 		await this._resourceLoader.reload();
+		this._visibleSkillNames = undefined;
 		this._buildRuntime({
 			activeToolNames: this.getActiveToolNames(),
 			flagValues: previousFlagValues,
@@ -2542,6 +2619,7 @@ export class AgentSession {
 		this._steeringMessages = [];
 		this._followUpMessages = [];
 		this._pendingNextTurnMessages = [];
+		this._visibleSkillNames = undefined;
 
 		// Set new session
 		this.sessionManager.setSessionFile(sessionPath);

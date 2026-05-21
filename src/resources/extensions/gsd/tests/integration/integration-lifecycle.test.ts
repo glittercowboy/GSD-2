@@ -17,10 +17,12 @@ import { migrateFromMarkdown, parseDecisionsTable } from '../../md-importer.ts';
 import {
   queryDecisions,
   queryRequirements,
+  getAllDecisionsFromMemories,
   formatDecisionsForPrompt,
   formatRequirementsForPrompt,
 } from '../../context-store.ts';
 import { saveDecisionToDb, generateDecisionsMd } from '../../db-writer.ts';
+import { backfillDecisionsToMemories } from '../../memory-backfill.ts';
 import { describe, test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -233,8 +235,8 @@ test('integration-lifecycle: full pipeline', async () => {
       assert.ok(typeof saved.id === 'string', 'lifecycle: saveDecisionToDb returned an id');
       assert.match(saved.id, /^D\d+$/, 'lifecycle: saved ID matches D### pattern');
 
-      // Query back from DB
-      const allAfterSave = queryDecisions();
+      // Query back from DB (memories — Stage 3 of ADR-013 stopped legacy decisions-table writes)
+      const allAfterSave = getAllDecisionsFromMemories();
       const savedDecision = allAfterSave.find(d => d.id === saved.id);
       assert.ok(savedDecision !== null && savedDecision !== undefined, `lifecycle: saved decision ${saved.id} found in DB`);
       assert.deepStrictEqual(savedDecision?.decision, 'integration test write-back decision', 'lifecycle: saved decision text matches');
@@ -253,9 +255,15 @@ test('integration-lifecycle: full pipeline', async () => {
       assert.deepStrictEqual(reparsedSaved?.rationale, 'proves round-trip fidelity', 'lifecycle: round-trip rationale preserved');
 
       // ── Step 8: DB consistency — total count sanity ─────────────────────
-      const finalCount = queryDecisions().length;
-      // Original 14 + 1 re-import + 1 saveDecisionToDb = 16
-      assert.ok(finalCount === DECISIONS_COUNT + 2, `lifecycle: final DB count = ${DECISIONS_COUNT + 2} (got ${finalCount})`);
+      // ADR-013 Stage 3 split the write paths: migrateFromMarkdown still
+      // populates the legacy decisions table, but saveDecisionToDb now writes
+      // only to memories. The unified projection (and the post-#5756 cutover
+      // end-state) lives in memories, so simulate what bootstrap does and
+      // backfill the table rows into memories before counting.
+      backfillDecisionsToMemories();
+      const finalCount = getAllDecisionsFromMemories().length;
+      // Original 14 + 1 re-import (decisions table → memories via backfill) + 1 saveDecisionToDb = 16
+      assert.ok(finalCount === DECISIONS_COUNT + 2, `lifecycle: final memory-store count = ${DECISIONS_COUNT + 2} (got ${finalCount})`);
 
       closeDatabase();
     } finally {

@@ -39,7 +39,7 @@ The Sketch Scope inlined above is a **hard constraint**. Plan within it. If code
 Before decomposing:
 
 1. Read inlined prior slice SUMMARY files. Note interface shifts, file-layout changes, and constraints.
-2. Use `rg`, `find`, and targeted reads to confirm current code for files the sketch references. If a module/type/API moved or changed, reflect that.
+2. Use `read`, `grep`, `glob`, `ls`, and targeted reads to confirm current code for files the sketch references. If you need richer search, use read-only `bash` commands. If a module/type/API moved or changed, reflect that.
 3. If prior slices flagged fragility or known issues relevant to this slice, fold them into task verification.
 
 ### Source Files
@@ -64,10 +64,10 @@ Then:
 2. {{skillActivation}} Record the installed skills you expect executors to use in each task plan's `skills_used` frontmatter.
 3. Define slice-level verification: the objective stopping condition. Plan real test files with real assertions; for simple slices, executable commands are fine.
 4. For non-trivial slices, plan observability / proof level / integration closure, threat surface, and requirement impact. Omit entirely for simple slices.
-5. Decompose the slice into tasks that fit one context window each. Every task must have Why / Files / Do / Verify / Done-when, plus a task plan with description, steps, must-haves, verification, inputs (backtick-wrapped paths), and expected output (backtick-wrapped paths).
+5. Decompose the slice into tasks that fit one context window each. Every task passed to `gsd_plan_slice` must use the exact keys `taskId`, `title`, `description`, `estimate`, `files`, `verify`, `inputs`, `expectedOutput`, and optional `observabilityImpact`. Put Why / Do / Done-when detail in `description`. `files`, `inputs`, and `expectedOutput` must be JSON arrays of strings, even for one path (for example, `"expectedOutput": ["src/index.ts"]`, never `"expectedOutput": "src/index.ts"`).
 6. **Persist planning state through `gsd_plan_slice`.** Call it with the full payload. The tool writes to the DB and renders `{{outputPath}}` and `{{slicePath}}/tasks/T##-PLAN.md` automatically. Do NOT rely on direct `PLAN.md` writes.
 7. **Self-audit the plan.** If every task were completed exactly as written, the slice goal/demo should be true. Every must-have maps to a task. Inputs and Expected Output are backtick-wrapped file paths.
-8. If refinement produced structural decisions that diverge from the sketch, append them to `.gsd/DECISIONS.md`.
+8. If refinement produced structural decisions that diverge from the sketch, call `gsd_decision_save` for each; the tool persists the decision and regenerates `.gsd/DECISIONS.md`.
 9. {{commitInstruction}}
 
 The slice directory and tasks/ subdirectory already exist. Do NOT mkdir.

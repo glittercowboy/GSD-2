@@ -1,38 +1,26 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 
-const sourcePath = join(import.meta.dirname, "..", "auto-start.ts");
-const source = readFileSync(sourcePath, "utf-8");
+import { hasGitIndexLockForTest } from "../auto-start.ts";
 
-test("bootstrapAutoSession blocks on .git/index.lock before git mutations", () => {
-  const preflightIdx = source.indexOf('join(base, ".git", "index.lock")');
-  const initIdx = source.indexOf("nativeInit(base, mainBranch)");
-  const addIdx = source.indexOf("nativeAddAll(base)");
-  const commitIdx = source.indexOf('nativeCommit(base, "chore: init gsd")');
+test("bootstrapAutoSession detects .git/index.lock without deleting it", (t) => {
+  const base = mkdtempSync(join(tmpdir(), "gsd-index-lock-"));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  const lockPath = join(base, ".git", "index.lock");
+  mkdirSync(join(base, ".git"), { recursive: true });
+  writeFileSync(lockPath, "locked\n", "utf-8");
 
-  assert.ok(preflightIdx > -1, "bootstrap must check for .git/index.lock");
-  assert.ok(initIdx > -1, "bootstrap still initializes git when safe");
-  assert.ok(addIdx > -1, "bootstrap still stages bootstrap files when safe");
-  assert.ok(commitIdx > -1, "bootstrap still commits bootstrap files when safe");
-
-  assert.ok(preflightIdx < initIdx, "index.lock preflight must run before git init");
-  assert.ok(preflightIdx < addIdx, "index.lock preflight must run before git add");
-  assert.ok(preflightIdx < commitIdx, "index.lock preflight must run before git commit");
+  assert.equal(hasGitIndexLockForTest(base), true);
+  assert.equal(existsSync(lockPath), true);
 });
 
-test("bootstrapAutoSession never deletes .git/index.lock", () => {
-  assert.ok(
-    !source.includes("unlinkSync(gitLockFile)") && !source.includes("rmSync(gitLockFile"),
-    "bootstrap must not remove .git/index.lock because git lock staleness is not safe to infer",
-  );
-  assert.ok(
-    !source.includes("STALE_GIT_LOCK_THRESHOLD_MS"),
-    "bootstrap must not use lock age as a deletion heuristic",
-  );
-  assert.ok(
-    source.includes("return releaseLockAndReturn();"),
-    "bootstrap must abort and release the session lock when the git index is locked",
-  );
+test("bootstrapAutoSession reports no index lock when the lock file is absent", (t) => {
+  const base = mkdtempSync(join(tmpdir(), "gsd-index-lock-missing-"));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  mkdirSync(join(base, ".git"), { recursive: true });
+
+  assert.equal(hasGitIndexLockForTest(base), false);
 });

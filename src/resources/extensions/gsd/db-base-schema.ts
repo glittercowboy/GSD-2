@@ -57,7 +57,8 @@ export function createBaseSchemaObjects(db: DbAdapter, hooks: BaseSchemaHooks): 
       slice_id TEXT DEFAULT NULL,
       task_id TEXT DEFAULT NULL,
       full_content TEXT NOT NULL DEFAULT '',
-      imported_at TEXT NOT NULL DEFAULT ''
+      imported_at TEXT NOT NULL DEFAULT '',
+      content_hash TEXT DEFAULT NULL
     )
   `);
 
@@ -76,7 +77,8 @@ export function createBaseSchemaObjects(db: DbAdapter, hooks: BaseSchemaHooks): 
       hit_count INTEGER NOT NULL DEFAULT 0,
       scope TEXT NOT NULL DEFAULT 'project',
       tags TEXT NOT NULL DEFAULT '[]',
-      structured_fields TEXT DEFAULT NULL
+      structured_fields TEXT DEFAULT NULL,
+      last_hit_at TEXT DEFAULT NULL
     )
   `);
 
@@ -166,6 +168,7 @@ export function createBaseSchemaObjects(db: DbAdapter, hooks: BaseSchemaHooks): 
       proof_level TEXT NOT NULL DEFAULT '',
       integration_closure TEXT NOT NULL DEFAULT '',
       observability_impact TEXT NOT NULL DEFAULT '',
+      target_repositories TEXT NOT NULL DEFAULT '[]',
       sequence INTEGER DEFAULT 0,
       replan_triggered_at TEXT DEFAULT NULL,
       is_sketch INTEGER NOT NULL DEFAULT 0,
@@ -206,6 +209,7 @@ export function createBaseSchemaObjects(db: DbAdapter, hooks: BaseSchemaHooks): 
       expected_output TEXT NOT NULL DEFAULT '[]',
       observability_impact TEXT NOT NULL DEFAULT '',
       full_plan_md TEXT NOT NULL DEFAULT '',
+      target_repositories TEXT NOT NULL DEFAULT '[]',
       sequence INTEGER DEFAULT 0,
       PRIMARY KEY (milestone_id, slice_id, id),
       FOREIGN KEY (milestone_id, slice_id) REFERENCES slices(milestone_id, id)

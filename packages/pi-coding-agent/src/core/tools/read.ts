@@ -6,6 +6,7 @@ import { access as fsAccess, readFile as fsReadFile } from "fs/promises";
 import { formatDimensionNote, resizeImage } from "../../utils/image-resize.js";
 import { detectSupportedImageMimeTypeFromFile } from "../../utils/mime.js";
 import { resolveReadPath } from "./path-utils.js";
+import { createReadFileTarget, type ToolTargetMetadata } from "./tool-target.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult, truncateHead } from "./truncate.js";
 
 const readSchema = Type.Object({
@@ -17,6 +18,7 @@ const readSchema = Type.Object({
 export type ReadToolInput = Static<typeof readSchema>;
 
 export interface ReadToolDetails {
+	target?: ToolTargetMetadata;
 	truncation?: TruncationResult;
 }
 
@@ -61,6 +63,7 @@ export function createReadTool(cwd: string, options?: ReadToolOptions): AgentToo
 			signal?: AbortSignal,
 		) => {
 			const absolutePath = resolveReadPath(path, cwd);
+			const target = createReadFileTarget(path, absolutePath, offset, limit);
 
 			return new Promise<{ content: (TextContent | ImageContent)[]; details: ReadToolDetails | undefined }>(
 				(resolve, reject) => {
@@ -210,7 +213,7 @@ export function createReadTool(cwd: string, options?: ReadToolOptions): AgentToo
 								signal.removeEventListener("abort", onAbort);
 							}
 
-							resolve({ content, details });
+							resolve({ content, details: { ...details, target } });
 						} catch (error: any) {
 							// Clean up abort handler
 							if (signal) {

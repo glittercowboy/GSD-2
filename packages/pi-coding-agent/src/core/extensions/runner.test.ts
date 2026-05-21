@@ -160,7 +160,7 @@ describe("ExtensionRunner.emitToolCall", () => {
 });
 
 describe("ExtensionRunner.createContext", () => {
-	it("uses the live process cwd instead of the constructor cwd", (t) => {
+	it("uses the constructor workspace root instead of ambient process cwd", (t) => {
 		const originalCwd = process.cwd();
 		const dir = mkdtempSync(join(tmpdir(), "runner-test-"));
 		const projectDir = join(dir, "project");
@@ -179,8 +179,8 @@ describe("ExtensionRunner.createContext", () => {
 		const realProjectDir = realpathSync(projectDir);
 		process.chdir(realProjectDir);
 
-		assert.equal(runner.createContext().cwd, realProjectDir);
-		assert.equal(runner.createCommandContext().cwd, realProjectDir);
+		assert.equal(runner.createContext().cwd, originalCwd);
+		assert.equal(runner.createCommandContext().cwd, originalCwd);
 	});
 
 	it("does not let lifecycle event handlers close the TUI", async (t) => {

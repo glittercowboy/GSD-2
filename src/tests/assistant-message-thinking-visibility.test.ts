@@ -1,46 +1,56 @@
-// Regression test for #4181:
-// When assistant messages include both thinking + text, cap visible thinking
-// lines so question/chat text remains visible without toggling thinking off.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { AssistantMessageComponent } from "../../packages/pi-coding-agent/src/modes/interactive/components/assistant-message.ts";
 
-const assistantMessagePath = join(
-  process.cwd(),
-  "packages",
-  "pi-coding-agent",
-  "src",
-  "modes",
-  "interactive",
-  "components",
-  "assistant-message.ts",
-);
+function firstRenderedMarkdown(component: AssistantMessageComponent): any {
+  return (component as any).contentContainer.children[0];
+}
+
+function longThinking() {
+  return Array.from({ length: 20 }, (_, i) => `thought ${i}`).join("\n");
+}
 
 test("assistant-message caps thinking block height when text content is present", () => {
-  const src = readFileSync(assistantMessagePath, "utf-8");
+  const component = new AssistantMessageComponent({
+    id: "msg-1",
+    role: "assistant",
+    timestamp: Date.now(),
+    provider: "openai",
+    model: "test-model",
+    content: [
+      { type: "thinking", thinking: longThinking() },
+      { type: "text", text: "final answer" },
+    ],
+  } as any);
 
-  assert.match(
-    src,
-    /const hasTextContent = message\.content\.some\(\(c\) => c\.type === "text" && c\.text\.trim\(\)\.length > 0\);/,
-    "assistant-message should detect text presence in mixed thinking+text messages",
-  );
+  assert.equal(firstRenderedMarkdown(component).maxLines, 8);
+});
 
-  assert.match(
-    src,
-    /const hasToolContent = message\.content\.some\(\(c\) => c\.type === "toolCall" \|\| c\.type === "serverToolUse"\);/,
-    "assistant-message should detect tool blocks in mixed turns",
-  );
+test("assistant-message caps thinking block height when tool content is present", () => {
+  const component = new AssistantMessageComponent({
+    id: "msg-2",
+    role: "assistant",
+    timestamp: Date.now(),
+    provider: "openai",
+    model: "test-model",
+    content: [
+      { type: "thinking", thinking: longThinking() },
+      { type: "toolCall", toolCallId: "tool-1", toolName: "bash", args: {} },
+    ],
+  } as any);
 
-  assert.match(
-    src,
-    /const shouldCapThinking = hasTextContent \|\| hasToolContent \|\| message\.provider === "claude-code";/,
-    "assistant-message should derive a cap policy that also covers claude-code long reasoning traces",
-  );
+  assert.equal(firstRenderedMarkdown(component).maxLines, 8);
+});
 
-  assert.match(
-    src,
-    /if \(shouldCapThinking\)\s*\{\s*thinkingMarkdown\.maxLines = 8;\s*\}/s,
-    "assistant-message should cap visible thinking lines when the cap policy is active",
-  );
+test("assistant-message caps claude-code thinking-only traces", () => {
+  const component = new AssistantMessageComponent({
+    id: "msg-3",
+    role: "assistant",
+    timestamp: Date.now(),
+    provider: "claude-code",
+    model: "test-model",
+    content: [{ type: "thinking", thinking: longThinking() }],
+  } as any);
+
+  assert.equal(firstRenderedMarkdown(component).maxLines, 8);
 });

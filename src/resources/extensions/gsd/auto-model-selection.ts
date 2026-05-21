@@ -615,10 +615,11 @@ export async function selectAndApplyModel(
  * Handles formats: "provider/model", "bare-id", "org/model-name" (OpenRouter).
  */
 export function resolveModelId<T extends { id: string; provider: string }>(
-  modelId: string,
+  modelId: string | undefined,
   availableModels: T[],
   currentProvider: string | undefined,
 ): T | undefined {
+  if (!modelId) return undefined;
   const slashIdx = modelId.indexOf("/");
 
   if (slashIdx !== -1) {

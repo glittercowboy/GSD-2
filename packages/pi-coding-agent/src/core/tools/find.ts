@@ -5,6 +5,7 @@ import { existsSync } from "fs";
 import path from "path";
 import { FIND_DEFAULT_LIMIT } from "../constants.js";
 import { resolveToCwd } from "./path-utils.js";
+import { createToolTarget, type ToolTargetMetadata } from "./tool-target.js";
 import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult, truncateHead } from "./truncate.js";
 
 const findSchema = Type.Object({
@@ -20,6 +21,7 @@ export type FindToolInput = Static<typeof findSchema>;
 const DEFAULT_LIMIT = FIND_DEFAULT_LIMIT;
 
 export interface FindToolDetails {
+	target?: ToolTargetMetadata;
 	truncation?: TruncationResult;
 	resultLimitReached?: number;
 }
@@ -73,6 +75,13 @@ export function createFindTool(cwd: string, options?: FindToolOptions): AgentToo
 				(async () => {
 					try {
 						const searchPath = resolveToCwd(searchDir || ".", cwd);
+						const target = createToolTarget({
+							kind: "search",
+							action: "find",
+							inputPath: searchDir || ".",
+							resolvedPath: searchPath,
+							pattern,
+						});
 						const effectiveLimit = limit ?? DEFAULT_LIMIT;
 						const ops = customOps ?? defaultFindOperations;
 
@@ -93,7 +102,7 @@ export function createFindTool(cwd: string, options?: FindToolOptions): AgentToo
 							if (results.length === 0) {
 								resolve({
 									content: [{ type: "text", text: "No files found matching pattern" }],
-									details: undefined,
+									details: { target },
 								});
 								return;
 							}
@@ -111,7 +120,7 @@ export function createFindTool(cwd: string, options?: FindToolOptions): AgentToo
 							const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
 
 							let resultOutput = truncation.content;
-							const details: FindToolDetails = {};
+							const details: FindToolDetails = { target };
 							const notices: string[] = [];
 
 							if (resultLimitReached) {
@@ -130,7 +139,7 @@ export function createFindTool(cwd: string, options?: FindToolOptions): AgentToo
 
 							resolve({
 								content: [{ type: "text", text: resultOutput }],
-								details: Object.keys(details).length > 0 ? details : undefined,
+								details,
 							});
 							return;
 						}
@@ -150,7 +159,7 @@ export function createFindTool(cwd: string, options?: FindToolOptions): AgentToo
 						if (globResult.matches.length === 0) {
 							resolve({
 								content: [{ type: "text", text: "No files found matching pattern" }],
-								details: undefined,
+								details: { target },
 							});
 							return;
 						}
@@ -163,7 +172,7 @@ export function createFindTool(cwd: string, options?: FindToolOptions): AgentToo
 						const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
 
 						let resultOutput = truncation.content;
-						const details: FindToolDetails = {};
+						const details: FindToolDetails = { target };
 						const notices: string[] = [];
 
 						if (resultLimitReached) {
@@ -184,7 +193,7 @@ export function createFindTool(cwd: string, options?: FindToolOptions): AgentToo
 
 						resolve({
 							content: [{ type: "text", text: resultOutput }],
-							details: Object.keys(details).length > 0 ? details : undefined,
+							details,
 						});
 					} catch (e: any) {
 						signal?.removeEventListener("abort", onAbort);

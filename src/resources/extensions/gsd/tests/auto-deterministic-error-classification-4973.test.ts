@@ -42,6 +42,20 @@ function makeTmpBase(): string {
   return base;
 }
 
+function makeBrokenIsolatedWorktree(): string {
+  const root = mkdtempSync(join(tmpdir(), `gsd-test-5848-${randomUUID().slice(0, 8)}-`));
+  tmpDirs.push(root);
+  const base = join(root, ".gsd", "projects", "project-id", "worktrees", "M003");
+  mkdirSync(join(base, ".gsd", "milestones", "M003", "slices", "S03"), { recursive: true });
+  return base;
+}
+
+function makeBrokenIsolatedWorktreeRevParse(): string {
+  const base = makeBrokenIsolatedWorktree();
+  mkdirSync(join(base, ".git"));
+  return base;
+}
+
 function resetAutoState(): void {
   _setAutoActiveForTest(false);
 }
@@ -227,6 +241,108 @@ describe("Test 5 — postUnitPreVerification short-circuits on deterministic err
     assert.ok(
       existsSync(placeholderPath),
       `blocker placeholder must be written at ${placeholderPath}`,
+    );
+  });
+});
+
+describe("Test 5b — broken isolated worktree short-circuits artifact retry (#5848)", () => {
+  test("pauses with worktree integrity failure instead of setting pendingVerificationRetry", async () => {
+    const { postUnitPreVerification } = await import("../auto-post-unit.ts");
+
+    const base = makeBrokenIsolatedWorktree();
+    const s = new AutoSession();
+    s.active = true;
+    s.basePath = base;
+    s.currentUnit = { type: "research-slice", id: "M003/S03", startedAt: Date.now() };
+    s.verificationRetryCount.set("research-slice:M003/S03", 2);
+
+    const notifications: string[] = [];
+    let pauseCalled = false;
+    const pctx = {
+      s,
+      ctx: {
+        ui: {
+          notify: (message: string) => {
+            notifications.push(message);
+          },
+        },
+      },
+      pi: {},
+      buildSnapshotOpts: () => ({}) as any,
+      lockBase: () => base,
+      stopAuto: async () => {},
+      pauseAuto: async () => {
+        pauseCalled = true;
+      },
+      updateProgressWidget: () => {},
+    } as any;
+
+    const result = await postUnitPreVerification(pctx, {
+      skipSettleDelay: true,
+      skipWorktreeSync: true,
+    });
+
+    assert.strictEqual(result, "dispatched", "worktree integrity failure must pause instead of retrying");
+    assert.strictEqual(pauseCalled, true, "pauseAuto must be called for a broken isolated worktree");
+    assert.strictEqual(s.pendingVerificationRetry, null, "pendingVerificationRetry must NOT be set");
+    assert.strictEqual(s.verificationRetryCount.has("research-slice:M003/S03"), false, "stale retry count must be cleared");
+    assert.ok(
+      notifications.some((message) => message.includes("Worktree integrity failure") && message.includes(".git missing")),
+      `expected worktree integrity notification, got: ${notifications.join("\n")}`,
+    );
+    assert.ok(
+      notifications.every((message) => !message.includes("Artifact verification failed")),
+      `must not surface artifact retry messaging, got: ${notifications.join("\n")}`,
+    );
+  });
+
+  test("pauses when git rev-parse cannot validate an isolated worktree", async () => {
+    const { postUnitPreVerification } = await import("../auto-post-unit.ts");
+
+    const base = makeBrokenIsolatedWorktreeRevParse();
+    const s = new AutoSession();
+    s.active = true;
+    s.basePath = base;
+    s.currentUnit = { type: "research-slice", id: "M003/S03", startedAt: Date.now() };
+    s.verificationRetryCount.set("research-slice:M003/S03", 2);
+
+    const notifications: string[] = [];
+    let pauseCalled = false;
+    const pctx = {
+      s,
+      ctx: {
+        ui: {
+          notify: (message: string) => {
+            notifications.push(message);
+          },
+        },
+      },
+      pi: {},
+      buildSnapshotOpts: () => ({}) as any,
+      lockBase: () => base,
+      stopAuto: async () => {},
+      pauseAuto: async () => {
+        pauseCalled = true;
+      },
+      updateProgressWidget: () => {},
+    } as any;
+
+    const result = await postUnitPreVerification(pctx, {
+      skipSettleDelay: true,
+      skipWorktreeSync: true,
+    });
+
+    assert.strictEqual(result, "dispatched", "worktree integrity failure must pause instead of retrying");
+    assert.strictEqual(pauseCalled, true, "pauseAuto must be called for a broken isolated worktree");
+    assert.strictEqual(s.pendingVerificationRetry, null, "pendingVerificationRetry must NOT be set");
+    assert.strictEqual(s.verificationRetryCount.has("research-slice:M003/S03"), false, "stale retry count must be cleared");
+    assert.ok(
+      notifications.some((message) => message.includes("Worktree integrity failure") && message.includes("git rev-parse")),
+      `expected git rev-parse worktree integrity notification, got: ${notifications.join("\n")}`,
+    );
+    assert.ok(
+      notifications.every((message) => !message.includes("Artifact verification failed")),
+      `must not surface artifact retry messaging, got: ${notifications.join("\n")}`,
     );
   });
 });

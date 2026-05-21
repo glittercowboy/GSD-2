@@ -70,10 +70,18 @@ export {
 export {
 	createWriteTool,
 	type WriteOperations,
+	type WriteToolDetails,
 	type WriteToolInput,
 	type WriteToolOptions,
 	writeTool,
 } from "./write.js";
+export {
+	createToolTarget,
+	type ToolTargetAction,
+	type ToolTargetKind,
+	type ToolTargetMetadata,
+	type ToolTargetRange,
+} from "./tool-target.js";
 export {
 	createHashlineEditTool,
 	type HashlineEditInput,

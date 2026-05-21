@@ -14,7 +14,9 @@ import {
   generatePreview,
   writeGSDDirectory,
 } from '../../migrate/index.ts';
+import { importWrittenMigrationToDb } from '../../migrate/command.ts';
 import { deriveState } from '../../state.ts';
+import { closeDatabase, getDecisionById, getRequirementCounts } from '../../gsd-db.ts';
 import { describe, test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -50,6 +52,16 @@ const SAMPLE_REQUIREMENTS = `# Requirements
 ### R002 — Output Format
 - Status: validated
 - Description: Output matches GSD format.
+`;
+
+const SAMPLE_REQUIREMENTS_LEGACY_IDS = `# Requirements
+
+## Active
+
+- [ ] **CORE-PIPELINE**: Pipeline must work end-to-end.
+- [ ] **OUTPUT-FORMAT**: Output matches GSD format.
+- [ ] **IMPORT-DB**: Migration imports requirements into the DB.
+- [ ] **STATUS-WIDGET**: Status can query migrated requirements.
 `;
 
 const SAMPLE_STATE = `# State
@@ -166,14 +178,14 @@ Depends on foundation work.
 </context>
 `;
 
-function createCompleteFixture(): string {
+function createCompleteFixture(requirementsContent: string = SAMPLE_REQUIREMENTS): string {
   const base = mkdtempSync(join(tmpdir(), 'gsd-cmd-test-'));
   const planning = join(base, '.planning');
   mkdirSync(planning, { recursive: true });
 
   writeFileSync(join(planning, 'PROJECT.md'), SAMPLE_PROJECT);
   writeFileSync(join(planning, 'ROADMAP.md'), SAMPLE_ROADMAP);
-  writeFileSync(join(planning, 'REQUIREMENTS.md'), SAMPLE_REQUIREMENTS);
+  writeFileSync(join(planning, 'REQUIREMENTS.md'), requirementsContent);
   writeFileSync(join(planning, 'STATE.md'), SAMPLE_STATE);
   writeFileSync(join(planning, 'config.json'), SAMPLE_CONFIG);
 
@@ -303,6 +315,7 @@ test('Full pipeline: parse → transform → preview → write → deriveState',
       const expectedTaskPct = totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0;
       assert.deepStrictEqual(preview.sliceCompletionPct, expectedSlicePct, 'pipeline: preview sliceCompletionPct');
       assert.deepStrictEqual(preview.taskCompletionPct, expectedTaskPct, 'pipeline: preview taskCompletionPct');
+      assert.deepStrictEqual(preview.decisions.total, 1, 'pipeline: preview decisions total');
 
       // Requirements in preview
       assert.deepStrictEqual(preview.requirements.active, 1, 'pipeline: preview requirements active');
@@ -342,6 +355,39 @@ test('Full pipeline: parse → transform → preview → write → deriveState',
     }
 });
 
+test('Full pipeline: legacy requirement IDs import into DB with canonical IDs', async () => {
+    const base = createCompleteFixture(SAMPLE_REQUIREMENTS_LEGACY_IDS);
+    const writeTarget = mkdtempSync(join(tmpdir(), 'gsd-cmd-legacy-reqs-'));
+    try {
+      const parsed = await parsePlanningDirectory(join(base, '.planning'));
+      const project = transformToGSD(parsed);
+      const preview = generatePreview(project);
+
+      assert.deepStrictEqual(
+        project.requirements.map((req) => req.id),
+        ['R001', 'R002', 'R003', 'R004'],
+        'legacy-reqs: transform assigns canonical R IDs',
+      );
+      assert.ok(
+        project.requirements[0]?.description.includes('Legacy ID: CORE-PIPELINE'),
+        'legacy-reqs: original ID survives in migrated requirement content',
+      );
+
+      await writeGSDDirectory(project, writeTarget);
+      const imported = await importWrittenMigrationToDb(writeTarget, preview);
+      const counts = getRequirementCounts();
+
+      assert.deepStrictEqual(imported.decisions, 1, 'legacy-reqs: DB import includes migrated decisions');
+      assert.deepStrictEqual(imported.requirements, 4, 'legacy-reqs: DB import count matches preview');
+      assert.ok(getDecisionById('D001') !== null, 'legacy-reqs: migrated decision is queryable');
+      assert.deepStrictEqual(counts.total, 4, 'legacy-reqs: DB stores all migrated requirements');
+    } finally {
+      closeDatabase();
+      rmSync(base, { recursive: true, force: true });
+      rmSync(writeTarget, { recursive: true, force: true });
+    }
+});
+
   // ─── Test 6: .gsd/ exists detection ────────────────────────────────────
 
 test('.gsd/ exists detection', () => {
@@ -357,4 +403,3 @@ test('.gsd/ exists detection', () => {
       rmSync(base, { recursive: true, force: true });
     }
 });
-

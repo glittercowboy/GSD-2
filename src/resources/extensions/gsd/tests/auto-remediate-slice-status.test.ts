@@ -4,43 +4,45 @@
  * A SUMMARY.md on disk is a projection/diagnostic. Runtime post-unit checks
  * must not use it to mark the DB slice complete; explicit import/recovery
  * commands own markdown-to-DB behavior.
- *
- * This structural test verifies the complete-slice rogue branch reports the
- * stale projection without calling updateSliceStatus().
  */
 
-import { describe, test } from 'node:test';
-import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
-import { extractSourceRegion } from "./test-helpers.ts";
+import { afterEach, describe, test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+import { detectRogueFileWrites } from "../auto-post-unit.ts";
+import {
+  closeDatabase,
+  getSlice,
+  insertMilestone,
+  insertSlice,
+  isDbAvailable,
+  openDatabase,
+} from "../gsd-db.ts";
 
-const source = readFileSync(join(__dirname, '..', 'auto-post-unit.ts'), 'utf-8');
+afterEach(() => {
+  if (isDbAvailable()) closeDatabase();
+});
 
-describe('DB-authoritative slice rogue detection', () => {
-  test('updateSliceStatus is not imported for post-unit rogue reconciliation', () => {
-    assert.doesNotMatch(source, /import\s*\{[^}]*updateSliceStatus[^}]*\}\s*from\s*["']\.\/gsd-db/,
-      'auto-post-unit must not import updateSliceStatus for disk-to-DB reconciliation');
-  });
+describe("DB-authoritative slice rogue detection", () => {
+  test("complete-slice SUMMARY.md is reported as rogue without marking DB complete", (t) => {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), "gsd-rogue-slice-")));
+    t.after(() => rmSync(base, { recursive: true, force: true }));
 
-  test('complete-slice rogue branch does not mark DB complete from disk', () => {
-    assert.doesNotMatch(source, /updateSliceStatus\(mid,\s*sid,\s*["']complete["']/,
-      'SUMMARY.md on disk must not mark slice complete in DB');
-  });
+    mkdirSync(join(base, ".gsd"), { recursive: true });
+    openDatabase(join(base, ".gsd", "gsd.db"));
+    insertMilestone({ id: "M001", title: "Milestone", status: "active" });
+    insertSlice({ milestoneId: "M001", id: "S01", title: "Slice", status: "pending", sequence: 1 });
 
-  test('explicit rogue diagnostic reports stale slice summary projection', () => {
-    const branch = extractSourceRegion(source, 'unitType === "complete-slice"', 'unitType === "plan-milestone"');
-    assert.match(branch, /rogues\.push\(\{\s*path:\s*summaryPath,\s*unitType,\s*unitId\s*\}\)/,
-      'complete-slice branch should report stale SUMMARY.md as rogue');
-  });
+    const summaryPath = join(base, ".gsd", "milestones", "M001", "slices", "S01", "S01-SUMMARY.md");
+    mkdirSync(dirname(summaryPath), { recursive: true });
+    writeFileSync(summaryPath, "# Summary\n", "utf-8");
 
-  test('post-unit runtime does not call rogue diagnostics automatically', () => {
-    const postUnit = extractSourceRegion(source, 'export async function postUnitPostVerification');
-    assert.doesNotMatch(postUnit, /detectRogueFileWrites\(/,
-      'runtime post-unit path must not scan disk projections for rogue files');
+    const rogues = detectRogueFileWrites("complete-slice", "M001/S01", base);
+
+    assert.deepEqual(rogues, [{ path: summaryPath, unitType: "complete-slice", unitId: "M001/S01" }]);
+    assert.equal(getSlice("M001", "S01")?.status, "pending");
   });
 });

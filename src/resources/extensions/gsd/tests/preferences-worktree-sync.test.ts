@@ -12,32 +12,30 @@ import assert from "node:assert/strict";
 import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { syncWorktreeStateBack } from "../auto-worktree.ts";
 
-test("#2684: preferences files are NOT in ROOT_STATE_FILES (forward-only sync)", () => {
-  const srcPath = join(import.meta.dirname, "..", "auto-worktree.ts");
-  const src = readFileSync(srcPath, "utf-8");
+test("#2684: syncWorktreeStateBack does not overwrite project PREFERENCES.md", () => {
+  const mainBase = mkdtempSync(join(tmpdir(), "gsd-wt-prefs-main-"));
+  const wtBase = mkdtempSync(join(tmpdir(), "gsd-wt-prefs-worktree-"));
+  const mainGsd = join(mainBase, ".gsd");
+  const wtGsd = join(wtBase, ".gsd");
+  mkdirSync(mainGsd, { recursive: true });
+  mkdirSync(wtGsd, { recursive: true });
 
-  const constIdx = src.indexOf("ROOT_STATE_FILES");
-  assert.ok(constIdx !== -1, "ROOT_STATE_FILES constant exists");
+  try {
+    const authoritative = "---\nversion: 1\n---\n\nmode: team\n";
+    writeFileSync(join(mainGsd, "PREFERENCES.md"), authoritative);
+    writeFileSync(join(wtGsd, "PREFERENCES.md"), "---\nversion: 1\n---\n\nmode: solo\n");
 
-  const arrayStart = src.indexOf("[", constIdx);
-  const arrayEnd = src.indexOf("] as const", arrayStart);
-  const block = src.slice(arrayStart, arrayEnd);
+    const result = syncWorktreeStateBack(mainBase, wtBase, "M001");
 
-  // Project preferences must NOT be in ROOT_STATE_FILES — they are handled separately
-  // in syncGsdStateToWorktree() (forward-only, additive). Including it in
-  // ROOT_STATE_FILES would cause syncWorktreeStateBack() to overwrite the
-  // authoritative project root copy (#2684).
-  const entries = block.split("\n")
-    .map(l => l.trim())
-    .filter(l => l.startsWith('"') && l.includes(".md"));
-  const hasPrefs = entries.some(
-    l => l.includes("PREFERENCES.md") || l.includes("preferences.md"),
-  );
-  assert.ok(
-    !hasPrefs,
-    "preferences files must NOT be in ROOT_STATE_FILES (back-sync would overwrite root)",
-  );
+    assert.equal(readFileSync(join(mainGsd, "PREFERENCES.md"), "utf-8"), authoritative);
+    assert.ok(!result.synced.includes("PREFERENCES.md"));
+    assert.ok(!result.synced.includes("preferences.md"));
+  } finally {
+    rmSync(mainBase, { recursive: true, force: true });
+    rmSync(wtBase, { recursive: true, force: true });
+  }
 });
 
 // Phase C: copyPlanningArtifacts was deleted. Worktrees no longer

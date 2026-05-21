@@ -1,18 +1,28 @@
+// Project/App: GSD-2
+// File Purpose: VS Code extension manifest and pure helper behavior tests.
+
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import {
+	APPROVAL_MODES,
+	describeApprovalEvent,
+	nextApprovalMode,
+} from "../src/approval-mode.ts";
+import { buildGsdClientSpawnPlan } from "../src/gsd-client-spawn.ts";
+import {
+	buildAgentGitAddArgs,
+	buildAgentGitDiffArgs,
+	buildAgentGitStatusArgs,
+} from "../src/git-args.ts";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-function readText(relativePath: string): string {
-	return readFileSync(join(root, relativePath), "utf8");
-}
-
 function readPackage(): {
 	contributes: {
-		commands: Array<{ command: string }>;
+		commands: Array<{ command: string; title: string }>;
 		views: Record<string, Array<{ id: string }>>;
 		configuration: {
 			properties: Record<string, unknown>;
@@ -20,53 +30,69 @@ function readPackage(): {
 	};
 	scripts: Record<string, string>;
 } {
-	return JSON.parse(readText("package.json"));
+	return JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 }
 
-test("contributed commands are registered by the extension entrypoint", () => {
+test("manifest contributes unique executable commands with titles", () => {
 	const pkg = readPackage();
-	const extensionSource = readText("src/extension.ts");
 	const contributed = pkg.contributes.commands.map((entry) => entry.command);
-	const registered = new Set(
-		[...extensionSource.matchAll(/registerCommand\(\s*["']([^"']+)["']/g)].map((match) => match[1]),
-	);
+	assert.equal(new Set(contributed).size, contributed.length);
 
-	for (const command of contributed) {
-		assert.ok(registered.has(command), `${command} must be registered in src/extension.ts`);
+	for (const entry of pkg.contributes.commands) {
+		assert.equal(entry.command.startsWith("gsd."), true);
+		assert.equal(typeof entry.title, "string");
+		assert.ok(entry.title.length > 0);
 	}
 });
 
-test("GSDClient launches the configured binary in RPC mode with a controlled cwd", () => {
-	const clientSource = readText("src/gsd-client.ts");
+test("GSDClient spawn plan launches the configured binary in RPC mode with a controlled cwd", () => {
+	const plan = buildGsdClientSpawnPlan("/opt/bin/gsd", "/tmp/project", { PATH: "/usr/bin" }, "linux");
+	assert.equal(plan.command, "/opt/bin/gsd");
+	assert.deepEqual(plan.args, ["--mode", "rpc"]);
+	assert.deepEqual(plan.options, {
+		cwd: "/tmp/project",
+		stdio: ["pipe", "pipe", "pipe"],
+		env: { PATH: "/usr/bin" },
+		shell: false,
+	});
 
-	assert.match(clientSource, /spawn\(this\.binaryPath,\s*\[\s*["']--mode["'],\s*["']rpc["']\s*\]/);
-	assert.match(clientSource, /cwd:\s*this\.cwd/);
+	assert.equal(buildGsdClientSpawnPlan("gsd.cmd", "C:\\repo", {}, "win32").options.shell, true);
 });
 
-test("approval mode contributes settings and executable commands", () => {
+test("approval mode contributes settings and executable command behavior", () => {
 	const pkg = readPackage();
-	const extensionSource = readText("src/extension.ts");
-	const permissionsSource = readText("src/permissions.ts");
+	const commands = new Set(pkg.contributes.commands.map((entry) => entry.command));
 
 	assert.ok(pkg.contributes.configuration.properties["gsd.approvalMode"]);
-	assert.match(extensionSource, /registerCommand\(\s*["']gsd\.cycleApprovalMode["']/);
-	assert.match(extensionSource, /registerCommand\(\s*["']gsd\.selectApprovalMode["']/);
-	assert.match(permissionsSource, /getConfiguration\(["']gsd["']\)\.get<ApprovalMode>\(["']approvalMode["']/);
-	assert.match(permissionsSource, /update\(["']approvalMode["']/);
+	assert.ok(commands.has("gsd.cycleApprovalMode"));
+	assert.ok(commands.has("gsd.selectApprovalMode"));
+	assert.deepEqual(APPROVAL_MODES, ["auto-approve", "ask", "plan-only"]);
+	assert.equal(nextApprovalMode("auto-approve"), "ask");
+	assert.equal(nextApprovalMode("ask"), "plan-only");
+	assert.equal(nextApprovalMode("plan-only"), "auto-approve");
+
+	assert.equal(
+		describeApprovalEvent({ type: "tool_execution_start", toolName: "Write", toolInput: { file_path: "/tmp/project/src/app.ts" } }),
+		"Write: project/src/app.ts",
+	);
+	assert.equal(
+		describeApprovalEvent({ type: "tool_execution_start", toolName: "Bash", toolInput: { command: "npm run verify".repeat(10) } })?.startsWith("Execute: npm run verify"),
+		true,
+	);
+	assert.equal(describeApprovalEvent({ type: "tool_execution_start", toolName: "Read" }), null);
 });
 
-test("checkpoint view is contributed and registered", () => {
+test("checkpoint view is contributed in the extension manifest", () => {
 	const pkg = readPackage();
-	const extensionSource = readText("src/extension.ts");
 
 	assert.ok(pkg.contributes.views.gsd.some((view) => view.id === "gsd-checkpoints"));
-	assert.match(extensionSource, /registerTreeDataProvider\(GsdCheckpointProvider\.viewId, checkpointProvider\)/);
+	assert.ok(pkg.contributes.commands.some((entry) => entry.command === "gsd.restoreCheckpoint"));
 });
 
-test("agent diff command scopes git output to tracked agent files", () => {
-	const gitIntegrationSource = readText("src/git-integration.ts");
+test("agent git helpers scope git output to tracked agent files", () => {
+	const files = ["src/app.ts", "README.md"];
 
-	assert.match(gitIntegrationSource, /\["diff", "--", \.\.\.files\]/);
-	assert.match(gitIntegrationSource, /\["status", "--short", "--", \.\.\.files\]/);
-	assert.doesNotMatch(gitIntegrationSource, /\["diff"\]/);
+	assert.deepEqual(buildAgentGitAddArgs(files), ["add", "src/app.ts", "README.md"]);
+	assert.deepEqual(buildAgentGitDiffArgs(files), ["diff", "--", "src/app.ts", "README.md"]);
+	assert.deepEqual(buildAgentGitStatusArgs(files), ["status", "--short", "--", "src/app.ts", "README.md"]);
 });

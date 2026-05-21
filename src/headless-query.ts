@@ -117,14 +117,20 @@ export interface QueryResult {
 
 // ─── Implementation ─────────────────────────────────────────────────────────
 
-export async function handleQuery(basePath: string): Promise<QueryResult> {
+type HeadlessQueryModules = Awaited<ReturnType<typeof loadExtensionModules>>
+
+export async function runHeadlessQuery(
+  basePath: string,
+  modules: HeadlessQueryModules,
+  writeOutput: (text: string) => void = (text) => process.stdout.write(text),
+): Promise<QueryResult> {
   const {
     openProjectDbIfPresent,
     deriveState,
     resolveDispatch,
     readAllSessionStatuses,
     loadEffectiveGSDPreferences,
-  } = await loadExtensionModules()
+  } = modules
   await openProjectDbIfPresent(basePath)
   const state = await deriveState(basePath)
 
@@ -168,6 +174,10 @@ export async function handleQuery(basePath: string): Promise<QueryResult> {
     cost: { workers, total: workers.reduce((sum, w) => sum + w.cost, 0) },
   }
 
-  process.stdout.write(JSON.stringify(snapshot) + '\n')
+  writeOutput(JSON.stringify(snapshot) + '\n')
   return { exitCode: 0, data: snapshot }
+}
+
+export async function handleQuery(basePath: string): Promise<QueryResult> {
+  return runHeadlessQuery(basePath, await loadExtensionModules())
 }

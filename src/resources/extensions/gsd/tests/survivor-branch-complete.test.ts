@@ -28,7 +28,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 
-import { decideSurvivorAction } from "../auto-start.ts";
+import { decideSurvivorAction, resolveSurvivorRecoveryIsolationMode } from "../auto-start.ts";
 import type { SurvivorAction } from "../auto-start.ts";
 
 describe("decideSurvivorAction (#2358)", () => {
@@ -105,5 +105,17 @@ describe("decideSurvivorAction (#2358)", () => {
       ["discuss", "finalize", "none"],
       "decision function should produce exactly three outcomes",
     );
+  });
+});
+
+describe("resolveSurvivorRecoveryIsolationMode", () => {
+  test("complete-phase recovery may inspect milestone branches even when current prefs say none", () => {
+    assert.equal(resolveSurvivorRecoveryIsolationMode("none", "complete"), "branch");
+  });
+
+  test("non-complete phases keep the configured isolation mode", () => {
+    assert.equal(resolveSurvivorRecoveryIsolationMode("none", "pre-planning"), "none");
+    assert.equal(resolveSurvivorRecoveryIsolationMode("worktree", "complete"), "worktree");
+    assert.equal(resolveSurvivorRecoveryIsolationMode("branch", "complete"), "branch");
   });
 });

@@ -381,7 +381,7 @@ Milestone  →  一个可交付版本（4-10 个 slice）
   PROJECT.md          — 项目当前是什么
   REQUIREMENTS.md     — 需求契约
   DECISIONS.md        — 追加式架构决策记录
-  KNOWLEDGE.md        — 跨会话规则与模式
+  KNOWLEDGE.md        — 手写 Rules，加上 memory 支撑的 Patterns/Lessons
   STATE.md            — 一眼可见的状态摘要
   milestones/
     M001/

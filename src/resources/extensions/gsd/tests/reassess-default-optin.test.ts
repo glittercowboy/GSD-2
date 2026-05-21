@@ -5,7 +5,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -16,6 +16,8 @@ import {
   type DispatchAction,
   type DispatchContext,
 } from "../auto-dispatch.ts";
+import { buildPlanSlicePrompt } from "../auto-prompts.ts";
+import { registerDbTools } from "../bootstrap/db-tools.ts";
 import { resolveProfileDefaults } from "../preferences-models.ts";
 import type { GSDState } from "../types.ts";
 import type { GSDPreferences } from "../preferences.ts";
@@ -117,16 +119,28 @@ test("ADR-003 §4: burn-max profile opts into dedicated reassess-roadmap dispatc
 });
 
 test("ADR-003 §4: plan-slice prompt and MCP tool agree on reassess sliceChanges shape", () => {
-  const planSlicePrompt = readFileSync(new URL("../prompts/plan-slice.md", import.meta.url), "utf8");
-  assert.match(planSlicePrompt, /gsd_reassess_roadmap/);
-  assert.match(planSlicePrompt, /sliceChanges\.modified/);
-  assert.match(planSlicePrompt, /sliceChanges\.added/);
-  assert.match(planSlicePrompt, /sliceChanges\.removed/);
+  const tools: Record<string, any> = {};
+  registerDbTools({ registerTool(tool: any) { tools[tool.name] = tool; } } as any);
 
-  const dbToolsSource = readFileSync(new URL("../bootstrap/db-tools.ts", import.meta.url), "utf8");
-  assert.match(dbToolsSource, /name:\s*"gsd_reassess_roadmap"/);
-  assert.match(dbToolsSource, /sliceChanges:\s*Type\.Object/);
-  assert.match(dbToolsSource, /modified:\s*Type\.Array/);
-  assert.match(dbToolsSource, /added:\s*Type\.Array/);
-  assert.match(dbToolsSource, /removed:\s*Type\.Array/);
+  const reassessTool = tools.gsd_reassess_roadmap;
+  assert.ok(reassessTool, "gsd_reassess_roadmap should be registered");
+  const sliceChanges = reassessTool.parameters.properties.sliceChanges.properties;
+  assert.ok(sliceChanges.modified, "tool schema exposes sliceChanges.modified");
+  assert.ok(sliceChanges.added, "tool schema exposes sliceChanges.added");
+  assert.ok(sliceChanges.removed, "tool schema exposes sliceChanges.removed");
+});
+
+test("ADR-003 §4: rendered plan-slice prompt documents reassess sliceChanges shape", async () => {
+  const base = makeIsolatedBase();
+  try {
+    const msDir = join(base, ".gsd", "milestones", "M001");
+    writeFileSync(join(msDir, "M001-ROADMAP.md"), "# Roadmap\n\n## Slices\n\n- [ ] **S01: First** `risk:low` `depends:[]`\n");
+    const prompt = await buildPlanSlicePrompt("M001", "Test", "S01", "First", base, "minimal");
+    assert.match(prompt, /gsd_reassess_roadmap/);
+    assert.match(prompt, /sliceChanges\.modified/);
+    assert.match(prompt, /sliceChanges\.added/);
+    assert.match(prompt, /sliceChanges\.removed/);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
 });

@@ -55,6 +55,14 @@ test("system prompt hard rules forbid fabricating user responses", () => {
   assert.match(prompt, /ask_user_questions.*only valid structured user input/i);
 });
 
+test("system prompt requires reading before edit or overwrite", () => {
+  const prompt = readPrompt("system");
+  assert.match(prompt, /Read before edit or overwrite/i);
+  assert.match(prompt, /Before any write that creates or replaces a file/i);
+  assert.match(prompt, /confirm whether the path exists; if it does, `read` it first/i);
+  assert.match(prompt, /For truly new files, confirm the path does not already exist/i);
+});
+
 test("discuss prompt allows implementation questions when they materially matter", () => {
   const prompt = readPrompt("discuss");
   assert.match(prompt, /Lead with experience, but ask implementation when it materially matters/i);
@@ -62,6 +70,16 @@ test("discuss prompt allows implementation questions when they materially matter
   assert.match(prompt, /Ask one question round \(1-3 questions\) per turn, then stop and wait for the user's actual response/i);
   assert.match(prompt, /one gate, not two/i);
   assert.doesNotMatch(prompt, /Questions must be about the experience, not the implementation/i);
+});
+
+test("discuss prompt ends milestone planning with next-step handoff", () => {
+  const prompt = readPrompt("discuss");
+  assert.match(prompt, /Next steps:/);
+  assert.match(prompt, /\/gsd auto/);
+  assert.match(prompt, /\/gsd status/);
+  assert.match(prompt, /\/gsd visualize/);
+  assert.match(prompt, /\/gsd notifications/);
+  assert.doesNotMatch(prompt, /nothing else\. Auto-mode will start automatically/);
 });
 
 test("guided discussion prompts avoid wrap-up prompts after every round", () => {
@@ -217,6 +235,17 @@ test("complete-slice prompt does not instruct LLM to toggle checkboxes manually"
   assert.doesNotMatch(prompt, /change \[ \] to \[x\]/);
 });
 
+test("complete-slice prompt keeps source fixes in execution units", () => {
+  const prompt = readPrompt("complete-slice");
+  assert.match(prompt, /Do not use direct `bash` for verification commands/i);
+  assert.match(prompt, /do \*\*not\*\* edit source files in this unit/i);
+  assert.match(prompt, /do \*\*not\*\* call `gsd_slice_complete`/i);
+  assert.match(prompt, /gsd_task_reopen/);
+  assert.match(prompt, /gsd_replan_slice/);
+  assert.match(prompt, /needs execution follow-up/i);
+  assert.doesNotMatch(prompt, /Fix failures before marking done/i);
+});
+
 test("complete-slice prompt instructs writing summary and UAT files before tool call", () => {
   const prompt = readPrompt("complete-slice");
   assert.match(prompt, /\{\{sliceSummaryPath\}\}/);
@@ -363,7 +392,9 @@ test("execute-task prompt uses camelCase parameter names matching TypeBox schema
 test("complete-slice prompt uses camelCase parameter names matching TypeBox schema", () => {
   const prompt = readPrompt("complete-slice");
   // The gsd_complete_slice tool schema uses camelCase: milestoneId, sliceId
-  const toolCallLine = prompt.split("\n").find((l) => /gsd_complete_slice/.test(l) || /gsd_slice_complete/.test(l));
+  const toolCallLine = prompt.split("\n").find((l) =>
+    (/gsd_complete_slice/.test(l) || /gsd_slice_complete/.test(l)) && /milestoneId/.test(l) && /sliceId/.test(l)
+  );
   assert.ok(toolCallLine, "prompt must contain a gsd_complete_slice or gsd_slice_complete tool call line");
   assert.doesNotMatch(toolCallLine!, /milestone_id/, "must use milestoneId, not milestone_id");
   assert.doesNotMatch(toolCallLine!, /slice_id/, "must use sliceId, not slice_id");

@@ -9,6 +9,7 @@
  */
 
 import type {
+	AgentAbortOrigin,
 	AgentMessage,
 	AgentToolResult,
 	AgentToolUpdateCallback,
@@ -69,6 +70,7 @@ import type {
 	LsToolInput,
 	ReadToolDetails,
 	ReadToolInput,
+	WriteToolDetails,
 	WriteToolInput,
 } from "../tools/index.js";
 
@@ -127,8 +129,8 @@ export interface ExtensionUIContext {
 	/** Set status text in the footer/status bar. Pass undefined to clear. */
 	setStatus(key: string, text: string | undefined): void;
 
-	/** Set the working/loading message shown during streaming. Call with no argument to restore default. */
-	setWorkingMessage(message?: string): void;
+	/** Set the working/loading message shown during streaming. Call with no argument to restore default; pass null to suppress it. */
+	setWorkingMessage(message?: string | null): void;
 
 	/** Set a widget to display above or below the editor. Accepts string array or component factory. */
 	setWidget(key: string, content: string[] | undefined, options?: ExtensionWidgetOptions): void;
@@ -309,10 +311,13 @@ export interface ExtensionCommandContext extends ExtensionContext {
 	newSession(options?: {
 		parentSession?: string;
 		setup?: (sessionManager: SessionManager) => Promise<void>;
+		/** Explicit workspace root for the new session/tool runtime.
+		 *  When omitted, newSession() captures process.cwd() for backwards compatibility. */
+		workspaceRoot?: string;
 		/** When aborted before the session is fully configured, newSession() returns
 		 *  early without rebuilding the tool runtime. Used by runUnit() to discard
 		 *  a late-resolving newSession() after the session-creation timeout fires,
-		 *  preventing the tool runtime from being rebuilt with the wrong cwd (#3731). */
+		 *  preventing the tool runtime from being rebuilt with a stale workspace root (#3731). */
 		abortSignal?: AbortSignal;
 	}): Promise<{ cancelled: boolean }>;
 
@@ -557,12 +562,17 @@ export interface BeforeAgentStartEvent {
 /** Fired when an agent loop starts */
 export interface AgentStartEvent {
 	type: "agent_start";
+	sessionId?: string;
+	turnId?: string;
 }
 
 /** Fired when an agent loop ends */
 export interface AgentEndEvent {
 	type: "agent_end";
 	messages: AgentMessage[];
+	sessionId?: string;
+	turnId?: string;
+	abortOrigin?: AgentAbortOrigin;
 }
 
 /**
@@ -574,6 +584,9 @@ export interface StopEvent {
 	type: "stop";
 	reason: "completed" | "cancelled" | "error" | "blocked";
 	lastMessage?: AgentMessage;
+	sessionId?: string;
+	turnId?: string;
+	abortOrigin?: AgentAbortOrigin;
 }
 
 /**
@@ -763,6 +776,8 @@ export interface TurnStartEvent {
 	type: "turn_start";
 	turnIndex: number;
 	timestamp: number;
+	sessionId?: string;
+	turnId?: string;
 }
 
 /** Fired at the end of each turn */
@@ -771,12 +786,16 @@ export interface TurnEndEvent {
 	turnIndex: number;
 	message: AgentMessage;
 	toolResults: ToolResultMessage[];
+	sessionId?: string;
+	turnId?: string;
 }
 
 /** Fired when a message starts (user, assistant, or toolResult) */
 export interface MessageStartEvent {
 	type: "message_start";
 	message: AgentMessage;
+	sessionId?: string;
+	turnId?: string;
 }
 
 /** Fired during assistant message streaming with token-by-token updates */
@@ -784,12 +803,16 @@ export interface MessageUpdateEvent {
 	type: "message_update";
 	message: AgentMessage;
 	assistantMessageEvent: AssistantMessageEvent;
+	sessionId?: string;
+	turnId?: string;
 }
 
 /** Fired when a message ends */
 export interface MessageEndEvent {
 	type: "message_end";
 	message: AgentMessage;
+	sessionId?: string;
+	turnId?: string;
 }
 
 /** Fired when a tool starts executing */
@@ -848,6 +871,13 @@ export interface BeforeModelSelectResult {
 	modelId: string;
 }
 
+export interface AdjustToolSetRequestCustomMessage {
+	/** Index in the post-transform AgentMessage context. */
+	index: number;
+	/** Custom message type only; prompt/content text is intentionally omitted. */
+	customType: string;
+}
+
 /**
  * Fired after model selection to allow extensions to adjust the active tool set (ADR-005 Phase 4).
  * Extensions can add, remove, or reorder tools based on the selected model's provider capabilities.
@@ -864,6 +894,12 @@ export interface AdjustToolSetEvent {
 	activeToolNames: string[];
 	/** Tools already filtered by provider compatibility */
 	filteredTools: string[];
+	/**
+	 * Custom message metadata in the current request tail, measured from the
+	 * latest assistant message. This is metadata-only so extensions can scope
+	 * queued custom-message turns without seeing raw prompt content.
+	 */
+	requestCustomMessages?: AdjustToolSetRequestCustomMessage[];
 }
 
 /** Result from adjust_tool_set event handler. Return { toolNames } to override tool set. */
@@ -1015,7 +1051,7 @@ export interface EditToolResultEvent extends ToolResultEventBase {
 
 export interface WriteToolResultEvent extends ToolResultEventBase {
 	toolName: "write";
-	details: undefined;
+	details: WriteToolDetails | undefined;
 }
 
 export interface GrepToolResultEvent extends ToolResultEventBase {
@@ -1486,6 +1522,20 @@ export interface ExtensionAPI {
 	/** Set the active tools by name. */
 	setActiveTools(toolNames: string[]): void;
 
+	/**
+	 * Get the prompt-only skill catalog filter, if one is active.
+	 * Undefined means all loaded skills remain visible in <available_skills>.
+	 */
+	getVisibleSkills(): string[] | undefined;
+
+	/**
+	 * Set or clear the prompt-only skill catalog filter.
+	 *
+	 * This changes which loaded skills are advertised in <available_skills>;
+	 * it does not unload skills or disable the Skill tool.
+	 */
+	setVisibleSkills(skillNames: string[] | undefined): void;
+
 	/** Get available slash commands in the current session. */
 	getCommands(): SlashCommandInfo[];
 
@@ -1727,6 +1777,8 @@ export interface ExtensionActions {
 	getActiveTools: () => string[];
 	getAllTools: () => ToolInfo[];
 	setActiveTools: (toolNames: string[]) => void;
+	getVisibleSkills: () => string[] | undefined;
+	setVisibleSkills: (skillNames: string[] | undefined) => void;
 	refreshTools: () => void;
 	getCommands: () => SlashCommandInfo[];
 	setModel: (model: Model<any>, options?: { persist?: boolean }) => Promise<boolean>;
@@ -1759,6 +1811,8 @@ export interface ExtensionCommandContextActions {
 	newSession: (options?: {
 		parentSession?: string;
 		setup?: (sessionManager: SessionManager) => Promise<void>;
+		/** See ExtensionCommandContext.newSession for docs. */
+		workspaceRoot?: string;
 		/** See ExtensionCommandContext.newSession for docs (#3731). */
 		abortSignal?: AbortSignal;
 	}) => Promise<{ cancelled: boolean }>;

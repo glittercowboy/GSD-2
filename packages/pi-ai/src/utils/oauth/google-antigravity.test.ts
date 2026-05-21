@@ -1,20 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { OAuthCredentials } from "./types.js";
 import { antigravityOAuthProvider } from "./google-antigravity.js";
-
-const __dirname = fileURLToPath(new URL(".", import.meta.url));
-const packageRoot = join(__dirname, "..", "..", "..");
-const sourceDir = existsSync(join(__dirname, "google-antigravity.ts"))
-	? __dirname
-	: join(packageRoot, "src", "utils", "oauth");
-
-function readSourceFile(name: string): string {
-	return readFileSync(join(sourceDir, name), "utf-8");
-}
 
 describe("Antigravity OAuth — provider structure", () => {
 	test("has correct id and name", () => {
@@ -65,20 +52,29 @@ describe("Antigravity OAuth — credential regression", () => {
 		assert.ok(antigravityOAuthProvider);
 	});
 
-	test("CLIENT_ID and CLIENT_SECRET are plaintext", () => {
-		const content = readSourceFile("google-antigravity.ts");
-		assert.ok(
-			content.includes(
-				'CLIENT_ID = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"',
-			),
-		);
-		assert.ok(content.includes('CLIENT_SECRET = "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"'));
-		assert.ok(!content.includes("atob("));
-	});
+	test("refreshToken sends the desktop OAuth client credentials to Google", async (t) => {
+		const calls: RequestInit[] = [];
+		const originalFetch = globalThis.fetch;
+		t.after(() => {
+			globalThis.fetch = originalFetch;
+		});
+		globalThis.fetch = async (_input: string | URL | Request, init?: RequestInit) => {
+			calls.push(init ?? {});
+			return Response.json({ access_token: "new-access-token", expires_in: 3600 });
+		};
 
-	test("security explanation comments are present", () => {
-		const content = readSourceFile("google-antigravity.ts");
-		assert.ok(content.includes("NOTE: These credentials are public"));
-		assert.ok(content.includes("obfuscated") || content.includes("security scanners"));
+		const credentials = await antigravityOAuthProvider.refreshToken({
+			access: "old-access-token",
+			refresh: "refresh-token",
+			expires: Date.now() + 3600000,
+			projectId: "test-project-123",
+		});
+
+		assert.equal(credentials.access, "new-access-token");
+		assert.equal(credentials.projectId, "test-project-123");
+		assert.ok(calls[0]?.body instanceof URLSearchParams);
+		const body = calls[0].body;
+		assert.equal(body.get("client_id"), "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com");
+		assert.equal(body.get("client_secret"), "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");
 	});
 });

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -29,9 +29,4 @@ test("SettingsManager reads defaultProvider/defaultModel from the explicit agent
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
-});
-
-test("cli.ts wires SettingsManager.create with both cwd and agentDir (#3860)", () => {
-  const cliSource = readFileSync(join(import.meta.dirname, "..", "cli.ts"), "utf-8");
-  assert.match(cliSource, /SettingsManager\.create\(process\.cwd\(\),\s*agentDir\)/);
 });

@@ -1,63 +1,79 @@
 /**
- * Regression test: S##-CONTEXT.md from slice discussion must be
- * injected into all 5 downstream prompt builders (#3452).
- *
- * Scans auto-prompts.ts for the 5 builder functions and verifies
- * each one resolves and inlines the slice-level CONTEXT file.
+ * Regression test: S##-CONTEXT.md from slice discussion is injected into
+ * downstream prompt builders (#3452).
  */
 
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-import { extractSourceRegion } from "./test-helpers.ts";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const autoPromptsPath = join(__dirname, "..", "auto-prompts.ts");
-const source = readFileSync(autoPromptsPath, "utf-8");
+import {
+  buildCompleteSlicePrompt,
+  buildPlanSlicePrompt,
+  buildReassessRoadmapPrompt,
+  buildReplanSlicePrompt,
+  buildResearchSlicePrompt,
+} from "../auto-prompts.ts";
 
-const BUILDERS = [
-  "buildResearchSlicePrompt",
-  "buildPlanSlicePrompt",
-  "buildCompleteSlicePrompt",
-  "buildReplanSlicePrompt",
-  "buildReassessRoadmapPrompt",
-];
+function makeSliceContextFixture(): string {
+  const base = mkdtempSync(join(tmpdir(), "gsd-slice-context-"));
+  const milestoneDir = join(base, ".gsd", "milestones", "M001");
+  const sliceDir = join(milestoneDir, "slices", "S01");
+  mkdirSync(join(sliceDir, "tasks"), { recursive: true });
+  writeFileSync(
+    join(milestoneDir, "M001-ROADMAP.md"),
+    [
+      "# M001: Context Injection",
+      "",
+      "## Slices",
+      "- [ ] **S01: Context-heavy slice** `risk:low`",
+      "  Demo: context appears in prompts.",
+    ].join("\n"),
+    "utf-8",
+  );
+  writeFileSync(join(milestoneDir, "M001-CONTEXT.md"), "# M001 Context\n", "utf-8");
+  writeFileSync(
+    join(sliceDir, "S01-CONTEXT.md"),
+    "# Slice Context\n\nUnique slice context marker: SLICE-CONTEXT-3452\n",
+    "utf-8",
+  );
+  writeFileSync(
+    join(sliceDir, "S01-PLAN.md"),
+    [
+      "# S01: Context-heavy slice",
+      "",
+      "**Goal:** Test context injection.",
+      "**Demo:** Prompt contains the marker.",
+      "",
+      "## Tasks",
+      "- [ ] **T01: Task** `est:10m`",
+    ].join("\n"),
+    "utf-8",
+  );
+  return base;
+}
 
 describe("slice CONTEXT.md injection into prompt builders (#3452)", () => {
-  for (const builder of BUILDERS) {
-    test(`${builder} resolves slice CONTEXT file`, () => {
-      // Find the function body
-      const fnStart = source.indexOf(`export async function ${builder}`);
-      assert.ok(fnStart !== -1, `${builder} should exist in auto-prompts.ts`);
+  const builders: Array<[string, (base: string) => Promise<string>]> = [
+    ["buildResearchSlicePrompt", (base) => buildResearchSlicePrompt("M001", "Context Injection", "S01", "Context-heavy slice", base)],
+    ["buildPlanSlicePrompt", (base) => buildPlanSlicePrompt("M001", "Context Injection", "S01", "Context-heavy slice", base)],
+    ["buildCompleteSlicePrompt", (base) => buildCompleteSlicePrompt("M001", "Context Injection", "S01", "Context-heavy slice", base)],
+    ["buildReplanSlicePrompt", (base) => buildReplanSlicePrompt("M001", "Context Injection", "S01", "Context-heavy slice", base)],
+    ["buildReassessRoadmapPrompt", (base) => buildReassessRoadmapPrompt("M001", "Context Injection", "S01", base)],
+  ];
 
-      // Get a reasonable chunk after the function start
-      const chunk = extractSourceRegion(source, `export async function ${builder}`);
-
-      // ADR-011: buildPlanSlicePrompt / buildRefineSlicePrompt now delegate to
-      // a shared helper (renderSlicePrompt) that performs the slice CONTEXT
-      // resolve. When a builder delegates, scan the helper's body instead.
-      const delegatesToHelper = chunk.includes("renderSlicePrompt(");
-      const bodyToCheck = delegatesToHelper
-        ? (() => {
-            const helperStart = source.indexOf("async function renderSlicePrompt");
-            assert.ok(helperStart !== -1, "renderSlicePrompt helper must exist");
-            return extractSourceRegion(source, "async function renderSlicePrompt");
-          })()
-        : chunk;
-
-      // Must resolve the slice CONTEXT path
-      assert.ok(
-        bodyToCheck.includes('resolveSliceFile(base, mid,') && bodyToCheck.includes('"CONTEXT"'),
-        `${builder} should call resolveSliceFile with "CONTEXT" (directly or via renderSlicePrompt)`,
-      );
-
-      // Must inline it with inlineFileOptional
-      assert.ok(
-        bodyToCheck.includes("Slice Context"),
-        `${builder} should inline slice CONTEXT with a "Slice Context" label`,
-      );
+  for (const [name, build] of builders) {
+    test(`${name} includes slice discussion context`, async () => {
+      const base = makeSliceContextFixture();
+      try {
+        const prompt = await build(base);
+        assert.match(prompt, /Slice Context/);
+        assert.match(prompt, /SLICE-CONTEXT-3452/);
+      } finally {
+        rmSync(base, { recursive: true, force: true });
+      }
     });
   }
 });

@@ -7,7 +7,9 @@ import test from "node:test";
 import type { AutoSession } from "../auto/session.ts";
 import type { IterationData } from "../auto/types.ts";
 import {
+  ensureDispatchLease,
   openDispatchClaim,
+  type EnsureDispatchLeaseDeps,
   type OpenDispatchClaimDeps,
 } from "../auto/workflow-dispatch-claim.ts";
 
@@ -47,6 +49,25 @@ function makeDeps(overrides?: Partial<OpenDispatchClaimDeps>): OpenDispatchClaim
     logClaimFailed: () => {},
     ...overrides,
   };
+}
+
+function makeLeaseDeps(overrides?: Partial<EnsureDispatchLeaseDeps>): {
+  deps: EnsureDispatchLeaseDeps;
+  calls: unknown[];
+  failures: unknown[];
+} {
+  const calls: unknown[] = [];
+  const failures: unknown[] = [];
+  const deps: EnsureDispatchLeaseDeps = {
+    claimMilestoneLease: (workerId, milestoneId) => {
+      calls.push(["claim", workerId, milestoneId]);
+      return { ok: true, token: 8, expiresAt: "2030-01-01T00:00:00.000Z" };
+    },
+    logLeaseRecovered: details => calls.push(["recovered", details]),
+    logLeaseRecoveryFailed: details => failures.push(details),
+    ...overrides,
+  };
+  return { deps, calls, failures };
 }
 
 test("openDispatchClaim degrades when worker identity or lease token is missing", () => {
@@ -155,4 +176,138 @@ test("openDispatchClaim degrades on claim write failures", () => {
 
   assert.deepEqual(outcome, { kind: "degraded" });
   assert.deepEqual(logged, [writeError]);
+});
+
+test("ensureDispatchLease degrades without worker identity or milestone id", () => {
+  const { deps, calls } = makeLeaseDeps({
+    claimMilestoneLease: () => assert.fail("claimMilestoneLease should not be called"),
+  });
+
+  assert.deepEqual(
+    ensureDispatchLease(makeSession({ workerId: null }), "M001", deps),
+    { kind: "degraded", reason: "missing-worker" },
+  );
+  assert.deepEqual(
+    ensureDispatchLease(makeSession(), undefined, deps),
+    { kind: "degraded", reason: "missing-milestone" },
+  );
+  assert.deepEqual(calls, []);
+});
+
+test("ensureDispatchLease degrades for virtual milestone ids", () => {
+  const { deps, calls } = makeLeaseDeps({
+    claimMilestoneLease: () => assert.fail("claimMilestoneLease should not be called"),
+  });
+
+  assert.deepEqual(
+    ensureDispatchLease(makeSession(), "PROJECT", deps),
+    { kind: "degraded", reason: "virtual-milestone" },
+  );
+  assert.deepEqual(calls, []);
+});
+
+test("ensureDispatchLease reuses an existing numeric token", () => {
+  const { deps, calls } = makeLeaseDeps({
+    claimMilestoneLease: () => assert.fail("claimMilestoneLease should not be called"),
+  });
+
+  const session = makeSession({ milestoneLeaseToken: 7 });
+  const outcome = ensureDispatchLease(session, "M001", deps);
+
+  assert.deepEqual(outcome, { kind: "ready", token: 7, recovered: false });
+  assert.equal(session.milestoneLeaseToken, 7);
+  assert.deepEqual(calls, []);
+});
+
+test("ensureDispatchLease claims a lease when the session has no token", () => {
+  const { deps, calls, failures } = makeLeaseDeps();
+  const session = makeSession({
+    currentMilestoneId: "M001",
+    milestoneLeaseToken: null,
+  });
+
+  const outcome = ensureDispatchLease(session, "M001", deps);
+
+  assert.deepEqual(outcome, { kind: "ready", token: 8, recovered: false });
+  assert.equal(session.currentMilestoneId, "M001");
+  assert.equal(session.milestoneLeaseToken, 8);
+  assert.deepEqual(calls, [
+    ["claim", "worker-1", "M001"],
+    ["recovered", {
+      milestoneId: "M001",
+      workerId: "worker-1",
+      token: 8,
+      recovered: false,
+    }],
+  ]);
+  assert.deepEqual(failures, []);
+});
+
+test("ensureDispatchLease force-reclaims after a stale dispatch claim", () => {
+  const { deps, calls } = makeLeaseDeps({
+    claimMilestoneLease: (workerId, milestoneId) => {
+      calls.push(["claim", workerId, milestoneId]);
+      return { ok: true, token: 9, expiresAt: "2030-01-01T00:00:00.000Z" };
+    },
+  });
+  const session = makeSession({ milestoneLeaseToken: 7 });
+
+  const outcome = ensureDispatchLease(session, "M001", deps, { forceReclaim: true });
+
+  assert.deepEqual(outcome, { kind: "ready", token: 9, recovered: true });
+  assert.equal(session.milestoneLeaseToken, 9);
+  assert.deepEqual(calls, [
+    ["claim", "worker-1", "M001"],
+    ["recovered", {
+      milestoneId: "M001",
+      workerId: "worker-1",
+      token: 9,
+      recovered: true,
+    }],
+  ]);
+});
+
+test("ensureDispatchLease blocks when another worker holds the lease", () => {
+  const { deps, failures } = makeLeaseDeps({
+    claimMilestoneLease: () => ({
+      ok: false,
+      error: "held_by",
+      byWorker: "worker-2",
+      expiresAt: "2030-01-01T00:00:00.000Z",
+    }),
+  });
+  const session = makeSession({ milestoneLeaseToken: null });
+
+  const outcome = ensureDispatchLease(session, "M001", deps);
+
+  assert.deepEqual(outcome, {
+    kind: "blocked",
+    reason: "Milestone M001 is held by worker worker-2 until 2030-01-01T00:00:00.000Z.",
+    holderWorkerId: "worker-2",
+  });
+  assert.equal(session.milestoneLeaseToken, null);
+  assert.deepEqual(failures, [{
+    milestoneId: "M001",
+    workerId: "worker-1",
+    reason: "Milestone M001 is held by worker worker-2 until 2030-01-01T00:00:00.000Z.",
+  }]);
+});
+
+test("ensureDispatchLease fails closed on claim errors", () => {
+  const { deps, failures } = makeLeaseDeps({
+    claimMilestoneLease: () => {
+      throw new Error("db unavailable");
+    },
+  });
+  const session = makeSession({ milestoneLeaseToken: null });
+
+  const outcome = ensureDispatchLease(session, "M001", deps);
+
+  assert.deepEqual(outcome, { kind: "failed", reason: "db unavailable" });
+  assert.equal(session.milestoneLeaseToken, null);
+  assert.deepEqual(failures, [{
+    milestoneId: "M001",
+    workerId: "worker-1",
+    reason: "db unavailable",
+  }]);
 });

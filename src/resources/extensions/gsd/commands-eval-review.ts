@@ -26,7 +26,7 @@
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@gsd/pi-coding-agent";
 
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { open, readFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 
@@ -304,7 +304,7 @@ export async function buildEvalReviewContext(
   }
 
   const truncated = summaryRead.truncated || specTruncated;
-  const outputPath = evalReviewWritePath(state.sliceDir, state.sliceId);
+  const outputPath = evalReviewWritePath(realpathSync(state.sliceDir), state.sliceId);
   const basePath = projectRoot();
   const relativeOutputPath = relative(basePath, outputPath);
 

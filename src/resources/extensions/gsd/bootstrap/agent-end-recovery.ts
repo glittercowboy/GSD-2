@@ -2,6 +2,7 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@gsd/pi-coding-agent";
 
+import type { AgentEndEvent, ErrorContext } from "../auto/types.js";
 import { logWarning } from "../workflow-logger.js";
 import {
   checkDeepProjectSetupAfterTurn,
@@ -11,13 +12,27 @@ import {
   resetEmptyTurnCounter,
 } from "../guided-flow.js";
 import { clearPathCache } from "../paths.js";
-import { getAutoDashboardData, getAutoModeStartModel, isAutoActive, pauseAuto, setCurrentDispatchedModelId } from "../auto.js";
+import {
+  getAutoDashboardData,
+  getAutoModeStartModel,
+  isAutoActive,
+  isAutoCompletionStopInProgress,
+  pauseAuto,
+  setCurrentDispatchedModelId,
+} from "../auto.js";
 import { getNextFallbackModel, resolveModelWithFallbacksForUnit } from "../preferences.js";
 import { pauseAutoForProviderError } from "../provider-error-pause.js";
-import { isSessionSwitchInFlight, resolveAgentEnd, resolveAgentEndCancelled } from "../auto/resolve.js";
+import {
+  isSessionSwitchAbortGraceActive,
+  isSessionSwitchInFlight,
+  resolveAgentEnd,
+  resolveAgentEndCancelled,
+} from "../auto/resolve.js";
+import { shouldIgnoreAgentEndForActiveUnit } from "../auto/unit-runner-events.js";
 import { resolveModelId } from "../auto-model-selection.js";
 import { resolveProjectRoot } from "../worktree.js";
 import { clearDiscussionFlowState } from "./write-gate.js";
+import { clearGuidedUnitContext } from "../guided-unit-context.js";
 import { resumeAutoAfterProviderDelay } from "./provider-error-resume.js";
 import {
   classifyError,
@@ -30,6 +45,23 @@ import { blockModel, isModelBlocked } from "../blocked-models.js";
 
 const retryState = createRetryState();
 const MAX_NETWORK_RETRIES = 2;
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object";
+}
+
+export function _hasEmptyAgentEndContent(content: unknown): boolean {
+  if (content == null) return true;
+  if (!Array.isArray(content)) return false;
+  if (content.length === 0) return true;
+  return content.every((block) => {
+    if (!block || typeof block !== "object") return true;
+    const typedBlock = block as { type?: unknown; text?: unknown };
+    if (typedBlock.type !== "text") return false;
+    return typeof typedBlock.text !== "string" || typedBlock.text.trim() === "";
+  });
+}
+
 /**
  * Cap on auto-resume attempts for sustained transient-provider errors.
  *
@@ -76,6 +108,152 @@ export function isUserInitiatedAbortMessage(message: string | undefined | null):
   return /\b(?:claude code process aborted by user|request aborted by user|process aborted by user)\b/i.test(message);
 }
 
+export function shouldDeferTransientErrorToCoreRetry(
+  cls: ErrorClass,
+  rawErrorMsg: string,
+): boolean {
+  if (!isTransient(cls) || cls.kind === "rate-limit") return false;
+  return !/retry failed after \d+ attempts:/i.test(rawErrorMsg);
+}
+
+function isBareClaudeCodeSessionSwitchAbortMarker(message: string | undefined | null): boolean {
+  if (!message) return false;
+  const normalized = message.trim().replace(/\s+/g, " ").toLowerCase();
+  return normalized === "claude code process aborted by user"
+    || normalized === "request aborted by user"
+    || normalized === "process aborted by user"
+    || normalized === "claude code stream aborted by caller";
+}
+
+function readAssistantTextContent(content: unknown): string {
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((block) => {
+      if (!block || typeof block !== "object") return "";
+      const text = (block as { text?: unknown }).text;
+      return typeof text === "string" ? text : "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+export function isClaudeCodeSessionSwitchAbortMessage(lastMsg: unknown): boolean {
+  if (!lastMsg || typeof lastMsg !== "object") return false;
+  const m = lastMsg as { stopReason?: unknown; errorMessage?: unknown; content?: unknown };
+  const carriers = [
+    m.errorMessage ? String(m.errorMessage) : "",
+    readAssistantTextContent(m.content),
+  ].filter((value) => value.trim().length > 0);
+
+  if ((m.stopReason === "error" || m.stopReason === "aborted") && carriers.length > 0) {
+    return carriers.every(isBareClaudeCodeSessionSwitchAbortMarker);
+  }
+
+  return false;
+}
+
+export function isBareClaudeCodeStreamAbortPlaceholder(lastMsg: unknown): boolean {
+  if (!lastMsg || typeof lastMsg !== "object") return false;
+  const m = lastMsg as { stopReason?: unknown; errorMessage?: unknown; content?: unknown };
+  if (m.stopReason !== "aborted" || m.errorMessage) return false;
+  const text = readAssistantTextContent(m.content).trim().replace(/\s+/g, " ").toLowerCase();
+  return text === "claude code stream aborted by caller";
+}
+
+/**
+ * Resolve an agent_end event observed while a session switch is in flight.
+ *
+ * #5538-followup: When `newSession()` aborts an in-flight stream as part of a
+ * session transition (run-unit.ts:63 → _settleCurrentTurnForSessionTransition
+ * → agent.abort()), the SDK emits "Claude Code process aborted by user" or
+ * "Request aborted by user" against the previous unit's turn. The previous
+ * code path treated that as a user cancellation and propagated it to the next
+ * unit via the pending-switch-cancellation queue, killing auto-mode with
+ * "Auto-mode stopped — Unit aborted: Claude Code process aborted by user"
+ * even though no user input occurred.
+ *
+ * Claude Code abort markers are intentionally ignored when the abort fires
+ * while the session-switch is in flight: the abort is the expected side-effect
+ * of the transition, not a user signal. Other branches (genuine `stopReason
+ * === "aborted"` with explicit errorMessage) preserve the prior behavior.
+ */
+export function _handleSessionSwitchAgentEnd(
+  lastMsg: unknown,
+  resolveCancelled: (ctx: ErrorContext) => boolean,
+): void {
+  if (!lastMsg || typeof lastMsg !== "object") return;
+  const m = lastMsg as { stopReason?: unknown; errorMessage?: unknown; content?: unknown };
+
+  if (isClaudeCodeSessionSwitchAbortMessage(m)) {
+    // Internal abort from in-flight session transition — drop on the floor.
+    return;
+  }
+
+  if (m.stopReason === "error") {
+    const rawErrorMsg = m.errorMessage ? String(m.errorMessage) : "";
+    if (isBareClaudeCodeSessionSwitchAbortMarker(rawErrorMsg)) {
+      // Internal abort from in-flight session transition — drop on the floor.
+      return;
+    }
+    return;
+  }
+
+  if (m.stopReason === "aborted") {
+    const hasErrorMessage = !!m.errorMessage;
+    if (hasErrorMessage) {
+      resolveCancelled(_buildAbortedPauseContext(m as { errorMessage?: unknown }));
+    }
+  }
+}
+
+export function resolveAgentEndErrorDisplay(
+  rawErrorMsg: string,
+  content: unknown,
+): string {
+  const isUseless = !rawErrorMsg || /^(success|ok|true|error|unknown)$/i.test(rawErrorMsg.trim());
+  if (isUseless && Array.isArray(content)) {
+    const textBlock = content.find((b: any) => b.type === "text" && b.text);
+    if (textBlock) return (textBlock as any).text.slice(0, 300);
+  }
+  return rawErrorMsg;
+}
+
+export function isTerminalDeletedWorktreeProviderError(
+  message: string | undefined | null,
+): boolean {
+  if (!message) return false;
+  if (!/\bdoes not exist\b/i.test(message)) return false;
+  return /[/\\]\.gsd[/\\](?:projects[/\\][^/\\]+[/\\])?worktrees[/\\][^/\\\s"']+/i.test(message);
+}
+
+type MessageEndLike = {
+  message: unknown;
+};
+
+export function suppressTerminalDeletedWorktreeMessageEnd(event: MessageEndLike): boolean {
+  const message = event.message as {
+    role?: unknown;
+    stopReason?: unknown;
+    errorMessage?: unknown;
+    content?: unknown;
+  };
+  if (!isAutoCompletionStopInProgress()) return false;
+  if (message?.role !== "assistant" || message.stopReason !== "error") return false;
+
+  const rawErrorMsg = message.errorMessage ? String(message.errorMessage) : "";
+  const displayMsg = resolveAgentEndErrorDisplay(rawErrorMsg, message.content);
+  if (!isTerminalDeletedWorktreeProviderError(`${rawErrorMsg}\n${displayMsg}`)) return false;
+
+  message.stopReason = "completed";
+  message.errorMessage = undefined;
+  message.content = [];
+  logWarning(
+    "bootstrap",
+    `Suppressing stale deleted-worktree provider error during terminal completion reroot: ${displayMsg || rawErrorMsg}`,
+  );
+  return true;
+}
+
 async function pauseTransientWithBackoff(
   cls: ErrorClass,
   pi: ExtensionAPI,
@@ -112,7 +290,7 @@ async function pauseTransientWithBackoff(
 
 export async function handleAgentEnd(
   pi: ExtensionAPI,
-  event: { messages: any[] },
+  event: AgentEndEvent,
   ctx: ExtensionContext,
 ): Promise<void> {
   // #4648 — Invalidate the directory-listing cache before any artifact-existence
@@ -124,9 +302,11 @@ export async function handleAgentEnd(
   // falsely report files as missing — producing a spurious "ready signal
   // rejected" loop even though the files are on disk.
   clearPathCache();
+  const basePath = resolveAgentEndBasePath();
+  clearGuidedUnitContext(basePath);
 
   try {
-    if (await checkDeepProjectSetupAfterTurn(event, ctx, resolveAgentEndBasePath())) {
+    if (await checkDeepProjectSetupAfterTurn(event, ctx, basePath)) {
       return;
     }
   } catch (err) {
@@ -134,8 +314,8 @@ export async function handleAgentEnd(
     logWarning("bootstrap", `checkDeepProjectSetupAfterTurn failed: ${message}`);
   }
 
-  if (checkAutoStartAfterDiscuss()) {
-    clearDiscussionFlowState(resolveAgentEndBasePath() ?? process.cwd());
+  if (checkAutoStartAfterDiscuss(basePath)) {
+    clearDiscussionFlowState(basePath ?? process.cwd());
     return;
   }
 
@@ -143,46 +323,67 @@ export async function handleAgentEnd(
   // are missing, `checkAutoStartAfterDiscuss` returns false silently. Surface
   // that and nudge the LLM to complete the writes before the user hits the
   // downstream "All milestones complete" warning loop.
-  if (maybeHandleReadyPhraseWithoutFiles(event)) return;
+  if (maybeHandleReadyPhraseWithoutFiles(event, basePath)) return;
 
   // #4573 — Empty-turn recovery: if the LLM announced intent in prose but
   // emitted no tool calls, nudge it to execute. Fires only when auto-mode is
   // active or a discussion autostart is pending (non-auto interactive discuss
   // is user-driven). Runs before `isAutoActive` early return so pending
   // discussions (where isAutoActive may be false) still get recovered.
-  if (maybeHandleEmptyIntentTurn(event, isAutoActive())) return;
+  if (maybeHandleEmptyIntentTurn(event, isAutoActive(), basePath)) return;
 
   if (!isAutoActive()) return;
 
+  if (shouldIgnoreAgentEndForActiveUnit(event)) {
+    return;
+  }
+
   const lastMsg = event.messages[event.messages.length - 1];
   if (isSessionSwitchInFlight()) {
-    if (lastMsg && "stopReason" in lastMsg && lastMsg.stopReason === "error") {
-      const rawErrorMsg = ("errorMessage" in lastMsg && lastMsg.errorMessage) ? String(lastMsg.errorMessage) : "";
-      if (isUserInitiatedAbortMessage(rawErrorMsg)) {
-        resolveAgentEndCancelled({
-          message: rawErrorMsg,
-          category: "aborted",
-          isTransient: false,
-        });
-      }
-    } else if (lastMsg && "stopReason" in lastMsg && lastMsg.stopReason === "aborted") {
-      const content = "content" in lastMsg ? lastMsg.content : undefined;
-      const hasEmptyContent = Array.isArray(content) && content.length === 0;
-      const hasErrorMessage = "errorMessage" in lastMsg && !!lastMsg.errorMessage;
-      if (!hasEmptyContent || hasErrorMessage) {
-        resolveAgentEndCancelled(_buildAbortedPauseContext(lastMsg as { errorMessage?: unknown }));
-      }
+    _handleSessionSwitchAgentEnd(lastMsg, resolveAgentEndCancelled);
+    return;
+  }
+
+  if (isSessionSwitchAbortGraceActive() && isClaudeCodeSessionSwitchAbortMessage(lastMsg)) {
+    // Claude Code can report the abort from `newSession()` a few hundred ms
+    // after the guard drops. That event belongs to the old turn; do not let it
+    // cancel the freshly-dispatched unit.
+    return;
+  }
+
+  if (isBareClaudeCodeStreamAbortPlaceholder(lastMsg)) {
+    if (isSessionSwitchAbortGraceActive()) {
+      // Old turn leaking through after a session switch — drop it.
+      return;
+    }
+
+    // Mid-unit stream abort with no diagnostic. Treat as non-fatal so the loop
+    // can continue, but surface it to the user and resolve the in-flight unit.
+    ctx.ui.notify("Claude Code stream aborted mid-unit (no diagnostic). Continuing.", "warning");
+    try {
+      resetRetryState(retryState);
+      resolveAgentEnd(event);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      ctx.ui.notify(`Auto-mode error after stream-abort placeholder: ${message}. Stopping auto-mode.`, "error");
+      try { await pauseAuto(ctx, pi); } catch (e) { logWarning("bootstrap", `pauseAuto failed after stream-abort placeholder: ${(e as Error).message}`); }
     }
     return;
   }
 
-  if (lastMsg && "stopReason" in lastMsg && lastMsg.stopReason === "aborted") {
+  if (isObjectRecord(lastMsg) && "stopReason" in lastMsg && lastMsg.stopReason === "aborted") {
+    if (isAutoCompletionStopInProgress()) {
+      resetRetryState(retryState);
+      resolveAgentEnd(event);
+      return;
+    }
+
     // Empty content with aborted stopReason is a non-fatal agent stop (the LLM
     // chose to end without producing output). Only pause on genuine fatal aborts
     // that carry error context — e.g. errorMessage field or non-empty content
     // indicating a mid-stream failure. (#2695)
     const content = "content" in lastMsg ? lastMsg.content : undefined;
-    const hasEmptyContent = Array.isArray(content) && content.length === 0;
+    const hasEmptyContent = _hasEmptyAgentEndContent(content);
     const hasErrorMessage = "errorMessage" in lastMsg && !!lastMsg.errorMessage;
 
     if (hasEmptyContent && !hasErrorMessage) {
@@ -202,12 +403,17 @@ export async function handleAgentEnd(
     await pauseAuto(ctx, pi, _buildAbortedPauseContext(lastMsg as { errorMessage?: unknown }));
     return;
   }
-  if (lastMsg && "stopReason" in lastMsg && lastMsg.stopReason === "error") {
+  if (isObjectRecord(lastMsg) && "stopReason" in lastMsg && lastMsg.stopReason === "error") {
     // #3588: errorMessage can be useless (e.g. "success") while the real error
     // is in the assistant message text content. Fall back to content when
     // errorMessage looks uninformative.
     const rawErrorMsg = ("errorMessage" in lastMsg && lastMsg.errorMessage) ? String(lastMsg.errorMessage) : "";
     if (isUserInitiatedAbortMessage(rawErrorMsg)) {
+      if (isAutoCompletionStopInProgress()) {
+        resetRetryState(retryState);
+        resolveAgentEnd(event);
+        return;
+      }
       resolveAgentEndCancelled({
         message: rawErrorMsg,
         category: "aborted",
@@ -215,14 +421,23 @@ export async function handleAgentEnd(
       });
       return;
     }
-    const isUseless = !rawErrorMsg || /^(success|ok|true|error|unknown)$/i.test(rawErrorMsg.trim());
     // #3588: When errorMessage is uninformative, extract the real error from
     // the assistant message text content for display purposes only.
     // Classification still uses rawErrorMsg to avoid false positives from prose.
-    let displayMsg = rawErrorMsg;
-    if (isUseless && "content" in lastMsg && Array.isArray(lastMsg.content)) {
-      const textBlock = lastMsg.content.find((b: any) => b.type === "text" && b.text);
-      if (textBlock) displayMsg = (textBlock as any).text.slice(0, 300);
+    const displayMsg = resolveAgentEndErrorDisplay(
+      rawErrorMsg,
+      "content" in lastMsg ? lastMsg.content : undefined,
+    );
+    if (
+      isAutoCompletionStopInProgress() &&
+      isTerminalDeletedWorktreeProviderError(`${rawErrorMsg}\n${displayMsg}`)
+    ) {
+      resetRetryState(retryState);
+      logWarning(
+        "bootstrap",
+        `Ignoring stale deleted-worktree provider error during terminal completion reroot: ${displayMsg || rawErrorMsg}`,
+      );
+      return;
     }
     const errorDetail = displayMsg ? `: ${displayMsg}` : "";
     const explicitRetryAfterMs = ("retryAfterMs" in lastMsg && typeof lastMsg.retryAfterMs === "number") ? lastMsg.retryAfterMs : undefined;
@@ -330,7 +545,20 @@ export async function handleAgentEnd(
     // Core retries transient failures in-session after this handler.
     // Keep that behavior for non-rate-limit classes to avoid pause/retry races,
     // but let rate-limit continue into model fallback logic below (#4373).
-    if (isTransient(cls) && cls.kind !== "rate-limit") {
+    if (shouldDeferTransientErrorToCoreRetry(cls, rawErrorMsg)) {
+      return;
+    }
+
+    if (cls.kind === "tool-schema") {
+      await pauseAutoForProviderError(ctx.ui, errorDetail, () => pauseAuto(ctx, pi, {
+        message: `Tool schema error${errorDetail}`,
+        category: "tool-schema",
+        isTransient: false,
+      }), {
+        isRateLimit: false,
+        isTransient: false,
+        retryAfterMs: 0,
+      });
       return;
     }
 

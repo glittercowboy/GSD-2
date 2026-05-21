@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { getPriorSliceCompletionBlocker } from "../dispatch-guard.ts";
+import { getConsecutiveDispatchBlocker, getPriorSliceCompletionBlocker } from "../dispatch-guard.ts";
 import { openDatabase, closeDatabase, insertMilestone, insertSlice } from "../gsd-db.ts";
 
 /** Helper: create temp dir and open an in-dir DB for dispatch-guard tests */
@@ -44,6 +44,33 @@ test("dispatch guard blocks when prior milestone has incomplete slices", (t) => 
   assert.equal(
     getPriorSliceCompletionBlocker(repo, "main", "plan-slice", "M003/S01"),
     "Cannot dispatch plan-slice M003/S01: earlier slice M002/S02 is not complete.",
+  );
+});
+
+test("dispatch guard skips prior DB parked or deferred milestones without marker files", (t) => {
+  const repo = setupRepo();
+  t.after(() => teardownRepo(repo));
+
+  mkdirSync(join(repo, ".gsd", "milestones", "M001"), { recursive: true });
+  mkdirSync(join(repo, ".gsd", "milestones", "M002"), { recursive: true });
+  mkdirSync(join(repo, ".gsd", "milestones", "M003"), { recursive: true });
+
+  insertMilestone({ id: "M001", title: "Parked", status: "parked" });
+  insertSlice({ id: "S01", milestoneId: "M001", title: "Incomplete", status: "pending", depends: [], sequence: 1 });
+
+  insertMilestone({ id: "M002", title: "Deferred", status: "deferred" });
+  insertSlice({ id: "S01", milestoneId: "M002", title: "Incomplete", status: "pending", depends: [], sequence: 1 });
+
+  insertMilestone({ id: "M003", title: "Current", status: "active" });
+  insertSlice({ id: "S01", milestoneId: "M003", title: "First", status: "pending", depends: [], sequence: 1 });
+
+  writeFileSync(join(repo, ".gsd", "milestones", "M001", "M001-ROADMAP.md"), "# M001\n");
+  writeFileSync(join(repo, ".gsd", "milestones", "M002", "M002-ROADMAP.md"), "# M002\n");
+  writeFileSync(join(repo, ".gsd", "milestones", "M003", "M003-ROADMAP.md"), "# M003\n");
+
+  assert.equal(
+    getPriorSliceCompletionBlocker(repo, "main", "plan-slice", "M003/S01"),
+    null,
   );
 });
 
@@ -252,6 +279,83 @@ test("dispatch guard does not skip prior milestone from SUMMARY projection when 
     getPriorSliceCompletionBlocker(repo, "main", "plan-slice", "M002/S01"),
     "Cannot dispatch plan-slice M002/S01: earlier slice M001/S03-R is not complete.",
   );
+});
+
+test("consecutive dispatch guard blocks complete-milestone after repeat cap", () => {
+  // REPEAT_CAP = 5: five same-unit dispatches are allowed; the sixth is blocked.
+  const state = {
+    consecutiveDispatchCount: new Map<string, number>(),
+    lastDispatchedKey: null as string | null,
+    lastDispatchPhase: null as string | null,
+  };
+
+  assert.equal(getConsecutiveDispatchBlocker(state, "completing-milestone", "complete-milestone", "M009"), null);
+  assert.equal(getConsecutiveDispatchBlocker(state, "completing-milestone", "complete-milestone", "M009"), null);
+  assert.equal(getConsecutiveDispatchBlocker(state, "completing-milestone", "complete-milestone", "M009"), null);
+  assert.equal(getConsecutiveDispatchBlocker(state, "completing-milestone", "complete-milestone", "M009"), null);
+  assert.equal(getConsecutiveDispatchBlocker(state, "completing-milestone", "complete-milestone", "M009"), null);
+  assert.match(
+    getConsecutiveDispatchBlocker(state, "completing-milestone", "complete-milestone", "M009") ?? "",
+    /same-unit repeat cap reached/,
+  );
+});
+
+test("consecutive dispatch guard blocks execute-task after repeat cap", () => {
+  const state = {
+    consecutiveDispatchCount: new Map<string, number>(),
+    lastDispatchedKey: null as string | null,
+    lastDispatchPhase: null as string | null,
+  };
+
+  assert.equal(getConsecutiveDispatchBlocker(state, "executing-slice", "execute-task", "M001/S01/T01"), null);
+  assert.equal(getConsecutiveDispatchBlocker(state, "executing-slice", "execute-task", "M001/S01/T01"), null);
+  assert.equal(getConsecutiveDispatchBlocker(state, "executing-slice", "execute-task", "M001/S01/T01"), null);
+  assert.equal(getConsecutiveDispatchBlocker(state, "executing-slice", "execute-task", "M001/S01/T01"), null);
+  assert.equal(getConsecutiveDispatchBlocker(state, "executing-slice", "execute-task", "M001/S01/T01"), null);
+  assert.match(
+    getConsecutiveDispatchBlocker(state, "executing-slice", "execute-task", "M001/S01/T01") ?? "",
+    /same-unit repeat cap reached/,
+  );
+});
+
+test("consecutive dispatch guard preserves per-unit counts across unit switches", () => {
+  const state = {
+    consecutiveDispatchCount: new Map<string, number>(),
+    lastDispatchedKey: null as string | null,
+    lastDispatchPhase: null as string | null,
+  };
+
+  // Interleave 5 dispatches of each unit; per-unit counts accumulate independently.
+  assert.equal(getConsecutiveDispatchBlocker(state, "validating-milestone", "validate-milestone", "M001"), null);
+  assert.equal(getConsecutiveDispatchBlocker(state, "validating-milestone", "research-slice", "M001/parallel-research"), null);
+  assert.equal(getConsecutiveDispatchBlocker(state, "validating-milestone", "validate-milestone", "M001"), null);
+  assert.equal(getConsecutiveDispatchBlocker(state, "validating-milestone", "research-slice", "M001/parallel-research"), null);
+  assert.equal(getConsecutiveDispatchBlocker(state, "validating-milestone", "validate-milestone", "M001"), null);
+  assert.equal(getConsecutiveDispatchBlocker(state, "validating-milestone", "research-slice", "M001/parallel-research"), null);
+  assert.equal(getConsecutiveDispatchBlocker(state, "validating-milestone", "validate-milestone", "M001"), null);
+  assert.equal(getConsecutiveDispatchBlocker(state, "validating-milestone", "research-slice", "M001/parallel-research"), null);
+  assert.equal(getConsecutiveDispatchBlocker(state, "validating-milestone", "validate-milestone", "M001"), null);
+  assert.equal(getConsecutiveDispatchBlocker(state, "validating-milestone", "research-slice", "M001/parallel-research"), null);
+  assert.match(
+    getConsecutiveDispatchBlocker(state, "validating-milestone", "validate-milestone", "M001") ?? "",
+    /same-unit repeat cap reached/,
+  );
+  assert.match(
+    getConsecutiveDispatchBlocker(state, "validating-milestone", "research-slice", "M001/parallel-research") ?? "",
+    /same-unit repeat cap reached/,
+  );
+});
+
+test("consecutive dispatch guard resets when phase changes", () => {
+  const state = {
+    consecutiveDispatchCount: new Map<string, number>(),
+    lastDispatchedKey: null as string | null,
+    lastDispatchPhase: null as string | null,
+  };
+
+  assert.equal(getConsecutiveDispatchBlocker(state, "validating-milestone", "validate-milestone", "M001"), null);
+  assert.equal(getConsecutiveDispatchBlocker(state, "validating-milestone", "validate-milestone", "M001"), null);
+  assert.equal(getConsecutiveDispatchBlocker(state, "completing-milestone", "validate-milestone", "M001"), null);
 });
 
 test("dispatch guard does not skip failed milestone SUMMARY without blocker prose", (t) => {

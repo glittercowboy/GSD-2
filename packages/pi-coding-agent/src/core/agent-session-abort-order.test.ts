@@ -235,6 +235,7 @@ describe("#4243 — abort() must run before _disconnectFromAgent()", () => {
 	it("abort() marks synthetic agent_end processing while extension handlers run", async () => {
 		const session = await createSession();
 		const observedProcessingStates: boolean[] = [];
+		const observedOrigins: unknown[] = [];
 
 		(session as any).agent.abort = () => {};
 		(session as any).agent.waitForIdle = async () => {};
@@ -242,6 +243,7 @@ describe("#4243 — abort() must run before _disconnectFromAgent()", () => {
 			emit: async (event: any) => {
 				if (event.type === "agent_end") {
 					observedProcessingStates.push((session as any)._processingAgentEnd);
+					observedOrigins.push(event.abortOrigin);
 				}
 			},
 			emitStop: async () => {
@@ -249,9 +251,10 @@ describe("#4243 — abort() must run before _disconnectFromAgent()", () => {
 			},
 		};
 
-		await session.abort();
+		await session.abort({ origin: "session-transition" });
 
 		assert.deepEqual(observedProcessingStates, [true, true]);
+		assert.deepEqual(observedOrigins, ["session-transition"]);
 		assert.equal((session as any)._processingAgentEnd, false);
 	});
 

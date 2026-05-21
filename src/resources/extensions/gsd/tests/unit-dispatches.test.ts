@@ -13,7 +13,7 @@ import {
   insertSlice,
 } from "../gsd-db.ts";
 import { registerAutoWorker } from "../db/auto-workers.ts";
-import { claimMilestoneLease } from "../db/milestone-leases.ts";
+import { claimMilestoneLease, releaseMilestoneLease } from "../db/milestone-leases.ts";
 import {
   recordDispatchClaim,
   markRunning,
@@ -103,6 +103,55 @@ test("partial unique index rejects double-claim of the same active unit", (t) =>
     assert.equal(second.error, "already_active");
     assert.equal(second.existingWorker, workerId);
   }
+});
+
+test("recordDispatchClaim cancels stale active dispatch after lease takeover", (t) => {
+  const base = makeBase();
+  t.after(() => cleanup(base));
+  const { workerId: firstWorkerId, leaseToken: firstLeaseToken } = setup(base);
+
+  const first = recordDispatchClaim({
+    traceId: "t-first",
+    workerId: firstWorkerId,
+    milestoneLeaseToken: firstLeaseToken,
+    milestoneId: "M001",
+    sliceId: "S01",
+    unitType: "plan-slice",
+    unitId: "M001/S01",
+  });
+  assert.equal(first.ok, true);
+  if (!first.ok) return;
+  markRunning(first.dispatchId);
+
+  assert.equal(releaseMilestoneLease(firstWorkerId, "M001", firstLeaseToken), true);
+  const takeoverWorkerId = registerAutoWorker({ projectRootRealpath: base });
+  const takeoverLease = claimMilestoneLease(takeoverWorkerId, "M001");
+  assert.equal(takeoverLease.ok, true);
+  if (!takeoverLease.ok) return;
+
+  const second = recordDispatchClaim({
+    traceId: "t-takeover",
+    workerId: takeoverWorkerId,
+    milestoneLeaseToken: takeoverLease.token,
+    milestoneId: "M001",
+    sliceId: "S01",
+    unitType: "plan-slice",
+    unitId: "M001/S01",
+    attemptN: 2,
+  });
+
+  assert.equal(second.ok, true);
+  if (!second.ok) return;
+
+  const recent = getRecentForUnit("M001/S01", 5);
+  assert.equal(recent.length, 2);
+  assert.equal(recent[0].id, second.dispatchId);
+  assert.equal(recent[0].status, "claimed");
+  assert.equal(recent[0].worker_id, takeoverWorkerId);
+  assert.equal(recent[0].attempt_n, 2);
+  assert.equal(recent[1].id, first.dispatchId);
+  assert.equal(recent[1].status, "canceled");
+  assert.equal(recent[1].exit_reason, "stale-dispatch-lease-takeover");
 });
 
 test("after markCompleted, a fresh claim for the same unit succeeds", (t) => {

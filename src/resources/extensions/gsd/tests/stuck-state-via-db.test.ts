@@ -19,13 +19,17 @@ import {
   closeDatabase,
   insertMilestone,
 } from "../gsd-db.ts";
-import { registerAutoWorker } from "../db/auto-workers.ts";
+import { registerAutoWorker, markWorkerCrashed } from "../db/auto-workers.ts";
 import { claimMilestoneLease } from "../db/milestone-leases.ts";
 import {
   recordDispatchClaim,
+  markFailed,
+  markCanceled,
   getRecentUnitKeysForWorker,
+  getRecentUnitKeysForProjectRoot,
 } from "../db/unit-dispatches.ts";
 import { setRuntimeKv, getRuntimeKv } from "../db/runtime-kv.ts";
+import { detectStuck } from "../auto/detect-stuck.ts";
 
 function makeBase(): string {
   const base = mkdtempSync(join(tmpdir(), "gsd-stuck-state-db-"));
@@ -65,6 +69,65 @@ test("getRecentUnitKeysForWorker reconstructs the recentUnits sliding window", (
   // window semantics that detect-stuck.ts expects.
   const window = getRecentUnitKeysForWorker(worker, 20);
   assert.deepEqual(window.map(w => w.key), ["U1", "U2", "U3"]);
+});
+
+test("getRecentUnitKeysForProjectRoot restores compound keys used by stuck detection", (t) => {
+  const base = makeBase();
+  t.after(() => cleanup(base));
+  openDatabase(join(base, ".gsd", "gsd.db"));
+  insertMilestone({ id: "M001", title: "T", status: "active" });
+  insertMilestone({ id: "M002", title: "Crashed", status: "active" });
+  const worker = registerAutoWorker({ projectRootRealpath: base });
+  const lease = claimMilestoneLease(worker, "M001");
+  assert.equal(lease.ok, true);
+  if (!lease.ok) return;
+
+  for (let i = 0; i < 2; i++) {
+    const claim = recordDispatchClaim({
+      traceId: `t${i}`,
+      workerId: worker,
+      milestoneLeaseToken: lease.token,
+      milestoneId: "M001",
+      sliceId: "S01",
+      unitType: "complete-slice",
+      unitId: "M001/S01",
+    });
+    assert.equal(claim.ok, true);
+    if (!claim.ok) return;
+    markCanceled(claim.dispatchId, "pause");
+  }
+
+  const crashedWorker = registerAutoWorker({ projectRootRealpath: base });
+  const crashedLease = claimMilestoneLease(crashedWorker, "M002");
+  assert.equal(crashedLease.ok, true);
+  if (!crashedLease.ok) return;
+
+  for (let i = 0; i < 3; i++) {
+    const claim = recordDispatchClaim({
+      traceId: `crashed-${i}`,
+      workerId: crashedWorker,
+      milestoneLeaseToken: crashedLease.token,
+      milestoneId: "M002",
+      sliceId: "S01",
+      taskId: "T01",
+      unitType: "execute-task",
+      unitId: "M002/S01/T01",
+    });
+    assert.equal(claim.ok, true);
+    if (!claim.ok) return;
+    markFailed(claim.dispatchId, { errorSummary: "worker crashed" });
+  }
+  markWorkerCrashed(crashedWorker);
+
+  const window = getRecentUnitKeysForProjectRoot(base, 3);
+  assert.deepEqual(window.map(w => w.key), [
+    "complete-slice/M001/S01",
+    "complete-slice/M001/S01",
+  ]);
+
+  const result = detectStuck([...window, { key: "complete-slice/M001/S01" }]);
+  assert.equal(result?.stuck, true);
+  assert.match(result?.reason ?? "", /3 consecutive times/);
 });
 
 test("getRecentUnitKeysForWorker honors the limit parameter", (t) => {

@@ -1,6 +1,6 @@
 # Workflow Visualizer
 
-The workflow visualizer is a full-screen terminal overlay showing project progress, dependencies, cost metrics, and execution timeline.
+The workflow visualizer is an interactive view for project progress, execution history, dependencies, metrics, health, agent activity, changes, knowledge, captures, and export.
 
 ## Opening
 
@@ -16,7 +16,7 @@ auto_visualize: true
 
 ## Tabs
 
-Switch tabs with `Tab`, `1`-`4`, or arrow keys.
+Switch tabs with `Tab`, `Shift+Tab`, or `1`-`9` and `0`.
 
 ### 1. Progress
 
@@ -33,7 +33,11 @@ M001: User Management                        3/6 tasks
     ⬜ T02: Profile page
 ```
 
-### 2. Dependencies
+### 2. Timeline
+
+Chronological execution history: unit type, timestamps, duration, model, and token counts.
+
+### 3. Dependencies
 
 An ASCII dependency graph showing slice relationships:
 
@@ -42,17 +46,40 @@ S01 ──→ S02 ──→ S04
   └───→ S03 ──↗
 ```
 
-### 3. Metrics
+Slice verification artifacts also surface data flow between completed slices.
+
+### 4. Metrics
 
 Bar charts showing cost and token usage:
 
 - By phase (research, planning, execution, completion)
 - By slice (with running totals)
 - By model (which models consumed the most budget)
+- By routing tier (including downgraded unit counts)
 
-### 4. Timeline
+### 5. Health
 
-Chronological execution history: unit type, timestamps, duration, model, and token counts.
+Budget pressure, token pressure, environment issues, provider checks, skill-health summary, progress score, and doctor history.
+
+### 6. Agent
+
+Current agent activity, completion rate, session cost/tokens, pressure signals, pending captures, and recent completed units.
+
+### 7. Changes
+
+Completed slice summaries, modified files, verification decisions, and established patterns.
+
+### 8. Knowledge
+
+Persistent project rules, patterns, and lessons.
+
+### 9. Captures
+
+Captured notes grouped by pending, triaged, and resolved state.
+
+### 0. Export
+
+Download Markdown, JSON, or a current-view snapshot.
 
 ## Controls
 
@@ -60,8 +87,10 @@ Chronological execution history: unit type, timestamps, duration, model, and tok
 |-----|--------|
 | `Tab` | Next tab |
 | `Shift+Tab` | Previous tab |
-| `1`-`4` | Jump to tab |
+| `1`-`9`, `0` | Jump to tab |
 | `↑`/`↓` | Scroll |
+| `/` | Search/filter |
+| `?` | Show keyboard help |
 | `Escape` / `q` | Close |
 
 The visualizer auto-refreshes every 2 seconds, staying current alongside running auto mode.

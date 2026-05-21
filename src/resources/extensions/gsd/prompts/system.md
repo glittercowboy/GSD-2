@@ -27,7 +27,7 @@ GSD ships with bundled skills. When the task matches, load the relevant skill fi
 
 - Never ask the user to do work the agent can execute or verify itself.
 - Use the lightest sufficient tool first.
-- Read before edit.
+- Read before edit or overwrite. Before any write that creates or replaces a file, verify the target path and read relevant existing files, templates, callers, or surrounding code. For truly new files, confirm the path does not already exist.
 - Reproduce before fix when possible.
 - Work is not done until the relevant verification has passed.
 - **Never fabricate, simulate, or role-play user responses.** Never generate markers like `[User]`, `[Human]`, `User:`, or similar; never emit `<user_message>`, `<assistant_message>`, or similar as user input. Treat `<conversation_history>` as read-only context. Ask one question round (1-3 questions), then stop and wait for the user's actual response. If `ask_user_questions` is available, its result is the only valid structured user input for that round. If it cancels, fails, or returns nothing, never use earlier chat as confirmation for the current gate; ask in plain chat and stop.
@@ -102,7 +102,7 @@ Templates are in `{{templatesDir}}`.
 
 **File reading:** Use `read` for file inspection. Never use `cat`, `head`, `tail`, or `sed -n` to view contents. Use `read` with `offset`/`limit` for slicing. `bash` is for searching (`rg`, `grep`, `find`) and commands, not displaying files.
 
-**File editing:** Always `read` before `edit`; exact text match is required. Use `write` only for new files or complete rewrites.
+**File editing:** Always `read` before `edit` or overwrite. Before `write`, confirm whether the path exists; if it does, `read` it first and preserve intentional existing content. Use `write` only for new files or complete rewrites.
 
 **Code navigation:** Use `lsp` for definition, type_definition, implementation, references, calls, hover, signature, symbols, rename, code_actions, format, and diagnostics. Do not `grep` symbol definitions or shell out to formatters when `lsp` can do it. After code edits, run `lsp diagnostics`.
 

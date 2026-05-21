@@ -13,24 +13,14 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:f
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { fileURLToPath } from 'node:url';
-import { dirname } from 'node:path';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+import { installEpipeGuard } from "../bootstrap/register-extension.ts";
 
 function makeTmpBase(): string {
   const base = join(tmpdir(), `gsd-test-${randomUUID()}`);
   mkdirSync(join(base, '.gsd'), { recursive: true });
   return base;
 }
-
-// ─── register-extension source assertions ────────────────────────────────────
-
-const registerExtSrc = readFileSync(
-  join(__dirname, '..', 'bootstrap', 'register-extension.ts'),
-  'utf-8',
-);
 
 describe('register-extension crash handler secondary fixes (#3348)', () => {
   test('writeCrashLog is exported and writes a file to the crash directory', async () => {
@@ -60,30 +50,44 @@ describe('register-extension crash handler secondary fixes (#3348)', () => {
   });
 
   test('_gsdRejectionGuard is registered for unhandledRejection', () => {
-    assert.match(
-      registerExtSrc,
-      /_gsdRejectionGuard/,
-      '_gsdRejectionGuard handler should be defined',
+    installEpipeGuard();
+    const listener = process.listeners("unhandledRejection").find((candidate) =>
+      candidate.name === "_gsdRejectionGuard"
     );
-    assert.match(
-      registerExtSrc,
-      /unhandledRejection/,
-      'installEpipeGuard should register an unhandledRejection handler',
-    );
+    assert.ok(listener, 'installEpipeGuard should register an unhandledRejection handler');
   });
 
-  test('_gsdEpipeGuard calls process.exit(1) for unrecoverable errors, not log-and-continue', () => {
-    // The original #3696 fix replaced "throw err" with a log-and-continue.
-    // The secondary fix replaces that with writeCrashLog + process.exit(1).
-    assert.ok(
-      !registerExtSrc.includes('process.stderr.write(`[gsd] uncaught extension error (non-fatal)'),
-      '_gsdEpipeGuard should NOT log errors as non-fatal and continue',
+  test('_gsdEpipeGuard writes a crash log and exits for unrecoverable errors', () => {
+    installEpipeGuard();
+    const listener = process.listeners("uncaughtException").find((candidate) =>
+      candidate.name === "_gsdEpipeGuard"
     );
-    assert.match(
-      registerExtSrc,
-      /process\.exit\(1\)/,
-      '_gsdEpipeGuard should call process.exit(1) for unrecoverable errors',
-    );
+    assert.ok(listener, '_gsdEpipeGuard should be registered');
+
+    const tmpHome = join(tmpdir(), `gsd-crash-exit-test-${randomUUID()}`);
+    const origHome = process.env.GSD_HOME;
+    const originalExit = process.exit;
+    let exitCode: number | string | null | undefined;
+    (process as any).exit = (code?: number | string | null | undefined): never => {
+      exitCode = code;
+      throw new Error("process.exit intercepted");
+    };
+    process.env.GSD_HOME = tmpHome;
+    try {
+      assert.throws(
+        () => listener(new Error("unrecoverable crash guard test"), "uncaughtException"),
+        /process\.exit intercepted/,
+      );
+      assert.equal(exitCode, 1);
+      const crashDir = join(tmpHome, "crash");
+      const logs = readdirSync(crashDir).filter((f) => f.endsWith(".log"));
+      assert.equal(logs.length, 1);
+      assert.match(readFileSync(join(crashDir, logs[0]), "utf-8"), /unrecoverable crash guard test/);
+    } finally {
+      (process as any).exit = originalExit;
+      process.env.GSD_HOME = origHome;
+      rmSync(tmpHome, { recursive: true, force: true });
+    }
   });
 
   test('writeCrashLog never throws even when directory is unwritable', async () => {

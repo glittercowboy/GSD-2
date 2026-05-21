@@ -1,7 +1,5 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 
 const { getXtermTheme, getXtermOptions } = await import("../../web/lib/xterm-theme.ts");
 
@@ -38,22 +36,6 @@ test("light xterm palette keeps warning and ANSI white entries readable", () => 
   assert.ok(contrastRatio(theme.brightYellow, theme.background) >= 4.5, "bright yellow should meet readable contrast");
   assert.ok(contrastRatio(theme.white, theme.background) >= 4.5, "white should stay readable on light background");
   assert.ok(contrastRatio(theme.brightWhite, theme.background) >= 4.5, "bright white should stay readable on light background");
-});
-
-test("terminal components share the central xterm theme helper", () => {
-  const shellSource = readFileSync(
-    resolve(import.meta.dirname, "../../web/components/gsd/shell-terminal.tsx"),
-    "utf8",
-  );
-  const mainSource = readFileSync(
-    resolve(import.meta.dirname, "../../web/components/gsd/main-session-terminal.tsx"),
-    "utf8",
-  );
-
-  assert.match(shellSource, /from \"@\/lib\/xterm-theme\"/);
-  assert.match(mainSource, /from \"@\/lib\/xterm-theme\"/);
-  assert.doesNotMatch(shellSource, /const XTERM_LIGHT_THEME =/);
-  assert.doesNotMatch(mainSource, /const XTERM_LIGHT_THEME =/);
 });
 
 test("xterm palette mode defaults to classic and supports vivid override", () => {

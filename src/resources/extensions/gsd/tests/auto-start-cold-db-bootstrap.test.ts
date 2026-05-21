@@ -1,37 +1,27 @@
-import { readFileSync } from "node:fs";
+import test from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 
-import {createTestContext, extractSourceRegion } from "./test-helpers.ts";
+import { openProjectDbIfPresent } from "../auto-start.ts";
+import { closeDatabase, isDbAvailable, openDatabase } from "../gsd-db.ts";
 
-const { assertTrue, report } = createTestContext();
+test.afterEach(() => {
+  if (isDbAvailable()) closeDatabase();
+});
 
-const srcPath = join(import.meta.dirname, "..", "auto-start.ts");
-const src = readFileSync(srcPath, "utf-8");
+test("#2841: cold DB bootstrap opens an existing project database before state derivation", async (t) => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "gsd-cold-db-")));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  mkdirSync(join(base, ".gsd"), { recursive: true });
+  const dbPath = join(base, ".gsd", "gsd.db");
 
-console.log("\n=== #2841: cold DB opened before initial deriveState ===");
+  assert.equal(openDatabase(dbPath), true);
+  closeDatabase();
+  assert.equal(isDbAvailable(), false);
 
-const helperIdx = src.indexOf("async function openProjectDbIfPresent");
-assertTrue(helperIdx >= 0, "auto-start.ts defines a helper for pre-derive DB open (#2841)");
+  await openProjectDbIfPresent(base);
 
-const helperRegion = helperIdx >= 0 ? extractSourceRegion(src, "async function openProjectDbIfPresent") : "";
-assertTrue(
-  helperRegion.includes("resolveProjectRootDbPath(basePath)"),
-  "pre-derive DB helper resolves the project-root DB path (#2841)",
-);
-assertTrue(
-  helperRegion.includes("openDatabase(gsdDbPath)"),
-  "pre-derive DB helper opens the resolved DB path (#2841)",
-);
-
-const firstDeriveIdx = src.indexOf("let state = await deriveState(base);");
-assertTrue(firstDeriveIdx > 0, "auto-start.ts has the initial deriveState(base) call");
-
-const preDeriveRegion = firstDeriveIdx > 0 ? src.slice(0, firstDeriveIdx) : "";
-const preDeriveOpenIdx = preDeriveRegion.lastIndexOf("await openProjectDbIfPresent(base);");
-
-assertTrue(
-  preDeriveOpenIdx > 0,
-  "bootstrapAutoSession opens the DB before the first deriveState(base) call (#2841)",
-);
-
-report();
+  assert.equal(isDbAvailable(), true);
+});

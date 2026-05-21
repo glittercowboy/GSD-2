@@ -23,11 +23,17 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 import { buildFlatRateContext } from "../auto-model-selection.ts";
-import { extractSourceRegion } from "./test-helpers.ts";
+import { _isSamePath, _resetAutoWorktreeOriginalBaseForTests } from "../auto-worktree.ts";
+import {
+  checkAutoStartAfterDiscuss,
+  clearPendingAutoStart,
+  setPendingAutoStart,
+} from "../guided-flow.ts";
 
 // ─── Bug 2: this-binding regression ─────────────────────────────────────
 
@@ -62,57 +68,39 @@ test("buildFlatRateContext invokes getProviderAuthMode with correct `this`", () 
 
 // ─── Bug 1: isSamePath source check ─────────────────────────────────────
 
-test("isSamePath short-circuits ENOENT before logging a warning", () => {
-  const srcPath = join(import.meta.dirname, "..", "auto-worktree.ts");
-  const src = readFileSync(srcPath, "utf-8");
-
-  const fnIdx = src.indexOf("function isSamePath");
-  assert.ok(fnIdx !== -1, "isSamePath function exists");
-
-  // Grab the function body (enough to cover the catch block).
-  const fnBody = extractSourceRegion(src, "function isSamePath", { fromIdx: fnIdx });
-
-  const catchIdx = fnBody.indexOf("catch");
-  assert.ok(catchIdx !== -1, "isSamePath has a catch block");
-
-  const enoentIdx = fnBody.indexOf("ENOENT", catchIdx);
-  const warnIdx = fnBody.indexOf("logWarning", catchIdx);
-
-  assert.ok(enoentIdx !== -1, "catch block must handle ENOENT explicitly");
-  assert.ok(warnIdx !== -1, "catch block still warns on non-ENOENT errors");
-  assert.ok(
-    enoentIdx < warnIdx,
-    "ENOENT early-return must precede the logWarning call",
-  );
+test("isSamePath returns false for missing paths without throwing", () => {
+  const dir = mkdtempSync(join(tmpdir(), "gsd-same-path-"));
+  try {
+    assert.equal(_isSamePath(join(dir, "missing-a"), join(dir, "missing-b")), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    _resetAutoWorktreeOriginalBaseForTests();
+  }
 });
 
 // ─── Bug 3: guided-flow manifest unlink source check ────────────────────
 
-test("checkAutoStartAfterDiscuss guards DISCUSSION-MANIFEST.json unlink with existsSync", () => {
-  const srcPath = join(import.meta.dirname, "..", "guided-flow.ts");
-  const src = readFileSync(srcPath, "utf-8");
+test("checkAutoStartAfterDiscuss completes when discussion manifest is absent", () => {
+  const base = mkdtempSync(join(tmpdir(), "gsd-discuss-manifest-"));
+  const notifications: Array<{ message: string; level: string }> = [];
+  let scheduled = false;
+  try {
+    const milestoneDir = join(base, ".gsd", "milestones", "M001");
+    mkdirSync(milestoneDir, { recursive: true });
+    writeFileSync(join(milestoneDir, "M001-CONTEXT.md"), "# Context\n", "utf-8");
+    writeFileSync(join(base, ".gsd", "STATE.md"), "# State\n", "utf-8");
+    setPendingAutoStart(base, {
+      basePath: base,
+      milestoneId: "M001",
+      ctx: { ui: { notify: (message: string, level: string) => notifications.push({ message, level }) } } as any,
+      pi: { sendMessage: () => { scheduled = true; } } as any,
+    });
 
-  const fnIdx = src.indexOf("function checkAutoStartAfterDiscuss");
-  assert.ok(fnIdx !== -1, "checkAutoStartAfterDiscuss function exists");
-
-  // Locate the manifest cleanup comment and its surrounding block.
-  const cleanupIdx = src.indexOf(
-    "remove discussion manifest after auto-start",
-    fnIdx,
-  );
-  assert.ok(cleanupIdx !== -1, "manifest cleanup block still exists");
-
-  // Everything from the comment to a short distance below should contain
-  // the existsSync guard before the unlinkSync call.
-  const block = extractSourceRegion(src, "remove discussion manifest after auto-start", { fromIdx: cleanupIdx });
-
-  const existsIdx = block.indexOf("existsSync(manifestPath)");
-  const unlinkIdx = block.indexOf("unlinkSync(manifestPath)");
-
-  assert.ok(existsIdx !== -1, "manifest unlink must be guarded by existsSync");
-  assert.ok(unlinkIdx !== -1, "manifest unlink still happens when file exists");
-  assert.ok(
-    existsIdx < unlinkIdx,
-    "existsSync guard must precede the unlinkSync call",
-  );
+    assert.equal(checkAutoStartAfterDiscuss(), true);
+    assert.equal(scheduled, false);
+    assert.deepEqual(notifications, [{ message: "Milestone M001 ready.", level: "success" }]);
+  } finally {
+    clearPendingAutoStart(base);
+    rmSync(base, { recursive: true, force: true });
+  }
 });

@@ -14,7 +14,7 @@ import { parseSummary } from '../files.ts';
 import { deriveState } from '../state.ts';
 import { invalidateAllCaches } from '../cache.ts';
 import { ensureDbOpen } from '../bootstrap/dynamic-tools.ts';
-import { closeDatabase, getAllMilestones } from '../gsd-db.ts';
+import { closeDatabase, getAllMilestones, getArtifact } from '../gsd-db.ts';
 import { importWrittenMigrationToDb } from '../migrate/command.ts';
 import type {
   GSDProject,
@@ -336,7 +336,12 @@ test('Scenario 2: Fully complete project — deriveState phase', async () => {
       assert.deepStrictEqual(preview.taskCompletionPct, 100, 'complete: preview taskCompletionPct');
       assert.deepStrictEqual(preview.requirements.total, 0, 'complete: preview requirements total');
 
+      const imported = await importWrittenMigrationToDb(base, preview);
+      assert.ok(imported.artifacts >= 6, 'complete: imports generated milestone artifacts');
+      assert.ok(getArtifact('milestones/M001/M001-VALIDATION.md') !== null, 'complete: M001-VALIDATION.md imported as artifact');
+      assert.ok(getArtifact('milestones/M001/M001-SUMMARY.md') !== null, 'complete: M001-SUMMARY.md imported as artifact');
     } finally {
+      closeDatabase();
       rmSync(base, { recursive: true, force: true });
     }
 });

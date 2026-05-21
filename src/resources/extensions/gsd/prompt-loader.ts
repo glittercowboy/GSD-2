@@ -123,17 +123,42 @@ function warmCache(): void {
 }
 
 let warmCacheScheduled = false;
+let warmCacheRan = false;
+let warmCacheTimer: ReturnType<typeof setTimeout> | undefined;
+
+/**
+ * Synchronously snapshot the prompt/template tree into the cache.
+ *
+ * Safe to call immediately after `initResources()` because that function uses
+ * synchronous fs APIs — there is no race window that requires deferring the
+ * cache warm via setTimeout. Idempotent: subsequent calls are no-ops.
+ *
+ * Cancels the fallback `scheduleWarmCache` timer if it is still pending.
+ */
+export function primeCache(): void {
+  if (warmCacheRan) return;
+  if (warmCacheTimer) {
+    clearTimeout(warmCacheTimer);
+    warmCacheTimer = undefined;
+  }
+  warmCacheScheduled = true;
+  warmCacheRan = true;
+  warmCache();
+}
 
 function scheduleWarmCache(): void {
   if (warmCacheScheduled) return;
   warmCacheScheduled = true;
 
   const run = () => {
+    warmCacheTimer = undefined;
+    if (warmCacheRan) return;
+    warmCacheRan = true;
     warmCache();
   };
 
-  const timer = setTimeout(run, 1000);
-  timer.unref?.();
+  warmCacheTimer = setTimeout(run, 1000);
+  warmCacheTimer.unref?.();
 }
 
 // Snapshot the full prompt/template tree after import so extension startup only
@@ -175,7 +200,7 @@ export function loadPrompt(name: string, vars: Record<string, string> = {}): str
     if (missing.length > 0) {
       throw new GSDError(
         GSD_PARSE_ERROR,
-        `loadPrompt("${name}"): template declares {{${missing.join("}}, {{")}}}} but no value was provided. ` +
+        `loadPrompt("${name}"): template declares {{${missing.join("}}, {{")}}} but no value was provided. ` +
         `This usually means the extension code in memory is older than the template on disk. ` +
         `Restart pi to reload the extension.`,
       );

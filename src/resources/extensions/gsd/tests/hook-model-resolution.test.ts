@@ -92,6 +92,11 @@ test("resolveModelId: returns undefined for unknown model", () => {
   assert.equal(match, undefined);
 });
 
+test("resolveModelId: returns undefined for missing model ID", () => {
+  const match = resolveModelId(undefined, AVAILABLE_MODELS, "anthropic");
+  assert.equal(match, undefined);
+});
+
 test("resolveModelId: returns undefined for unknown provider/model combo", () => {
   const match = resolveModelId("fakeprovider/fake-model", AVAILABLE_MODELS, undefined);
   assert.equal(match, undefined);

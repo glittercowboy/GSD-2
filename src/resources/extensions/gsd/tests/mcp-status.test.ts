@@ -3,8 +3,10 @@ import assert from "node:assert/strict";
 
 import {
   formatMcpInitResult,
+  formatMcpConnectionTestResult,
   formatMcpStatusReport,
   formatMcpServerDetail,
+  hasHostMcpTool,
   type McpServerStatus,
 } from "../commands-mcp-status.ts";
 
@@ -36,6 +38,15 @@ describe("formatMcpStatusReport", () => {
     const result = formatMcpStatusReport(servers);
     assert.match(result, /error/i);
     assert.match(result, /Connection refused/);
+  });
+
+  test("shows disabled state separately from disconnected", () => {
+    const servers: McpServerStatus[] = [
+      { name: "disabled-server", transport: "stdio", connected: false, toolCount: 0, error: undefined, disabled: true },
+    ];
+    const result = formatMcpStatusReport(servers);
+    assert.match(result, /disabled-server/);
+    assert.match(result, /disabled/i);
   });
 
   test("includes server count in header", () => {
@@ -101,6 +112,50 @@ describe("formatMcpServerDetail", () => {
     });
     assert.match(result, /disconnected/i);
   });
+
+  test("shows env warnings for server detail", () => {
+    const result = formatMcpServerDetail({
+      name: "warned",
+      transport: "http",
+      connected: false,
+      toolCount: 0,
+      tools: [],
+      error: undefined,
+      envWarnings: ["headers.Authorization references unset environment variable TOKEN."],
+    });
+    assert.match(result, /Warnings/);
+    assert.match(result, /TOKEN/);
+  });
+});
+
+describe("formatMcpConnectionTestResult", () => {
+  test("summarizes successful tools/list", () => {
+    const result = formatMcpConnectionTestResult({
+      ok: true,
+      server: "demo",
+      transport: "stdio",
+      toolCount: 1,
+      tools: ["ping"],
+      warnings: [],
+    });
+    assert.match(result, /passed/i);
+    assert.match(result, /ping/);
+  });
+
+  test("summarizes failed connection with warnings", () => {
+    const result = formatMcpConnectionTestResult({
+      ok: false,
+      server: "demo",
+      transport: "http",
+      toolCount: 0,
+      tools: [],
+      warnings: ["url references unset environment variable TOKEN."],
+      error: "bad config",
+    });
+    assert.match(result, /failed/i);
+    assert.match(result, /bad config/);
+    assert.match(result, /TOKEN/);
+  });
 });
 
 describe("formatMcpInitResult", () => {
@@ -114,5 +169,15 @@ describe("formatMcpInitResult", () => {
   test("shows unchanged message when config is current", () => {
     const result = formatMcpInitResult("unchanged", "/tmp/project/.mcp.json", "/tmp/project");
     assert.match(result, /already up to date/i);
+  });
+});
+
+describe("hasHostMcpTool", () => {
+  test("detects host-provided MCP tool prefix for a server", () => {
+    assert.equal(hasHostMcpTool("tools: mcp__gsd-workflow__*", "gsd-workflow"), true);
+  });
+
+  test("does not match other servers", () => {
+    assert.equal(hasHostMcpTool("tools: mcp__other-server__*", "gsd-workflow"), false);
   });
 });

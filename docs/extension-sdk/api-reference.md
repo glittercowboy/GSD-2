@@ -79,6 +79,10 @@ Handlers receive the event payload and an `ExtensionContext`. Return values vary
 | `pi.getActiveTools()` | `getActiveTools(): string[]` | Get currently active tool names |
 | `pi.getAllTools()` | `getAllTools(): ToolInfo[]` | Get all registered tools (name, description, parameters) |
 | `pi.setActiveTools(names)` | `setActiveTools(toolNames: string[])` | Enable/disable tools at runtime |
+| `pi.getVisibleSkills()` | `getVisibleSkills(): string[] \| undefined` | Get the prompt-only skill visibility filter |
+| `pi.setVisibleSkills(names)` | `setVisibleSkills(skillNames: string[] \| undefined)` | Limit which loaded skills are advertised in `<available_skills>` |
+
+`setVisibleSkills()` only changes the skill catalog rendered into the next system prompt. It does not unload skills or disable the Skill tool; pass `undefined` to restore the full loaded skill catalog.
 
 ### Model Management
 
@@ -292,6 +296,25 @@ Configuration for `pi.registerProvider()`.
 
 All events are subscribed via `pi.on(eventName, handler)`. Handlers receive `(event, ctx: ExtensionContext)` unless noted otherwise.
 
+### Agent Event Metadata
+
+Agent lifecycle events carry optional correlation metadata when the current provider/session can supply it:
+
+| Field | Type | Events | Description |
+|-------|------|--------|-------------|
+| `sessionId` | `string` | `agent_start`, `agent_end`, `stop`, `turn_start`, `turn_end`, `message_start`, `message_update`, `message_end`, `tool_execution_start`, `tool_execution_update`, `tool_execution_end` | Current session identifier. Treat as optional for compatibility with older emitters and synthetic events. |
+| `turnId` | `string` | `agent_start`, `agent_end`, `stop`, `turn_start`, `turn_end`, `message_start`, `message_update`, `message_end`, `tool_execution_start`, `tool_execution_update`, `tool_execution_end` | Correlates events emitted for the same agent turn. Treat as optional. |
+| `abortOrigin` | `"session-transition" \| "user" \| "timeout" \| "unknown"` | `agent_end`, `stop` | Present when the agent loop ended because an abort was observed. |
+
+`abortOrigin` lets consumers distinguish user-visible cancellation from internal control flow:
+
+| Value | Meaning |
+|-------|---------|
+| `"session-transition"` | Internal abort used while switching, forking, or creating sessions. Extensions that settle work from `agent_end` should usually ignore this origin for the active unit/session. |
+| `"user"` | User-initiated cancellation, such as Escape, RPC `abort`, or `ctx.abort()`. |
+| `"timeout"` | Timeout-driven cancellation. |
+| `"unknown"` | Abort was observed but the caller did not provide a more specific origin. |
+
 ### Session Events
 
 | Event | Type | Return Type | Description |
@@ -321,10 +344,11 @@ All events are subscribed via `pi.on(eventName, handler)`. Handlers receive `(ev
 | Event | Type | Return Type | Description |
 |-------|------|-------------|-------------|
 | `before_agent_start` | `BeforeAgentStartEvent` | `BeforeAgentStartEventResult` | After user submits prompt, before agent loop. Can inject system prompt or message. |
-| `agent_start` | `AgentStartEvent` | — | Agent loop started |
-| `agent_end` | `AgentEndEvent` | — | Agent loop ended. Includes `messages` array. |
-| `turn_start` | `TurnStartEvent` | — | Start of each turn. Includes `turnIndex` and `timestamp`. |
-| `turn_end` | `TurnEndEvent` | — | End of each turn. Includes `turnIndex`, `message`, and `toolResults`. |
+| `agent_start` | `AgentStartEvent` | — | Agent loop started. May include `sessionId` and `turnId`. |
+| `agent_end` | `AgentEndEvent` | — | Agent loop ended. Includes `messages`; may include `sessionId`, `turnId`, and `abortOrigin`. |
+| `stop` | `StopEvent` | — | Agent is truly idle with no follow-up or steering pending. May include `sessionId`, `turnId`, and `abortOrigin`. |
+| `turn_start` | `TurnStartEvent` | — | Start of each turn. Includes `turnIndex` and `timestamp`; may include `sessionId` and `turnId`. |
+| `turn_end` | `TurnEndEvent` | — | End of each turn. Includes `turnIndex`, `message`, and `toolResults`; may include `sessionId` and `turnId`. |
 | `context` | `ContextEvent` | `ContextEventResult` | Before each LLM call. Can modify `messages` array. |
 | `before_provider_request` | `BeforeProviderRequestEvent` | `unknown` | Before provider request is sent. Can replace the payload. |
 
@@ -332,9 +356,9 @@ All events are subscribed via `pi.on(eventName, handler)`. Handlers receive `(ev
 
 | Event | Type | Return Type | Description |
 |-------|------|-------------|-------------|
-| `message_start` | `MessageStartEvent` | — | A message started (user, assistant, or toolResult) |
-| `message_update` | `MessageUpdateEvent` | — | Token-by-token streaming updates during assistant message |
-| `message_end` | `MessageEndEvent` | — | A message ended |
+| `message_start` | `MessageStartEvent` | — | A message started (user, assistant, or toolResult). May include `sessionId` and `turnId`. |
+| `message_update` | `MessageUpdateEvent` | — | Token-by-token streaming updates during assistant message. May include `sessionId` and `turnId`. |
+| `message_end` | `MessageEndEvent` | — | A message ended. May include `sessionId` and `turnId`. |
 
 ### Tool Events
 
@@ -342,9 +366,9 @@ All events are subscribed via `pi.on(eventName, handler)`. Handlers receive `(ev
 |-------|------|-------------|-------------|
 | `tool_call` | `ToolCallEvent` | `ToolCallEventResult` | Before a tool executes. Return `{ block: true, reason? }` to block. |
 | `tool_result` | `ToolResultEvent` | `ToolResultEventResult` | After a tool executes. Can modify `content`, `details`, or `isError`. |
-| `tool_execution_start` | `ToolExecutionStartEvent` | — | Tool started executing |
-| `tool_execution_update` | `ToolExecutionUpdateEvent` | — | Tool streaming/partial output |
-| `tool_execution_end` | `ToolExecutionEndEvent` | — | Tool finished executing |
+| `tool_execution_start` | `ToolExecutionStartEvent` | — | Tool started executing. May include `sessionId` and `turnId`. |
+| `tool_execution_update` | `ToolExecutionUpdateEvent` | — | Tool streaming/partial output. May include `sessionId` and `turnId`. |
+| `tool_execution_end` | `ToolExecutionEndEvent` | — | Tool finished executing. May include `sessionId` and `turnId`. |
 
 `ToolCallEvent` is a discriminated union by `toolName`. Use `isToolCallEventType()` and `isToolResultEventType()` type guards for narrowing:
 
@@ -375,7 +399,10 @@ pi.on("tool_call", (event, ctx) => {
 
 | Event | Type | Return Type | Description |
 |-------|------|-------------|-------------|
+| `adjust_tool_set` | `AdjustToolSetEvent` | `AdjustToolSetResult` | After built-in provider compatibility filtering and before the provider request. Can return `{ toolNames }` to narrow or reorder the final request tool set. |
 | `model_select` | `ModelSelectEvent` | — | Model changed. Includes `model`, `previousModel`, and `source` (`"set"`, `"cycle"`, `"restore"`). |
+
+`AdjustToolSetEvent` includes `selectedModelApi`, `selectedModelProvider`, `selectedModelId`, `activeToolNames`, `filteredTools`, and metadata-only `requestCustomMessages`. The final tool list is also the list seen by `PI_TOKEN_AUDIT` and the provider request.
 
 ---
 
@@ -412,5 +439,6 @@ if (isToolResultEventType<"my_tool", MyDetails>("my_tool", event)) {
 | `ProviderConfig` | `@gsd/pi-coding-agent` | Provider registration config |
 | `ExtensionFactory` | `@gsd/pi-coding-agent` | `(pi: ExtensionAPI) => void \| Promise<void>` |
 | `ContextUsage` | `@gsd/pi-coding-agent` | `{ tokens, contextWindow, percent }` |
+| `AgentAbortOrigin` | `@gsd/pi-agent-core` | `"session-transition" \| "user" \| "timeout" \| "unknown"` |
 | `ThinkingLevel` | `@gsd/pi-agent-core` | `"off" \| "low" \| "medium" \| "high" \| "xhigh"` |
 | `TSchema` | `@sinclair/typebox` | TypeBox schema type for tool parameters |

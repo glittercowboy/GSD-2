@@ -1,33 +1,74 @@
+// Project/App: GSD-2
+// File Purpose: Behavior tests for auto-mode project-root environment cleanup.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const sourcePath = join(import.meta.dirname, "..", "auto.ts");
-const source = readFileSync(sourcePath, "utf-8");
+import {
+  cleanupAfterLoopExit,
+  _captureProjectRootEnvForTest,
+  _restoreProjectRootEnvForTest,
+} from "../auto.ts";
+import { autoSession } from "../auto-runtime-state.ts";
 
-test("auto-mode captures GSD_PROJECT_ROOT before entering the dispatch loop", () => {
-  const captureDeclIdx = source.indexOf("function captureProjectRootEnv(projectRoot: string): void {");
-  assert.ok(captureDeclIdx > -1, "auto.ts should define captureProjectRootEnv()");
-
-  const resumeCallIdx = source.indexOf("captureProjectRootEnv(s.originalBasePath || s.basePath);");
-  assert.ok(resumeCallIdx > -1, "auto.ts should capture GSD_PROJECT_ROOT before resume autoLoop");
-
-  const firstLoopIdxCandidates = [
-    source.indexOf("await runAutoLoopWithUok({"),
-    source.indexOf("await autoLoop(ctx, pi, s, buildLoopDeps());"),
-  ].filter((idx) => idx > -1);
-  const firstAutoLoopIdx = firstLoopIdxCandidates.length > 0 ? Math.min(...firstLoopIdxCandidates) : -1;
-  assert.ok(firstAutoLoopIdx > -1, "auto.ts should invoke the auto dispatch loop");
-  assert.ok(
-    resumeCallIdx < firstAutoLoopIdx,
-    "auto.ts must set GSD_PROJECT_ROOT before the first loop call",
-  );
+test.afterEach(() => {
+  _restoreProjectRootEnvForTest();
 });
 
-test("auto-mode restores GSD_PROJECT_ROOT when execution stops or pauses", () => {
-  assert.match(source, /function restoreProjectRootEnv\(\): void \{/);
-  assert.match(source, /cleanupAfterLoopExit\(ctx: ExtensionContext\): void \{[\s\S]*restoreProjectRootEnv\(\);/);
-  assert.match(source, /export async function pauseAuto\([\s\S]*restoreProjectRootEnv\(\);/);
-  assert.match(source, /\} finally \{[\s\S]*restoreProjectRootEnv\(\);[\s\S]*s\.reset\(\);/);
+test("auto-mode project-root env capture sets GSD_PROJECT_ROOT and restores an existing value", () => {
+  process.env.GSD_PROJECT_ROOT = "/before";
+
+  _captureProjectRootEnvForTest("/project");
+  assert.equal(process.env.GSD_PROJECT_ROOT, "/project");
+
+  _restoreProjectRootEnvForTest();
+  assert.equal(process.env.GSD_PROJECT_ROOT, "/before");
+  delete process.env.GSD_PROJECT_ROOT;
+});
+
+test("auto-mode project-root env restore deletes GSD_PROJECT_ROOT when it was initially absent", () => {
+  delete process.env.GSD_PROJECT_ROOT;
+
+  _captureProjectRootEnvForTest("/project");
+  assert.equal(process.env.GSD_PROJECT_ROOT, "/project");
+
+  _restoreProjectRootEnvForTest();
+  assert.equal(process.env.GSD_PROJECT_ROOT, undefined);
+});
+
+test("cleanupAfterLoopExit restores captured GSD_PROJECT_ROOT", async () => {
+  const base = mkdtempSync(join(tmpdir(), "gsd-project-root-env-"));
+  const previousCwd = process.cwd();
+  const previousProjectRoot = process.env.GSD_PROJECT_ROOT;
+
+  autoSession.reset();
+  autoSession.active = true;
+  autoSession.basePath = join(base, ".gsd", "worktrees", "M001");
+  autoSession.originalBasePath = base;
+  autoSession.projectRootEnvCaptured = true;
+  autoSession.hadProjectRootEnv = true;
+  autoSession.previousProjectRootEnv = "/previous/project";
+  process.env.GSD_PROJECT_ROOT = base;
+
+  try {
+    await cleanupAfterLoopExit({
+      ui: {
+        setStatus: () => {},
+        setWidget: () => {},
+        notify: () => {},
+      },
+    } as any);
+
+    assert.equal(process.env.GSD_PROJECT_ROOT, "/previous/project");
+    assert.equal(autoSession.projectRootEnvCaptured, false);
+    assert.equal(autoSession.previousProjectRootEnv, null);
+  } finally {
+    autoSession.reset();
+    process.chdir(previousCwd);
+    if (previousProjectRoot === undefined) delete process.env.GSD_PROJECT_ROOT;
+    else process.env.GSD_PROJECT_ROOT = previousProjectRoot;
+    rmSync(base, { recursive: true, force: true });
+  }
 });

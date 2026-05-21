@@ -3,7 +3,7 @@
  *
  * gsdRoot() must return the canonical project .gsd directory when basePath
  * is inside a .gsd/worktrees/<name>/ structure. Worktree-local .gsd folders
- * are legacy projection roots only; runtime state is DB-authoritative at the
+ * are projection roots; runtime/control state stays DB-authoritative at the
  * project .gsd.
  *
  * The bug: when a git worktree lives at /project/.gsd/worktrees/M008/,
@@ -21,7 +21,7 @@ import { mkdtempSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 
-import { gsdRoot, resolveGsdPathContract, _clearGsdRootCache } from "../paths.ts";
+import { gsdProjectionRoot, gsdRoot, resolveGsdPathContract, _clearGsdRootCache } from "../paths.ts";
 
 describe("gsdRoot() worktree detection (#2594)", () => {
   let projectRoot: string;
@@ -76,6 +76,7 @@ describe("gsdRoot() worktree detection (#2594)", () => {
       `Expected canonical project .gsd (${projectGsd}), got ${result}.`,
     );
     assert.equal(resolveGsdPathContract(worktreeBase).worktreeGsd, worktreeGsd);
+    assert.equal(gsdProjectionRoot(worktreeBase), worktreeGsd);
   });
 
   test("returns project .gsd when worktree .gsd does not exist yet", () => {
@@ -89,6 +90,7 @@ describe("gsdRoot() worktree detection (#2594)", () => {
       projectGsd,
       `Expected canonical project .gsd (${projectGsd}), got ${result}.`,
     );
+    assert.equal(gsdProjectionRoot(worktreeBase), join(worktreeBase, ".gsd"));
   });
 
   test("returns project .gsd when basePath is a real git worktree inside .gsd/worktrees/", () => {
@@ -116,6 +118,7 @@ describe("gsdRoot() worktree detection (#2594)", () => {
       projectGsd,
       `Expected canonical project .gsd (${projectGsd}), got ${gsdResult}`,
     );
+    assert.equal(gsdProjectionRoot(worktreeBase), join(worktreeBase, ".gsd"));
 
     // Cleanup worktree
     spawnSync("git", ["worktree", "remove", "--force", worktreeBase], {

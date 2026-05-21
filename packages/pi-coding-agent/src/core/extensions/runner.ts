@@ -173,6 +173,8 @@ export type ExtensionErrorListener = (error: ExtensionError) => void;
 export type NewSessionHandler = (options?: {
 	parentSession?: string;
 	setup?: (sessionManager: SessionManager) => Promise<void>;
+	/** Explicit workspace root for the new session/tool runtime. */
+	workspaceRoot?: string;
 	/** See ExtensionCommandContext.newSession for docs (#3731). */
 	abortSignal?: AbortSignal;
 }) => Promise<{ cancelled: boolean }>;
@@ -275,11 +277,7 @@ export class ExtensionRunner {
 	}
 
 	private currentCwd(): string {
-		try {
-			return process.cwd();
-		} catch {
-			return this.cwd;
-		}
+		return this.cwd;
 	}
 
 	/**
@@ -414,6 +412,8 @@ export class ExtensionRunner {
 		this.runtime.getActiveTools = actions.getActiveTools;
 		this.runtime.getAllTools = actions.getAllTools;
 		this.runtime.setActiveTools = actions.setActiveTools;
+		this.runtime.getVisibleSkills = actions.getVisibleSkills;
+		this.runtime.setVisibleSkills = actions.setVisibleSkills;
 		this.runtime.refreshTools = actions.refreshTools;
 		this.runtime.getCommands = actions.getCommands;
 		this.runtime.setModel = actions.setModel;

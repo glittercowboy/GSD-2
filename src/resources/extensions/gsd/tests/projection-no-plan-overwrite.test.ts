@@ -13,80 +13,44 @@
 
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
-
-// Use process.cwd() based resolution instead of import.meta.url
-// to avoid tsx test runner path resolution issues
-const src = readFileSync(
-  resolve(process.cwd(), 'src', 'resources', 'extensions', 'gsd', 'workflow-projections.ts'),
-  'utf-8',
-)
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { closeDatabase, insertMilestone, insertSlice, openDatabase } from '../gsd-db.ts'
+import { renderAllProjections } from '../workflow-projections.ts'
 
 describe('renderAllProjections must not overwrite PLAN.md (#3651)', () => {
-  it('renderAllProjections function body does NOT invoke renderPlanProjection', () => {
-    // Extract the renderAllProjections function body
-    const fnStart = src.indexOf('export async function renderAllProjections(')
-    assert.ok(fnStart !== -1, 'renderAllProjections function must exist')
+  it('preserves authoritative PLAN.md while rendering other projections', async () => {
+    const base = mkdtempSync(join(tmpdir(), 'gsd-projection-plan-'))
+    const msDir = join(base, '.gsd', 'milestones', 'M001')
+    const sliceDir = join(msDir, 'slices', 'S01')
+    const planPath = join(sliceDir, 'S01-PLAN.md')
+    const planContent = [
+      '# S01 Plan',
+      '',
+      '## Must-Haves',
+      '',
+      '- preserve this authoritative section',
+      '',
+    ].join('\n')
 
-    // Find the for-loop over sliceRows inside renderAllProjections
-    const loopStart = src.indexOf('for (const slice of sliceRows)', fnStart)
-    assert.ok(loopStart !== -1, 'slice loop must exist in renderAllProjections')
+    try {
+      mkdirSync(sliceDir, { recursive: true })
+      writeFileSync(join(msDir, 'M001-ROADMAP.md'), '# Roadmap\n\n## Slices\n\n- [ ] **S01: Slice** `risk:low` `depends:[]`\n')
+      writeFileSync(planPath, planContent)
+      openDatabase(join(base, '.gsd', 'gsd.db'))
+      insertMilestone({ id: 'M001', title: 'Milestone', status: 'active' })
+      insertSlice({ id: 'S01', milestoneId: 'M001', title: 'Slice', status: 'pending' })
 
-    // Find the closing of renderAllProjections (next section marker)
-    const fnEnd = src.indexOf('\n// ─── ', fnStart + 1)
-    assert.ok(fnEnd !== -1, 'section delimiter after renderAllProjections must exist')
+      await renderAllProjections(base, 'M001')
 
-    const fnBody = src.slice(loopStart, fnEnd)
-
-    // The fix: renderPlanProjection must NOT appear as a function call.
-    // Strip comment lines before checking (comments may mention the function name).
-    const codeOnly = fnBody
-      .split('\n')
-      .filter(line => !line.trim().startsWith('//'))
-      .join('\n')
-
-    const hasPlanCall = /renderPlanProjection\s*\(/.test(codeOnly)
-    assert.equal(
-      hasPlanCall,
-      false,
-      'renderPlanProjection must not be called inside the renderAllProjections slice loop — ' +
-        'authoritative PLAN.md is rendered only by plan-slice/replan-slice tools',
-    )
-  })
-
-  it('renderPlanProjection is still defined (available for regenerateIfMissing)', () => {
-    assert.ok(
-      src.includes('function renderPlanProjection('),
-      'renderPlanProjection function definition must still exist for on-demand recovery',
-    )
-  })
-
-  it('renderAllProjections still renders ROADMAP, SUMMARY, and STATE projections', () => {
-    const fnStart = src.indexOf('export async function renderAllProjections(')
-    const fnEnd = src.indexOf('\n// ─── ', fnStart + 1)
-    const fnBody = src.slice(fnStart, fnEnd)
-
-    // #4402: ROADMAP.md is now rendered by the authoritative renderer
-    // (renderRoadmapFromDb) to preserve ## Boundary Map and other sections
-    // that the reduced renderRoadmapProjection would strip.
-    assert.ok(
-      fnBody.includes('renderRoadmapFromDb('),
-      'renderRoadmapFromDb must be called (authoritative roadmap renderer)',
-    )
-    assert.ok(
-      !/renderRoadmapProjection\s*\(/.test(
-        fnBody.split('\n').filter(l => !l.trim().startsWith('//')).join('\n'),
-      ),
-      'renderRoadmapProjection must NOT be called — it clobbers Boundary Map (#4402)',
-    )
-    assert.ok(
-      fnBody.includes('renderSummaryProjection('),
-      'renderSummaryProjection must still be called',
-    )
-    assert.ok(
-      fnBody.includes('renderStateProjection('),
-      'renderStateProjection must still be called',
-    )
+      assert.equal(readFileSync(planPath, 'utf-8'), planContent)
+      assert.ok(readFileSync(join(base, '.gsd', 'STATE.md'), 'utf-8').includes('M001'))
+      assert.ok(readFileSync(join(base, '.gsd', 'ROADMAP.md'), 'utf-8').includes('M001'))
+      assert.ok(readFileSync(join(base, '.gsd', 'QUEUE.md'), 'utf-8').includes('M001'))
+    } finally {
+      closeDatabase()
+      rmSync(base, { recursive: true, force: true })
+    }
   })
 })

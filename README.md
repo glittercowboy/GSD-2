@@ -27,75 +27,143 @@ One command. Walk away. Come back to a built project with clean git history.
 
 ---
 
-## What's New in v2.79
+## What's New in v3.0
 
-### DB-Authoritative Runtime State
+The v3.0 release closes the single-writer engine v3 control plane, finishes the ADR-013 memory cutover, and adds two new top-level commands. It also lands a long list of dispatch-ordering, recovery, and cross-platform fixes that have been accumulating since the v2.82 cut.
 
-- **Auto-mode coordination tables (#5247)** — workers, leases, dispatches, and a command queue are now first-class DB rows, replacing ad-hoc files for cross-process auto coordination.
-- **`auto.lock` + `paused-session.json` → DB (#5250)** — phase C pt 2 of the runtime-state migration. The on-disk lockfile and paused-session JSON are gone; lock acquisition, stale-lock detection, and pause state all live in `gsd.db`.
-- **Stuck-state migration (#5249)** — `copyPlanningArtifacts` / `reconcile` deleted; auto-mode writers canonicalize through the DB instead of mirroring artifacts to disk.
-- **`gsd headless recover`** — non-TTY DB recovery command for unattended environments where the interactive recover flow can't run.
-- **Doctor surfaces DB locks** — `gsd doctor` reports DB-backed stale locks and flags exhausted `run-uat` retry counters so wedged runs are visible without log archaeology.
+### New Commands
 
-### Workspace & Worktree Isolation
+- **`/gsd verdict <pass|needs-attention|needs-remediation>`** — manually override the recorded milestone validation verdict when auto-mode pauses with a non-passing verdict. Previously the only recovery path was hand-editing `VALIDATION.md` frontmatter or hand-crafting a seven-field `gsd_validate_milestone` call. The new command resolves the active milestone if `--milestone` is omitted, preserves every other section of the existing validation file, and requires `--rationale` for non-pass verdicts. Paused-state messages now reference the command directly instead of "update the verdict manually."
+- **`/gsd brief <mode>`** — generate a visual HTML brief in one of six modes (`diagram`, `plan`, `diff`, `recap`, `table`, `slides`). The HTML shell is unified with `/gsd export` so both surfaces produce consistent output.
+- **ROADMAP `[sketch]` badges** (ADR-011) — slices that have not been refined past sketch level are now badged in the rendered roadmap, so it's obvious at a glance which slices still need planning work.
 
-- **`GsdWorkspace` + `MilestoneScope` handle types** — workspace identity is now an explicit handle threaded through writers, metrics, and the DB connection instead of a module singleton.
-- **Symlink-safe canonicalization** — `deriveState` read root and cache key are canonicalized; path normalization unified on `realpathSync.native`; `gsdRootCache` keys normalized and decoupled from per-turn cache clears; `git-root` anchor guarded against `~/.gsd` resolution.
-- **Worktree-scoped DB + metrics** — `gsd-db` connections and metrics ledgers are scoped by workspace identity, so concurrent milestones in separate worktrees can't cross-contaminate state.
-- **Worktree cwd anchoring** — subagent dispatch anchors to the canonical worktree path, `mergeAndExit` anchors cwd at project root (closes [#5079](https://github.com/gsd-build/GSD-2/issues/5079)), MCP cwd is hardened against drift, and dispatch stops on cwd anchor failures.
-- **Slice isolation through resolver (#5246)** — slice merge isolation routed through the worktree resolver; `originalBase` checks use `isSamePath` instead of string equality; `auto-worktree` validates `milestoneId` match in `ByScope` wrappers.
-- **Worktree CLI commands** — `gsd worktree {list, merge, clean, remove}` exposed in the TUI dispatcher.
+### Auto Orchestration Parity (Single-Writer Engine v3 Control Plane)
 
-### Deep Planning Mode (Phase 11)
+The v2.x dispatch layer accumulated parallel code paths between the legacy `auto.ts` loop and the newer Auto Orchestration kernel. v3.0 closes that gap:
 
-- **`/gsd new-project --deep`** — opt-in deep mode for new projects, with `research-decision` and `research-project` dispatch units, deep-mode artifact validators, and gated approval flows that pause the milestone instead of aborting on grounding/discovery questions.
-- **EVAL-REVIEW system** — `/gsd eval-review` command, frontmatter schema, pre-ship soft warning when EVAL-REVIEW status is incomplete, and registration in the catalog + ops dispatcher.
-- **Project-shape-aware discuss depth** — discuss-phase questioning depth scales via the project-shape classifier; tiny apps cap research and auto-skip stale research blockers; deep research is opt-in and blocked while a marker is in flight.
-- **Approval-gate hardening** — deep approval gates verified, opening interview question protected from approval abort, plain-text setup approvals gated, deep setup state guarded against phantom transitions.
+- **Dispatch adapter receives full session inputs** — the adapter now gets the same context the orchestrator does, eliminating a class of "the new path is missing X" bugs.
+- **Orchestrator reaches `runPreDispatch` parity** — pre-dispatch validation runs through the orchestrator path with the same checks the legacy path has, so behavior no longer depends on which entry point fired.
+- **Stuck-loop detection moved into Auto Orchestration** — previously partly in the legacy loop; now owned by the orchestrator so stuck detection participates in the same lifecycle as everything else.
+- **`AutoAdvanceResult` widened with `unit` and `action`** — callers can now branch on the actual outcome of an advance without re-deriving it.
 
-### Auto Pipeline & Dispatch
+### Dispatch & Recovery Reliability
 
-- **Delegation-policy verdicts** — dispatch actions are annotated with a per-tool background-safety policy verdict; the policy itself is codified instead of inferred per call.
-- **Reactive-execute default** — auto-dispatch defaults to reactive-execute when ≥3 ready tasks are queued, replacing the always-sequential fallback.
-- **Proactive rate limiting (#2996)** — `min_request_interval_ms` preference paces auto-mode requests; the interval is stamped at dispatch.
-- **Manifest-driven skill surfacing** — `auto-prompts` surfaces manifest skills via recommendations + auto-match; planning-dispatch mode added to the unit manifest for slice plan/complete; runtime tools-policy enforced for planning units (#4934).
-- **Subagent telemetry** — dispatch telemetry, stronger prompt guidelines, and model-override threading (`??` consistently used for `modelOverride`).
+- **State mutations now happen after pre-dispatch validation** — previously, auto-mode would mutate session state and emit journal events before pre-dispatch validation passed, so a failed validation could leave the journal believing a unit had dispatched. State writes now wait until validation succeeds.
+- **Provider 500 errors pause and retry instead of aborting** — auto-mode used to hard-stop the loop when a model provider returned a 5xx. The dispatch path now pauses with a retry budget so transient provider outages don't lose session state.
+- **`needs-attention` and `needs-remediation` verdicts guarded in dispatch** — completing-milestone no longer falsely loops when validation produced a non-pass terminal verdict. Combined with `/gsd verdict`, paused milestones are unstuck-able without hand-editing files.
+- **`validate-milestone` infinite-loop guard** — when an LLM failed to call `gsd_validate_milestone` and the unit ran without an artifact, dispatch would re-fire forever. The unit now fails closed with a recoverable error instead of looping.
+- **Empty milestone worktree recovery** — milestones that were entered, paused, and resumed against an empty/orphaned worktree now recover cleanly instead of stalling.
+- **Stuck-detection key consistency across sessions** — derived keys now match how DB persistence records them (bare `unitId`), so cross-session stuck detection actually fires.
+- **DB-backed stale worker cleanup also covers hook dispatchers** — previously could leave crashed hook-dispatch rows active and poison the next session.
+- **Stale lock detection when worker PID is dead** — `clearLock()` now marks the DB worker as stopping so resume after a crash isn't blocked until the 30-minute stale window expires.
+- **Auto-mode crash on MCP tool resolution failure** — research-slice no longer reports false success when an MCP tool fails to resolve; the dispatch loop catches the failure instead of treating it as a completion.
+- **Auto-commit submodule + empty `keyFiles` handling** — `git add -- (none)` no longer crashes auto-commit, and `keyFiles` that live inside a submodule no longer throw `pathspec is in submodule`.
 
-### MCP, Models & Cross-Platform
+### Verification & Safety
 
-- **Global MCP config** — `mcp-client` reads `~/.gsd/mcp.json` for user-level MCP server config.
-- **`ask_user_questions` over MCP** — host elicitation tried before remote channel; multi-select array shape preserved; explicit cancellation handled; remote answers normalized into `structuredContent`.
-- **Model routing overhaul** — cross-provider tier resolution, provider-agnostic profile-tier defaults, disabled-provider routing denylist, resolved tier model IDs normalized, and `findModelForTier` with behavioral tests.
-- **Ollama** — configurable probe/request timeouts via env vars (clamped); cloud / long-variant context windows reported correctly.
-- **Windows fixes** — home directory resolved correctly (#5015), `Path` env lookup repaired, Windows-safe env CLI shims, DEP0190 avoided in Claude CLI binary probes, tool-bootstrap skipped when tools are on PATH.
-- **Anthropic prompt-cache preserved (#5019)** — `pi-coding-agent` and `gsd` no longer thrash the cache on dispatch.
+- **Reject unsafe verify commands before execution** — the verification gate now refuses to run commands that violate the tools policy, instead of executing first and failing the gate afterwards.
+- **Reconcile preflight stash collisions** — milestone-entry stash now reconciles with pre-existing stashes instead of silently overwriting them.
+- **Execute-task verification fails closed** — when verification cannot reach a definitive verdict, it fails the task instead of optimistically passing.
+- **Read-required-before-write in prompts** — prompt contracts now require reading a file before writing it, reducing the rate of clobbered edits.
+- **Doctor blocks snapshots that contain conflict markers** — `/gsd doctor` refuses to take a snapshot of a working tree with unresolved merge conflicts.
 
-### Git, GitHub Sync & Reliability
+### Memory Architecture Cutover (ADR-013)
 
-- **Integration-branch self-merge guard (#5024)** — milestone refuses to self-merge when the integration branch equals the milestone branch; self-merge ref guard normalized.
-- **Slice-cadence safety** — integration branch used for slice cadence, dirty worktree state preserved on merge, checked-out slice worktrees advance safely, slice PRs deferred until completion, slice-PR sync stays retryable on failure.
-- **Milestone-ID reservation** — DB rows included in reservation; ghost IDs reused in `nextMilestoneId` to close gaps; `ensurePreconditions` guarded against phantom IDs (#4996); orphan milestone-dir doctor check (#4996); milestone-dir creation deferred until first artifact write.
-- **Auto-commit hygiene** — task commits scoped to reported files, generated commit subjects sanitized, user hooks run on automated commits, milestone-tagged commits bound when `.gsd/` is gitignored (#5033), startup blocked on `git index.lock`.
-- **GitHub sync** — issues no longer closed before delivery, failed task closure / slice PR sync stay retryable, config cache scoped by project, safe git environment used.
+The v2.77 introduction of the memories table is now fully load-bearing. Decisions and KNOWLEDGE patterns/lessons read from and write to memories first, with `DECISIONS.md` and `KNOWLEDGE.md` projected from that source:
 
-### Safety, Recovery & Hardening
+- **Stage 1** — prompt-inline decisions read from memories.
+- **Stage 2a–2c** — `DECISIONS.md` projection sources from memories; `KNOWLEDGE.md` backfill + hybrid projection; `/gsd knowledge` routes patterns and lessons into memories.
+- **Stage 3** — `gsd_save_decision` no longer writes to the legacy decisions table.
+- **Preflight scanner** — detects pre-cutover artifacts and warns before they cause divergence.
 
-- **Policy-block pause through dispatch errors** — pause state is preserved when dispatch errors out mid-policy-block.
-- **Skip-validation persistence** — skip-validation state persists and gate rows are cleared on recover.
-- **Cancelled-gate hard block** — redirected to `ask_user_questions`; false plain-text claim dropped from the message.
-- **Write-gate basePath required** — `process.cwd()` defaults removed; basePath threaded through pre-existing tests.
-- **Atomic metrics writes** — parallel-mode `metrics.json` writes merge atomically; ledger cache invalidated after prune; `saveLedger` aborts when lock not acquired; stale-lock detection adds PID stamp + async yield.
-- **Auto-worktree teardown** — `activeWorkspace` guaranteed cleared on teardown failure; teardown try/finally broadened to cover `chdir`; cleanup steps mirrored on the abort path; warning emitted on resume when persisted worktree is missing.
-- **Empty-turn nudge** — no longer auto-replies to user questions; deferred on mid-line approval prompts.
-- **Refuses project writes from `$HOME`** — and surfaces real SQL errors from `capture_thought` instead of swallowing them.
+### Cross-Platform & Infrastructure
 
-### VS Code & TUI
+- **gsd.db on WSL2 9p mounts** — WAL+mmap pragmas were corrupting `gsd.db` on `/mnt/c` and `/mnt/d`. The database layer now detects 9p mounts and uses safer pragmas.
+- **Milestone merge on Windows** — silent failure when `gsd.db` held a SQLite WAL lock is now surfaced as a recoverable error instead of an empty merge.
+- **Web UI multi-drive access** — Windows users can now point the web UI at projects outside the `C:` drive.
+- **Bedrock context overflow in `--print` mode** — fixed; long contexts no longer crash headless runs against Bedrock models.
+- **OpenAI Codex 429 retries** — no longer fire inside the provider cooldown window (Gemini path was already correct).
+- **Antigravity model removal** — the misleading 404 from Cloud Code Assist when Antigravity models are removed is now a clear error message.
+- **cmux usability after exit** — GSD no longer leaves cmux in a broken terminal state after exit.
 
-- **Checkpoint tree view** — registered in the VS Code extension; checkpoint file existence restored; RPC file-mutation events tracked; agent diff scoped to tracked files.
-- **TUI image paste** — pasted images preserved on regular submit.
-- **Bundled `/gsd` slash command protected** — core handler refuses to overwrite the bundled command.
+### TUI, Web, and Visualizer
 
-See the full [Changelog](./CHANGELOG.md) for the complete v2.79 entry and prior releases.
+- **Web visualizer tabs updated** — refreshed tab set across the 10-tab visualizer.
+- **Auto resume blocker surface** — when resume is blocked (e.g., needs-remediation + all slices complete), the blocker reason is shown prominently instead of buried.
+- **Pi-coding-agent rendering** — empty reasoning blocks no longer render a blank assistant rail for GPT-5.5 tool-only turns; interactive tool output defaults to expanded.
+- **Step-mode polish** — completion surface preserved across step-mode boundary; next-action guidance clarified after pause.
+- **HTML shell unified across `/gsd export` and `/gsd brief`** — one shared visual language for generated reports.
+
+### Subagent Telemetry
+
+- **Random tracking names** — subagent runs get human-readable random names that show up in dashboards, making it easier to trace a specific run across logs.
+- **Resumable isolated launches** — subagent launch records persist, so a crashed subagent can be resumed instead of restarted from scratch.
+
+See the full [Changelog](./CHANGELOG.md) for the complete v3.0 entry and prior releases.
+
+<details>
+<summary>v2.82 highlights</summary>
+
+### State Reconciliation & Drift Detection (ADR-017)
+
+- **Unified drift-detection framework** — a new state-reconciliation layer replaces ad-hoc recovery checks. Each drift kind (stale worker, unregistered milestone, roadmap divergence, missing completion timestamp, merge-state, stale render) is owned by a focused detector + idempotent repair handler registered in a single registry, with a cap=2 retry contract that ensures repair-then-retry settles cleanly.
+- **Stale session locks no longer block resume** — when a `/gsd auto` process is SIGKILL'd, sleep-killed, or otherwise crashes, the `auto.lock` file is left behind with a dead PID. Previously you had to wait out a 30-minute stale window before `/gsd` would resume. The new `stale-worker` drift handler verifies the PID is alive and clears orphaned locks proactively on startup.
+- **Unregistered milestones get imported automatically** — if you scaffold a milestone directory (with `ROADMAP.md`/`CONTEXT.md`/`SUMMARY.md`) but never re-imported, dispatch couldn't see it. The `unregistered-milestone` handler now imports those rows idempotently before dispatch.
+- **ROADMAP and DB stay in sync** — divergence between `ROADMAP.md` (parsed slice sequence + `depends` declarations) and the corresponding DB slice rows is detected per-milestone and reconciled via importer upserts plus an explicit `syncSliceDependencies` pass.
+- **Missing completion timestamps backfill from disk** — entities marked complete in the DB but with a null `completed_at` are now backfilled from `SUMMARY.md` mtime, deterministically and idempotently. Tasks are checked independently of their parent slice status.
+- **Parallel spawns reconcile before fanning out** — `/gsd parallel start` and slice-parallel-dispatch now run reconciliation at the parent before spawning auto-loop workers. Gate failures surface a typed exit reason (`slice-parallel-reconciliation-failed`) and a user-visible message.
+
+### Worktree Lifecycle Refactor (ADR-016 — final phases)
+
+- **Phase 2 complete** — the worktree-manager module finished absorbing fs primitives, git-CLI primitives, worktree-manager helpers, cache/preferences/paths, and the final `gitServiceFactory`. Lifecycle verbs are now first-class: `adoptOrphanWorktree`, `adoptSessionRoot`, `resumeFromPausedSession`, and `restoreToProjectRoot` are explicit entry points.
+- **Phase 3 closes strict-closure residuals** — dead defensive fallbacks removed from `auto.ts` stop-path catch blocks. The public `WorktreeLifecycleDeps` interface dropped 15 `@deprecated` optional fields; the active dep bag is now three fields.
+
+### Auto-Mode Reliability
+
+- **`complete-slice` closeout is read-only** — closeout prompts can no longer write project files, removing closeout-vs-next-slice races.
+- **Verification retries back off properly** — bounded exponential backoff with stuck detection between attempts; transient failures no longer spin.
+- **Auto-loop exit paths are journaled end-to-end** — post-unit finalize stops, all unit-end exits, and the run-unit failsafe now journal cleanly.
+- **Ghost completions and stale telemetry are guarded** — no stops on ghost completions before milestone stops fire; unmerged-exit telemetry gated on active worktrees.
+
+### TUI & Operator Experience
+
+- **Operations console redesign** — auto-mode dashboard, notification overlay, parallel-monitor overlay, health widget, header renderer, and welcome screen rebuilt against a shared `render-kit`.
+- **Milestone completion rollup** — `CompletionDashboardSnapshot` summarizes success criteria, DoD, requirements, deviations, follow-ups, key decisions, key files, lessons, cost, tokens, cache hit rate, and slice progress at milestone boundaries.
+
+</details>
+
+<details>
+<summary>v2.81 highlights</summary>
+
+- **Worktree safety is fail-closed** — write/edit operations enforce the worktree-isolation contract; lifecycle and projection split into dedicated modules; milestone merge closeout is harder to wedge.
+- **Memory, context, and token control** — artifact integrity fingerprints, time-decay memory ranking, safer FTS5 fallback, request-time tool scoping, leaner workflow prompts, and more accurate session/context token accounting.
+- **TUI polish** — compact tool output with targets, refreshed chat/tool cards, adaptive refresher layouts, stable welcome/header lifecycle, and bottom-anchored auto-mode rendering.
+- **Reliability, tests, and CI** — auto-mode recovery and session handoff hardened, broad E2E coverage expansion (real-process MCP, fake LLM, native ABI, Docker, Windows), and a faster, less-noisy CI gate setup.
+
+</details>
+
+<details>
+<summary>v2.80 highlights</summary>
+
+- **DB-authoritative context** — UOK contracts moved through database-backed runtime state, auto-run context mode was wired end-to-end, and planned slices recover after artifact writes.
+- **Auto, deep mode, and gates** — deep queued milestones continue, deep project milestones register cleanly, depth-verification regressions were closed, and task commits respect the milestone completion guard.
+- **MCP, post-exec, and cross-platform hardening** — post-exec import fallback handling, React Router `+types` imports, `gsd_exec` write gating, project-save behavior, and home-directory fallback behavior were tightened.
+- **Reliability and review hardening** — auto orchestration contracts, cancellation context preservation, recovery stop lifecycle events, trace correlation, cleanup-on-throw, and phase-result guards were improved.
+
+</details>
+
+<details>
+<summary>v2.79 highlights</summary>
+
+- **DB-backed runtime coordination** — workers, leases, dispatches, command queue, locks, paused-session state, and stuck-state recovery moved into `gsd.db`
+- **Workspace/worktree isolation** — `GsdWorkspace` and `MilestoneScope` handles, symlink-safe canonicalization, worktree-scoped DB/metrics, cwd anchoring, and `gsd worktree {list, merge, clean, remove}`
+- **Deep planning mode** — `/gsd new-project --deep`, research dispatch units, EVAL-REVIEW, project-shape-aware questioning, and approval-gate hardening
+- **Auto pipeline upgrades** — delegation-policy verdicts, reactive-execute default, proactive rate limiting, manifest-driven skill surfacing, and subagent telemetry
+- **MCP/model/cross-platform fixes** — global MCP config, `ask_user_questions` over MCP, provider-agnostic model routing, Ollama timeouts, Windows fixes, and Anthropic prompt-cache preservation
+- **Git and recovery reliability** — self-merge guards, safer slice cadence, milestone-ID reservation, auto-commit hygiene, retryable GitHub sync, atomic metrics writes, and stronger teardown handling
+- **VS Code and TUI polish** — checkpoint tree view, image paste preservation, and bundled `/gsd` slash command protection
+
+</details>
 
 <details>
 <summary>v2.78 highlights</summary>
@@ -122,7 +190,7 @@ See the full [Changelog](./CHANGELOG.md) for the complete v2.79 entry and prior 
 
 - **Context Mode** — dispatch builds task-ready context automatically (artifacts, prior session, milestone/slice signals, execution metadata); enabled by default for new projects
 - **Sandboxed execution tools** — `gsd_exec_search`, `gsd_resume`, and sandboxed tool-output paths for context-mode flows
-- **Memory architecture (ADR-013)** — `memories` table is now authoritative; `structured_fields` adds typed metadata; dual-write migration landed with decisions backfill
+- **Memory architecture (ADR-013)** — `memories` table is now authoritative; `structured_fields` adds typed metadata; decisions and KNOWLEDGE patterns/lessons are memory-backed projections after the cutover
 - **Skill coverage** — 9 gap-closing skills landed plus 6 planning/design skills surfaced
 - **Hook stack** — Layer 0 shell hooks and additional Layer 2 lifecycle events
 - **TUI polish** — dedicated chat-frame style for skill invocations; active-row overflow fixes
@@ -311,10 +379,14 @@ The migration tool:
 
 - Parses your old `PROJECT.md`, `ROADMAP.md`, `REQUIREMENTS.md`, phase directories, plans, summaries, and research
 - Maps phases → slices, plans → tasks, milestones → milestones
+- Treats an explicit path as the target project root, so `/gsd migrate ~/projects/my-old-project` writes to `~/projects/my-old-project/.gsd`
+- Blocks zero-slice migrations and refuses to run while active, paused, or worktree session state exists
+- Backs up any existing `.gsd/` to `.gsd-backups/migrate-YYYYMMDD-HHMMSS/`, deletes the old `.gsd/`, and restores the backup if migration fails
+- Writes imported hierarchy into the GSD database, renders/verifies markdown projections from DB state, and records a migration audit under `.gsd/migration/`
 - Preserves completion state (`[x]` phases stay done, summaries carry over)
-- Consolidates research files into the new structure
+- Consolidates research files into the new structure and archives the full legacy `.planning` source under `.gsd/migration/legacy/`
 - Shows a preview before writing anything
-- Optionally runs an agent-driven review of the output for quality assurance
+- Optionally runs a read-only review of the output for quality assurance
 
 Supports format variations including milestone-sectioned roadmaps with `<details>` blocks, bold phase entries, bullet-format requirements, decimal phase numbering, and duplicate phase numbers across milestones.
 
@@ -342,7 +414,9 @@ Plan (with integrated research) → Execute (per task) → Complete → Reassess
                                                                               Validate Milestone → Complete Milestone
 ```
 
-**Plan** scouts the codebase, researches relevant docs, and decomposes the slice into tasks with must-haves (mechanically verifiable outcomes). **Execute** runs each task in a fresh context window with only the relevant files pre-loaded — then runs configured verification commands (lint, test, etc.) with auto-fix retries. **Complete** writes the summary, UAT script, marks the roadmap, and commits with meaningful messages derived from task summaries. **Reassess** checks if the roadmap still makes sense given what was learned. **Validate Milestone** runs a reconciliation gate after all slices complete — comparing roadmap success criteria against actual results before sealing the milestone.
+**Plan** scouts the codebase, researches relevant docs, and decomposes the slice into tasks with must-haves (mechanically verifiable outcomes). **Execute** runs each task in a fresh context window with only the relevant files pre-loaded, then runs configured verification commands (lint, test, etc.) with auto-fix retries before the task closeout commit or snapshot is published. Failed or incomplete verification blocks execute-task closeout. **Complete** writes the summary, UAT script, marks the roadmap, and commits with meaningful messages derived from task summaries. **Reassess** checks if the roadmap still makes sense given what was learned. **Validate Milestone** runs a reconciliation gate after all slices complete — comparing roadmap success criteria against actual results before sealing the milestone.
+
+When progressive planning is enabled, the first slice is fully planned up front while later slices may appear in `M###-ROADMAP.md` with a `` `[sketch]` `` badge. A sketch slice has an approved title, dependency shape, demo line, and scope boundary, but it has not yet been expanded into task plans; auto mode runs `refine-slice` just before execution to turn the sketch into a full slice plan using the latest prior-slice summaries.
 
 ### `/gsd auto` — The Main Event
 
@@ -354,7 +428,9 @@ This is what makes GSD different. Run it, walk away, come back to built software
 
 Auto mode is a state machine driven by the GSD database at the project root. It derives the next unit of work from authoritative SQLite state, creates a fresh agent session, injects a focused prompt with all relevant context pre-inlined, and lets the LLM execute. When the LLM finishes, auto mode persists the result to the database, refreshes markdown projections such as `STATE.md`, and dispatches the next unit.
 
-The database is authoritative for milestones, slices, tasks, requirements, decisions, summaries, and completion status. Markdown under `.gsd/` is a rendered projection for review, prompts, and git-friendly history; it is not a runtime fallback unless you explicitly run a recovery/import command. In worktree mode, project-root DB state remains authoritative and worktree markdown projections are not synced back as state.
+The database is authoritative for milestones, slices, tasks, requirements, summaries, and completion status. Durable decisions and project knowledge are stored in the `memories` table: decisions are `architecture` memories, and KNOWLEDGE patterns/lessons are `pattern`/`gotcha` memories. Markdown under `.gsd/` is a rendered projection for review, prompts, and git-friendly history; it is not a runtime fallback unless you explicitly run a recovery/import command. In worktree mode, artifact/projection writes are rendered under the active worktree-local `.gsd/`, while the project-root DB remains authoritative runtime state.
+
+`KNOWLEDGE.md` is hybrid: rules remain file-canonical, while patterns and lessons are stored in the `memories` table and rendered back into `KNOWLEDGE.md` on the next session-start projection. Existing pattern and lesson rows are backfilled into memories before projection, so newly captured patterns and lessons may appear in memory-backed prompt context before the file view refreshes.
 
 **What happens under the hood:**
 
@@ -372,13 +448,13 @@ The database is authoritative for milestones, slices, tasks, requirements, decis
 
 7. **Stuck and artifact detection** — A sliding-window detector identifies repeated dispatch patterns (including multi-unit cycles). Missing expected artifacts use a separate bounded path: GSD retries artifact verification up to 3 times with failure context, then pauses auto mode with the missing artifact error instead of looping indefinitely.
 
-8. **Timeout supervision** — Soft timeout warns the LLM to wrap up. Idle watchdog detects stalls. Hard timeout pauses auto mode. Recovery steering nudges the LLM to finish durable output before giving up.
+8. **Timeout supervision** — Soft timeout warns the LLM to wrap up. Idle watchdog detects stalls. Hard timeout starts recovery and only pauses auto mode if durable progress cannot be made. Runtime progress is recorded under `.gsd/runtime/`, and journal events close out unit, finalize, and iteration phases for later forensics.
 
 9. **Cost tracking** — Every unit's token usage and cost is captured, broken down by phase, slice, and model. The dashboard shows running totals and projections. Budget ceilings can pause auto mode before overspending.
 
 10. **Adaptive replanning** — After each slice completes, the roadmap is reassessed. If the work revealed new information that changes the plan, slices are reordered, added, or removed before continuing.
 
-11. **Verification enforcement** — Configure shell commands (`npm run lint`, `npm run test`, etc.) that run automatically after task execution. Failures trigger auto-fix retries before advancing. Auto-discovered checks from `package.json` run in advisory mode — they log warnings but don't block on pre-existing errors. Configurable via `verification_commands`, `verification_auto_fix`, and `verification_max_retries` preferences.
+11. **Verification enforcement** — Configure simple executable commands (`npm run lint`, `npm run test`, etc.) that run automatically after task execution. Verification commands must not use shell composition or control syntax such as pipes, redirects, semicolons, backticks, or command substitution. Failures trigger auto-fix retries before advancing. Execute-task commits and snapshots are deferred until verification passes; failed or incomplete verification blocks closeout instead of publishing changes. Auto-discovered checks from `package.json` and Python pytest project markers (`python-project`) run in advisory mode — they log warnings but don't block on pre-existing errors. Configurable via `verification_commands`, `verification_auto_fix`, and `verification_max_retries` preferences.
 
 12. **Milestone validation** — After all slices complete, a `validate-milestone` gate compares roadmap success criteria against actual results before sealing the milestone.
 
@@ -504,7 +580,8 @@ On first run, GSD launches a branded setup wizard that walks you through LLM pro
 | `/gsd rethink`          | Conversational project reorganization                                         |
 | `/gsd mcp`              | MCP server status and connectivity                                            |
 | `/gsd status`           | Progress dashboard                                                            |
-| `/gsd queue`            | Queue future milestones (safe during auto mode)                               |
+| `/gsd brief <mode>`     | Generate a visual HTML brief (diagram, plan, diff, recap, table, slides)      |
+| `/gsd queue`            | Queue/reorder future milestones (`pending`, `queued`, or legacy `planned`; safe during auto mode) |
 | `/gsd prefs`            | Model selection, timeouts, budget ceiling                                     |
 | `/gsd migrate`          | Migrate a v1 `.planning` directory to `.gsd` format                           |
 | `/gsd help`             | Categorized command reference for all GSD subcommands                         |
@@ -548,13 +625,13 @@ Every dispatch is carefully constructed. The LLM never wastes tool calls on orie
 | `gsd.db`           | Authoritative runtime state for hierarchy and completion        |
 | `PROJECT.md`       | Living doc — what the project is right now                      |
 | `REQUIREMENTS.md`  | Project-level capability contract and out-of-scope list         |
-| `DECISIONS.md`     | Append-only register of architectural decisions                 |
-| `KNOWLEDGE.md`     | Cross-session rules, patterns, and lessons learned              |
+| `DECISIONS.md`     | Projected register of memory-backed architectural decisions     |
+| `KNOWLEDGE.md`     | Hybrid knowledge projection: manual Rules plus memory-backed Patterns/Lessons |
 | `RUNTIME.md`       | Runtime context — API endpoints, env vars, services (v2.39)     |
 | `runtime/research-decision.json` | Deep-mode marker for project research vs skip       |
 | `research/*.md`    | Optional deep-mode project research: stack, features, architecture, pitfalls |
 | `STATE.md`         | Quick-glance dashboard rendered from the database                |
-| `M001-ROADMAP.md`  | Milestone plan with slice checkboxes, risk levels, dependencies |
+| `M001-ROADMAP.md`  | Milestone plan with slice checkboxes, risk levels, dependencies, and `` `[sketch]` `` badges for slices awaiting `refine-slice` |
 | `M001-CONTEXT.md`  | User decisions from the discuss phase                           |
 | `M001-RESEARCH.md` | Codebase and ecosystem research                                 |
 | `S01-PLAN.md`      | Slice task decomposition with must-haves                        |
@@ -590,6 +667,12 @@ Every task has must-haves — mechanically checkable outcomes:
 - **Key Links** — Imports and wiring between artifacts
 
 The verification ladder: static checks → command execution → behavioral testing → human review (only when the agent genuinely can't verify itself).
+
+### Project Knowledge
+
+`.gsd/KNOWLEDGE.md` remains the human-readable register for durable project knowledge, but the memory store is now authoritative for generated Patterns and Lessons. On startup, GSD backfills existing `## Patterns` and `## Lessons Learned` rows into `gsd.db` memories, then rewrites `KNOWLEDGE.md` as a hybrid projection: the manual `## Rules` section is preserved from the file, while Patterns and Lessons are rendered from the backfilled memory rows.
+
+Keep hand-authored operating rules in `## Rules` or add them with `/gsd knowledge rule`. Patterns and Lessons that agents discover are retrieved through the memory system for prompts and projected back into `KNOWLEDGE.md` for review, reports, and git history.
 
 ### Dashboard
 
@@ -665,7 +748,7 @@ auto_report: true
 | `context_mode.exec_stdout_cap_bytes` | Persisted stdout cap for `gsd_exec` output (default: 1048576)                                      |
 | `context_mode.exec_digest_chars`  | Trailing stdout characters returned to the agent context (default: 300)                              |
 | `context_mode.exec_env_allowlist` | Environment variables forwarded to sandboxed `gsd_exec` runs in addition to `PATH` and `HOME`        |
-| `verification_commands`           | Array of shell commands to run after task execution (e.g., `["npm run lint", "npm run test"]`)        |
+| `verification_commands`           | Array of simple executable commands to run after task execution (e.g., `["npm run lint", "npm run test"]`); avoid pipes, redirects, semicolons, backticks, and command substitution |
 | `verification_auto_fix`           | Auto-retry on verification failures (default: true)                                                   |
 | `verification_max_retries`        | Max retries for verification failures (default: 2)                                                    |
 | `phases.require_slice_discussion` | Pause auto-mode before each slice for human discussion review                                         |
@@ -764,7 +847,7 @@ The best practice for working in teams is to ensure unique milestone names acros
 .gsd/metrics.json
 # Raw JSONL session dumps — crash recovery forensics, auto-pruned
 .gsd/activity/
-# Unit execution records — dispatch phase, timeouts, and recovery tracking
+# Unit execution records — dispatch phase, timeout recovery progress, and finalize tracking
 .gsd/runtime/
 # Git worktree working copies
 .gsd/worktrees/
@@ -772,7 +855,7 @@ The best practice for working in teams is to ensure unique milestone names acros
 .gsd/parallel/
 # SQLite database and WAL sidecars — authoritative runtime state, local only
 .gsd/gsd.db*
-# Daily-rotated event journal — structured event log for forensics
+# Daily-rotated event journal — structured unit/finalize/iteration event log for forensics
 .gsd/journal/
 # Doctor run history — diagnostic check results
 .gsd/doctor-history.jsonl
@@ -835,7 +918,7 @@ gsd (CLI binary)
 - **`pkg/` shim directory** — `PI_PACKAGE_DIR` points here (not project root) to avoid Pi's theme resolution collision with our `src/` directory. Contains only `piConfig` and theme assets.
 - **Two-file loader pattern** — `loader.ts` sets all env vars with zero SDK imports, then dynamic-imports `cli.ts` which does static SDK imports. This ensures `PI_PACKAGE_DIR` is set before any SDK code evaluates.
 - **Always-overwrite sync** — `npm update -g` takes effect immediately. Bundled extensions and agents are synced to `~/.gsd/agent/` on every launch, not just first run.
-- **DB-authoritative state** — the project-root GSD database is the runtime source of truth. `.gsd/` markdown files are rendered projections for review, prompt context, and git history. No in-memory state survives across sessions.
+- **DB-authoritative state** — the project-root GSD database is the runtime source of truth. `.gsd/` markdown files are rendered projections for review, prompt context, and git history. `KNOWLEDGE.md` keeps rules file-canonical and projects patterns/lessons from `memories` at session start. No in-memory state survives across sessions.
 
 ---
 

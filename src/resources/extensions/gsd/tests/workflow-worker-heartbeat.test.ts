@@ -14,9 +14,11 @@ function makeDeps(overrides?: Partial<MaintainWorkerHeartbeatDeps>): {
   deps: MaintainWorkerHeartbeatDeps;
   calls: unknown[];
   errors: unknown[];
+  misses: unknown[];
 } {
   const calls: unknown[] = [];
   const errors: unknown[] = [];
+  const misses: unknown[] = [];
   const deps: MaintainWorkerHeartbeatDeps = {
     heartbeatAutoWorker: workerId => calls.push(["heartbeat", workerId]),
     refreshMilestoneLease: (workerId, milestoneId, token) => {
@@ -24,9 +26,10 @@ function makeDeps(overrides?: Partial<MaintainWorkerHeartbeatDeps>): {
       return true;
     },
     logHeartbeatFailure: err => errors.push(err),
+    logLeaseRefreshMiss: details => misses.push(details),
     ...overrides,
   };
-  return { deps, calls, errors };
+  return { deps, calls, errors, misses };
 }
 
 test("maintainWorkerHeartbeat no-ops without a worker id", () => {
@@ -120,4 +123,32 @@ test("maintainWorkerHeartbeat logs and suppresses lease refresh failures", () =>
     ["refresh", "worker-1", "M001", 7],
   ]);
   assert.deepEqual(errors, [failure]);
+});
+
+test("maintainWorkerHeartbeat clears stale lease tokens when refresh misses", () => {
+  const { deps, calls, errors, misses } = makeDeps({
+    refreshMilestoneLease: (workerId, milestoneId, token) => {
+      calls.push(["refresh", workerId, milestoneId, token]);
+      return false;
+    },
+  });
+  const session: WorkerHeartbeatSession = {
+    workerId: "worker-1",
+    currentMilestoneId: "M001",
+    milestoneLeaseToken: 7,
+  };
+
+  maintainWorkerHeartbeat(session, deps);
+
+  assert.deepEqual(calls, [
+    ["heartbeat", "worker-1"],
+    ["refresh", "worker-1", "M001", 7],
+  ]);
+  assert.deepEqual(errors, []);
+  assert.deepEqual(misses, [{
+    workerId: "worker-1",
+    milestoneId: "M001",
+    fencingToken: 7,
+  }]);
+  assert.equal(session.milestoneLeaseToken, null);
 });

@@ -1,3 +1,4 @@
+// GSD2 - Shared AI provider type definitions
 import type { AssistantMessageEventStream } from "./utils/event-stream.js";
 
 export type { AssistantMessageEventStream } from "./utils/event-stream.js";
@@ -116,6 +117,8 @@ export type ProviderStreamOptions = StreamOptions & Record<string, unknown>;
 
 // Unified options with reasoning passed to streamSimple() and completeSimple()
 export interface SimpleStreamOptions extends StreamOptions {
+	/** Workspace root for providers that spawn local processes. */
+	cwd?: string;
 	reasoning?: ThinkingLevel;
 	/** Custom token budgets for thinking levels (token-based providers only) */
 	thinkingBudgets?: ThinkingBudgets;
@@ -309,6 +312,8 @@ export interface OpenAICompletionsCompat {
 	requiresAssistantAfterToolResult?: boolean;
 	/** Whether thinking blocks must be converted to text blocks with <thinking> delimiters. Default: auto-detected from URL. */
 	requiresThinkingAsText?: boolean;
+	/** Whether to strip replayed `reasoning_content`-style assistant fields from outbound messages. Default: false. */
+	stripReasoningContent?: boolean;
 	/** Format for reasoning/thinking parameter. "openai" uses reasoning_effort, "zai" uses thinking: { type: "enabled" }, "qwen" uses enable_thinking: boolean. Default: "openai". */
 	thinkingFormat?: "openai" | "zai" | "qwen";
 	/** OpenRouter-specific routing preferences. Only used when baseUrl points to OpenRouter. */

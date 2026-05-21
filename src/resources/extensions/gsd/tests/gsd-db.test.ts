@@ -30,6 +30,7 @@ import {
   insertTask,
   getTask,
   getSliceTasks,
+  getActiveMilestoneFromDb,
   deleteMilestone,
   clearEngineHierarchy,
   recordMilestoneCommitAttribution,
@@ -37,6 +38,7 @@ import {
   checkpointDatabase,
   refreshOpenDatabaseFromDisk,
   tryCreateMemoriesFts,
+  _isLikelyWslDrvFsPathForTest,
 } from '../gsd-db.ts';
 import { _resetLogs, peekLogs, setStderrLoggingEnabled } from '../workflow-logger.ts';
 
@@ -218,6 +220,22 @@ describe('gsd-db', () => {
     closeDatabase();
   });
 
+  test("gsd-db: getActiveMilestoneFromDb excludes closed statuses", () => {
+    openDatabase(":memory:");
+
+    insertMilestone({ id: "M001", title: "Done", status: "complete" });
+    insertMilestone({ id: "M002", title: "Legacy done", status: "done" });
+    insertMilestone({ id: "M003", title: "Skipped", status: "skipped" });
+    insertMilestone({ id: "M004", title: "Closed", status: "closed" });
+    insertMilestone({ id: "M005", title: "Parked", status: "parked" });
+    insertMilestone({ id: "M006", title: "Active", status: "active" });
+
+    const active = getActiveMilestoneFromDb();
+    assert.equal(active?.id, "M006", "closed/complete/done/skipped/parked should be excluded from active milestone selection");
+
+    closeDatabase();
+  });
+
   test('gsd-db: active_decisions view excludes superseded', () => {
     openDatabase(':memory:');
 
@@ -342,6 +360,16 @@ describe('gsd-db', () => {
       const mmap = adapter.prepare('PRAGMA mmap_size').get();
       assert.deepStrictEqual(mmap?.['mmap_size'], 67108864, 'non-darwin should still enable mmap_size');
       cleanup(linuxDbPath);
+    });
+  });
+
+  test('gsd-db: detects WSL DrvFs mount paths for conservative pragmas', () => {
+    withPlatform('linux', () => {
+      assert.equal(_isLikelyWslDrvFsPathForTest('/mnt/d/code/project/.gsd/gsd.db'), true);
+      assert.equal(_isLikelyWslDrvFsPathForTest('/tmp/gsd.db'), false);
+    });
+    withPlatform('darwin', () => {
+      assert.equal(_isLikelyWslDrvFsPathForTest('/mnt/d/code/project/.gsd/gsd.db'), false);
     });
   });
 

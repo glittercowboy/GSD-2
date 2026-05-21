@@ -134,10 +134,11 @@ export function mapUsage(sdkUsage: NonNullableUsage, totalCostUsd: number): Usag
 		output: sdkUsage.output_tokens,
 		cacheRead: sdkUsage.cache_read_input_tokens,
 		cacheWrite: sdkUsage.cache_creation_input_tokens,
+		// Claude Agent SDK result usage is cumulative across its internal loop;
+		// repeated cache reads do not represent additional live context.
 		totalTokens:
 			sdkUsage.input_tokens +
 			sdkUsage.output_tokens +
-			sdkUsage.cache_read_input_tokens +
 			sdkUsage.cache_creation_input_tokens,
 		cost: {
 			input: 0,

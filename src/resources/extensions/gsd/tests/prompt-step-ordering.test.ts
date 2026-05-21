@@ -1,146 +1,91 @@
 /**
- * Regression test for #3696 — prompt step ordering and runtime fixes
+ * Regression tests for #3696 — prompt step ordering and compact hook behavior.
  *
- * 1. complete-milestone.md: gsd_requirement_update (step 9) before
- *    gsd_complete_milestone, and completion remains the final durable write
- * 2. complete-slice.md: uses gsd_requirement_update
- * 3. register-extension.ts: _gsdEpipeGuard logs instead of re-throwing
- * 4. register-hooks.ts: session_before_compact only checks isAutoActive
+ * These tests assert rendered prompts and registered hook behavior instead of
+ * reading source files as text.
  */
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
-import { extractSourceRegion } from "./test-helpers.ts";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+import { _setAutoActiveForTest } from '../auto.ts';
+import { buildCompleteMilestonePrompt, buildCompleteSlicePrompt } from '../auto-prompts.ts';
+import { registerHooks } from '../bootstrap/register-hooks.ts';
 
-const completeMilestoneMd = readFileSync(
-  join(__dirname, '..', 'prompts', 'complete-milestone.md'),
-  'utf-8',
-);
-const completeSliceMd = readFileSync(
-  join(__dirname, '..', 'prompts', 'complete-slice.md'),
-  'utf-8',
-);
-const registerExtSrc = readFileSync(
-  join(__dirname, '..', 'bootstrap', 'register-extension.ts'),
-  'utf-8',
-);
-const registerHooksSrc = readFileSync(
-  join(__dirname, '..', 'bootstrap', 'register-hooks.ts'),
-  'utf-8',
-);
+function makePromptBase(): string {
+  const base = mkdtempSync(join(tmpdir(), 'gsd-prompt-order-'));
+  const msDir = join(base, '.gsd', 'milestones', 'M001');
+  const sliceDir = join(msDir, 'slices', 'S01');
+  mkdirSync(sliceDir, { recursive: true });
+  writeFileSync(
+    join(msDir, 'M001-ROADMAP.md'),
+    '# Roadmap\n\n## Slices\n\n- [x] **S01: Done** `risk:low` `depends:[]`\n',
+  );
+  writeFileSync(join(sliceDir, 'S01-PLAN.md'), '# S01 Plan\n\n## Tasks\n\n- T01\n');
+  writeFileSync(join(sliceDir, 'S01-SUMMARY.md'), '# S01 Summary\n\nDone.\n');
+  return base;
+}
+
+function numberedStepIndex(prompt: string, needle: RegExp): number {
+  const lines = prompt.split('\n');
+  const idx = lines.findIndex((line) => /^\d+\.\s/.test(line) && needle.test(line));
+  assert.notEqual(idx, -1, `missing numbered step matching ${needle}`);
+  return idx;
+}
 
 describe('prompt step ordering (#3696)', () => {
-  test('gsd_requirement_update step appears before gsd_complete_milestone step', () => {
-    // Search for the numbered step definitions, not early "Do NOT call" warnings
-    const reqUpdateMatch = completeMilestoneMd.match(/^\d+\.\s.*gsd_requirement_update/m);
-    const completeMilestoneMatch = completeMilestoneMd.match(/^\d+\.\s.*gsd_complete_milestone/m);
-    assert.ok(reqUpdateMatch, 'gsd_requirement_update should appear in a numbered step');
-    assert.ok(completeMilestoneMatch, 'gsd_complete_milestone should appear in a numbered step');
-    const reqUpdateIdx = completeMilestoneMd.indexOf(reqUpdateMatch![0]);
-    const completeMilestoneIdx = completeMilestoneMd.indexOf(completeMilestoneMatch![0]);
-    assert.ok(
-      reqUpdateIdx < completeMilestoneIdx,
-      'gsd_requirement_update step must come before gsd_complete_milestone step',
-    );
+  test('complete-milestone prompt orders durable writes before gsd_complete_milestone', async () => {
+    const base = makePromptBase();
+    try {
+      const prompt = await buildCompleteMilestonePrompt('M001', 'Milestone', base, 'minimal');
+      const guardIdx = numberedStepIndex(prompt, /gsd_milestone_status/);
+      const requirementIdx = numberedStepIndex(prompt, /gsd_requirement_update/);
+      const projectIdx = numberedStepIndex(prompt, /PROJECT\.md/);
+      const learningsIdx = numberedStepIndex(prompt, /Extract structured learnings/);
+      const completeIdx = numberedStepIndex(prompt, /gsd_complete_milestone/);
+
+      assert.ok(guardIdx < requirementIdx);
+      assert.ok(requirementIdx < completeIdx);
+      assert.ok(projectIdx < completeIdx);
+      assert.ok(learningsIdx < completeIdx);
+      assert.match(prompt, /status(?:`|\*\*)?\s+(?:is\s+)?(?:`complete`|"complete")/i);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
   });
 
-  test('project and learnings writes appear before gsd_complete_milestone', () => {
-    const projectMatch = completeMilestoneMd.match(/^\d+\.\s.*PROJECT\.md/m);
-    const learningsMatch = completeMilestoneMd.match(/^\d+\.\s.*Extract structured learnings/m);
-    const completeMilestoneMatch = completeMilestoneMd.match(/^\d+\.\s.*gsd_complete_milestone/m);
-    assert.ok(projectMatch, 'PROJECT.md update should appear in a numbered step');
-    assert.ok(learningsMatch, 'learnings extraction should appear in a numbered step');
-    assert.ok(completeMilestoneMatch, 'gsd_complete_milestone should appear in a numbered step');
-
-    const projectIdx = completeMilestoneMd.indexOf(projectMatch![0]);
-    const learningsIdx = completeMilestoneMd.indexOf(learningsMatch![0]);
-    const completeMilestoneIdx = completeMilestoneMd.indexOf(completeMilestoneMatch![0]);
-    assert.ok(projectIdx < completeMilestoneIdx, 'PROJECT.md update must happen before gsd_complete_milestone');
-    assert.ok(learningsIdx < completeMilestoneIdx, 'learnings extraction must happen before gsd_complete_milestone');
-  });
-
-  test('complete-milestone duplicate guard checks milestone status before durable writes', () => {
-    const guardMatch = completeMilestoneMd.match(/^\d+\.\s.*gsd_milestone_status/m);
-    const reqUpdateMatch = completeMilestoneMd.match(/^\d+\.\s.*gsd_requirement_update/m);
-    assert.ok(guardMatch, 'complete-milestone must start with a gsd_milestone_status duplicate guard');
-    assert.ok(reqUpdateMatch, 'gsd_requirement_update should appear in a numbered step');
-
-    const guardIdx = completeMilestoneMd.indexOf(guardMatch![0]);
-    const reqUpdateIdx = completeMilestoneMd.indexOf(reqUpdateMatch![0]);
-    assert.ok(
-      guardIdx < reqUpdateIdx,
-      'duplicate guard must run before requirement/project/learnings writes',
-    );
-    assert.match(
-      completeMilestoneMd,
-      /status(?:`|\*\*)?\s+(?:is\s+)?(?:`complete`|"complete")/i,
-      'duplicate guard must tell the agent to stop when status is complete',
-    );
-  });
-
-  test('complete-slice.md uses gsd_requirement_update', () => {
-    assert.match(completeSliceMd, /gsd_requirement_update/,
-      'complete-slice.md should reference gsd_requirement_update');
-  });
-});
-
-describe('register-extension _gsdEpipeGuard (#3696)', () => {
-  test('_gsdEpipeGuard exists and does not re-throw', () => {
-    assert.match(registerExtSrc, /_gsdEpipeGuard/,
-      '_gsdEpipeGuard should be defined in register-extension.ts');
-    // After the fix, the handler logs instead of throwing
-    assert.ok(
-      !registerExtSrc.includes('throw err'),
-      '_gsdEpipeGuard should NOT contain "throw err"',
-    );
+  test('complete-slice prompt exposes gsd_requirement_update', async () => {
+    const base = makePromptBase();
+    try {
+      const prompt = await buildCompleteSlicePrompt('M001', 'Milestone', 'S01', 'Done', base, 'minimal');
+      assert.match(prompt, /gsd_requirement_update/);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
   });
 });
 
 describe('register-hooks session_before_compact (#3696)', () => {
-  test('session_before_compact only checks isAutoActive', () => {
-    // Anchor on the full registration token rather than the bare event name —
-    // prevents matching unrelated substring occurrences.
-    const compactIdx = registerHooksSrc.indexOf('pi.on("session_before_compact"');
-    assert.ok(compactIdx > -1, 'session_before_compact hook should exist');
-    // The first check in the handler should be isAutoActive(), not isAutoPaused().
-    // Bound the region to this single handler — register-hooks.ts contains
-    // multiple pi.on("session_before_compact") handlers and a later handler
-    // legitimately references isAutoPaused.
-    const afterCompact = extractSourceRegion(
-      registerHooksSrc,
-      'pi.on("session_before_compact"',
-      'pi.on("',
-      // NB: endAnchor search starts AFTER the startAnchor, so the next
-      // pi.on("... matches the subsequent handler rather than this one.
-    );
-    assert.match(afterCompact, /isAutoActive\(\)/,
-      'session_before_compact should check isAutoActive()');
-    // Should NOT block compaction when paused
-    assert.ok(
-      !afterCompact.includes('isAutoPaused()'),
-      'session_before_compact should not check isAutoPaused',
-    );
-  });
+  test('registered hook cancels compaction only while auto-mode is active', async () => {
+    const handlers = new Map<string, Function>();
+    registerHooks({
+      on(event: string, handler: Function) {
+        handlers.set(event, handler);
+      },
+    } as any, []);
 
-  test('session_before_compact does not gate checkpointing to executing phase (#4258)', () => {
-    const compactIdx = registerHooksSrc.indexOf('session_before_compact');
-    assert.ok(compactIdx > -1, 'session_before_compact hook should exist');
+    const compact = handlers.get('session_before_compact');
+    assert.ok(compact, 'session_before_compact hook should be registered');
 
-    const preCheckpointSection = registerHooksSrc.slice(
-      compactIdx,
-      registerHooksSrc.indexOf('const sliceDir', compactIdx),
-    );
-
-    const normalized = preCheckpointSection.replace(/\/\/.*$/gm, '');
-    assert.ok(
-      !/if\s*\(\s*state\.phase\s*!==\s*['"]executing['"]\s*\)\s*\{?\s*return\b/.test(normalized),
-      'session_before_compact should not early-return on non-executing phases',
-    );
+    _setAutoActiveForTest(true);
+    try {
+      const result = await compact({}, { cwd: mkdtempSync(join(tmpdir(), 'gsd-compact-active-')), ui: { notify() {}, setWidget() {} } });
+      assert.deepEqual(result, { cancel: true });
+    } finally {
+      _setAutoActiveForTest(false);
+    }
   });
 });

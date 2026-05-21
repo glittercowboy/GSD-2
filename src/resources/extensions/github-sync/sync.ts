@@ -122,6 +122,13 @@ export async function runGitHubSync(
   }
 }
 
+export function shouldCreateSlicePrForSyncEvent(
+  unitType: string,
+  config: Pick<GitHubSyncConfig, "slice_prs">,
+): boolean {
+  return unitType === "complete-slice" && config.slice_prs !== false;
+}
+
 // ─── Per-Event Sync Functions ───────────────────────────────────────────────
 
 async function syncMilestonePlan(
@@ -406,7 +413,7 @@ async function syncSliceComplete(
     sliceRecord = getSliceRecord(mapping, mid, sid);
   }
   if (!sliceRecord || sliceRecord.state === "closed") return;
-  if (!sliceRecord.prNumber && config.slice_prs !== false) {
+  if (!sliceRecord.prNumber && shouldCreateSlicePrForSyncEvent("complete-slice", config)) {
     await ensureSlicePullRequest(basePath, mapping, mid, sid);
     sliceRecord = getSliceRecord(mapping, mid, sid);
     if (!sliceRecord || !sliceRecord.prNumber) return;

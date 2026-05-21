@@ -9,12 +9,13 @@
 
 import { describe, test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execSync } from "node:child_process";
 
 import { PROJECT_FILES, classifyProject } from "../detection.js";
+import { _shouldProceedWithInvalidRepoClassificationForTest } from "../auto/phases.ts";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -86,19 +87,19 @@ test("PROJECT_FILES is exported and contains expected multi-ecosystem entries", 
   assert.ok(PROJECT_FILES.includes("Package.swift"), "includes Swift marker");
 });
 
-test("runUnitPhase fails closed when classification returns invalid-repo", () => {
-  const source = readFileSync(join(process.cwd(), "src/resources/extensions/gsd/auto/phases.ts"), "utf-8");
-  const invalidRepoBranch = source.slice(
-    source.indexOf('projectClassification.kind === "invalid-repo"'),
-    source.indexOf('projectClassification.kind === "greenfield"'),
+test("invalid-repo classification only proceeds when the git marker was already confirmed", () => {
+  assert.equal(
+    _shouldProceedWithInvalidRepoClassificationForTest("missing .git", true),
+    true,
   );
-
-  assert.match(invalidRepoBranch, /projectClassification\.reason === "missing \.git" && hasGit/);
-  assert.match(invalidRepoBranch, /project classification could not confirm \.git/);
-  assert.match(invalidRepoBranch, /ctx\.ui\.notify\(msg,\s*"error"\)/);
-  assert.match(invalidRepoBranch, /await deps\.stopAuto\(ctx,\s*pi,\s*msg\)/);
-  assert.match(invalidRepoBranch, /return \{ action: "break", reason: "worktree-invalid" \}/);
-  assert.match(invalidRepoBranch, /classified as invalid-repo/);
+  assert.equal(
+    _shouldProceedWithInvalidRepoClassificationForTest("missing .git", false),
+    false,
+  );
+  assert.equal(
+    _shouldProceedWithInvalidRepoClassificationForTest("permission denied", true),
+    false,
+  );
 });
 
 describe("health check with git repo", () => {

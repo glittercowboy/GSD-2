@@ -1,3 +1,6 @@
+// Project/App: GSD-2
+// File Purpose: Unit tests for pre-execution validation checks.
+
 /**
  * pre-execution-checks.test.ts — Unit tests for pre-execution validation checks.
  *
@@ -6,6 +9,7 @@
  *   2. File path consistency — files exist vs prior expected_output
  *   3. Task ordering — detect impossible read-before-create
  *   4. Interface contracts — contradictory function signatures
+ *   5. Verify commands — reject unsafe or non-runnable task verification
  */
 
 import { describe, test, mock } from "node:test";
@@ -19,6 +23,7 @@ import {
   checkFilePathConsistency,
   checkTaskOrdering,
   checkInterfaceContracts,
+  checkVerificationCommands,
   runPreExecutionChecks,
   normalizeFilePath,
   type PreExecutionResult,
@@ -70,7 +75,7 @@ function createTask(overrides: Partial<TaskRow> = {}): TaskRow {
 
 describe("extractPackageReferences", () => {
   test("extracts npm install patterns", () => {
-    const desc = "Run npm install lodash then npm i axios";
+    const desc = "npm install lodash\nnpm i axios";
     const packages = extractPackageReferences(desc);
     assert.deepEqual(packages.sort(), ["axios", "lodash"]);
   });
@@ -123,6 +128,12 @@ import type { Request } from 'express';
     assert.deepEqual(packages, []);
   });
 
+  test("ignores @/ path alias imports", () => {
+    const desc = `import { handler } from '@/app/api/hello/route';`;
+    const packages = extractPackageReferences(desc);
+    assert.deepEqual(packages, []);
+  });
+
   test("normalizes package subpaths", () => {
     const desc = "npm install lodash/get";
     const packages = extractPackageReferences(desc);
@@ -139,6 +150,12 @@ import type { Request } from 'express';
     const packages = extractPackageReferences(desc);
     assert.ok(packages.includes("typescript"));
     assert.ok(!packages.includes("-D"));
+  });
+
+  test("does not parse prose mention of npm install as packages (#5170)", () => {
+    const desc = "- npm install hits worktree symlink breakage → flag blocker; do not `rm node_modules` under the sandbox.";
+    const packages = extractPackageReferences(desc);
+    assert.deepEqual(packages, []);
   });
 
   // Regression tests for #4388: prose containing `from "..."` must not produce false-positive packages
@@ -412,6 +429,40 @@ describe("checkFilePathConsistency with path normalization", () => {
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
+
+  test("absolute input path matches relative expected_output within basePath (#5519)", () => {
+    tempDir = join(tmpdir(), `pre-exec-test-${Date.now()}`);
+    mkdirSync(tempDir, { recursive: true });
+
+    try {
+      const absGenerated = join(tempDir, "src/new-file.ts");
+      const tasks = [
+        createTask({
+          id: "T01",
+          sequence: 0,
+          files: [],
+          inputs: [],
+          expected_output: ["src/new-file.ts"],
+        }),
+        createTask({
+          id: "T02",
+          sequence: 1,
+          files: [],
+          inputs: [absGenerated],
+          expected_output: [],
+        }),
+      ];
+
+      const results = checkFilePathConsistency(tasks, tempDir);
+      assert.deepEqual(
+        results,
+        [],
+        "Should pass because absolute/relative paths under basePath must compare equal",
+      );
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("checkTaskOrdering with path normalization", () => {
@@ -482,6 +533,38 @@ describe("checkTaskOrdering with path normalization", () => {
 
     const results = checkTaskOrdering(tasks, "/tmp");
     assert.deepEqual(results, [], "Should pass - T02 reads file that T01 already created");
+  });
+
+  test("absolute input matches later relative expected_output and triggers ordering violation (#5519)", () => {
+    const tempDir = join(tmpdir(), `pre-exec-ordering-abs-rel-${Date.now()}`);
+    mkdirSync(tempDir, { recursive: true });
+
+    try {
+      const tasks = [
+        createTask({
+          id: "T01",
+          sequence: 0,
+          files: [],
+          inputs: [join(tempDir, "src/new-file.ts")],
+          expected_output: [],
+        }),
+        createTask({
+          id: "T02",
+          sequence: 1,
+          files: [],
+          inputs: [],
+          expected_output: ["src/new-file.ts"],
+        }),
+      ];
+
+      const results = checkTaskOrdering(tasks, tempDir);
+      assert.equal(results.length, 1, "Should detect violation for equivalent absolute/relative paths");
+      assert.ok(results[0].message.includes("sequence violation"));
+      assert.ok(results[0].message.includes("T01"));
+      assert.ok(results[0].message.includes("T02"));
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -809,6 +892,33 @@ function process(a: number): number
   });
 });
 
+describe("checkVerificationCommands", () => {
+  test("accepts pipe-free pytest Verify command", () => {
+    const results = checkVerificationCommands([
+      createTask({
+        id: "T01",
+        verify: "python3 -m pytest tests/ -q --tb=short",
+      }),
+    ]);
+
+    assert.deepEqual(results, []);
+  });
+
+  test("rejects piped pytest Verify command", () => {
+    const results = checkVerificationCommands([
+      createTask({
+        id: "T01",
+        verify: "python3 -m pytest tests/ -q --tb=short 2>&1 | tail -5",
+      }),
+    ]);
+
+    assert.equal(results.length, 1);
+    assert.equal(results[0]?.category, "tool");
+    assert.equal(results[0]?.blocking, true);
+    assert.match(results[0]?.message ?? "", /shell control syntax/);
+  });
+});
+
 // ─── runPreExecutionChecks Integration Tests ─────────────────────────────────
 
 describe("runPreExecutionChecks", () => {
@@ -839,6 +949,58 @@ describe("runPreExecutionChecks", () => {
       assert.equal(result.status, "pass");
       assert.equal(result.checks.length, 0);
       assert.ok(result.durationMs >= 0);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("resolves .gsd metadata inputs from canonical project root in worktree mode (#5492)", async () => {
+    const projectRoot = join(tmpdir(), `pre-exec-project-root-${Date.now()}`);
+    const worktreeRoot = join(tmpdir(), `pre-exec-worktree-root-${Date.now()}`);
+    mkdirSync(join(projectRoot, ".gsd"), { recursive: true });
+    mkdirSync(worktreeRoot, { recursive: true });
+    writeFileSync(join(projectRoot, ".gsd", "DECISIONS.md"), "# decisions");
+
+    try {
+      const tasks = [
+        createTask({
+          id: "T01",
+          files: [],
+          inputs: [".gsd/DECISIONS.md"],
+          expected_output: [],
+        }),
+      ];
+
+      const result = await runPreExecutionChecks(tasks, worktreeRoot, {
+        canonicalProjectRoot: projectRoot,
+      });
+      assert.equal(result.status, "pass");
+      assert.equal(result.checks.length, 0);
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true });
+      rmSync(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("returns fail status for unsafe Verify command before execution", async () => {
+    tempDir = join(tmpdir(), `pre-exec-test-${Date.now()}`);
+    mkdirSync(tempDir, { recursive: true });
+
+    try {
+      const tasks = [
+        createTask({
+          id: "T01",
+          verify: "python3 -m pytest tests/ -q --tb=short 2>&1 | tail -5",
+        }),
+      ];
+
+      const result = await runPreExecutionChecks(tasks, tempDir);
+
+      assert.equal(result.status, "fail");
+      assert.equal(result.checks.length, 1);
+      assert.equal(result.checks[0]?.category, "tool");
+      assert.equal(result.checks[0]?.blocking, true);
+      assert.match(result.checks[0]?.message ?? "", /Unsafe or non-runnable Verify command/);
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
@@ -1475,6 +1637,28 @@ describe("normalizeFilePath tilde expansion (#4446)", () => {
 });
 
 describe("checkFilePathConsistency directory inputs (#4446)", () => {
+  test("monorepo root accepts unique immediate-subdirectory match for relative src path (#5894)", (t) => {
+    const workspaceDir = join(tmpdir(), `pre-exec-monorepo-${Date.now()}`);
+    mkdirSync(join(workspaceDir, "frontend", "src", "engine"), { recursive: true });
+    writeFileSync(join(workspaceDir, "frontend", "src", "engine", "bus.ts"), "// existing");
+    t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
+
+    const tasks = [
+      createTask({
+        id: "T01",
+        inputs: ["src/engine/bus.ts"],
+        expected_output: [],
+      }),
+    ];
+
+    const results = checkFilePathConsistency(tasks, workspaceDir);
+    assert.deepEqual(
+      results,
+      [],
+      "When only one immediate sub-project contains src/engine/bus.ts, pre-exec should treat it as existing",
+    );
+  });
+
   test("directory input is satisfied by prior task's output under it", (t) => {
     const tempDir = join(tmpdir(), `pre-exec-dir-prior-${Date.now()}`);
     mkdirSync(tempDir, { recursive: true });
@@ -1542,6 +1726,27 @@ describe("checkFilePathConsistency directory inputs (#4446)", () => {
     assert.equal(results[0].blocking, true);
   });
 
+  test("runtime directory annotation is skipped as a pre-execution file dependency", (t) => {
+    const tempDir = join(tmpdir(), `pre-exec-dir-runtime-${Date.now()}`);
+    mkdirSync(tempDir, { recursive: true });
+    t.after(() => rmSync(tempDir, { recursive: true, force: true }));
+
+    const tasks = [
+      createTask({
+        id: "T02",
+        inputs: ["entries/ directory (runtime)"],
+        expected_output: ["src/commands/delete.ts", "src/index.ts"],
+      }),
+    ];
+
+    const results = checkFilePathConsistency(tasks, tempDir);
+    assert.deepEqual(
+      results,
+      [],
+      "Runtime-only directory inputs are created during command execution, not required before the task starts",
+    );
+  });
+
   test("tilde-prefixed input is matched against $HOME, not the project basePath", (t) => {
     const fakeHome = join(tmpdir(), `pre-exec-tilde-home-${Date.now()}`);
     const projectDir = join(tmpdir(), `pre-exec-tilde-proj-${Date.now()}`);
@@ -1596,6 +1801,20 @@ describe("checkTaskOrdering directory inputs (#4446)", () => {
       [],
       "Directory reference should not be treated as reading a file created later",
     );
+  });
+
+  test("runtime directory annotation does not produce an ordering violation", () => {
+    const tasks = [
+      createTask({
+        id: "T02",
+        sequence: 0,
+        inputs: ["entries/ directory (runtime)"],
+        expected_output: [],
+      }),
+    ];
+
+    const results = checkTaskOrdering(tasks, "/tmp");
+    assert.deepEqual(results, []);
   });
 });
 
@@ -1781,7 +2000,7 @@ describe("checkFilePathConsistency completed-task output exemption (#4071)", () 
     );
   });
 
-  test("pending task at higher index still causes a missing-file error", (t) => {
+  test("pending task at higher index does NOT cause a duplicate consistency error (ordering check handles it)", (t) => {
     const tempDir = join(tmpdir(), `pre-exec-fc-pending-${Date.now()}`);
     mkdirSync(tempDir, { recursive: true });
     t.after(() => rmSync(tempDir, { recursive: true, force: true }));
@@ -1803,14 +2022,16 @@ describe("checkFilePathConsistency completed-task output exemption (#4071)", () 
       }),
     ];
 
+    // checkFilePathConsistency suppresses the error here because checkTaskOrdering
+    // will fire a more precise "sequence violation" error for the same file.
+    // The combined output of runPreExecutionChecks still flags the issue — just
+    // once, via the ordering check, instead of twice.
     const results = checkFilePathConsistency(tasks, tempDir);
     assert.equal(
       results.length,
-      1,
-      "pending task at higher index must still be flagged — the file is not available yet",
+      0,
+      "consistency check must not duplicate what the ordering check already reports",
     );
-    assert.equal(results[0].blocking, true);
-    assert.equal(results[0].target, "artifacts/output.json");
   });
 });
 
@@ -1950,6 +2171,28 @@ describe("checkFilePathConsistency quote-wrapped annotation (#3747)", () => {
       results.length,
       0,
       "Bare backtick-wrapped path should resolve to the real file",
+    );
+  });
+
+  test("bare path with parenthetical annotation strips suffix before path check", (t) => {
+    const tempDir = join(tmpdir(), `pre-exec-paren-${Date.now()}`);
+    mkdirSync(join(tempDir, "src"), { recursive: true });
+    writeFileSync(join(tempDir, "src/paren.ts"), "// content");
+    t.after(() => rmSync(tempDir, { recursive: true, force: true }));
+
+    const tasks = [
+      createTask({
+        id: "T01",
+        inputs: ["src/paren.ts (note)"],
+        expected_output: [],
+      }),
+    ];
+
+    const results = checkFilePathConsistency(tasks, tempDir);
+    assert.equal(
+      results.length,
+      0,
+      "Parenthetical suffix should be stripped and resolved to the real file",
     );
   });
 

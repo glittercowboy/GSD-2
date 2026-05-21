@@ -2,7 +2,7 @@
 
 import { truncateToWidth, visibleWidth } from "./utils.js";
 
-export type TerminalBorderStyle = "none" | "rule" | "single" | "rounded" | "heavy" | "minimal";
+export type TerminalBorderStyle = "none" | "rule" | "single" | "rounded" | "heavy" | "minimal" | "open";
 export type TerminalDensity = "compact" | "comfortable" | "dashboard";
 export type TerminalTone = "default" | "muted" | "running" | "success" | "error" | "current";
 
@@ -21,6 +21,8 @@ export interface TerminalStyleSpec {
 	titleColor?: (text: string) => string;
 	titleRightColor?: (text: string) => string;
 	bodyGutter?: string;
+	/** "open" border only: render the closing rule. Defaults to true. */
+	bottomRule?: boolean;
 }
 
 type BorderChars = {
@@ -32,7 +34,7 @@ type BorderChars = {
 	vertical: string;
 };
 
-const BORDER_CHARS: Record<Exclude<TerminalBorderStyle, "none" | "rule" | "minimal">, BorderChars> = {
+const BORDER_CHARS: Record<Exclude<TerminalBorderStyle, "none" | "rule" | "minimal" | "open">, BorderChars> = {
 	single: {
 		topLeft: "┌",
 		topRight: "┐",
@@ -71,6 +73,11 @@ function padVisible(line: string, width: number): string {
 
 function color(fn: ((text: string) => string) | undefined, text: string): string {
 	return fn ? fn(text) : text;
+}
+
+function fitVisible(line: string, width: number): string {
+	const clipped = visibleWidth(line) > width ? truncateToWidth(line, width, "") : line;
+	return padVisible(clipped, width);
 }
 
 function normalizeWidth(spec: TerminalStyleSpec, width?: number): number {
@@ -140,6 +147,11 @@ export class TerminalStyle {
 		return new TerminalStyle({ ...this.spec, bodyGutter });
 	}
 
+	/** "open" border only: when false, omit the closing rule line. */
+	bottomRule(bottomRule: boolean): TerminalStyle {
+		return new TerminalStyle({ ...this.spec, bottomRule });
+	}
+
 	render(contentLines: string[], width?: number): string[] {
 		const outerWidth = normalizeWidth(this.spec, width);
 		const border = this.spec.border ?? "none";
@@ -148,7 +160,9 @@ export class TerminalStyle {
 		const paddingY = Math.max(0, Math.floor(this.spec.paddingY ?? densityPadding.y));
 		const gutter = this.spec.bodyGutter ?? "";
 		const gutterWidth = visibleWidth(gutter);
-		const borderColumns = border === "none" ? 0 : 2;
+		// "open" surfaces have no vertical border column — body lines are
+		// emitted as pure content so terminal selection copies clean text.
+		const borderColumns = border === "none" || border === "open" ? 0 : 2;
 		const innerWidth = Math.max(1, outerWidth - borderColumns - paddingX * 2 - gutterWidth);
 		const emptyPaddedLine = " ".repeat(paddingX * 2 + innerWidth);
 		const sourceLines = contentLines.length > 0 ? contentLines : [""];
@@ -184,6 +198,22 @@ export class TerminalStyle {
 			];
 		}
 
+		if (border === "open") {
+			// Copy-clean content surface (ADR-019): a titled top rule and
+			// body lines emitted verbatim with no border column or prefix, so
+			// selecting a body line copies only its content. The closing rule
+			// is optional — conversation turns omit it and rely on the next
+			// turn's top rule for separation.
+			const openLines = [
+				this.renderOpenTopRule(outerWidth, borderColor),
+				...paddedBody.map((line) => padVisible(line, outerWidth)),
+			];
+			if (this.spec.bottomRule !== false) {
+				openLines.push(borderColor("─".repeat(Math.max(1, outerWidth))));
+			}
+			return openLines;
+		}
+
 		const chars = BORDER_CHARS[border];
 		const horizontalWidth = Math.max(0, outerWidth - 2);
 		const top = borderColor(
@@ -203,6 +233,46 @@ export class TerminalStyle {
 			),
 			bottom,
 		];
+	}
+
+	/**
+	 * Build the titled top rule for an "open" surface, e.g.
+	 * `─── bash · success ─────────── 1.2s ───`. The whole line is rule
+	 * characters plus the (optional) titles — no content, so it is safe for
+	 * a user to include in a copy selection.
+	 */
+	private renderOpenTopRule(width: number, borderColor: (text: string) => string): string {
+		const w = Math.max(1, width);
+		const left = this.spec.title ?? "";
+		const right = this.spec.titleRight ?? "";
+		if (!left && !right) return borderColor("─".repeat(w));
+
+		if (left && right) {
+			const titleBudget = Math.max(0, w - 11);
+			const rightReserve = titleBudget > 1 && visibleWidth(right) > 0 ? 1 : 0;
+			const leftBudget = Math.min(visibleWidth(left), Math.max(0, titleBudget - rightReserve));
+			const rightBudget = Math.max(0, titleBudget - leftBudget);
+			const clippedLeft = truncateToWidth(left, leftBudget, "");
+			const clippedRight = truncateToWidth(right, rightBudget, "");
+			const fixed = 4 + visibleWidth(clippedLeft) + 2 + visibleWidth(clippedRight) + 4;
+			const fill = Math.max(1, w - fixed);
+			return fitVisible(
+				borderColor("─── ") +
+				color(this.spec.titleColor, clippedLeft) +
+				borderColor(` ${"─".repeat(fill)} `) +
+				color(this.spec.titleRightColor, clippedRight) +
+				borderColor(" ───"),
+				w,
+			);
+		}
+		if (left) {
+			const clippedLeft = truncateToWidth(left, Math.max(0, w - 6), "");
+			const fill = Math.max(1, w - 5 - visibleWidth(clippedLeft));
+			return fitVisible(borderColor("─── ") + color(this.spec.titleColor, clippedLeft) + borderColor(` ${"─".repeat(fill)}`), w);
+		}
+		const clippedRight = truncateToWidth(right, Math.max(0, w - 6), "");
+		const fill = Math.max(1, w - 5 - visibleWidth(clippedRight));
+		return fitVisible(borderColor(`${"─".repeat(fill)} `) + color(this.spec.titleRightColor, clippedRight) + borderColor(" ───"), w);
 	}
 
 	private renderTitleRows(width: number): string[] {

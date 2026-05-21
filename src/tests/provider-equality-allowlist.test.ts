@@ -1,3 +1,5 @@
+// Project/App: GSD-2
+// File Purpose: Provider equality guardrail tests for ADR-012.
 // gsd-2: provider-equality guardrail test (ADR-012)
 //
 // Purpose: prevent regressions of bug class #4478 — gating API-shape-dependent
@@ -129,18 +131,28 @@ function walk(dir: string, out: string[]): void {
   }
 }
 
+const CANONICAL_ALLOWLIST_PATHS: Record<string, string> = {
+  // dist-test can contain this compatibility copy alongside src/provider-migrations.ts.
+  "src/providers/provider-migrations.ts": "src/provider-migrations.ts",
+};
+
+function canonicalAllowlistPath(rel: string): string {
+  return CANONICAL_ALLOWLIST_PATHS[rel] ?? rel;
+}
+
 function collectHits(): string[] {
   const files: string[] = [];
   walk(join(REPO_ROOT, "src"), files);
   walk(join(REPO_ROOT, "packages"), files);
 
-  const hits: string[] = [];
+  const hits = new Set<string>();
   for (const abs of files) {
     const rel = relative(REPO_ROOT, abs).split(sep).join("/");
+    // allow-source-grep: ADR-012 guardrail intentionally scans source files for provider equality anti-patterns.
     const contents = readFileSync(abs, "utf8");
-    if (PROVIDER_EQ_RE.test(contents)) hits.push(rel);
+    if (PROVIDER_EQ_RE.test(contents)) hits.add(canonicalAllowlistPath(rel));
   }
-  return hits.sort();
+  return Array.from(hits).sort();
 }
 
 test("ADR-012: provider-equality checks are allowlisted or use isXxxApi helpers", () => {

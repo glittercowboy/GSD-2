@@ -3,6 +3,11 @@
 
 import type { BashResult, SessionStats } from "@gsd-build/contracts" with { "resolution-mode": "import" };
 
+export interface ContextUsageDisplay {
+	percent: number | null;
+	text: string;
+}
+
 export function getSessionInputTokens(stats: SessionStats | null | undefined): number {
 	return stats?.tokens.input ?? 0;
 }
@@ -29,6 +34,13 @@ export function getSessionCost(stats: SessionStats | null | undefined): number {
 
 export function hasSessionTokenStats(stats: SessionStats | null | undefined): boolean {
 	return getSessionInputTokens(stats) > 0 || getSessionOutputTokens(stats) > 0;
+}
+
+export function getContextUsageDisplay(_stats: SessionStats | null | undefined): ContextUsageDisplay {
+	return {
+		percent: null,
+		text: "Context unknown",
+	};
 }
 
 export function formatSessionStatsLines(stats: SessionStats): string[] {

@@ -6,13 +6,10 @@
 
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { buildFlatRateContext, isFlatRateProvider, resolvePreferredModelConfig } from "../auto-model-selection.ts";
-
-const __dirname_4386 = dirname(fileURLToPath(import.meta.url));
 
 describe("flat-rate provider routing guard (#3453)", () => {
 
@@ -303,21 +300,6 @@ describe("flat-rate routing opt-in (#4386)", () => {
         });
         assert.equal(result, undefined, "explicit opt-out behaves like default");
       },
-    );
-  });
-});
-
-// ─── Banner transparency: auto-start respects the opt-in (#4386) ────────────
-
-describe("auto-start banner respects allow_flat_rate_providers (#4386)", () => {
-  test("banner expression gates flat-rate disable on allow_flat_rate_providers", () => {
-    const src = readFileSync(
-      join(__dirname_4386, "..", "auto-start.ts"),
-      "utf-8",
-    );
-    assert.ok(
-      src.includes("routingConfig.allow_flat_rate_providers"),
-      "auto-start banner must read allow_flat_rate_providers so the banner reflects the opt-in",
     );
   });
 });

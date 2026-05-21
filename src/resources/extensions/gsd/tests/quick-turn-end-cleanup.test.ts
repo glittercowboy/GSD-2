@@ -1,90 +1,61 @@
 /**
- * Tests that cleanupQuickBranch is called on turn_end to squash-merge the
- * quick branch back to the original branch after the agent completes.
- *
- * Relates to #2668: /gsd quick does not squash-merge branch back after agent
- * completes task. cleanupQuickBranch() exists but is never invoked.
- *
- * The fix registers a turn_end hook in register-hooks.ts that calls
- * cleanupQuickBranch() after each turn, which is a no-op when no quick-task
- * state is pending.
+ * Tests that cleanupQuickBranch is wired to turn_end by exercising the
+ * registered hook against a real temporary git repository.
  */
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 
-// ─── Structural test: verify turn_end hook exists in register-hooks.ts ──────
+import { registerHooks } from "../bootstrap/register-hooks.ts";
+
+function git(cwd: string, args: string[]): string {
+  return execFileSync("git", args, { cwd, encoding: "utf-8" }).trim();
+}
 
 describe("quick task turn_end cleanup (#2668)", () => {
-  const hooksSource = readFileSync(
-    join(import.meta.dirname, "..", "bootstrap", "register-hooks.ts"),
-    "utf-8",
-  );
+  it("turn_end handler runs cleanupQuickBranch and removes quick-return state", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "gsd-quick-cleanup-"));
+    const oldCwd = process.cwd();
+    try {
+      git(repo, ["init", "-b", "main"]);
+      git(repo, ["config", "user.email", "test@example.com"]);
+      git(repo, ["config", "user.name", "Test User"]);
+      writeFileSync(join(repo, "README.md"), "base\n");
+      git(repo, ["add", "README.md"]);
+      git(repo, ["commit", "-m", "chore: initial"]);
+      git(repo, ["checkout", "-b", "quick/Q1-test"]);
+      writeFileSync(join(repo, "quick.txt"), "quick work\n");
+      git(repo, ["add", "quick.txt"]);
+      git(repo, ["commit", "-m", "test: quick work"]);
 
-  it("register-hooks.ts loads cleanupQuickBranch from quick.ts", () => {
-    assert.ok(
-      hooksSource.includes("cleanupQuickBranch"),
-      "register-hooks.ts must reference cleanupQuickBranch",
-    );
+      mkdirSync(join(repo, ".gsd", "runtime"), { recursive: true });
+      writeFileSync(join(repo, ".gsd", "runtime", "quick-return.json"), JSON.stringify({
+        basePath: repo,
+        originalBranch: "main",
+        quickBranch: "quick/Q1-test",
+        taskNum: 1,
+        slug: "test",
+        description: "test",
+      }) + "\n");
 
-    // Verify it is loaded from quick.ts (static or lazy), not just mentioned in a comment.
-    const importMatch =
-      hooksSource.match(/import\s*\{[^}]*cleanupQuickBranch[^}]*\}\s*from\s*["'][^"']*quick/) ||
-      hooksSource.match(/const\s+\{\s*cleanupQuickBranch\s*\}\s*=\s*await\s+import\(["'][^"']*quick\.js["']\)/);
-    assert.ok(
-      importMatch,
-      "cleanupQuickBranch must be loaded from quick module",
-    );
-  });
+      const handlers = new Map<string, Function>();
+      registerHooks({ on(event: string, handler: Function) { handlers.set(event, handler); } } as any, []);
+      const turnEnd = handlers.get("turn_end");
+      assert.ok(turnEnd, "turn_end hook should be registered");
 
-  it("registers a turn_end handler that calls cleanupQuickBranch", () => {
-    // Find the turn_end registration
-    const turnEndMatch = hooksSource.match(
-      /pi\.on\(\s*["']turn_end["']/,
-    );
-    assert.ok(
-      turnEndMatch,
-      "register-hooks.ts must register a turn_end handler",
-    );
+      process.chdir(repo);
+      await turnEnd();
 
-    // Extract the turn_end handler body — find everything from the pi.on("turn_end"
-    // to the matching closing });
-    const turnEndIdx = hooksSource.indexOf(turnEndMatch[0]);
-    assert.ok(turnEndIdx !== -1);
-
-    // Get the rest of the source from that point
-    const rest = hooksSource.slice(turnEndIdx);
-
-    // The handler must call cleanupQuickBranch
-    // Look for cleanupQuickBranch within the first handler body (up to first `});`)
-    const handlerEnd = rest.indexOf("});");
-    assert.ok(handlerEnd !== -1, "turn_end handler has a closing });");
-
-    const handlerBody = rest.slice(0, handlerEnd);
-    assert.ok(
-      handlerBody.includes("cleanupQuickBranch"),
-      "turn_end handler must call cleanupQuickBranch",
-    );
-  });
-
-  it("turn_end handler calls cleanupQuickBranch without arguments (uses cwd default)", () => {
-    // cleanupQuickBranch(basePath = process.cwd()) — calling without args is correct
-    // because the handler runs in the same process where handleQuick set up cwd
-    const turnEndIdx = hooksSource.indexOf('pi.on("turn_end"') !== -1
-      ? hooksSource.indexOf('pi.on("turn_end"')
-      : hooksSource.indexOf("pi.on('turn_end'");
-    assert.ok(turnEndIdx !== -1);
-
-    const rest = hooksSource.slice(turnEndIdx);
-    const handlerEnd = rest.indexOf("});");
-    const handlerBody = rest.slice(0, handlerEnd);
-
-    // Should call cleanupQuickBranch() — either bare or with no-arg form
-    assert.ok(
-      handlerBody.includes("cleanupQuickBranch("),
-      "turn_end handler invokes cleanupQuickBranch()",
-    );
+      assert.equal(git(repo, ["branch", "--show-current"]), "main");
+      assert.throws(() => git(repo, ["rev-parse", "--verify", "quick/Q1-test"]));
+      assert.equal(existsSync(join(repo, ".gsd", "runtime", "quick-return.json")), false);
+    } finally {
+      process.chdir(oldCwd);
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
 });

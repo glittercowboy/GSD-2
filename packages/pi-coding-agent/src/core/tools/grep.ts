@@ -6,6 +6,7 @@ import { readFileSync, statSync } from "fs";
 import path from "path";
 import { ensureTool } from "../../utils/tools-manager.js";
 import { resolveToCwd } from "./path-utils.js";
+import { createToolTarget, type ToolTargetMetadata } from "./tool-target.js";
 import {
 	DEFAULT_MAX_BYTES,
 	formatSize,
@@ -34,6 +35,7 @@ export type GrepToolInput = Static<typeof grepSchema>;
 const DEFAULT_LIMIT = 100;
 
 export interface GrepToolDetails {
+	target?: ToolTargetMetadata;
 	truncation?: TruncationResult;
 	matchLimitReached?: number;
 	linesTruncated?: boolean;
@@ -112,6 +114,14 @@ export function createGrepTool(cwd: string, options?: GrepToolOptions): AgentToo
 						}
 
 						const searchPath = resolveToCwd(searchDir || ".", cwd);
+						const target = createToolTarget({
+							kind: "search",
+							action: "grep",
+							inputPath: searchDir || ".",
+							resolvedPath: searchPath,
+							pattern,
+							glob,
+						});
 						const ops = customOps ?? defaultGrepOperations;
 
 						let isDirectory: boolean;
@@ -282,7 +292,7 @@ export function createGrepTool(cwd: string, options?: GrepToolOptions): AgentToo
 
 							if (matchCount === 0) {
 								settle(() =>
-									resolve({ content: [{ type: "text", text: "No matches found" }], details: undefined }),
+									resolve({ content: [{ type: "text", text: "No matches found" }], details: { target } }),
 								);
 								return;
 							}
@@ -298,7 +308,7 @@ export function createGrepTool(cwd: string, options?: GrepToolOptions): AgentToo
 							const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
 
 							let output = truncation.content;
-							const details: GrepToolDetails = {};
+							const details: GrepToolDetails = { target };
 
 							// Build notices
 							const notices: string[] = [];
@@ -329,7 +339,7 @@ export function createGrepTool(cwd: string, options?: GrepToolOptions): AgentToo
 							settle(() =>
 								resolve({
 									content: [{ type: "text", text: output }],
-									details: Object.keys(details).length > 0 ? details : undefined,
+									details,
 								}),
 							);
 						});

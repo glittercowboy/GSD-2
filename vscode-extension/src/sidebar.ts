@@ -4,6 +4,7 @@
 import * as vscode from "vscode";
 import type { GsdClient, SessionStats, ThinkingLevel } from "./gsd-client.js";
 import {
+	getContextUsageDisplay,
 	getSessionCacheReadTokens,
 	getSessionCacheWriteTokens,
 	getSessionCost,
@@ -206,7 +207,6 @@ export class GsdSidebarProvider implements vscode.WebviewViewProvider {
 		let autoCompaction = false;
 		let autoRetry = false;
 		let stats: SessionStats | null = null;
-		let contextWindow = 0;
 		let steeringMode: "all" | "one-at-a-time" = "all";
 		let followUpMode: "all" | "one-at-a-time" = "all";
 
@@ -226,7 +226,6 @@ export class GsdSidebarProvider implements vscode.WebviewViewProvider {
 				isStreaming = state.isStreaming;
 				isCompacting = state.isCompacting;
 				autoCompaction = state.autoCompactionEnabled;
-				contextWindow = state.model?.contextWindow ?? 0;
 				steeringMode = state.steeringMode;
 				followUpMode = state.followUpMode;
 			} catch {
@@ -256,7 +255,6 @@ export class GsdSidebarProvider implements vscode.WebviewViewProvider {
 			autoCompaction,
 			autoRetry,
 			stats,
-			contextWindow,
 			steeringMode,
 			followUpMode,
 		});
@@ -285,7 +283,6 @@ export class GsdSidebarProvider implements vscode.WebviewViewProvider {
 		autoCompaction: boolean;
 		autoRetry: boolean;
 		stats: SessionStats | null;
-		contextWindow: number;
 		steeringMode: "all" | "one-at-a-time";
 		followUpMode: "all" | "one-at-a-time";
 	}): string {
@@ -304,10 +301,9 @@ export class GsdSidebarProvider implements vscode.WebviewViewProvider {
 			? `$${cost.toFixed(4)}`
 			: "";
 
-		// Context window
+		// Live context usage is unknown until provider-bound audit data is available.
 		const totalTokens = getSessionTotalTokens(info.stats);
-		const contextPct = info.contextWindow > 0 ? Math.min(100, Math.round((totalTokens / info.contextWindow) * 100)) : 0;
-		const contextColor = contextPct > 80 ? "#f44747" : contextPct > 50 ? "#cca700" : "#4ec9b0";
+		const contextUsage = getContextUsageDisplay(info.stats);
 
 		// Only show stats that have real data
 		const hasStats = hasSessionTokenStats(info.stats);
@@ -318,6 +314,7 @@ export class GsdSidebarProvider implements vscode.WebviewViewProvider {
 		let statRows = "";
 		if (hasStats && info.stats) {
 			const pairs: [string, string][] = [];
+			if (totalTokens) pairs.push(["Session tokens", formatNum(totalTokens)]);
 			if (getSessionInputTokens(info.stats)) pairs.push(["In", formatNum(getSessionInputTokens(info.stats))]);
 			if (getSessionOutputTokens(info.stats)) pairs.push(["Out", formatNum(getSessionOutputTokens(info.stats))]);
 			if (getSessionCacheReadTokens(info.stats)) pairs.push(["Cache R", formatNum(getSessionCacheReadTokens(info.stats))]);
@@ -618,8 +615,8 @@ export class GsdSidebarProvider implements vscode.WebviewViewProvider {
 			modelDisplay,
 			sessionDisplay,
 			costDisplay,
-			contextPct,
-			contextColor,
+			contextUsage,
+			totalTokens,
 			hasStats: !!hasStats,
 			statRows,
 			nonce,
@@ -686,7 +683,6 @@ export class GsdSidebarProvider implements vscode.WebviewViewProvider {
 			autoCompaction: boolean;
 			autoRetry: boolean;
 			stats: SessionStats | null;
-			contextWindow: number;
 			steeringMode: "all" | "one-at-a-time";
 			followUpMode: "all" | "one-at-a-time";
 		},
@@ -695,8 +691,8 @@ export class GsdSidebarProvider implements vscode.WebviewViewProvider {
 			modelDisplay: string;
 			sessionDisplay: string;
 			costDisplay: string;
-			contextPct: number;
-			contextColor: string;
+			contextUsage: ReturnType<typeof getContextUsageDisplay>;
+			totalTokens: number;
 			hasStats: boolean;
 			statRows: string;
 			nonce: string;
@@ -722,14 +718,14 @@ export class GsdSidebarProvider implements vscode.WebviewViewProvider {
 			<span class="sep">/</span>
 			<span data-command="cycleThinking" style="cursor:pointer" title="Click to cycle thinking level">${info.thinkingLevel === "off" ? "no think" : info.thinkingLevel}</span>
 		</div>
-		${info.contextWindow > 0 ? `
 		<div class="context-bar">
+			${ui.contextUsage.percent !== null ? `
 			<div class="context-track">
-				<div class="context-fill" style="width:${ui.contextPct}%;background:${ui.contextColor}"></div>
+				<div class="context-fill" style="width:${ui.contextUsage.percent}%;background:#4ec9b0"></div>
 			</div>
-			<div class="context-text">${ui.contextPct}% context (${formatNum(getSessionTotalTokens(info.stats))} / ${formatNum(info.contextWindow)})</div>
+			` : ""}
+			<div class="context-text">${escapeHtml(ui.contextUsage.text)}${ui.totalTokens ? ` / Session tokens: ${formatNum(ui.totalTokens)}` : ""}</div>
 		</div>
-		` : ""}
 	</div>
 
 	${info.isStreaming ? `

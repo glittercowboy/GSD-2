@@ -57,6 +57,12 @@ skills_used:
 - {{howToVerifyThisTaskIsActuallyDone}}
 - {{commandToRun_OR_behaviorToCheck}}
 
+## Verify Rules
+
+- Use a real executable check, not prose.
+- If the check needs file-content assertions, write a `node:test` file and run it with `node --test` or a package test script.
+- Do not use inline `node -e` assertions for verification.
+
 ## Observability Impact
 
 <!-- OMIT THIS SECTION ENTIRELY for simple tasks that don't touch runtime boundaries,
@@ -72,7 +78,8 @@ skills_used:
 <!-- Every input MUST be a backtick-wrapped file path. These paths are machine-parsed to
      derive task dependencies — vague descriptions without paths break dependency detection.
      For the first task in a slice with no prior task outputs, list the existing source files
-     this task reads or modifies. -->
+     this task reads or modifies.
+     Tool field: inputs must be an array of strings, e.g. ["src/index.ts"], never a single string. -->
 
 - `{{filePath}}` — {{whatThisTaskNeedsFromPriorWork}}
 
@@ -82,6 +89,7 @@ skills_used:
      or modifies. These paths are machine-parsed to derive task dependencies.
      This task should produce a real increment toward making the slice goal/demo true. A full
      slice plan should not be able to mark every task complete while the claimed slice behavior
-     still does not work at the stated proof level. -->
+     still does not work at the stated proof level.
+     Tool field: expectedOutput must be an array of strings, e.g. ["src/index.ts"], never a single string. -->
 
 - `{{filePath}}` — {{whatThisTaskCreatesOrModifies}}

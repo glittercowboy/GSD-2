@@ -8,48 +8,35 @@
  * The fix makes isGhostMilestone treat a "queued" DB row with no disk
  * artifacts (CONTEXT, ROADMAP, SUMMARY) as a ghost.
  *
- * This structural test verifies the dbRow.status === 'queued' guard exists.
+ * This behavior test exercises isGhostMilestone against real DB rows and
+ * milestone artifacts.
  */
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
-const source = readFileSync(join(__dirname, '..', 'state.ts'), 'utf-8');
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { closeDatabase, insertMilestone, openDatabase } from '../gsd-db.ts';
+import { clearPathCache } from '../paths.ts';
+import { isGhostMilestone } from '../state.ts';
 
 describe('isGhostMilestone phantom queued detection (#3671)', () => {
-  test('isGhostMilestone function exists', () => {
-    assert.match(source, /export function isGhostMilestone\(/,
-      'isGhostMilestone should be exported');
-  });
+  test('queued DB row with no artifacts is a ghost, but content makes it real', () => {
+    const base = mkdtempSync(join(tmpdir(), 'gsd-phantom-ghost-'));
+    try {
+      openDatabase(':memory:');
+      insertMilestone({ id: 'M001', title: 'Reserved only', status: 'queued' });
+      mkdirSync(join(base, '.gsd', 'milestones', 'M001'), { recursive: true });
 
-  test('checks dbRow.status === queued', () => {
-    assert.match(source, /dbRow\.status\s*===\s*['"]queued['"]/,
-      'isGhostMilestone should check dbRow.status === "queued"');
-  });
+      assert.equal(isGhostMilestone(base, 'M001'), true);
 
-  test('checks for CONTEXT disk artifact', () => {
-    assert.match(source, /resolveMilestoneFile\(basePath,\s*mid,\s*["']CONTEXT["']\)/,
-      'should check for CONTEXT file');
-  });
-
-  test('checks for ROADMAP disk artifact', () => {
-    assert.match(source, /resolveMilestoneFile\(basePath,\s*mid,\s*["']ROADMAP["']\)/,
-      'should check for ROADMAP file');
-  });
-
-  test('checks for SUMMARY disk artifact', () => {
-    assert.match(source, /resolveMilestoneFile\(basePath,\s*mid,\s*["']SUMMARY["']\)/,
-      'should check for SUMMARY file');
-  });
-
-  test('returns !hasContent for queued rows (ghost if no artifacts)', () => {
-    assert.match(source, /return !hasContent/,
-      'should return !hasContent for queued phantom milestones');
+      writeFileSync(join(base, '.gsd', 'milestones', 'M001', 'M001-CONTEXT.md'), '# Context\n');
+      clearPathCache();
+      assert.equal(isGhostMilestone(base, 'M001'), false);
+    } finally {
+      closeDatabase();
+      rmSync(base, { recursive: true, force: true });
+    }
   });
 });

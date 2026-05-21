@@ -1,7 +1,15 @@
 import * as vscode from "vscode";
 import type { GsdClient, AgentEvent } from "./gsd-client.js";
-
-type ApprovalMode = "ask" | "auto-approve" | "plan-only";
+import {
+	APPROVAL_MODE_LABELS,
+	APPROVAL_MODES,
+	type ApprovalMode,
+	describeApprovalEvent,
+	GSD_APPROVAL_CONFIG_KEY,
+	GSD_APPROVAL_CONFIG_PATH,
+	GSD_APPROVAL_CONFIG_SECTION,
+	nextApprovalMode,
+} from "./approval-mode.js";
 
 /**
  * Permission/approval system for agent actions.
@@ -16,13 +24,13 @@ export class GsdPermissionManager implements vscode.Disposable {
 
 	constructor(private readonly client: GsdClient) {
 		// Load saved mode from configuration
-		this._mode = vscode.workspace.getConfiguration("gsd").get<ApprovalMode>("approvalMode", "auto-approve");
+		this._mode = vscode.workspace.getConfiguration(GSD_APPROVAL_CONFIG_SECTION).get<ApprovalMode>(GSD_APPROVAL_CONFIG_KEY, "auto-approve");
 
 		this.disposables.push(
 			this._onModeChange,
 			vscode.workspace.onDidChangeConfiguration((e) => {
-				if (e.affectsConfiguration("gsd.approvalMode")) {
-					this._mode = vscode.workspace.getConfiguration("gsd").get<ApprovalMode>("approvalMode", "auto-approve");
+				if (e.affectsConfiguration(GSD_APPROVAL_CONFIG_PATH)) {
+					this._mode = vscode.workspace.getConfiguration(GSD_APPROVAL_CONFIG_SECTION).get<ApprovalMode>(GSD_APPROVAL_CONFIG_KEY, "auto-approve");
 					this._onModeChange.fire(this._mode);
 				}
 			}),
@@ -44,45 +52,28 @@ export class GsdPermissionManager implements vscode.Disposable {
 	 * Cycle through approval modes: auto-approve -> ask -> plan-only -> auto-approve
 	 */
 	async cycleMode(): Promise<void> {
-		const modes: ApprovalMode[] = ["auto-approve", "ask", "plan-only"];
-		const currentIdx = modes.indexOf(this._mode);
-		this._mode = modes[(currentIdx + 1) % modes.length];
+		this._mode = nextApprovalMode(this._mode);
 
-		await vscode.workspace.getConfiguration("gsd").update("approvalMode", this._mode, vscode.ConfigurationTarget.Workspace);
+		await vscode.workspace.getConfiguration(GSD_APPROVAL_CONFIG_SECTION).update(GSD_APPROVAL_CONFIG_KEY, this._mode, vscode.ConfigurationTarget.Workspace);
 		this._onModeChange.fire(this._mode);
 
-		const labels: Record<ApprovalMode, string> = {
-			"auto-approve": "Auto-Approve (agent runs freely)",
-			"ask": "Ask (prompt before file changes)",
-			"plan-only": "Plan Only (read-only, no writes)",
-		};
-		vscode.window.showInformationMessage(`Approval mode: ${labels[this._mode]}`);
+		vscode.window.showInformationMessage(`Approval mode: ${APPROVAL_MODE_LABELS[this._mode]}`);
 	}
 
 	/**
 	 * Show a QuickPick to select approval mode.
 	 */
 	async selectMode(): Promise<void> {
-		const items: (vscode.QuickPickItem & { mode: ApprovalMode })[] = [
-			{
-				label: "$(check) Auto-Approve",
-				description: "Agent runs freely without prompts",
-				detail: "Best for trusted workflows. The agent can read, write, and execute without asking.",
-				mode: "auto-approve",
-			},
-			{
-				label: "$(shield) Ask",
-				description: "Prompt before file changes",
-				detail: "The agent will ask for approval before writing or editing files.",
-				mode: "ask",
-			},
-			{
-				label: "$(eye) Plan Only",
-				description: "Read-only mode, no writes allowed",
-				detail: "The agent can read and analyze but cannot modify files or run commands.",
-				mode: "plan-only",
-			},
-		];
+		const items: (vscode.QuickPickItem & { mode: ApprovalMode })[] = APPROVAL_MODES.map((mode) => ({
+			label: mode === "auto-approve" ? "$(check) Auto-Approve" : mode === "ask" ? "$(shield) Ask" : "$(eye) Plan Only",
+			description: mode === "auto-approve" ? "Agent runs freely without prompts" : mode === "ask" ? "Prompt before file changes" : "Read-only mode, no writes allowed",
+			detail: mode === "auto-approve"
+				? "Best for trusted workflows. The agent can read, write, and execute without asking."
+				: mode === "ask"
+					? "The agent will ask for approval before writing or editing files."
+					: "The agent can read and analyze but cannot modify files or run commands.",
+			mode,
+		}));
 
 		const selected = await vscode.window.showQuickPick(items, {
 			placeHolder: `Current mode: ${this._mode}`,
@@ -90,7 +81,7 @@ export class GsdPermissionManager implements vscode.Disposable {
 
 		if (selected) {
 			this._mode = selected.mode;
-			await vscode.workspace.getConfiguration("gsd").update("approvalMode", this._mode, vscode.ConfigurationTarget.Workspace);
+			await vscode.workspace.getConfiguration(GSD_APPROVAL_CONFIG_SECTION).update(GSD_APPROVAL_CONFIG_KEY, this._mode, vscode.ConfigurationTarget.Workspace);
 			this._onModeChange.fire(this._mode);
 		}
 	}
@@ -103,28 +94,8 @@ export class GsdPermissionManager implements vscode.Disposable {
 
 	private async handleEvent(evt: AgentEvent): Promise<void> {
 		if (this._mode !== "ask") return;
-		if (evt.type !== "tool_execution_start") return;
-
-		const toolName = String(evt.toolName ?? "");
-		if (toolName !== "Write" && toolName !== "Edit" && toolName !== "Bash") return;
-
-		const toolInput = (evt.toolInput ?? {}) as Record<string, unknown>;
-		let description = "";
-
-		switch (toolName) {
-			case "Write":
-			case "Edit": {
-				const filePath = String(toolInput.file_path ?? "");
-				const shortPath = filePath.split(/[\\/]/).slice(-3).join("/");
-				description = `${toolName}: ${shortPath}`;
-				break;
-			}
-			case "Bash": {
-				const cmd = String(toolInput.command ?? "").slice(0, 80);
-				description = `Execute: ${cmd}`;
-				break;
-			}
-		}
+		const description = describeApprovalEvent(evt);
+		if (!description) return;
 
 		// Note: In practice, the RPC protocol doesn't support blocking tool execution
 		// for approval. This notification serves as awareness — the user sees what's

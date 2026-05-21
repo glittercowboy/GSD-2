@@ -6,6 +6,8 @@ You are executing GSD auto-mode.
 
 Your working directory is `{{workingDirectory}}`. All file reads, writes, and shell commands MUST operate relative to this directory. Do NOT `cd` to any other directory.
 
+If any inlined plan, summary, verification command, or prior artifact names an absolute path outside `{{workingDirectory}}`, treat that path as stale context. Convert it to the equivalent relative path under `{{workingDirectory}}` before reading, writing, or executing. If no equivalent path exists under `{{workingDirectory}}`, record a verification failure and stop; do not edit or run commands in another checkout.
+
 ## Mission
 
 All slices are complete. Verify the integrated work, persist milestone completion, refresh project state, and write the final record future milestones will rely on.
@@ -14,7 +16,7 @@ Preloaded context includes roadmap, requirements, decisions, project context, an
 
 Start with what the excerpts give you. Read full files when the section heads signal richer context you need.
 
-**On-demand Read ordering:** Complete all slice SUMMARY Reads you need for cross-slice synthesis, the Decision Re-evaluation table, and LEARNINGS **before** calling `gsd_complete_milestone` (step 12). Once that tool runs, the milestone is marked complete in the DB, so it must be the final persistent milestone-closeout write.
+**On-demand Read ordering:** Complete all slice SUMMARY Reads you need for cross-slice synthesis, the Decision Re-evaluation table, and LEARNINGS **before** calling `gsd_complete_milestone` (step 13). Once that tool runs, the milestone is marked complete in the DB, so it must be the final persistent milestone-closeout write.
 
 ### Closeout Review Mode
 
@@ -43,7 +45,7 @@ Subagents report only; they do not write user source. Fold any findings into Dec
 
 ### Verification Gate — STOP if verification failed
 
-**If ANY verification failure was recorded in steps 3, 4, or 5, you MUST follow the failure path below. Do NOT proceed with steps 9–13.**
+**If ANY verification failure was recorded in steps 4, 5, or 6, you MUST follow the failure path below. Do NOT proceed with steps 10–14.**
 
 **Failure path** (verification failed):
 - Do NOT call `gsd_complete_milestone`.
@@ -55,7 +57,7 @@ Subagents report only; they do not write user source. Fold any findings into Dec
 **Success path** (all verifications passed):
 
 10. For each requirement whose status changed in step 9, call `gsd_requirement_update` with the requirement ID and updated `status` and `validation` fields — the tool regenerates `.gsd/REQUIREMENTS.md` automatically. Do this BEFORE completing the milestone so requirement updates are persisted.
-11. Update `.gsd/PROJECT.md`: use the `write` tool with `path: ".gsd/PROJECT.md"` and `content` containing the full updated document reflecting milestone completion and current project state. Do NOT use the `edit` tool for this — PROJECT.md is a full-document refresh.
+11. Refresh the project state through `gsd_summary_save` with `artifact_type: "PROJECT"` and the full updated project markdown as `content`; omit `milestone_id`. The tool persists the DB-backed PROJECT artifact and renders `.gsd/PROJECT.md`. Do not write or edit `.gsd/PROJECT.md` directly.
 12. Extract structured learnings from this milestone and persist them to the GSD memory store. Follow the procedure block immediately below — it writes `{{milestoneId}}-LEARNINGS.md` as the audit trail and persists Patterns, Lessons, and Decisions via `capture_thought` (categories: pattern, gotcha/convention, architecture). The memory store is the single source of truth for cross-session durable knowledge (ADR-013).
 
 {{extractLearningsSteps}}
@@ -67,13 +69,15 @@ Subagents report only; they do not write user source. Fold any findings into Dec
    - `title` (string) — Milestone title
    - `oneLiner` (string) — One-sentence summary of what the milestone achieved
    - `narrative` (string) — Detailed narrative of what happened during the milestone
+   - `verificationPassed` (boolean) — Must be `true`; confirms code-change verification, success criteria, and definition-of-done checks all passed
+
+   **Recommended parameters** (the schema accepts these as optional, but always fill them in — omitted values render as placeholders such as "Not provided.", "None.", or "(none)"):
    - `successCriteriaResults` (string) — Markdown detailing how each success criterion was met or not met
    - `definitionOfDoneResults` (string) — Markdown detailing how each definition-of-done item was met
    - `requirementOutcomes` (string) — Markdown detailing requirement status transitions with evidence
    - `keyDecisions` (array of strings) — Key architectural/pattern decisions made during the milestone
    - `keyFiles` (array of strings) — Key files created or modified during the milestone
    - `lessonsLearned` (array of strings) — Lessons learned during the milestone
-   - `verificationPassed` (boolean) — Must be `true`; confirms code-change verification, success criteria, and definition-of-done checks all passed
 
    **Optional parameters:**
    - `followUps` (string) — Follow-up items for future milestones
@@ -82,6 +86,6 @@ Subagents report only; they do not write user source. Fold any findings into Dec
 14. Do not commit manually — the system auto-commits your changes after this unit completes.
 - Say: "Milestone {{milestoneId}} complete."
 
-**Important:** Do NOT skip code-change, success-criteria, or definition-of-done verification (steps 3-5). The summary must reflect verified outcomes. Verification failures block completion; there is no override. If a verification tool fails, errors, or returns unexpected output, treat it as failure.
+**Important:** Do NOT skip code-change, success-criteria, or definition-of-done verification (steps 4-6). The summary must reflect verified outcomes. Verification failures block completion; there is no override. If a verification tool fails, errors, or returns unexpected output, treat it as failure.
 
 **File system safety:** When scanning milestone directories for evidence, use `ls` or `find` first. Never pass a directory path (e.g. `tasks/`, `slices/`) to `read`; it only accepts file paths.

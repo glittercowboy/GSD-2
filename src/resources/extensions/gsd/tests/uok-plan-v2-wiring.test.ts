@@ -1,9 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { fileURLToPath } from "node:url";
 
 import {
   closeDatabase,
@@ -19,9 +18,13 @@ import {
   isEmptyPlanV2GraphResult,
   isMissingFinalizedContextResult,
 } from "../uok/plan-v2.ts";
+import {
+  _needsPlanV2GateForTest,
+  _runPlanV2GateForTest,
+} from "../guided-flow.ts";
+import { shouldRunPlanV2Gate } from "../auto/phases.ts";
+import { resolveUokFlags } from "../uok/flags.ts";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const gsdDir = join(__dirname, "..");
 const MILESTONE_ID = "M001";
 const SLICE_ID = "S01";
 const TASK_ID = "T01";
@@ -94,48 +97,52 @@ test.afterEach(() => {
 });
 
 test("guided flow keeps plan-v2 fail-closed handling for non-recoverable failures", () => {
-  const source = readFileSync(join(gsdDir, "guided-flow.ts"), "utf-8");
-  assert.ok(
-    source.includes("needsPlanV2Gate") &&
-    source.includes("ensurePlanV2Graph") &&
-    source.includes("Plan gate failed-closed"),
-    "guided flow should fail-closed when plan-v2 graph compilation fails",
+  const basePath = createBasePath();
+  writeMilestoneFile(basePath, "CONTEXT", "Finalized context.");
+  insertMilestone({ id: MILESTONE_ID, title: "Milestone", status: "active" });
+  insertSlice({
+    id: SLICE_ID,
+    milestoneId: MILESTONE_ID,
+    title: "Slice",
+    status: "pending",
+    sequence: 1,
+  });
+
+  const notifications: string[] = [];
+  const decision = _runPlanV2GateForTest(
+    { ui: { notify: (message: string) => notifications.push(message) } } as any,
+    basePath,
+    buildState("executing"),
   );
+
+  assert.equal(decision, "block");
+  assert.match(notifications[0] ?? "", /Plan gate failed-closed/);
 });
 
 test("guided flow routes recoverable missing finalized context to discuss-milestone", () => {
-  const source = readFileSync(join(gsdDir, "guided-flow.ts"), "utf-8");
-  assert.ok(
-    source.includes('PlanV2GateDecision = "pass" | "recover-missing-context" | "block"') &&
-    source.includes("isMissingFinalizedContextResult(compiled)") &&
-    source.includes('planV2GateDecision === "recover-missing-context"') &&
-    source.includes("buildDiscussMilestonePrompt"),
-    "guided flow should redispatch missing finalized context to discuss-milestone instead of fail-closing",
+  const basePath = createBasePath();
+  seedGraphRows();
+  writeMilestoneFile(basePath, "CONTEXT-DRAFT", "Draft context only.");
+
+  const decision = _runPlanV2GateForTest(
+    { ui: { notify: () => undefined } } as any,
+    basePath,
+    buildState("executing"),
   );
+
+  assert.equal(decision, "recover-missing-context");
 });
 
-test("guided flow checks pending deep setup before plan-v2 gate", () => {
-  const source = readFileSync(join(gsdDir, "guided-flow.ts"), "utf-8");
-  const showSmartEntryIdx = source.indexOf("export async function showSmartEntry");
-  assert.notEqual(showSmartEntryIdx, -1);
-  const deepIdx = source.indexOf("shouldRunDeepProjectSetup(state, prefs, basePath)", showSmartEntryIdx);
-  const planIdx = source.indexOf("runPlanV2Gate(ctx, basePath, state)", showSmartEntryIdx);
-  assert.ok(
-    deepIdx > -1 && planIdx > -1 && deepIdx < planIdx,
-    "foreground deep setup must run before plan-v2 can fail-close guided /gsd",
-  );
-  assert.ok(
-    source.includes("loadEffectiveGSDPreferences(basePath)?.preferences"),
-    "guided plan-v2 gate must load preferences from the target project root",
-  );
+test("guided and auto plan-v2 phase gates agree on execution phases", () => {
+  assert.equal(_needsPlanV2GateForTest(buildState("planning")), false);
+  assert.equal(_needsPlanV2GateForTest(buildState("executing")), true);
+  assert.equal(shouldRunPlanV2Gate("planning"), false);
+  assert.equal(shouldRunPlanV2Gate("executing"), true);
 });
 
 test("auto pre-dispatch uses resolved plan-v2 defaults", () => {
-  const source = readFileSync(join(gsdDir, "auto", "phases.ts"), "utf-8");
-  assert.ok(
-    source.includes("uokFlags.planV2 && shouldRunPlanV2Gate(state.phase)"),
-    "auto-mode should honor resolveUokFlags defaults, not only explicit uok.plan_v2.enabled",
-  );
+  assert.equal(resolveUokFlags(undefined).planV2, true);
+  assert.equal(resolveUokFlags({ uok: { plan_v2: { enabled: false } } } as any).planV2, false);
 });
 
 test("plan-v2 gate fails closed for execution phase when finalized context is missing", () => {

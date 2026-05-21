@@ -23,7 +23,7 @@ An override was issued by the user that changes a fundamental decision or approa
    - For DECISIONS.md: append a new decision entry documenting the override and why. Do NOT delete prior decisions — mark them as superseded with a note.
    - For slice plans (S##-PLAN.md): update Goal, Demo, and Verification sections if affected. Update Files Likely Touched if the override changes scope. Do NOT modify completed task entries.
    - For REQUIREMENTS.md: update requirement descriptions if the override changes what "done" means, but do not remove requirements.
-   - For PROJECT.md: update if the override changes project-level facts.
+   - For PROJECT.md: do not edit the projection directly. If the override changes project-level facts, persist the revised Project content through `gsd_summary_save` with `artifact_type: "PROJECT"` so the DB remains authoritative.
    - Milestone context files are reference only — do not modify them.
 4. Mark all active overrides as resolved: change `**Scope:** active` to `**Scope:** resolved` in `{{overridesPath}}`
 5. Do not commit manually — the system auto-commits your changes after this unit completes.

@@ -7,104 +7,74 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import {
+  _consumePendingSwitchCancellation,
+  _hasPendingResolveForTest,
+  _resetPendingResolve,
+  _setCurrentResolve,
+  _setSessionSwitchInFlight,
+  isSessionSwitchInFlight,
+  resolveAgentEnd,
+  resolveAgentEndCancelled,
+} from "../auto/resolve.ts";
+import { AutoSession } from "../auto/session.ts";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const AUTO_TS_PATH = join(__dirname, "..", "auto.ts");
-const AUTO_RESOLVE_TS_PATH = join(__dirname, "..", "auto", "resolve.ts");
-const SESSION_TS_PATH = join(__dirname, "..", "auto", "session.ts");
-
-function getAutoTsSource(): string {
-  return readFileSync(AUTO_TS_PATH, "utf-8");
-}
-
-function getAutoResolveTsSource(): string {
-  return readFileSync(AUTO_RESOLVE_TS_PATH, "utf-8");
-}
-
-function getSessionTsSource(): string {
-  return readFileSync(SESSION_TS_PATH, "utf-8");
-}
-
-test("auto/resolve.ts declares _currentResolve for per-unit one-shot promises", () => {
-  const source = getAutoResolveTsSource();
-  assert.ok(
-    source.includes("_currentResolve"),
-    "auto/resolve.ts must declare _currentResolve for the per-unit resolve function",
-  );
-  assert.ok(
-    source.includes("_sessionSwitchInFlight"),
-    "auto/resolve.ts must declare _sessionSwitchInFlight guard",
-  );
+test.afterEach(() => {
+  _resetPendingResolve();
 });
 
-test("AutoSession no longer holds promise state (moved to auto-loop.ts module scope)", () => {
-  const source = getSessionTsSource();
-  // Properties should NOT exist as class fields
-  assert.ok(
-    !source.includes("pendingResolve:"),
-    "AutoSession must not declare pendingResolve (moved to auto-loop.ts)",
-  );
-  assert.ok(
-    !source.includes("pendingAgentEndQueue:"),
-    "AutoSession must not declare pendingAgentEndQueue (removed — events are dropped)",
-  );
+test("resolveAgentEnd resolves the current unit once and clears the resolver", () => {
+  const results: unknown[] = [];
+  _setCurrentResolve((result) => results.push(result));
+
+  resolveAgentEnd({ messages: ["done"] } as any);
+  resolveAgentEnd({ messages: ["late"] } as any);
+
+  assert.equal(_hasPendingResolveForTest(), false);
+  assert.equal(results.length, 1);
+  assert.deepEqual(results[0], { status: "completed", event: { messages: ["done"] } });
 });
 
-test("legacy pendingAgentEndRetry state is gone", () => {
-  const source = getSessionTsSource();
-  assert.ok(
-    !source.includes("pendingAgentEndRetry"),
-    "AutoSession should no longer use legacy pendingAgentEndRetry state",
-  );
+test("resolveAgentEnd ignores events while a session switch is in flight", () => {
+  const results: unknown[] = [];
+  _setCurrentResolve((result) => results.push(result));
+  _setSessionSwitchInFlight(true);
+
+  resolveAgentEnd({ messages: ["ignored"] } as any);
+
+  assert.equal(isSessionSwitchInFlight(), true);
+  assert.equal(_hasPendingResolveForTest(), true);
+  assert.deepEqual(results, []);
 });
 
-test("pauseAuto calls resolveAgentEndCancelled to unblock the loop", () => {
-  const source = getAutoTsSource();
-  const fnIdx = source.indexOf("export async function pauseAuto");
-  assert.ok(fnIdx > -1, "pauseAuto must exist in auto.ts");
-  // Extract the function body (up to the next export or top-level function)
-  const fnBlock = source.slice(fnIdx, source.indexOf("\n/**\n * Build", fnIdx + 100));
+test("resolveAgentEndCancelled unblocks the current unit with cancellation context", () => {
+  const results: unknown[] = [];
+  _setCurrentResolve((result) => results.push(result));
 
-  assert.ok(
-    fnBlock.includes("resolveAgentEndCancelled("),
-    "pauseAuto must call resolveAgentEndCancelled to unblock the auto-loop promise",
-  );
+  const cancelled = resolveAgentEndCancelled({ category: "idle-timeout", detail: "test" } as any);
+
+  assert.equal(cancelled, true);
+  assert.equal(_hasPendingResolveForTest(), false);
+  assert.deepEqual(results, [
+    { status: "cancelled", errorContext: { category: "idle-timeout", detail: "test" } },
+  ]);
 });
 
-test("auto-timers.ts idle watchdog catch calls resolveAgentEndCancelled", () => {
-  const TIMERS_PATH = join(__dirname, "..", "auto-timers.ts");
-  const source = readFileSync(TIMERS_PATH, "utf-8");
+test("resolveAgentEndCancelled records cancellation that occurs during session switch", () => {
+  _setSessionSwitchInFlight(true);
 
-  const idleCatchIdx = source.indexOf("[idle-watchdog] Unhandled error");
-  assert.ok(idleCatchIdx > -1, "idle watchdog catch block must exist");
-  // Check that resolveAgentEndCancelled is called near this catch
-  const catchRegion = source.slice(Math.max(0, idleCatchIdx - 200), idleCatchIdx + 200);
-  assert.ok(
-    catchRegion.includes("resolveAgentEndCancelled("),
-    "idle watchdog catch block must call resolveAgentEndCancelled",
-  );
+  const cancelled = resolveAgentEndCancelled({ category: "session-switch", detail: "test" } as any);
+
+  assert.equal(cancelled, false);
+  assert.deepEqual(_consumePendingSwitchCancellation(), {
+    errorContext: { category: "session-switch", detail: "test" },
+  });
 });
 
-test("auto-timers.ts hard timeout catch calls resolveAgentEndCancelled", () => {
-  const TIMERS_PATH = join(__dirname, "..", "auto-timers.ts");
-  const source = readFileSync(TIMERS_PATH, "utf-8");
+test("AutoSession does not own agent_end promise state", () => {
+  const s = new AutoSession() as any;
 
-  const hardCatchIdx = source.indexOf("[hard-timeout] Unhandled error");
-  assert.ok(hardCatchIdx > -1, "hard timeout catch block must exist");
-  const catchRegion = source.slice(Math.max(0, hardCatchIdx - 200), hardCatchIdx + 200);
-  assert.ok(
-    catchRegion.includes("resolveAgentEndCancelled("),
-    "hard timeout catch block must call resolveAgentEndCancelled",
-  );
-});
-
-test("resolveAgentEndCancelled is exported from auto/resolve.ts", () => {
-  const source = getAutoResolveTsSource();
-  assert.ok(
-    source.includes("export function resolveAgentEndCancelled"),
-    "auto/resolve.ts must export resolveAgentEndCancelled",
-  );
+  assert.equal("pendingResolve" in s, false);
+  assert.equal("pendingAgentEndQueue" in s, false);
+  assert.equal("pendingAgentEndRetry" in s, false);
 });

@@ -490,6 +490,41 @@ test('Plan file with XML-in-markdown', async () => {
     }
 });
 
+test('Plan and summary files with letter-suffixed plan numbers', async () => {
+    const base = createFixtureBase();
+    try {
+      const planning = createPlanningDir(base);
+      writeFileSync(join(planning, 'ROADMAP.md'), SAMPLE_ROADMAP);
+
+      const phaseDir = join(planning, 'phases', '03-type-safety');
+      mkdirSync(phaseDir, { recursive: true });
+      writeFileSync(join(phaseDir, '03-03b-PLAN.md'), `---
+phase: "03-type-safety"
+plan: "03b"
+---
+
+<objective>Type the telehealth controller.</objective>
+`);
+      writeFileSync(join(phaseDir, '03-03b-SUMMARY.md'), `---
+phase: "03-type-safety"
+plan: "03b"
+subsystem: "api"
+---
+
+# 03-03b Summary
+`);
+
+      const project = await parsePlanningDirectory(planning);
+      const phase = project.phases['03-type-safety'];
+
+      assert.ok(phase?.plans?.['03b'] !== undefined, 'letter plan: plan exists');
+      assert.ok(phase?.summaries?.['03b'] !== undefined, 'letter plan: summary exists');
+      assert.deepStrictEqual(phase?.plans?.['03b']?.frontmatter.plan, '03b', 'letter plan: frontmatter plan preserved');
+    } finally {
+      cleanup(base);
+    }
+});
+
   // ─── Test 6: Summary file with YAML frontmatter ───────────────────────
 
 test('Summary file with YAML frontmatter', async () => {
@@ -745,4 +780,3 @@ test('Validation: missing PROJECT.md → warning', async () => {
       cleanup(base);
     }
 });
-

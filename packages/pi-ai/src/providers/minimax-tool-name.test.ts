@@ -12,39 +12,52 @@
  */
 import test, { describe } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { buildAnthropicClientOptions } from "./anthropic.js";
 import { convertMessages } from "./anthropic-shared.js";
+import type { Model } from "../types.js";
 import type { AssistantMessage } from "../types.js";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-
-function resolveSourcePath(fileName: string): string {
-	const localPath = join(__dirname, fileName);
-	if (existsSync(localPath)) return localPath;
-	return join(__dirname, "..", "..", "src", "providers", fileName);
+function anthropicModel(overrides: Partial<Model<"anthropic-messages">> = {}): Model<"anthropic-messages"> {
+	return {
+		id: "claude-sonnet-4",
+		name: "Claude Sonnet 4",
+		api: "anthropic-messages",
+		provider: "anthropic",
+		baseUrl: "https://api.anthropic.com",
+		reasoning: true,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 200000,
+		maxTokens: 8192,
+		...overrides,
+	};
 }
-
-const source = readFileSync(resolveSourcePath("anthropic.ts"), "utf-8");
 
 describe("MiniMax fine-grained-tool-streaming exclusion (#4538)", () => {
 	test("minimax is excluded from fine-grained-tool-streaming-2025-05-14 beta", () => {
-		// The skipBetaHeaders flag must include minimax so it never receives the
-		// fine-grained-tool-streaming beta that causes empty tool names.
-		assert.match(
-			source,
-			/skipBetaHeaders.*minimax/s,
-			"minimax must be included in skipBetaHeaders to suppress fine-grained-tool-streaming",
+		const options = buildAnthropicClientOptions(anthropicModel({ provider: "minimax" }), "api-key", false);
+
+		assert.equal(
+			options.defaultHeaders["anthropic-beta"],
+			undefined,
+			"minimax must suppress fine-grained-tool-streaming",
 		);
 	});
 
 	test("minimax-cn is excluded from fine-grained-tool-streaming-2025-05-14 beta", () => {
-		assert.match(
-			source,
-			/skipBetaHeaders.*minimax-cn/s,
-			"minimax-cn must be included in skipBetaHeaders to suppress fine-grained-tool-streaming",
+		const options = buildAnthropicClientOptions(anthropicModel({ provider: "minimax-cn" }), "api-key", false);
+
+		assert.equal(
+			options.defaultHeaders["anthropic-beta"],
+			undefined,
+			"minimax-cn must suppress fine-grained-tool-streaming",
 		);
+	});
+
+	test("standard Anthropic-compatible providers keep fine-grained-tool-streaming enabled", () => {
+		const options = buildAnthropicClientOptions(anthropicModel(), "api-key", false);
+
+		assert.equal(options.defaultHeaders["anthropic-beta"], "fine-grained-tool-streaming-2025-05-14");
 	});
 });
 

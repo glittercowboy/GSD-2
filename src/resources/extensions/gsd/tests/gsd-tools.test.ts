@@ -14,7 +14,6 @@ import {
   isDbAvailable,
   upsertRequirement,
   getRequirementById,
-  getDecisionById,
   _getAdapter,
   insertArtifact,
 } from '../gsd-db.ts';
@@ -26,6 +25,7 @@ import {
   nextDecisionId,
   nextRequirementId,
 } from '../db-writer.ts';
+import { getAllDecisionsFromMemories } from '../context-store.ts';
 import type { Requirement } from '../types.ts';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -73,12 +73,16 @@ describe('gsd-tools', () => {
 
       assert.deepStrictEqual(result.id, 'D001', 'First decision should be D001');
 
-      // Verify DB row exists
-      const row = getDecisionById('D001');
-      assert.ok(row !== null, 'Decision D001 should exist in DB');
-      assert.deepStrictEqual(row!.scope, 'architecture', 'Decision scope should match');
-      assert.deepStrictEqual(row!.decision, 'Use SQLite for metadata', 'Decision text should match');
-      assert.deepStrictEqual(row!.choice, 'SQLite', 'Decision choice should match');
+      // ADR-013 Stage 3: decisions land in memories, not the legacy decisions
+      // table. Verify the memory row carries the same content.
+      const memoryDecisions = getAllDecisionsFromMemories();
+      assert.equal(memoryDecisions.length, 1, 'one memory row exists after save');
+      const memDecision = memoryDecisions[0];
+      assert.ok(memDecision, 'memory decision exists after save');
+      assert.equal(memDecision.id, 'D001');
+      assert.deepStrictEqual(memDecision.scope, 'architecture', 'memory decision scope should match');
+      assert.deepStrictEqual(memDecision.decision, 'Use SQLite for metadata', 'memory decision text should match');
+      assert.deepStrictEqual(memDecision.choice, 'SQLite', 'memory decision choice should match');
 
       // Verify DECISIONS.md was generated
       const mdPath = path.join(tmpDir, '.gsd', 'DECISIONS.md');

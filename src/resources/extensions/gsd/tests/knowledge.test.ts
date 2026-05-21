@@ -187,7 +187,7 @@ test('loadKnowledgeBlock: uses project knowledge alone when no global file', () 
   writeFileSync(join(cwd, '.gsd', 'KNOWLEDGE.md'), 'K001: Use real DB');
 
   const result = loadKnowledgeBlock(gsdHome, cwd);
-  assert.ok(result.block.includes('[KNOWLEDGE — Rules, patterns, and lessons learned]'));
+  assert.ok(result.block.includes('[KNOWLEDGE — Rules from KNOWLEDGE.md'));
   assert.ok(result.block.includes('## Project Knowledge'));
   assert.ok(result.block.includes('K001: Use real DB'));
   assert.ok(!result.block.includes('## Global Knowledge'));
@@ -205,7 +205,7 @@ test('loadKnowledgeBlock: uses global knowledge alone when no project file', () 
   writeFileSync(join(gsdHome, 'agent', 'KNOWLEDGE.md'), 'G001: Respond in English');
 
   const result = loadKnowledgeBlock(gsdHome, cwd);
-  assert.ok(result.block.includes('[KNOWLEDGE — Rules, patterns, and lessons learned]'));
+  assert.ok(result.block.includes('[KNOWLEDGE — Rules from KNOWLEDGE.md'));
   assert.ok(result.block.includes('## Global Knowledge'));
   assert.ok(result.block.includes('G001: Respond in English'));
   assert.ok(!result.block.includes('## Project Knowledge'));
@@ -234,6 +234,51 @@ test('loadKnowledgeBlock: merges global before project when both exist', () => {
   rmSync(tmp, { recursive: true, force: true });
 });
 
+test('loadKnowledgeBlock: strips patterns and lessons from project knowledge', () => {
+  const tmp = realpathSync(mkdtempSync(join(tmpdir(), 'gsd-kb-strip-')));
+  const gsdHome = join(tmp, 'home');
+  const cwd = join(tmp, 'project');
+  mkdirSync(join(cwd, '.gsd'), { recursive: true });
+  mkdirSync(join(gsdHome, 'agent'), { recursive: true });
+  writeFileSync(
+    join(cwd, '.gsd', 'KNOWLEDGE.md'),
+    [
+      '# Project Knowledge',
+      '',
+      'Intro note that should stay with manual rules.',
+      '',
+      '## Rules',
+      '',
+      '| ID | Rule | Notes |',
+      '|---|---|---|',
+      '| K001 | Use real DB | - |',
+      '',
+      '## Patterns',
+      '',
+      '| ID | Pattern | Where | Notes |',
+      '|---|---|---|---|',
+      '| P001 | Prefer async | server | - |',
+      '',
+      '## Lessons Learned',
+      '',
+      '| ID | What Happened | Root Cause | Fix | Scope |',
+      '|---|---|---|---|---|',
+      '| L001 | Missed cache | N/A | Add TTL | project |',
+    ].join('\n'),
+  );
+
+  const result = loadKnowledgeBlock(gsdHome, cwd);
+  assert.ok(result.block.includes('[KNOWLEDGE — Rules from KNOWLEDGE.md'));
+  assert.ok(result.block.includes('Intro note that should stay with manual rules.'));
+  assert.ok(result.block.includes('K001'), 'rules entry should be present');
+  assert.ok(!result.block.includes('P001'), 'patterns should be stripped and injected via memories');
+  assert.ok(!result.block.includes('L001'), 'lessons should be stripped and injected via memories');
+  assert.ok(!result.block.includes('## Patterns'), 'Patterns heading should not appear');
+  assert.ok(!result.block.includes('## Lessons Learned'), 'Lessons heading should not appear');
+
+  rmSync(tmp, { recursive: true, force: true });
+});
+
 test('loadKnowledgeBlock: reports globalSizeKb above 4KB threshold', () => {
   const tmp = realpathSync(mkdtempSync(join(tmpdir(), 'gsd-kb-')));
   const gsdHome = join(tmp, 'home');
@@ -247,6 +292,28 @@ test('loadKnowledgeBlock: reports globalSizeKb above 4KB threshold', () => {
   assert.ok(result.globalSizeKb > 4, `expected > 4KB, got ${result.globalSizeKb}`);
 
   rmSync(tmp, { recursive: true, force: true });
+});
+
+test('loadKnowledgeBlock: caps repeated system prompt knowledge by default with source path', () => {
+  const tmp = realpathSync(mkdtempSync(join(tmpdir(), 'gsd-kb-')));
+  const gsdHome = join(tmp, 'home');
+  const cwd = join(tmp, 'project');
+  mkdirSync(join(cwd, '.gsd'), { recursive: true });
+  mkdirSync(join(gsdHome, 'agent'), { recursive: true });
+  writeFileSync(join(cwd, '.gsd', 'KNOWLEDGE.md'), `K001: ${'large project knowledge '.repeat(1200)}`);
+
+  const original = process.env.PI_GSD_KNOWLEDGE_MAX_CHARS;
+  delete process.env.PI_GSD_KNOWLEDGE_MAX_CHARS;
+  try {
+    const result = loadKnowledgeBlock(gsdHome, cwd);
+    assert.ok(result.block.includes('Source: `'));
+    assert.ok(result.block.length <= 12_500, `knowledge block ${result.block.length} should stay near default cap`);
+    assert.ok(result.block.includes('[Knowledge Truncated]'));
+  } finally {
+    if (original === undefined) delete process.env.PI_GSD_KNOWLEDGE_MAX_CHARS;
+    else process.env.PI_GSD_KNOWLEDGE_MAX_CHARS = original;
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 // ─── inlineKnowledgeBudgeted — issue #4719 ─────────────────────────────────
@@ -310,6 +377,31 @@ test('inlineKnowledgeBudgeted: caps payload below budget for large files', async
     result!,
     /\[\.\.\.truncated \d+ chars; rerun with narrower scope if needed\]/,
     'should include truncation note when budget is exceeded',
+  );
+
+  rmSync(tmp, { recursive: true, force: true });
+});
+
+test('inlineKnowledgeBudgeted: default budget keeps auto prompt knowledge compact', async () => {
+  const tmp = realpathSync(mkdtempSync(join(tmpdir(), 'gsd-knowledge-')));
+  const gsdDir = join(tmp, '.gsd');
+  mkdirSync(gsdDir, { recursive: true });
+
+  const entries = Array.from({ length: 300 }, (_, i) =>
+    `### Entry ${i}: shared topic\n${'default budget filler '.repeat(25)}\n`,
+  ).join('\n');
+  writeFileSync(join(gsdDir, 'KNOWLEDGE.md'), `# Project Knowledge\n\n## Patterns\n\n${entries}`);
+
+  const result = await inlineKnowledgeBudgeted(tmp, ['shared']);
+  assert.ok(result !== null, 'should return content');
+  assert.ok(
+    result!.length <= 12_500,
+    `default payload ${result!.length} chars should stay near the 12k budget`,
+  );
+  assert.match(
+    result!,
+    /\[\.\.\.truncated \d+ chars; rerun with narrower scope if needed\]/,
+    'should include truncation note when default budget is exceeded',
   );
 
   rmSync(tmp, { recursive: true, force: true });
