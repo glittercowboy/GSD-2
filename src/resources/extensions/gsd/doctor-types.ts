@@ -14,6 +14,7 @@ export type DoctorIssueCode =
   | "orphaned_auto_worktree"
   | "stale_milestone_branch"
   | "corrupt_merge_state"
+  | "unresolved_git_conflicts"
   | "tracked_runtime_files"
   | "legacy_slice_branches"
   | "stale_crash_lock"
@@ -51,6 +52,7 @@ export type DoctorIssueCode =
   // Git / worktree integrity checks
   | "integration_branch_missing"
   | "worktree_directory_orphaned"
+  | "worktree_empty_with_project_content"
   // GSD state structural checks
   | "circular_slice_dependency"
   | "orphaned_slice_directory"

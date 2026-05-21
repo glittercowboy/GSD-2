@@ -12,6 +12,7 @@ import {
   insertTask,
   updateTaskStatus,
   getTask,
+  getSlice,
   getSliceTasks,
   insertVerificationEvidence,
   SCHEMA_VERSION,
@@ -289,7 +290,7 @@ console.log('\n=== complete-task: handler happy path ===');
 
   // Seed milestone + slice + both tasks so projection renders T01 ([x]) and T02 ([ ])
   insertMilestone({ id: 'M001', title: 'Test Milestone' });
-  insertSlice({ id: 'S01', milestoneId: 'M001', title: 'Test Slice' });
+  insertSlice({ id: 'S01', milestoneId: 'M001', title: 'Test Slice', risk: 'high', depends: ['S00'], demo: 'basic functionality works', sequence: 1 });
   insertTask({ id: 'T02', sliceId: 'S01', milestoneId: 'M001', status: 'pending', title: 'Second task' });
 
   const params = makeValidParams();
@@ -341,6 +342,13 @@ console.log('\n=== complete-task: handler happy path ===');
     const taskAfter = getTask('M001', 'S01', 'T01');
     assertTrue(taskAfter!.full_summary_md.length > 0, 'full_summary_md should be non-empty in DB');
     assertMatch(taskAfter!.full_summary_md, /id: T01/, 'full_summary_md should contain frontmatter');
+
+    const sliceAfter = getSlice('M001', 'S01');
+    assertTrue(sliceAfter !== null, 'slice should still exist after complete-task');
+    assertEq(sliceAfter!.title, 'Test Slice', 'complete-task should preserve existing slice title');
+    assertEq(sliceAfter!.risk, 'high', 'complete-task should preserve existing slice risk');
+    assertEq(sliceAfter!.depends, ['S00'], 'complete-task should preserve existing slice dependencies');
+    assertEq(sliceAfter!.demo, 'basic functionality works', 'complete-task should preserve existing slice demo');
   }
 
   cleanupDir(basePath);
@@ -491,7 +499,9 @@ console.log('\n=== complete-task: minimal params (no keyFiles, keyDecisions, ver
     assertTrue(fs.existsSync(result.summaryPath), 'summary file should be written with minimal params');
     const summaryContent = fs.readFileSync(result.summaryPath, 'utf-8');
     assertMatch(summaryContent, /blocker_discovered:\s*false/, 'blocker_discovered should default to false');
-    assertMatch(summaryContent, /\(none\)/, 'key_files/key_decisions should show (none) placeholder');
+    assertMatch(summaryContent, /key_files:\s*\[\]/, 'key_files should render as an empty frontmatter list');
+    assertMatch(summaryContent, /key_decisions:\s*\[\]/, 'key_decisions should render as an empty frontmatter list');
+    assertTrue(!summaryContent.includes('  - (none)'), 'empty frontmatter lists should not render (none) as a list item');
   }
 
   cleanupDir(basePath);

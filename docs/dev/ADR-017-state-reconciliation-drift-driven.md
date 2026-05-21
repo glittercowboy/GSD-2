@@ -45,12 +45,12 @@ type DriftRecord =
 ```
 
 `roadmap-divergence` means the milestone `ROADMAP.md` projection and DB slice
-rows no longer agree on slice presence, sequence, or declared `depends` values.
-Its repair treats `ROADMAP.md` as the source of truth: the markdown hierarchy is
-re-imported into the DB, then each parsed slice's `depends` list is synced into
-the `slice_dependencies` junction table. This keeps both the JSON `slices.depends`
-column and the relational dependency view aligned before Dispatch decides which
-slice or task can run.
+rows no longer agree on slice presence, sequence, checkbox state, or declared
+`depends` values. Runtime repair treats the DB as authoritative: the ROADMAP
+projection is regenerated from DB rows. It must not import slice presence,
+sequence, dependencies, or completion state from rendered markdown during
+Dispatch or worker-spawn reconciliation. Markdown hierarchy import remains
+available only through explicit recovery/migration commands.
 
 ### Lifecycle
 
@@ -134,7 +134,7 @@ Add new `RecoveryFailureKind: "reconciliation-drift"` with action `escalate` and
 
 - `gsd-db.ts:1156` `autoHealSketchFlags` relocates to `state-reconciliation/drift/sketch-flag.ts`. `gsd-db.ts` keeps `setSliceSketchFlag` and the SELECT primitive.
 - `auto-recovery.ts:1118` `reconcileMergeState` and supporting helpers relocate to `state-reconciliation/drift/merge-state.ts`. `auto-recovery.ts` shrinks; remaining post-failure helpers (`verifyExpectedArtifact`, `writeBlockerPlaceholder`) stay.
-- Four new repair functions land: stale-worker, PROJECT.md sync, ROADMAP.md sync, completion-timestamp backfill.
+- Four new repair functions land: stale-worker, PROJECT.md blocker/recovery guidance, ROADMAP.md projection regeneration, completion-timestamp backfill.
 - `state.ts` `blockers: string[]` is unchanged; existing call sites that read `s.blockers` are unaffected.
 - Detector cost is paid on every `advance()` tick. Cheap detectors (DB queries, `existsSync`) run unconditionally; markdown-parsing detectors must be designed to short-circuit when artifacts are unchanged.
 - Every drift kind has a contract test: seeded drift → reconcile → assert repaired. Persistent-drift cases are tested with non-idempotent fixture setups.

@@ -65,6 +65,86 @@ describe("style", () => {
 		assert.equal(plain[4], "└────────────┘");
 	});
 
+	test("open border emits copy-clean body lines with no prefix", () => {
+		const lines = style()
+			.border("open")
+			.title("bash · success")
+			.render(["$ npm test", "ok"], 40);
+		const plain = lines.map((line) => stripAnsi(line));
+
+		// Top rule carries the title and is all rule/title characters.
+		assert.ok(plain[0].startsWith("─── bash · success "));
+		assert.equal(visibleWidth(plain[0]), 40);
+		// Bottom rule is a plain dash line.
+		assert.match(plain[plain.length - 1], /^─+$/);
+		assert.equal(visibleWidth(plain[plain.length - 1]), 40);
+
+		// Every body line is pure content — no border column, no leading
+		// glyph — so a terminal selection copies clean text.
+		for (const body of plain.slice(1, -1)) {
+			assert.ok(!body.startsWith("│"), `body line must not start with │: ${body}`);
+			assert.ok(!body.startsWith("┃"), `body line must not start with ┃: ${body}`);
+			assert.ok(!body.startsWith("─"), `body line must not start with ─: ${body}`);
+			assert.equal(visibleWidth(body), 40);
+		}
+		assert.equal(plain[1].trimEnd(), "$ npm test");
+		assert.equal(plain[2].trimEnd(), "ok");
+	});
+
+	test("open border without a title renders a plain top rule", () => {
+		const plain = style()
+			.border("open")
+			.render(["body"], 20)
+			.map((line) => stripAnsi(line));
+
+		assert.match(plain[0], /^─+$/);
+		assert.equal(visibleWidth(plain[0]), 20);
+		assert.equal(plain[1].trimEnd(), "body");
+		assert.match(plain[2], /^─+$/);
+	});
+
+	test("open border omits the closing rule when bottomRule is false", () => {
+		const plain = style()
+			.border("open")
+			.bottomRule(false)
+			.title("GSD")
+			.render(["a turn of conversation"], 40)
+			.map((line) => stripAnsi(line));
+
+		// Top rule, then body — and no trailing rule line.
+		assert.ok(plain[0].includes("GSD"));
+		assert.equal(plain[plain.length - 1].trimEnd(), "a turn of conversation");
+		assert.ok(
+			!/^─+$/.test(plain[plain.length - 1]),
+			"last line should be content, not a closing rule",
+		);
+	});
+
+	test("open border places left and right titles in the top rule", () => {
+		const plain = style()
+			.border("open")
+			.title("command")
+			.titleRight("1.2s")
+			.render(["output"], 40)
+			.map((line) => stripAnsi(line));
+
+		assert.ok(plain[0].includes("command"));
+		assert.ok(plain[0].includes("1.2s"));
+		assert.equal(visibleWidth(plain[0]), 40);
+	});
+
+	test("open border truncates long right titles to the requested width", () => {
+		const plain = style()
+			.border("open")
+			.title("GSD")
+			.titleRight("x".repeat(80))
+			.render(["output"], 40)
+			.map((line) => stripAnsi(line));
+
+		assert.ok(plain[0].includes("GSD"));
+		assert.equal(visibleWidth(plain[0]), 40);
+	});
+
 	test("passes tone to toneColor when no explicit border color is set", () => {
 		const lines = style()
 			.border("minimal")

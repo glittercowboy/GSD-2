@@ -98,6 +98,7 @@ test("bootstrap aborts before starting next milestone when completed orphan merg
       {
         shouldUseWorktreeIsolation: () => true,
         registerSigtermHandler: () => {},
+        registerAutoWorkerForSession: () => {},
         lockBase: () => base,
         buildLifecycle: () => ({
           adoptSessionRoot: (sessionBase: string, originalBase?: string) => {

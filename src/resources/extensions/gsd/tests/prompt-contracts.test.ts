@@ -55,6 +55,14 @@ test("system prompt hard rules forbid fabricating user responses", () => {
   assert.match(prompt, /ask_user_questions.*only valid structured user input/i);
 });
 
+test("system prompt requires reading before edit or overwrite", () => {
+  const prompt = readPrompt("system");
+  assert.match(prompt, /Read before edit or overwrite/i);
+  assert.match(prompt, /Before any write that creates or replaces a file/i);
+  assert.match(prompt, /confirm whether the path exists; if it does, `read` it first/i);
+  assert.match(prompt, /For truly new files, confirm the path does not already exist/i);
+});
+
 test("discuss prompt allows implementation questions when they materially matter", () => {
   const prompt = readPrompt("discuss");
   assert.match(prompt, /Lead with experience, but ask implementation when it materially matters/i);

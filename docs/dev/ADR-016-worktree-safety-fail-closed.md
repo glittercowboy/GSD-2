@@ -18,7 +18,7 @@ That fallback was convenient for untracked project-root content, but it weakened
 
 Source-writing Units fail closed under worktree isolation unless Worktree Safety proves the Unit root is safe.
 
-A source-writing Unit is any Unit whose Tool Contract permits writes outside `.gsd/**`, currently tool policy modes `all` and `docs`. Planning-only Units may continue to write `.gsd/**` artifacts at the project root.
+A source-writing Unit is any Unit whose Tool Contract permits writes outside `.gsd/**`, currently tool policy modes `all` and `docs`. Planning-only Units may continue to write `.gsd/**` artifacts at the project root. Verification Units, such as `run-uat`, may run approved build/test commands but are not source-writing because their writes remain restricted to `.gsd/**`.
 
 Worktree Safety validates:
 

@@ -28,7 +28,7 @@ import { migrateToExternalState, recoverFailedMigration } from "./migrate-extern
 import { collectSecretsFromManifest } from "../get-secrets-from-user.js";
 import { gsdRoot, resolveMilestoneFile } from "./paths.js";
 import { invalidateAllCaches } from "./cache.js";
-import { writeLock, clearLock } from "./crash-recovery.js";
+import { writeLock, clearLock, readCrashLock, isLockProcessAlive } from "./crash-recovery.js";
 import {
   acquireSessionLock,
   releaseSessionLock,
@@ -42,8 +42,8 @@ import {
   nativeCommit,
   nativeGetCurrentBranch,
   nativeDetectMainBranch,
-  nativeCheckoutBranch,
   nativeBranchList,
+  nativeBranchExists,
   nativeBranchListMerged,
   nativeBranchDelete,
   nativeWorktreeRemove,
@@ -55,7 +55,7 @@ import {
   detectWorktreeName,
   setActiveMilestoneId,
 } from "./worktree.js";
-import { getAutoWorktreePath, isInAutoWorktree } from "./auto-worktree.js";
+import { getAutoWorktreePath, isInAutoWorktree, checkoutBranchWithStashGuard } from "./auto-worktree.js";
 import { readResourceVersion, cleanStaleRuntimeUnits } from "./auto-worktree.js";
 import { worktreePath as getWorktreeDir, isInsideWorktreesDir } from "./worktree-manager.js";
 import { emitWorktreeOrphaned } from "./worktree-telemetry.js";
@@ -64,10 +64,12 @@ import { initRoutingHistory } from "./routing-history.js";
 import { restoreHookState, resetHookState } from "./post-unit-hooks.js";
 import { resetProactiveHealing, setLevelChangeCallback } from "./doctor-proactive.js";
 import { snapshotSkills } from "./skill-discovery.js";
-import { isDbAvailable, getMilestone, openDatabase, getDbStatus } from "./gsd-db.js";
+import { isDbAvailable, getMilestone, getAllMilestones, insertMilestone, openDatabase, getDbStatus } from "./gsd-db.js";
 import { isClosedStatus } from "./status-guards.js";
 import { classifyMilestoneSummaryContent } from "./milestone-summary-classifier.js";
+import { extractVerdict } from "./verdict-parser.js";
 import { auditOrphanedPreflightStashes } from "./orphan-stash-audit.js";
+import { parseProject } from "./schemas/parsers.js";
 
 import {
   debugLog,
@@ -101,6 +103,7 @@ import { getSessionModelOverride } from "./session-model-override.js";
 export interface BootstrapDeps {
   shouldUseWorktreeIsolation: (basePath?: string) => boolean;
   registerSigtermHandler: (basePath: string) => void;
+  registerAutoWorkerForSession: (basePath: string) => void;
   lockBase: () => string;
   buildLifecycle: () => WorktreeLifecycle;
 }
@@ -148,6 +151,38 @@ export async function openProjectDbIfPresent(basePath: string): Promise<void> {
     openDatabase(gsdDbPath);
   } catch (err) {
     logWarning("engine", `gsd-db: failed to open existing database: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+export function reconcileProjectMilestonesFromDisk(basePath: string): number {
+  if (!isDbAvailable()) return 0;
+  const projectPath = join(basePath, ".gsd", "PROJECT.md");
+  if (!existsSync(projectPath)) return 0;
+
+  try {
+    const content = readFileSync(projectPath, "utf-8");
+    const parsed = parseProject(content);
+    if (parsed.milestones.length === 0) return 0;
+
+    const dbMilestones = new Set(getAllMilestones().map((m) => m.id));
+    let inserted = 0;
+    for (const milestone of parsed.milestones) {
+      if (dbMilestones.has(milestone.id)) continue;
+      insertMilestone({
+        id: milestone.id,
+        title: milestone.title,
+        status: milestone.done ? "complete" : "queued",
+      });
+      dbMilestones.add(milestone.id);
+      inserted += 1;
+    }
+    return inserted;
+  } catch (err) {
+    logWarning(
+      "bootstrap",
+      `PROJECT milestone reconciliation failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return 0;
   }
 }
 
@@ -199,12 +234,26 @@ export function decideSurvivorAction(
   return "none";
 }
 
+export function resolveSurvivorRecoveryIsolationMode(
+  isolationMode: "worktree" | "branch" | "none",
+  phase: string | null | undefined,
+): "worktree" | "branch" | "none" {
+  if (isolationMode === "none" && phase === "complete") return "branch";
+  return isolationMode;
+}
+
 export function auditOrphanedMilestoneBranches(
   basePath: string,
   isolationMode: "worktree" | "branch" | "none",
+  gitDeps: {
+    branchList?: typeof nativeBranchList;
+    branchExists?: typeof nativeBranchExists;
+  } = {},
 ): { recovered: string[]; warnings: string[] } {
   const recovered: string[] = [];
   const warnings: string[] = [];
+  const branchList = gitDeps.branchList ?? nativeBranchList;
+  const branchExists = gitDeps.branchExists ?? nativeBranchExists;
 
   // Skip in none mode — no milestone branches are created
   if (isolationMode === "none") return { recovered, warnings };
@@ -213,14 +262,15 @@ export function auditOrphanedMilestoneBranches(
   if (!isDbAvailable()) return { recovered, warnings };
 
   let milestoneBranches: string[];
+  let milestoneBranchListAvailable = true;
   try {
-    milestoneBranches = nativeBranchList(basePath, "milestone/*");
+    milestoneBranches = branchList(basePath, "milestone/*");
   } catch {
-    // git branch list failed — skip audit
-    return { recovered, warnings };
+    milestoneBranchListAvailable = false;
+    // git branch list failed — fall through with an empty branch set so the
+    // branch-less orphan pass can still run after per-milestone verification.
+    milestoneBranches = [];
   }
-
-  if (milestoneBranches.length === 0) return { recovered, warnings };
 
   // Detect main branch for merge-check
   let mainBranch: string;
@@ -354,6 +404,74 @@ export function auditOrphanedMilestoneBranches(
     }
   }
 
+  // Second pass (#5879): catch worktree directories stranded by a previous
+  // audit that deleted the milestone/* branch but failed to remove the
+  // directory (or the dir was orphaned by a separate path entirely, e.g.
+  // postflight-stash-restore-failed during closeout). The branch-keyed loop
+  // above is invisible to these cases — `nativeBranchList` returns nothing
+  // for the milestone, so the dir-cleanup block at line ~310 is never
+  // reached.
+  //
+  // Keyed on milestones whose DB status is `complete`. We do not iterate
+  // over arbitrary directories under .gsd/worktrees/ to avoid touching
+  // dirs that belong to an in-progress milestone whose branch was deleted
+  // separately — those are handled by the in-progress orphan path above
+  // when the branch is present, and by `/gsd doctor` when it is not.
+  const seenMilestoneIds = new Set(
+    milestoneBranches.map((branch) => branch.replace(/^milestone\//, "")),
+  );
+  let completedMilestones: readonly { id: string; status: string }[] = [];
+  try {
+    completedMilestones = getAllMilestones();
+  } catch {
+    // DB read failure — skip the second pass; the first pass is still useful.
+    completedMilestones = [];
+  }
+  for (const m of completedMilestones) {
+    if (m.status !== "complete") continue;
+    if (seenMilestoneIds.has(m.id)) continue; // already processed in the branch loop
+    if (!milestoneBranchListAvailable) {
+      try {
+        if (branchExists(basePath, `milestone/${m.id}`)) continue;
+      } catch (err) {
+        warnings.push(
+          `Could not verify whether milestone/${m.id} still exists; skipping branch-less worktree cleanup for safety: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        continue;
+      }
+    }
+    const wtDir = getWorktreeDir(basePath, m.id);
+    if (!existsSync(wtDir)) continue;
+    if (!isInsideWorktreesDir(basePath, wtDir)) {
+      warnings.push(
+        `Orphaned worktree directory for ${m.id} is outside .gsd/worktrees/ — skipping removal for safety.`,
+      );
+      continue;
+    }
+    // Try `git worktree remove` first in case the dir is still registered
+    // (defensive — usually it is not when we reach this branch-less pass).
+    try {
+      nativeWorktreeRemove(basePath, wtDir, true);
+    } catch (e) {
+      logWarning(
+        "engine",
+        `worktree remove failed (expected for branch-less orphans): ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+    if (existsSync(wtDir)) {
+      try {
+        rmSync(wtDir, { recursive: true, force: true });
+        recovered.push(`Removed orphaned worktree directory for ${m.id} (branch already deleted).`);
+      } catch (err) {
+        warnings.push(
+          `Failed to remove orphaned worktree directory for ${m.id}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    } else {
+      recovered.push(`Removed orphaned worktree directory for ${m.id} (branch already deleted).`);
+    }
+  }
+
   return { recovered, warnings };
 }
 
@@ -412,7 +530,6 @@ export function findUnmergedCompletedMilestone(
   isolationMode: "worktree" | "branch" | "none",
 ): string | null {
   if (isolationMode === "none") return null;
-  if (!isDbAvailable()) return null;
 
   let milestoneBranches: string[];
   try {
@@ -442,11 +559,29 @@ export function findUnmergedCompletedMilestone(
     milestoneBranches,
     mergedBranches,
     (milestoneId) => {
-      const row = getMilestone(milestoneId);
-      return !!row && row.status === "complete";
+      if (isDbAvailable()) {
+        const row = getMilestone(milestoneId);
+        if (row) return row.status === "complete";
+      }
+      return isCompletedMilestoneOnDisk(basePath, milestoneId);
     },
     (branch) => nativeCommitCountBetween(basePath, mainBranch, branch),
   );
+}
+
+function isCompletedMilestoneOnDisk(basePath: string, milestoneId: string): boolean {
+  const summaryPath = resolveMilestoneFile(basePath, milestoneId, "SUMMARY");
+  const validationPath = resolveMilestoneFile(basePath, milestoneId, "VALIDATION");
+  if (!summaryPath || !validationPath) return false;
+
+  try {
+    const summary = readFileSync(summaryPath, "utf-8");
+    if (classifyMilestoneSummaryContent(summary) === "failure") return false;
+    const validation = readFileSync(validationPath, "utf-8");
+    return extractVerdict(validation) != null;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -533,6 +668,7 @@ export async function bootstrapAutoSession(
   const {
     shouldUseWorktreeIsolation,
     registerSigtermHandler,
+    registerAutoWorkerForSession,
     lockBase,
     buildLifecycle,
   } = deps;
@@ -541,6 +677,12 @@ export async function bootstrapAutoSession(
   if (dirCheck.severity === "blocked") {
     ctx.ui.notify(dirCheck.reason!, "error");
     return false;
+  }
+
+  const startupLock = readCrashLock(base);
+  if (startupLock && !isLockProcessAlive(startupLock)) {
+    clearLock(base);
+    ctx.ui.notify("Cleared stale auto-mode worker state.", "info");
   }
 
   const lockResult = acquireSessionLock(base);
@@ -722,6 +864,8 @@ export async function bootstrapAutoSession(
     // consult DB status and avoid clearing runtime units for milestones that
     // only have a failure-path SUMMARY on disk (#4663).
     await openProjectDbIfPresent(base);
+    registerAutoWorkerForSession(base);
+    reconcileProjectMilestonesFromDisk(base);
 
     // Clean stale runtime unit files for completed milestones (#887).
     // DB-authoritative: when DB is available, require DB status to be closed
@@ -749,6 +893,7 @@ export async function bootstrapAutoSession(
     // Catches completed milestones whose teardown (merge + branch delete)
     // was lost due to session ending between completion and teardown.
     // Must run after DB open and before worktree entry.
+    let orphanAuditRecovered = false;
     try {
       const auditResult = auditOrphanedMilestoneBranches(base, getIsolationMode(base));
       for (const msg of auditResult.recovered) {
@@ -758,6 +903,7 @@ export async function bootstrapAutoSession(
         ctx.ui.notify(`Orphan audit: ${msg}`, "warning");
       }
       if (auditResult.recovered.length > 0) {
+        orphanAuditRecovered = true;
         debugLog("orphan-audit", { recovered: auditResult.recovered, warnings: auditResult.warnings });
       }
     } catch (err) {
@@ -800,6 +946,19 @@ export async function bootstrapAutoSession(
 
     let state = await deriveState(base);
 
+    if (
+      process.env.GSD_HEADLESS === "1" &&
+      orphanAuditRecovered &&
+      !state.activeMilestone &&
+      state.phase === "complete"
+    ) {
+      ctx.ui.notify(
+        "Auto-mode stopped (Recovered completed milestone cleanup; all milestones complete).",
+        "info",
+      );
+      return releaseLockAndReturn();
+    }
+
     // Stale worktree state recovery (#654)
     if (
       state.activeMilestone &&
@@ -818,14 +977,20 @@ export async function bootstrapAutoSession(
     // worktree cleanup) was never run — the survivor branch must be merged.
     // Applies to both worktree and branch isolation modes.
     let hasSurvivorBranch = false;
+    let survivorMilestoneId = state.activeMilestone?.id ?? null;
+    const configuredIsolationMode = getIsolationMode(base);
+    const survivorIsolationMode = resolveSurvivorRecoveryIsolationMode(configuredIsolationMode, state.phase);
+    if (!survivorMilestoneId && state.phase === "complete") {
+      survivorMilestoneId = findUnmergedCompletedMilestone(base, survivorIsolationMode);
+    }
     if (
-      state.activeMilestone &&
+      survivorMilestoneId &&
       (state.phase === "pre-planning" || state.phase === "complete") &&
-      getIsolationMode(base) !== "none" &&
+      survivorIsolationMode !== "none" &&
       !detectWorktreeName(base) &&
       !base.includes(`${pathSep}.gsd${pathSep}worktrees${pathSep}`)
     ) {
-      const milestoneBranch = `milestone/${state.activeMilestone.id}`;
+      const milestoneBranch = `milestone/${survivorMilestoneId}`;
       const { nativeBranchExists } = await import("./native-git-bridge.js");
       hasSurvivorBranch = nativeBranchExists(base, milestoneBranch);
       if (hasSurvivorBranch) {
@@ -869,13 +1034,15 @@ export async function bootstrapAutoSession(
     // Re-evaluate via the helper — the discuss branch above may have cleared
     // hasSurvivorBranch after a successful promotion.
     if (decideSurvivorAction(hasSurvivorBranch, state.phase) === "finalize") {
-      const mid = state.activeMilestone!.id;
+      const mid = survivorMilestoneId!;
+      const lifecycle = buildLifecycle();
+      lifecycle.adoptSessionRoot(base);
       // Commit 68ef58a3c made `_mergeBranchMode` throw on wrong-branch
       // instead of returning false silently. Wrap the call so the throw is
       // converted into an error notify + clean bootstrap abort, not an
       // unhandled exception propagating to the slash-command caller (#5549
       // post-merge audit, R2).
-      const finalize = _finalizeSurvivorBranch(buildLifecycle(), mid, ctx.ui);
+      const finalize = _finalizeSurvivorBranch(lifecycle, mid, ctx.ui);
       if (!finalize.merged) {
         return releaseLockAndReturn();
       }
@@ -902,7 +1069,7 @@ export async function bootstrapAutoSession(
     // Mirrors the survivor-finalize block above. Failures degrade to a
     // warning notify so a transient git error doesn't block bootstrap.
     {
-      const orphan = findUnmergedCompletedMilestone(base, getIsolationMode(base));
+      const orphan = findUnmergedCompletedMilestone(base, survivorIsolationMode);
       if (orphan && orphan !== state.activeMilestone?.id) {
         // ADR-016 phase 2 / B4 (#5622): the swap-run-revert protocol for
         // the orphan-merge dance is owned by `adoptOrphanWorktree`. The
@@ -1087,7 +1254,7 @@ export async function bootstrapAutoSession(
           isRepo,
         );
         if (branchToCheckout) {
-          nativeCheckoutBranch(base, branchToCheckout);
+          checkoutBranchWithStashGuard(base, branchToCheckout, "isolation-none-recovery");
           logWarning("bootstrap", `Returned to "${branchToCheckout}" — HEAD was on stale milestone branch "${currentBranch}" (isolation: none does not use milestone branches).`);
         }
       } catch (err) {
@@ -1132,6 +1299,11 @@ export async function bootstrapAutoSession(
         } else if (enterResult.reason === "creation-failed") {
           ctx.ui.notify(
             `Cannot enter milestone ${s.currentMilestoneId}: worktree/branch creation failed. Isolation is degraded.`,
+            "error",
+          );
+        } else if (enterResult.reason === "isolation-degraded") {
+          ctx.ui.notify(
+            `Cannot enter milestone ${s.currentMilestoneId}: isolation is degraded from a prior worktree failure. Close processes locking the worktree and retry, or run /gsd doctor fix.`,
             "error",
           );
         } else if (enterResult.reason === "invalid-milestone-id") {

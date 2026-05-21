@@ -87,20 +87,31 @@ The workflow MCP surface includes:
 - `gsd_plan_slice`
 - `gsd_plan_task`
 - `gsd_replan_slice`
-- `gsd_task_complete`
 - `gsd_slice_complete`
 - `gsd_skip_slice`
-- `gsd_validate_milestone`
 - `gsd_complete_milestone`
+- `gsd_validate_milestone`
 - `gsd_reassess_roadmap`
 - `gsd_save_gate_result`
 - `gsd_summary_save`
+- `gsd_task_complete`
+- `gsd_task_reopen`
+- `gsd_slice_reopen`
+- `gsd_milestone_reopen`
 - `gsd_milestone_status`
 - `gsd_journal_query`
+- `gsd_exec`
+- `gsd_exec_search`
+- `gsd_resume`
+- `gsd_capture_thought`
+- `gsd_memory_query`
+- `gsd_memory_graph`
 
-**Aliases (kept for backwards compatibility — prefer the canonical name above):** `gsd_save_decision`, `gsd_update_requirement`, `gsd_save_requirement`, `gsd_generate_milestone_id`, `gsd_task_plan`, `gsd_slice_replan`, `gsd_complete_task`, `gsd_complete_slice`, `gsd_milestone_validate`, `gsd_milestone_complete`, `gsd_roadmap_reassess`.
+**Aliases (kept for backwards compatibility — prefer the canonical name above):** `gsd_save_decision`, `gsd_update_requirement`, `gsd_save_requirement`, `gsd_generate_milestone_id`, `gsd_task_plan`, `gsd_slice_replan`, `gsd_complete_task`, `gsd_complete_slice`, `gsd_milestone_validate`, `gsd_milestone_complete`, `gsd_roadmap_reassess`, `gsd_reopen_task`, `gsd_reopen_slice`, `gsd_reopen_milestone`.
 
 These tools use the same GSD workflow handlers as the native in-process tool path wherever a shared handler exists.
+
+`gsd_decision_save` and its `gsd_save_decision` alias persist new decisions to the ADR-013 memory store, not to the legacy `decisions` table. The assigned `D###` ID is recorded in `memories.structured_fields.sourceDecisionId`, and `.gsd/DECISIONS.md` is refreshed as a projection from memory-backed decisions. The legacy table may still be read by compatibility and inspection paths during the cutover window, but it is no longer a write target.
 
 `gsd_summary_save` computes artifact paths from the supplied IDs. `milestone_id` is required for milestone-, slice-, and task-scoped artifact types (`SUMMARY`, `RESEARCH`, `CONTEXT`, `ASSESSMENT`, `CONTEXT-DRAFT`) and should be omitted only for root-level `PROJECT`, `PROJECT-DRAFT`, `REQUIREMENTS`, and `REQUIREMENTS-DRAFT` artifacts. For final `REQUIREMENTS` saves, the tool renders content from active database requirement rows; callers must create those rows with `gsd_requirement_save` first.
 

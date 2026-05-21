@@ -67,6 +67,7 @@ function parsePhaseEntry(line: string): PlanningRoadmapEntry | null {
     let title = fmtPhaseColon[3].trim();
     // Strip trailing parentheticals, plan counts, and completion notes
     title = title.replace(/\s*\(\d+\/\d+\s+plans?\)/, '')
+                 .replace(/\s*[—–]\s+.*$/, '') // strip em/en-dash description suffix
                  .replace(/\s*--\s+.*$/, '')
                  .replace(/\s*-\s+.*$/, '')  // strip "- description" suffix
                  .replace(/\s*\(completed.*\)$/i, '')
@@ -91,6 +92,17 @@ function parsePhaseEntry(line: string): PlanningRoadmapEntry | null {
       number: parseFloat(fmtDash[2]),
       title,
       done: fmtDash[1].toLowerCase() === 'x',
+      raw: line,
+    };
+  }
+
+  // Format 3: - ✅ v1.0 MVP — Phases 1-6
+  const fmtVersionPhases = stripped.match(/^-\s+([✅🚧])\s+v\d+(?:\.\d+)*\s+(.+?)\s*[—–]\s*Phases?\s+(\d+(?:\.\d+)?)(?:\s*-\s*\d+(?:\.\d+)?)?(?:\s+\(.*\))?\s*$/iu);
+  if (fmtVersionPhases) {
+    return {
+      number: parseFloat(fmtVersionPhases[3]),
+      title: fmtVersionPhases[2].trim(),
+      done: fmtVersionPhases[1] === '✅',
       raw: line,
     };
   }
@@ -147,7 +159,14 @@ export function parseOldRoadmap(content: string): PlanningRoadmap {
     return result;
   }
 
-  // ─── Strategy 2: Detect ## heading-sectioned milestones ───
+  // ─── Strategy 2: Detect ## Milestones summary + ### vN.N subsections ───
+  const summaryMilestones = parseMilestoneSummaryFormat(lines);
+  if (summaryMilestones.length > 0) {
+    result.milestones = summaryMilestones;
+    return result;
+  }
+
+  // ─── Strategy 3: Detect ## heading-sectioned milestones ───
   const milestoneHeadingRegex = /^##\s+(.+)$/;
   const milestoneHeadings: { index: number; id: string; title: string }[] = [];
 
@@ -196,7 +215,7 @@ export function parseOldRoadmap(content: string): PlanningRoadmap {
       result.milestones.push(milestone);
     }
   } else {
-    // ─── Strategy 3: Flat format — just extract all phase checkbox lines ───
+    // ─── Strategy 4: Flat format — just extract all phase checkbox lines ───
     for (const line of lines) {
       const entry = parsePhaseEntry(line.trim());
       if (entry) {
@@ -254,6 +273,124 @@ function parseDetailsBlockMilestones(lines: string[]): PlanningRoadmapMilestone[
         currentMilestone.phases.push(entry);
       }
     }
+  }
+
+  return milestones;
+}
+
+/**
+ * Parse a `## Milestones` summary section paired with `### vN.N ... (Phases N-M)` subsections.
+ * Returns empty array if not detected.
+ */
+function parseMilestoneSummaryFormat(lines: string[]): PlanningRoadmapMilestone[] {
+  let milestoneSectionStart = -1;
+  let milestoneSectionEnd = lines.length;
+
+  for (let i = 0; i < lines.length; i++) {
+    if (/^##\s+Milestones?\s*$/i.test(lines[i].trim())) {
+      milestoneSectionStart = i + 1;
+      for (let j = i + 1; j < lines.length; j++) {
+        if (/^##\s+/.test(lines[j])) {
+          milestoneSectionEnd = j;
+          break;
+        }
+      }
+      break;
+    }
+  }
+
+  if (milestoneSectionStart === -1) return [];
+
+  type MilestoneSummaryEntry = {
+    id: string;
+    title: string;
+    done: boolean;
+    phaseStart: number;
+    phaseEnd: number;
+  };
+
+  const summaryEntries: MilestoneSummaryEntry[] = [];
+  for (let i = milestoneSectionStart; i < milestoneSectionEnd; i++) {
+    const line = lines[i].trim();
+    if (!line.startsWith('-')) continue;
+    const stripped = line.replace(/\*\*/g, '');
+    const match = stripped.match(
+      /^-\s+\[([ xX])\]\s+(?:Phase\s+)?\d+(?:\.\d+)?\s*:\s*(v[\d.]+)\s+(.+?)(?:\s*[—–]\s*Phases?\s+(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?))?(?:\s*\(.*\))?\s*$/
+    );
+    if (!match) continue;
+
+    const id = match[2];
+    const titleSuffix = match[3]
+      .replace(/\s*[—–]\s*Phases?\s+\d+(?:\.\d+)?\s*-\s*\d+(?:\.\d+)?.*$/, '')
+      .replace(/\s*\(.*\)\s*$/, '')
+      .trim();
+
+    summaryEntries.push({
+      id,
+      title: `${id} ${titleSuffix}`.trim(),
+      done: match[1].toLowerCase() === 'x',
+      phaseStart: match[4] ? parseFloat(match[4]) : 0,
+      phaseEnd: match[5] ? parseFloat(match[5]) : 0,
+    });
+  }
+
+  if (summaryEntries.length === 0) return [];
+
+  const subsectionPhases = new Map<string, PlanningRoadmapEntry[]>();
+  for (let i = 0; i < lines.length; i++) {
+    const headingMatch = lines[i].trim().match(/^###\s+(v[\d.]+)\s+(.+?)(?:\s*\(Phases?\s+[\d.]+\s*-\s*[\d.]+\))?\s*$/i);
+    if (!headingMatch) continue;
+
+    const id = headingMatch[1];
+    const phases: PlanningRoadmapEntry[] = [];
+    for (let j = i + 1; j < lines.length; j++) {
+      const sectionLine = lines[j].trim();
+      if (/^##\s+/.test(sectionLine) || /^###\s+/.test(sectionLine)) break;
+      const entry = parsePhaseEntry(sectionLine);
+      if (entry) phases.push(entry);
+    }
+
+    if (phases.length > 0) subsectionPhases.set(id, phases);
+  }
+
+  const milestones: PlanningRoadmapMilestone[] = [];
+  for (const entry of summaryEntries) {
+    const phases = subsectionPhases.get(entry.id);
+    if (phases && phases.length > 0) {
+      milestones.push({
+        id: entry.id,
+        title: entry.title,
+        collapsed: false,
+        phases,
+      });
+      continue;
+    }
+
+    if (entry.done && entry.phaseStart > 0 && entry.phaseEnd >= entry.phaseStart) {
+      const synthetic: PlanningRoadmapEntry[] = [];
+      for (let n = entry.phaseStart; n <= entry.phaseEnd; n += 1) {
+        synthetic.push({
+          number: n,
+          title: `Phase ${n}`,
+          done: true,
+          raw: `synthetic:${entry.id}:${n}`,
+        });
+      }
+      milestones.push({
+        id: entry.id,
+        title: entry.title,
+        collapsed: false,
+        phases: synthetic,
+      });
+      continue;
+    }
+
+    milestones.push({
+      id: entry.id,
+      title: entry.title,
+      collapsed: false,
+      phases: [],
+    });
   }
 
   return milestones;

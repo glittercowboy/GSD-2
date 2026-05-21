@@ -18,6 +18,7 @@ import type { AutoDashboardData } from "./auto-dashboard.js";
 import {
   getLedger, getProjectTotals, aggregateByPhase, aggregateBySlice,
   aggregateByModel, aggregateCacheHitRate, formatCost, formatTokenCount, formatCostProjection,
+  getPromptSizeStats,
   type UnitMetrics,
 } from "./metrics.js";
 import { loadEffectiveGSDPreferences } from "./preferences.js";
@@ -48,6 +49,11 @@ export function unitLabel(type: string): string {
   }
 }
 
+function formatCharCount(chars: number): string {
+  if (chars >= 1_000_000) return `${(chars / 1_000_000).toFixed(2)}M chars`;
+  if (chars >= 1_000) return `${(chars / 1_000).toFixed(1)}k chars`;
+  return `${chars} chars`;
+}
 
 export class GSDDashboardOverlay {
   private tui: { requestRender: () => void };
@@ -497,6 +503,18 @@ export class GSDDashboardOverlay {
           budgetParts.push(th.fg("error", `${totals.continueHereFiredCount} continue-here fired`));
         }
         lines.push(row(budgetParts.join(`  ${th.fg("dim", "·")}  `)));
+      }
+
+      const promptStats = getPromptSizeStats(ledger.units);
+      if (promptStats) {
+        const promptParts = [
+          `${th.fg("dim", "avg prompt:")} ${th.fg("text", formatCharCount(promptStats.averagePromptChars))}`,
+          `${th.fg("dim", "max:")} ${th.fg("text", formatCharCount(promptStats.maxPromptChars))}`,
+        ];
+        if (promptStats.averageCompressionSavings != null) {
+          promptParts.push(`${th.fg("dim", "compression:")} ${th.fg("success", `${promptStats.averageCompressionSavings}%`)}`);
+        }
+        lines.push(row(promptParts.join(`  ${th.fg("dim", "·")}  `)));
       }
 
       const phases = aggregateByPhase(ledger.units);

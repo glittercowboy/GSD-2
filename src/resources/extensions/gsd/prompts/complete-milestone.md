@@ -57,7 +57,7 @@ Subagents report only; they do not write user source. Fold any findings into Dec
 **Success path** (all verifications passed):
 
 10. For each requirement whose status changed in step 9, call `gsd_requirement_update` with the requirement ID and updated `status` and `validation` fields — the tool regenerates `.gsd/REQUIREMENTS.md` automatically. Do this BEFORE completing the milestone so requirement updates are persisted.
-11. Update `.gsd/PROJECT.md`: use the `write` tool with `path: ".gsd/PROJECT.md"` and `content` containing the full updated document reflecting milestone completion and current project state. Do NOT use the `edit` tool for this — PROJECT.md is a full-document refresh.
+11. Refresh the project state through `gsd_summary_save` with `artifact_type: "PROJECT"` and the full updated project markdown as `content`; omit `milestone_id`. The tool persists the DB-backed PROJECT artifact and renders `.gsd/PROJECT.md`. Do not write or edit `.gsd/PROJECT.md` directly.
 12. Extract structured learnings from this milestone and persist them to the GSD memory store. Follow the procedure block immediately below — it writes `{{milestoneId}}-LEARNINGS.md` as the audit trail and persists Patterns, Lessons, and Decisions via `capture_thought` (categories: pattern, gotcha/convention, architecture). The memory store is the single source of truth for cross-session durable knowledge (ADR-013).
 
 {{extractLearningsSteps}}

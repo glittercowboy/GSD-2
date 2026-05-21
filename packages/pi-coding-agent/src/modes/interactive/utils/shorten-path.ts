@@ -1,3 +1,6 @@
+// Project/App: GSD-2
+// File Purpose: Display-friendly path shortening for interactive UI labels.
+
 import * as os from "node:os";
 
 /**
@@ -7,8 +10,6 @@ import * as os from "node:os";
 export function shortenPath(path: unknown): string {
 	if (typeof path !== "string" || !path) return "";
 	const home = os.homedir();
-	if (path.startsWith(home)) {
-		return `~${path.slice(home.length)}`;
-	}
-	return path;
+	const displayPath = path.startsWith(home) ? `~${path.slice(home.length)}` : path;
+	return displayPath.replace(/\\/g, "/");
 }

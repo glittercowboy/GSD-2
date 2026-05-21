@@ -20,6 +20,17 @@ function sanitizeStatusText(text: string): string {
 		.trim();
 }
 
+function truncateFooterPath(text: string, width: number): string {
+	if (visibleWidth(text) <= width) return text;
+	const tailMatch = text.match(/( \([^)]+\)(?: • .*)?)$/);
+	if (!tailMatch) return truncateToWidth(text, width, "...");
+	const tail = tailMatch[1];
+	const tailWidth = visibleWidth(tail);
+	if (tailWidth >= width - 4) return truncateToWidth(text, width, "...");
+	const head = text.slice(0, -tail.length);
+	return `${truncateToWidth(head, width - tailWidth, "...")}${tail}`;
+}
+
 /**
  * Format token counts (similar to web-ui)
  */
@@ -222,10 +233,6 @@ export class FooterComponent implements Component {
 			}
 		}
 
-		// Apply dim to the stats group before handing it to the shared footer strip.
-		// statsLeft may contain color codes for context %, so keep coloring local to the group.
-		const dimStatsLeft = theme.fg("dim", statsLeft);
-
 		// Extension statuses right-aligned on the pwd line (sorted by key).
 		// Keeps the footer compact by avoiding a dedicated row when the content
 		// fits alongside pwd. Falls back to pwd-only if the combined line would
@@ -239,12 +246,21 @@ export class FooterComponent implements Component {
 						.join(" ")
 				: "";
 
+		const footerRight = [rightSide, extStatusText].filter(Boolean).join(" ");
+		const gsdSegment = theme.fg("accent", "● GSD");
+		const dimStatsLeft = theme.fg("dim", statsLeft);
+		const innerWidth = Math.max(1, width - 2);
+		const rightWidth = visibleWidth(footerRight);
+		const leftBudget = footerRight ? Math.max(1, innerWidth - rightWidth - 3) : innerWidth;
+		const sepWidth = visibleWidth("  │  ");
+		const pwdBudget = Math.max(1, leftBudget - visibleWidth(gsdSegment) - visibleWidth(dimStatsLeft) - sepWidth * 2);
+		const pwdSegment = theme.fg("dim", truncateFooterPath(pwd, pwdBudget));
+
 		const leftSegments = [
-			theme.fg("accent", "● GSD"),
-			theme.fg("dim", pwd),
+			gsdSegment,
+			pwdSegment,
 			dimStatsLeft,
 		];
-		const footerRight = [rightSide, extStatusText].filter(Boolean).join(" ");
 		return renderFooterStrip(leftSegments, footerRight, width);
 	}
 }

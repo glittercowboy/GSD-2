@@ -1,0 +1,162 @@
+name: Security audit
+
+on:
+  pull_request:
+    paths:
+      - "package-lock.json"
+      - "web/package-lock.json"
+      - "vscode-extension/package-lock.json"
+      - "native/Cargo.lock"
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  SECURITY_AUDIT_BLOCKING: ${{ vars.SECURITY_AUDIT_BLOCKING }}
+  NPM_AUDIT_SEVERITY: ${{ vars.NPM_AUDIT_SEVERITY }}
+
+concurrency:
+  group: security-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  npm-audit:
+    name: npm audit (${{ matrix.workspace }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - workspace: "."
+            artifact: "root"
+          - workspace: "web"
+            artifact: "web"
+          - workspace: "vscode-extension"
+            artifact: "vscode-extension"
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: npm audit
+        working-directory: ${{ matrix.workspace }}
+        run: |
+          npm audit --json --omit=dev > npm-audit.json || true
+
+          node <<'NODE'
+          const fs = require("fs");
+
+          const severityOrder = ["info", "low", "moderate", "high", "critical"];
+          const threshold = (process.env.NPM_AUDIT_SEVERITY || "high").toLowerCase();
+          const thresholdIndex = severityOrder.includes(threshold)
+            ? severityOrder.indexOf(threshold)
+            : severityOrder.indexOf("high");
+          const blocking = process.env.SECURITY_AUDIT_BLOCKING === "true";
+
+          const audit = JSON.parse(fs.readFileSync("npm-audit.json", "utf8") || "{}");
+          const counts = { info: 0, low: 0, moderate: 0, high: 0, critical: 0 };
+
+          if (audit.metadata?.vulnerabilities) {
+            for (const severity of severityOrder) {
+              counts[severity] = Number(audit.metadata.vulnerabilities[severity] || 0);
+            }
+          } else if (audit.vulnerabilities) {
+            for (const vulnerability of Object.values(audit.vulnerabilities)) {
+              const severity = vulnerability?.severity;
+              if (severity in counts) counts[severity] += 1;
+            }
+          }
+
+          const findingsAtThreshold = severityOrder
+            .slice(thresholdIndex)
+            .reduce((total, severity) => total + counts[severity], 0);
+
+          const summary = [
+            "# npm audit summary",
+            "",
+            `Workspace: ${process.cwd()}`,
+            `Blocking: ${blocking}`,
+            `Threshold: ${severityOrder[thresholdIndex]}`,
+            `Findings at or above threshold: ${findingsAtThreshold}`,
+            "",
+            "| Severity | Count |",
+            "| --- | ---: |",
+            ...severityOrder.map((severity) => `| ${severity} | ${counts[severity]} |`),
+            "",
+          ].join("\n");
+
+          fs.writeFileSync("npm-audit-summary.md", summary);
+          if (process.env.GITHUB_STEP_SUMMARY) {
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${summary}\n`);
+          }
+
+          if (blocking && findingsAtThreshold > 0) {
+            process.exit(1);
+          }
+          NODE
+
+      - name: Upload npm audit results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-audit-${{ matrix.artifact }}
+          path: |
+            ${{ matrix.workspace }}/npm-audit.json
+            ${{ matrix.workspace }}/npm-audit-summary.md
+
+  cargo-audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@cargo-audit
+
+      - name: cargo audit
+        working-directory: native
+        run: |
+          cargo audit --json > cargo-audit.json || true
+
+          node <<'NODE'
+          const fs = require("fs");
+
+          const blocking = process.env.SECURITY_AUDIT_BLOCKING === "true";
+          const audit = JSON.parse(fs.readFileSync("cargo-audit.json", "utf8") || "{}");
+          const vulnerabilities = audit.vulnerabilities || {};
+          const advisoryCount = Number(vulnerabilities.count || vulnerabilities.list?.length || 0);
+          const warningCount = Array.isArray(audit.warnings) ? audit.warnings.length : 0;
+
+          const summary = [
+            "# cargo audit summary",
+            "",
+            `Workspace: ${process.cwd()}`,
+            `Blocking: ${blocking}`,
+            `Advisories: ${advisoryCount}`,
+            `Warnings: ${warningCount}`,
+            "",
+          ].join("\n");
+
+          fs.writeFileSync("cargo-audit-summary.md", summary);
+          if (process.env.GITHUB_STEP_SUMMARY) {
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${summary}\n`);
+          }
+
+          if (blocking && (advisoryCount > 0 || warningCount > 0)) {
+            process.exit(1);
+          }
+          NODE
+
+      - name: Upload cargo audit results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-audit
+          path: |
+            native/cargo-audit.json
+            native/cargo-audit-summary.md

@@ -335,6 +335,39 @@ node_modules/
     }
 
     // ─── Test 9: Orphaned completed-units detection & fix ─────────────
+    test('failed_migration orphan cleanup when .gsd is intact', async () => {
+      const dir = createMinimalProject();
+      cleanups.push(dir);
+
+      // Intact current state marker required by cleanup gate.
+      writeFileSync(join(dir, ".gsd", "STATE.md"), "# GSD State\n");
+      writeFileSync(join(dir, ".gsd", "gsd.db"), "db");
+      mkdirSync(join(dir, ".gsd.migrating"), { recursive: true });
+      writeFileSync(join(dir, ".gsd.migrating", "stale.txt"), "stale snapshot");
+
+      const detect = await runGSDDoctor(dir);
+      const migrationIssues = detect.issues.filter(i => i.code === "failed_migration");
+      assert.ok(migrationIssues.length > 0, "detects failed migration orphan");
+      assert.ok(migrationIssues[0]?.fixable === true, "failed migration is fixable");
+
+      await runGSDDoctor(dir, { fix: true });
+      assert.ok(!existsSync(join(dir, ".gsd.migrating")), "orphan .gsd.migrating removed");
+      assert.ok(existsSync(join(dir, ".gsd")), "current .gsd preserved");
+    });
+
+    test('failed_migration orphan NOT removed when .gsd is incomplete', async () => {
+      const dir = createMinimalProject();
+      cleanups.push(dir);
+
+      rmSync(join(dir, ".gsd", "STATE.md"), { force: true });
+      mkdirSync(join(dir, ".gsd.migrating"), { recursive: true });
+      writeFileSync(join(dir, ".gsd.migrating", "STATE.md"), "# Migrating state\n");
+
+      await runGSDDoctor(dir, { fix: true });
+      assert.ok(existsSync(join(dir, ".gsd.migrating")), ".gsd.migrating preserved when current .gsd is incomplete");
+      assert.ok(existsSync(join(dir, ".gsd", "milestones", "M001")), "current .gsd milestones preserved");
+    });
+
     test('orphaned_completed_units', async () => {
       const dir = createMinimalProject();
       cleanups.push(dir);
@@ -445,6 +478,26 @@ node_modules/
       const detect = await runGSDDoctor(dir);
       const strandedIssues = detect.issues.filter(i => i.code === "stranded_lock_directory");
       assert.deepStrictEqual(strandedIssues.length, 0, "live lock holder: stranded_lock_directory NOT detected");
+    });
+
+    test('stranded_lock_directory still reports when worker lookup fails', async () => {
+      const dir = createMinimalProject();
+      cleanups.push(dir);
+
+      const lockDir = join(dir, ".gsd.lock");
+      mkdirSync(lockDir, { recursive: true });
+      const { openDatabase, _getAdapter, closeDatabase } = await import("../../gsd-db.ts");
+      openDatabase(join(dir, ".gsd", "gsd.db"));
+      const db = _getAdapter()!;
+      db.exec("DROP TABLE workers");
+
+      try {
+        const detect = await runGSDDoctor(dir);
+        const strandedIssues = detect.issues.filter(i => i.code === "stranded_lock_directory");
+        assert.ok(strandedIssues.length > 0, "reports stranded lock directory even when active worker lookup fails");
+      } finally {
+        closeDatabase();
+      }
     });
     } else {
     }

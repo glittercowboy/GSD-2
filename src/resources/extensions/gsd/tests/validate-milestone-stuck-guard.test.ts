@@ -8,6 +8,7 @@ import { join } from "node:path";
 
 import { runPostUnitVerification, type VerificationContext } from "../auto-verification.ts";
 import { AutoSession } from "../auto/session.ts";
+import { clearPathCache } from "../paths.ts";
 import {
   openDatabase,
   closeDatabase,
@@ -87,6 +88,28 @@ Test fixture
   invalidateAllCaches();
 }
 
+function writeWorktreeValidationFile(verdict: string): void {
+  const worktreeRoot = join(tempDir, ".gsd", "worktrees", "M001");
+  mkdirSync(join(worktreeRoot, ".gsd", "milestones", "M001"), { recursive: true });
+  writeFileSync(join(worktreeRoot, ".git"), "gitdir: ../.git/worktrees/M001\n", "utf-8");
+  writeFileSync(
+    join(worktreeRoot, ".gsd", "milestones", "M001", "M001-VALIDATION.md"),
+    `---
+verdict: ${verdict}
+remediation_round: 1
+---
+
+# Milestone Validation: M001
+
+## Verdict Rationale
+Worktree fixture
+`,
+    "utf-8",
+  );
+  invalidateAllCaches();
+  clearPathCache();
+}
+
 describe("validate-milestone stuck-loop guard (#4094)", () => {
   beforeEach(() => setupTestEnvironment());
   afterEach(() => cleanupTestEnvironment());
@@ -109,6 +132,26 @@ describe("validate-milestone stuck-loop guard (#4094)", () => {
     assert.equal(ctx.ui.notify.mock.callCount(), 1);
     const notifyArgs = ctx.ui.notify.mock.calls[0].arguments;
     assert.match(notifyArgs[0], /needs-remediation/);
+    assert.equal(notifyArgs[1], "error");
+  });
+
+  test("pauses when verdict=needs-attention", async () => {
+    insertMilestone({ id: "M001" });
+    insertSlice({ id: "S01", milestoneId: "M001", title: "Slice 1", status: "complete" });
+    writeValidationFile("needs-attention");
+
+    const ctx = makeMockCtx();
+    const pi = makeMockPi();
+    const pauseAutoMock = mock.fn(async () => {});
+    const s = makeMockSession(tempDir, "validate-milestone", "M001");
+
+    const result = await runPostUnitVerification({ s, ctx, pi } as VerificationContext, pauseAutoMock);
+
+    assert.equal(result, "pause");
+    assert.equal(pauseAutoMock.mock.callCount(), 1);
+    assert.equal(ctx.ui.notify.mock.callCount(), 1);
+    const notifyArgs = ctx.ui.notify.mock.calls[0].arguments;
+    assert.match(notifyArgs[0], /needs-attention/);
     assert.equal(notifyArgs[1], "error");
   });
 
@@ -162,9 +205,10 @@ describe("validate-milestone stuck-loop guard (#4094)", () => {
     assert.equal(pauseAutoMock.mock.callCount(), 0);
   });
 
-  test("continues when no VALIDATION file exists yet", async () => {
+  test("continues when pass validation exists under canonical worktree projection", async () => {
     insertMilestone({ id: "M001" });
     insertSlice({ id: "S01", milestoneId: "M001", title: "Slice 1", status: "complete" });
+    writeWorktreeValidationFile("pass");
 
     const ctx = makeMockCtx();
     const pi = makeMockPi();
@@ -175,5 +219,82 @@ describe("validate-milestone stuck-loop guard (#4094)", () => {
 
     assert.equal(result, "continue");
     assert.equal(pauseAutoMock.mock.callCount(), 0);
+    assert.equal(s.pendingVerificationRetry, null);
+  });
+
+  test("retries when no VALIDATION file exists yet", async () => {
+    insertMilestone({ id: "M001" });
+    insertSlice({ id: "S01", milestoneId: "M001", title: "Slice 1", status: "complete" });
+
+    const ctx = makeMockCtx();
+    const pi = makeMockPi();
+    const pauseAutoMock = mock.fn(async () => {});
+    const s = makeMockSession(tempDir, "validate-milestone", "M001");
+
+    const result = await runPostUnitVerification({ s, ctx, pi } as VerificationContext, pauseAutoMock);
+
+    assert.equal(result, "retry");
+    assert.equal(pauseAutoMock.mock.callCount(), 0);
+    assert.ok(s.pendingVerificationRetry);
+    assert.equal(s.pendingVerificationRetry!.unitId, "M001");
+    assert.match(s.pendingVerificationRetry!.failureContext, /gsd_validate_milestone/);
+    assert.equal(s.pendingVerificationRetry!.attempt, 1);
+  });
+
+  test("retries when VALIDATION file exists but is empty", async () => {
+    insertMilestone({ id: "M001" });
+    insertSlice({ id: "S01", milestoneId: "M001", title: "Slice 1", status: "complete" });
+
+    const path = join(tempDir, ".gsd", "milestones", "M001", "M001-VALIDATION.md");
+    writeFileSync(path, "", "utf-8");
+    invalidateAllCaches();
+
+    const ctx = makeMockCtx();
+    const pi = makeMockPi();
+    const pauseAutoMock = mock.fn(async () => {});
+    const s = makeMockSession(tempDir, "validate-milestone", "M001");
+
+    const result = await runPostUnitVerification({ s, ctx, pi } as VerificationContext, pauseAutoMock);
+
+    assert.equal(result, "retry");
+    assert.equal(pauseAutoMock.mock.callCount(), 0);
+    assert.ok(s.pendingVerificationRetry);
+    assert.equal(s.pendingVerificationRetry!.unitId, "M001");
+    assert.match(s.pendingVerificationRetry!.failureContext, /exists but is empty/);
+    assert.equal(s.pendingVerificationRetry!.attempt, 1);
+  });
+
+  test("continues when same-turn roadmap reassessment invalidated the validation artifact", async () => {
+    insertMilestone({ id: "M001" });
+    insertSlice({ id: "S01", milestoneId: "M001", title: "Slice 1", status: "complete" });
+    insertSlice({ id: "S02", milestoneId: "M001", title: "Remediation", status: "queued" });
+
+    const path = join(tempDir, ".gsd", "milestones", "M001", "M001-VALIDATION.md");
+    writeFileSync(path, "", "utf-8");
+    invalidateAllCaches();
+
+    const ctx = makeMockCtx();
+    const pi = makeMockPi();
+    const pauseAutoMock = mock.fn(async () => {});
+    const s = makeMockSession(tempDir, "validate-milestone", "M001");
+    s.lastUnitAgentEndMessages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", name: "gsd_reassess_roadmap" },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolName: "gsd_reassess_roadmap",
+        isError: false,
+      },
+    ];
+
+    const result = await runPostUnitVerification({ s, ctx, pi } as VerificationContext, pauseAutoMock);
+
+    assert.equal(result, "continue");
+    assert.equal(pauseAutoMock.mock.callCount(), 0);
+    assert.equal(s.pendingVerificationRetry, null);
   });
 });

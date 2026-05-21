@@ -1,11 +1,12 @@
+// Project/App: GSD-2
+// File Purpose: Timestamp formatting helpers for interactive transcript messages.
+
 /**
  * Timestamp formatting for message display.
  *
- * Formats:
- * - "time-date-iso":  10:34 2025-03-24    (default)
- * - "date-time-iso":  2025-03-24 10:34
- * - "time-date-us":   10:34 AM 03/24/2025
- * - "date-time-us":   03/24/2025 10:34 AM
+ * Supported formats:
+ * - "date-time-iso":  2025-03-24 10:34    (default)
+ * - "date-time-us":   03-24-2025 10:34 AM
  */
 
 export type TimestampFormat = "date-time-iso" | "date-time-us";

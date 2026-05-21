@@ -1,3 +1,6 @@
+// Project/App: GSD-2
+// File Purpose: Complete-milestone tool handler for GSD workflow state and summaries.
+
 // GSD2 complete-milestone tool handler
 /**
  * complete-milestone handler — the core operation behind gsd_complete_milestone.
@@ -8,16 +11,18 @@
  */
 
 import { join } from "node:path";
-import { mkdirSync, existsSync } from "node:fs";
+import { existsSync } from "node:fs";
 
 import {
   transaction,
   getMilestone,
   getMilestoneSlices,
   getSliceTasks,
+  getLatestAssessmentByScope,
   updateMilestoneStatus,
 } from "../gsd-db.js";
-import { resolveMilestonePath, clearPathCache } from "../paths.js";
+import { gsdProjectionRoot, clearPathCache } from "../paths.js";
+import { resolveCanonicalMilestoneRoot } from "../worktree-manager.js";
 import { isClosedStatus } from "../status-guards.js";
 import { saveFile, clearParseCache } from "../files.js";
 import { invalidateStateCache } from "../state.js";
@@ -38,9 +43,9 @@ export interface CompleteMilestoneParams {
   definitionOfDoneResults?: string;
   /** @optional — empty/omitted renders as "Not provided." */
   requirementOutcomes?: string;
-  /** @optional — empty/omitted renders as "(none)" */
+  /** @optional — empty/omitted renders as an empty frontmatter list */
   keyDecisions?: string[];
-  /** @optional — empty/omitted renders as "(none)" */
+  /** @optional — empty/omitted renders as an empty frontmatter list */
   keyFiles?: string[];
   /** @optional — empty/omitted renders as "(none)" */
   lessonsLearned?: string[];
@@ -70,12 +75,12 @@ function renderMilestoneSummaryMarkdown(params: CompleteMilestoneParams, complet
   const lessonsLearned = params.lessonsLearned ?? [];
 
   const keyDecisionsYaml = keyDecisions.length > 0
-    ? keyDecisions.map(d => `  - ${d}`).join("\n")
-    : "  - (none)";
+    ? `\n${keyDecisions.map(d => `  - ${d}`).join("\n")}`
+    : " []";
 
   const keyFilesYaml = keyFiles.length > 0
-    ? keyFiles.map(f => `  - ${f}`).join("\n")
-    : "  - (none)";
+    ? `\n${keyFiles.map(f => `  - ${f}`).join("\n")}`
+    : " []";
 
   const lessonsYaml = lessonsLearned.length > 0
     ? lessonsLearned.map(l => `  - ${l}`).join("\n")
@@ -86,10 +91,8 @@ id: ${params.milestoneId}
 title: "${displayTitle}"
 status: complete
 completed_at: ${completedAt}
-key_decisions:
-${keyDecisionsYaml}
-key_files:
-${keyFilesYaml}
+key_decisions:${keyDecisionsYaml}
+key_files:${keyFilesYaml}
 lessons_learned:
 ${lessonsYaml}
 ---
@@ -136,6 +139,8 @@ export async function handleCompleteMilestone(
     return { error: "title is required and must be a non-empty string" };
   }
 
+  const artifactBasePath = resolveCanonicalMilestoneRoot(basePath, params.milestoneId);
+
   // ── Verify that verification passed ─────────────────────────────────────
   if (params.verificationPassed !== true) {
     return { error: "verification did not pass — milestone completion blocked. verificationPassed must be explicitly set to true after all verification steps succeed" };
@@ -155,6 +160,15 @@ export async function handleCompleteMilestone(
     }
     if (isClosedStatus(milestone.status)) {
       alreadyComplete = true;
+      return;
+    }
+
+    // Defense-in-depth: only a passing milestone validation permits closeout.
+    const validation = getLatestAssessmentByScope(params.milestoneId, "milestone-validation");
+    if (validation?.status !== "pass") {
+      guardError =
+        `Refusing to complete ${params.milestoneId}: latest milestone-validation verdict is ` +
+        `"${validation?.status ?? "absent"}". Only verdict=pass permits closeout.`;
       return;
     }
 
@@ -194,16 +208,12 @@ export async function handleCompleteMilestone(
   // ── Filesystem operations (outside transaction) ─────────────────────────
   const summaryMd = renderMilestoneSummaryMarkdown(params, completedAt);
 
-  let summaryPath: string;
-  const milestoneDir = resolveMilestonePath(basePath, params.milestoneId);
-  if (milestoneDir) {
-    summaryPath = join(milestoneDir, `${params.milestoneId}-SUMMARY.md`);
-  } else {
-    const gsdDir = join(basePath, ".gsd");
-    const manualDir = join(gsdDir, "milestones", params.milestoneId);
-    mkdirSync(manualDir, { recursive: true });
-    summaryPath = join(manualDir, `${params.milestoneId}-SUMMARY.md`);
-  }
+  const summaryPath = join(
+    gsdProjectionRoot(artifactBasePath),
+    "milestones",
+    params.milestoneId,
+    `${params.milestoneId}-SUMMARY.md`,
+  );
 
   // Guard (#4598): if SUMMARY.md already exists on disk, do not overwrite it.
   // This handles re-dispatch scenarios (DB/disk state divergence) where a prior
@@ -230,18 +240,18 @@ export async function handleCompleteMilestone(
   // Separate try/catch per step so a projection failure doesn't prevent
   // the event log entry (critical for worktree reconciliation).
   try {
-    await renderAllProjections(basePath, params.milestoneId);
+    await renderAllProjections(artifactBasePath, params.milestoneId);
   } catch (projErr) {
     logWarning("tool", `complete-milestone projection warning: ${(projErr as Error).message}`);
   }
   try {
-    writeManifest(basePath);
+    writeManifest(artifactBasePath);
   } catch (mfErr) {
     logWarning("tool", `complete-milestone manifest warning: ${(mfErr as Error).message}`);
   }
   try {
     if (!alreadyComplete) {
-      appendEvent(basePath, {
+      appendEvent(artifactBasePath, {
         cmd: "complete-milestone",
         params: { milestoneId: params.milestoneId },
         ts: new Date().toISOString(),

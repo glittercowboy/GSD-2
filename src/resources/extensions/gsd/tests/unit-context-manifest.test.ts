@@ -7,13 +7,17 @@ import {
   ARTIFACT_KEYS,
   KNOWN_UNIT_TYPES,
   UNIT_MANIFESTS,
+  resolveSubagentPermissionContract,
   resolveManifest,
   type ArtifactKey,
   type ContextModePolicy,
   type SkillsPolicy,
   type UnitContextManifest,
 } from "../unit-context-manifest.ts";
-import { ALLOWED_PLANNING_DISPATCH_AGENTS } from "../bootstrap/write-gate.ts";
+import {
+  ALLOWED_PLANNING_DISPATCH_AGENTS,
+  shouldBlockPlanningUnit,
+} from "../bootstrap/write-gate.ts";
 import {
   getRequiredWorkflowToolsForAutoUnit,
   getRequiredWorkflowToolsForGuidedUnit,
@@ -106,8 +110,10 @@ test("Context Mode: every manifest declares the expected contextMode lane", () =
     "reassess-roadmap": "planning",
     "execute-task": "execution",
     "reactive-execute": "execution",
+    "quick-task": "execution",
     "run-uat": "verification",
     "gate-evaluate": "verification",
+    "triage-captures": "triage",
     "validate-milestone": "verification",
     "complete-slice": "verification",
     "complete-milestone": "verification",
@@ -171,6 +177,28 @@ test("#4782 phase 1: complete-milestone manifest declares slice-summary as excer
   );
 });
 
+test("closeout manifests keep broad narrative docs on-demand in standard mode", () => {
+  for (const unitType of ["validate-milestone", "complete-milestone"] as const) {
+    const m = UNIT_MANIFESTS[unitType];
+    assert.ok(
+      m.artifacts.onDemand.includes("project"),
+      `${unitType} should keep project narrative on-demand`,
+    );
+    assert.ok(
+      m.artifacts.onDemand.includes("milestone-context"),
+      `${unitType} should keep milestone context on-demand`,
+    );
+    assert.ok(
+      !m.artifacts.inline.includes("project"),
+      `${unitType} should not inline project narrative by default`,
+    );
+    assert.ok(
+      !m.artifacts.inline.includes("milestone-context"),
+      `${unitType} should not inline milestone context by default`,
+    );
+  }
+});
+
 // ─── v2 contract invariants (#4924) ──────────────────────────────────────
 
 test("#4924: computed + prepend ids (when declared) are non-empty strings", () => {
@@ -216,7 +244,7 @@ test("#4934: every manifest declares a tools policy", () => {
 });
 
 test("#4934: tools.mode is one of the declared policies", () => {
-  const validModes = new Set(["all", "read-only", "planning", "planning-dispatch", "docs"]);
+  const validModes = new Set(["all", "read-only", "planning", "planning-dispatch", "docs", "verification"]);
   for (const [unitType, manifest] of Object.entries(UNIT_MANIFESTS)) {
     const mode = (manifest as { tools: { mode: string } }).tools.mode;
     assert.ok(
@@ -226,32 +254,130 @@ test("#4934: tools.mode is one of the declared policies", () => {
   }
 });
 
-test('#4934: only execute-task and reactive-execute may use tools.mode "all" (full source-tree write access)', () => {
-  const allowedAllUnits = new Set(["execute-task", "reactive-execute"]);
+test('#4934: only execution units, quick-task, and closeout units may use tools.mode "all"', () => {
+  const allowedAllUnits = new Set([
+    "execute-task",
+    "reactive-execute",
+    "quick-task",
+    "validate-milestone",
+    "complete-milestone",
+    "complete-slice",
+  ]);
   for (const [unitType, manifest] of Object.entries(UNIT_MANIFESTS)) {
     const mode = (manifest as { tools: { mode: string } }).tools.mode;
     if (mode === "all") {
       assert.ok(
         allowedAllUnits.has(unitType),
-        `manifest "${unitType}" declares tools.mode = "all" but is not on the execute-track. ` +
-        'Only execute-task and reactive-execute should have full source write access; ' +
+        `manifest "${unitType}" declares tools.mode = "all" but is not explicitly allowed. ` +
+        'Only execute-task/reactive-execute, quick-task, and closeout units should have full source write access; ' +
         'planning/discuss/research units must use "planning" or "planning-dispatch" (or "docs" for rewrite-docs).',
       );
     }
   }
 });
 
+test("#5453: complete-milestone uses all tools so bash verification is not planning-dispatch blocked", () => {
+  const manifest = UNIT_MANIFESTS["complete-milestone"];
+
+  assert.strictEqual(manifest.tools.mode, "all");
+  assert.deepEqual(resolveSubagentPermissionContract("complete-milestone"), {
+    allowed: true,
+    allowedSubagents: ["*"],
+    toolsMode: "all",
+  });
+  // Runtime gate-level regression: these verification commands were blocked
+  // under planning-dispatch in #5453; complete-milestone must bypass that gate.
+  for (const cmd of ["git diff --name-only HEAD~1", "git log -n1 --oneline"]) {
+    const result = shouldBlockPlanningUnit(
+      "bash",
+      cmd,
+      process.cwd(),
+      "complete-milestone",
+      manifest.tools,
+    );
+    assert.strictEqual(
+      result.block,
+      false,
+      `shouldBlockPlanningUnit must not block ${cmd} for complete-milestone: ${result.reason}`,
+    );
+  }
+});
+
+test("#5731: validate-milestone and complete-slice use all tools so closeout verification is not planning-dispatch blocked", () => {
+  for (const unitType of ["validate-milestone", "complete-slice"] as const) {
+    const manifest = UNIT_MANIFESTS[unitType];
+    assert.strictEqual(manifest.tools.mode, "all");
+    const result = shouldBlockPlanningUnit(
+      "bash",
+      "go test -short -count=1 ./...",
+      process.cwd(),
+      unitType,
+      manifest.tools,
+    );
+    assert.strictEqual(
+      result.block,
+      false,
+      `${unitType} must allow verification bash commands: ${result.reason}`,
+    );
+  }
+});
+
+test("#5843: run-uat uses verification tools policy so build/test commands can run", () => {
+  const manifest = UNIT_MANIFESTS["run-uat"];
+
+  assert.strictEqual(manifest.tools.mode, "verification");
+
+  const buildResult = shouldBlockPlanningUnit(
+    "bash",
+    "npm run build 2>&1",
+    process.cwd(),
+    "run-uat",
+    manifest.tools,
+  );
+  assert.strictEqual(
+    buildResult.block,
+    false,
+    `run-uat must allow build verification commands: ${buildResult.reason}`,
+  );
+
+  const sourceWriteResult = shouldBlockPlanningUnit(
+    "edit",
+    "src/main.ts",
+    process.cwd(),
+    "run-uat",
+    manifest.tools,
+  );
+  assert.strictEqual(sourceWriteResult.block, true);
+  assert.match(sourceWriteResult.reason!, /tools-policy "verification"/);
+});
+
+test("planning-dispatch hard block message omits internal tracker references", () => {
+  const manifest = UNIT_MANIFESTS["plan-slice"];
+  assert.strictEqual(manifest.tools.mode, "planning-dispatch");
+
+  const result = shouldBlockPlanningUnit(
+    "task",
+    "scout",
+    process.cwd(),
+    "plan-slice",
+    manifest.tools,
+  );
+
+  assert.strictEqual(result.block, true);
+  assert.ok(result.reason, "blocked dispatch should include a user-facing reason");
+  assert.doesNotMatch(result.reason!, /#[0-9]{3,}/);
+});
+
 test('planning-dispatch mode is reserved for slice-level decomposition and completion units', () => {
   const allowedDispatchUnits = new Set([
     "plan-slice",
+    "research-slice",
     "refine-slice",
-    "complete-slice",
-    "complete-milestone",
+    "gate-evaluate",
     // Deep planning mode: research-project orchestrates 4 parallel research
     // subagents (stack/features/architecture/pitfalls). Subagent dispatch is
     // the unit's core mechanism — without it, the unit cannot do its job.
     "research-project",
-    "validate-milestone",
   ]);
   for (const [unitType, manifest] of Object.entries(UNIT_MANIFESTS)) {
     const mode = (manifest as { tools: { mode: string } }).tools.mode;
@@ -263,6 +389,24 @@ test('planning-dispatch mode is reserved for slice-level decomposition and compl
       );
     }
   }
+});
+
+test('Unit Tool Contract exposes subagent dispatch permissions', () => {
+  assert.deepEqual(resolveSubagentPermissionContract("plan-slice"), {
+    allowed: true,
+    allowedSubagents: ["scout", "planner"],
+    toolsMode: "planning-dispatch",
+  });
+  assert.deepEqual(resolveSubagentPermissionContract("gate-evaluate"), {
+    allowed: true,
+    allowedSubagents: ["reviewer", "security", "tester"],
+    toolsMode: "planning-dispatch",
+  });
+  assert.deepEqual(resolveSubagentPermissionContract("discuss-milestone"), {
+    allowed: false,
+    allowedSubagents: [],
+    toolsMode: "planning",
+  });
 });
 
 test('planning-dispatch manifests declare non-empty allowedSubagents lists', () => {

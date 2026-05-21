@@ -1,3 +1,6 @@
+// Project/App: GSD-2
+// File Purpose: Adapts shared GSD workflow handlers for MCP executor calls.
+
 import { ensureDbOpen } from "../bootstrap/dynamic-tools.js";
 import { sanitizeCompleteMilestoneParams } from "../bootstrap/sanitize-complete-milestone.js";
 import { loadWriteGateSnapshot, shouldBlockContextArtifactSaveInSnapshot, shouldBlockRootArtifactSaveInSnapshot } from "../bootstrap/write-gate.js";
@@ -25,6 +28,12 @@ import type { PlanSliceParams } from "./plan-slice.js";
 import { handlePlanSlice } from "./plan-slice.js";
 import type { ReplanSliceParams } from "./replan-slice.js";
 import { handleReplanSlice } from "./replan-slice.js";
+import type { ReopenMilestoneParams } from "./reopen-milestone.js";
+import { handleReopenMilestone } from "./reopen-milestone.js";
+import type { ReopenSliceParams } from "./reopen-slice.js";
+import { handleReopenSlice } from "./reopen-slice.js";
+import type { ReopenTaskParams } from "./reopen-task.js";
+import { handleReopenTask } from "./reopen-task.js";
 import type { ReassessRoadmapParams } from "./reassess-roadmap.js";
 import { handleReassessRoadmap } from "./reassess-roadmap.js";
 import type { ValidateMilestoneParams } from "./validate-milestone.js";
@@ -311,6 +320,9 @@ export type SliceCompleteExecutorParams = CompleteSliceParams;
 export type PlanMilestoneExecutorParams = PlanMilestoneParams;
 export type PlanSliceExecutorParams = PlanSliceParams;
 export type ReplanSliceExecutorParams = ReplanSliceParams;
+export type ReopenTaskExecutorParams = ReopenTaskParams;
+export type ReopenSliceExecutorParams = ReopenSliceParams;
+export type ReopenMilestoneExecutorParams = ReopenMilestoneParams;
 export type ValidateMilestoneExecutorParams = ValidateMilestoneParams;
 export type ReassessRoadmapExecutorParams = ReassessRoadmapParams;
 
@@ -371,6 +383,129 @@ export async function executeTaskComplete(
   }
 }
 
+export async function executeTaskReopen(
+  params: ReopenTaskExecutorParams,
+  basePath: string = process.cwd(),
+): Promise<ToolExecutionResult> {
+  const dbAvailable = await ensureDbOpen(basePath);
+  if (!dbAvailable) {
+    return {
+      content: [{ type: "text", text: "Error: GSD database is not available. Cannot reopen task." }],
+      details: { operation: "reopen_task", error: "db_unavailable" },
+      isError: true,
+    };
+  }
+  try {
+    const result = await handleReopenTask(params, basePath);
+    if ("error" in result) {
+      return {
+        content: [{ type: "text", text: `Error reopening task: ${result.error}` }],
+        details: { operation: "reopen_task", error: result.error },
+        isError: true,
+      };
+    }
+    return {
+      content: [{ type: "text", text: `Reopened task ${result.taskId} (${result.sliceId}/${result.milestoneId})` }],
+      details: {
+        operation: "reopen_task",
+        taskId: result.taskId,
+        sliceId: result.sliceId,
+        milestoneId: result.milestoneId,
+      },
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logError("tool", `reopen_task tool failed: ${msg}`, { tool: "gsd_task_reopen", error: String(err) });
+    return {
+      content: [{ type: "text", text: `Error reopening task: ${msg}` }],
+      details: { operation: "reopen_task", error: msg },
+      isError: true,
+    };
+  }
+}
+
+export async function executeSliceReopen(
+  params: ReopenSliceExecutorParams,
+  basePath: string = process.cwd(),
+): Promise<ToolExecutionResult> {
+  const dbAvailable = await ensureDbOpen(basePath);
+  if (!dbAvailable) {
+    return {
+      content: [{ type: "text", text: "Error: GSD database is not available. Cannot reopen slice." }],
+      details: { operation: "reopen_slice", error: "db_unavailable" },
+      isError: true,
+    };
+  }
+  try {
+    const result = await handleReopenSlice(params, basePath);
+    if ("error" in result) {
+      return {
+        content: [{ type: "text", text: `Error reopening slice: ${result.error}` }],
+        details: { operation: "reopen_slice", error: result.error },
+        isError: true,
+      };
+    }
+    return {
+      content: [{ type: "text", text: `Reopened slice ${result.sliceId} (${result.milestoneId})` }],
+      details: {
+        operation: "reopen_slice",
+        sliceId: result.sliceId,
+        milestoneId: result.milestoneId,
+        tasksReset: result.tasksReset,
+      },
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logError("tool", `reopen_slice tool failed: ${msg}`, { tool: "gsd_slice_reopen", error: String(err) });
+    return {
+      content: [{ type: "text", text: `Error reopening slice: ${msg}` }],
+      details: { operation: "reopen_slice", error: msg },
+      isError: true,
+    };
+  }
+}
+
+export async function executeMilestoneReopen(
+  params: ReopenMilestoneExecutorParams,
+  basePath: string = process.cwd(),
+): Promise<ToolExecutionResult> {
+  const dbAvailable = await ensureDbOpen(basePath);
+  if (!dbAvailable) {
+    return {
+      content: [{ type: "text", text: "Error: GSD database is not available. Cannot reopen milestone." }],
+      details: { operation: "reopen_milestone", error: "db_unavailable" },
+      isError: true,
+    };
+  }
+  try {
+    const result = await handleReopenMilestone(params, basePath);
+    if ("error" in result) {
+      return {
+        content: [{ type: "text", text: `Error reopening milestone: ${result.error}` }],
+        details: { operation: "reopen_milestone", error: result.error },
+        isError: true,
+      };
+    }
+    return {
+      content: [{ type: "text", text: `Reopened milestone ${result.milestoneId}` }],
+      details: {
+        operation: "reopen_milestone",
+        milestoneId: result.milestoneId,
+        slicesReset: result.slicesReset,
+        tasksReset: result.tasksReset,
+      },
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logError("tool", `reopen_milestone tool failed: ${msg}`, { tool: "gsd_milestone_reopen", error: String(err) });
+    return {
+      content: [{ type: "text", text: `Error reopening milestone: ${msg}` }],
+      details: { operation: "reopen_milestone", error: msg },
+      isError: true,
+    };
+  }
+}
+
 export async function executeSliceComplete(
   params: SliceCompleteExecutorParams,
   basePath: string = process.cwd(),
@@ -388,42 +523,70 @@ export async function executeSliceComplete(
       const m = s.match(/^(.+?)\s*(?:—|-)\s+(.+)$/);
       return m ? [m[1].trim(), m[2].trim()] : [s.trim(), ""];
     };
-    const wrapArray = (v: unknown): unknown[] =>
-      v == null ? [] : Array.isArray(v) ? v : [v];
-
-    const coerced = { ...params } as CompleteSliceParams & Record<string, unknown>;
-    coerced.provides = wrapArray(params.provides) as string[];
-    coerced.keyFiles = wrapArray(params.keyFiles) as string[];
-    coerced.keyDecisions = wrapArray(params.keyDecisions) as string[];
-    coerced.patternsEstablished = wrapArray(params.patternsEstablished) as string[];
-    coerced.observabilitySurfaces = wrapArray(params.observabilitySurfaces) as string[];
-    coerced.requirementsSurfaced = wrapArray(params.requirementsSurfaced) as string[];
-    coerced.drillDownPaths = wrapArray(params.drillDownPaths) as string[];
-    coerced.affects = wrapArray(params.affects) as string[];
-    coerced.filesModified = wrapArray(params.filesModified).map((f) => {
+    const wrapOptionalArray = (v: unknown): unknown[] | undefined =>
+      v == null ? undefined : Array.isArray(v) ? v : [v];
+    const coerced = Object.fromEntries(
+      Object.entries(params).filter(([, value]) => value !== undefined && value !== null),
+    ) as CompleteSliceParams & Record<string, unknown>;
+    const provides = wrapOptionalArray(params.provides);
+    if (provides !== undefined) coerced.provides = provides as string[];
+    const keyFiles = wrapOptionalArray(params.keyFiles);
+    if (keyFiles !== undefined) coerced.keyFiles = keyFiles as string[];
+    const keyDecisions = wrapOptionalArray(params.keyDecisions);
+    if (keyDecisions !== undefined) coerced.keyDecisions = keyDecisions as string[];
+    const patternsEstablished = wrapOptionalArray(params.patternsEstablished);
+    if (patternsEstablished !== undefined) coerced.patternsEstablished = patternsEstablished as string[];
+    const observabilitySurfaces = wrapOptionalArray(params.observabilitySurfaces);
+    if (observabilitySurfaces !== undefined) coerced.observabilitySurfaces = observabilitySurfaces as string[];
+    const requirementsSurfaced = wrapOptionalArray(params.requirementsSurfaced);
+    if (requirementsSurfaced !== undefined) coerced.requirementsSurfaced = requirementsSurfaced as string[];
+    const drillDownPaths = wrapOptionalArray(params.drillDownPaths);
+    if (drillDownPaths !== undefined) coerced.drillDownPaths = drillDownPaths as string[];
+    const affects = wrapOptionalArray(params.affects);
+    if (affects !== undefined) coerced.affects = affects as string[];
+    const filesModified = wrapOptionalArray(params.filesModified);
+    if (filesModified !== undefined) coerced.filesModified = filesModified.map((f) => {
       if (typeof f !== "string") return f;
       const [path, description] = splitPair(f);
       return { path, description };
     }) as Array<{ path: string; description: string }>;
-    coerced.requires = wrapArray(params.requires).map((r) => {
+    const requires = wrapOptionalArray(params.requires);
+    if (requires !== undefined) coerced.requires = requires.map((r) => {
       if (typeof r !== "string") return r;
       const [slice, provides] = splitPair(r);
       return { slice, provides };
     }) as Array<{ slice: string; provides: string }>;
-    coerced.requirementsAdvanced = wrapArray(params.requirementsAdvanced).map((r) => {
+    const requirementsAdvanced = wrapOptionalArray(params.requirementsAdvanced);
+    if (requirementsAdvanced !== undefined) coerced.requirementsAdvanced = requirementsAdvanced.map((r) => {
       if (typeof r !== "string") return r;
       const [id, how] = splitPair(r);
       return { id, how };
     }) as Array<{ id: string; how: string }>;
-    coerced.requirementsValidated = wrapArray(params.requirementsValidated).map((r) => {
+    const requirementsValidated = wrapOptionalArray(params.requirementsValidated);
+    if (requirementsValidated !== undefined) coerced.requirementsValidated = requirementsValidated.map((r) => {
       if (typeof r !== "string") return r;
       const [id, proof] = splitPair(r);
       return { id, proof };
+    }).map((r) => {
+      if (!r || typeof r !== "object" || Array.isArray(r)) return r;
+      const record = r as Record<string, unknown>;
+      if (typeof record.id === "string" && typeof record.proof !== "string" && typeof record.how === "string") {
+        return { id: record.id, proof: record.how };
+      }
+      return r;
     }) as Array<{ id: string; proof: string }>;
-    coerced.requirementsInvalidated = wrapArray(params.requirementsInvalidated).map((r) => {
+    const requirementsInvalidated = wrapOptionalArray(params.requirementsInvalidated);
+    if (requirementsInvalidated !== undefined) coerced.requirementsInvalidated = requirementsInvalidated.map((r) => {
       if (typeof r !== "string") return r;
       const [id, what] = splitPair(r);
       return { id, what };
+    }).map((r) => {
+      if (!r || typeof r !== "object" || Array.isArray(r)) return r;
+      const record = r as Record<string, unknown>;
+      if (typeof record.id === "string" && typeof record.what !== "string" && typeof record.how === "string") {
+        return { id: record.id, what: record.how };
+      }
+      return r;
     }) as Array<{ id: string; what: string }>;
 
     const result = await handleCompleteSlice(coerced as CompleteSliceParams, basePath);

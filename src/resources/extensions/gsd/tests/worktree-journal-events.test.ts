@@ -30,11 +30,13 @@ function initGitRepoIn(base: string, isolation: "worktree" | "branch" | "none"):
 }
 import {
   WorktreeLifecycle,
+  resetRecentWorktreeMergeFailuresForTest,
   type WorktreeLifecycleDeps,
   type NotifyCtx,
 } from "../worktree-lifecycle.js";
 import { WorktreeStateProjection } from "../worktree-state-projection.js";
 import { type TaskCommitContext } from "../worktree.js";
+import { MergeConflictError } from "../git-service.js";
 
 // ADR-016 phase 2 / C-track retired all worktree-manager + cache + prefs
 // fields from `WorktreeLifecycleDeps`. Tests still pass them as overrides
@@ -141,6 +143,20 @@ function readJournalEntries(basePath: string): JournalEntry[] {
   }
 }
 
+function setupMergeWorktree(basePath: string, milestoneId: string): string {
+  initGitRepoIn(basePath, "worktree");
+  execFileSync("git", ["checkout", "-b", `milestone/${milestoneId}`], { cwd: basePath, stdio: "pipe" });
+  execFileSync("git", ["checkout", "main"], { cwd: basePath, stdio: "pipe" });
+  const wt = join(basePath, ".gsd", "worktrees", milestoneId);
+  execFileSync("git", ["worktree", "add", wt, `milestone/${milestoneId}`], { cwd: basePath, stdio: "pipe" });
+  mkdirSync(join(basePath, ".gsd", "milestones", milestoneId), { recursive: true });
+  writeFileSync(
+    join(basePath, ".gsd", "milestones", milestoneId, `${milestoneId}-ROADMAP.md`),
+    `# ${milestoneId}\n- [x] S01: Slice one\n`,
+  );
+  return wt;
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 describe("worktree journal events", () => {
@@ -148,6 +164,7 @@ describe("worktree journal events", () => {
   const originalCwd = process.cwd();
 
   beforeEach(() => {
+    resetRecentWorktreeMergeFailuresForTest();
     // realpathSync to match what `auto-worktree.ts` returns from
     // `resolveWorktreeProjectRoot` (macOS resolves `/var` → `/private/var`).
     tmp = realpathSync(mkdtempSync(join(tmpdir(), "wt-journal-")));
@@ -284,17 +301,7 @@ describe("worktree journal events", () => {
   });
 
   test("mergeAndExit emits worktree-merge-failed on error", () => {
-    initGitRepoIn(tmp, "worktree");
-    execFileSync("git", ["checkout", "-b", "milestone/M001"], { cwd: tmp, stdio: "pipe" });
-    execFileSync("git", ["checkout", "main"], { cwd: tmp, stdio: "pipe" });
-    const wt = join(tmp, ".gsd", "worktrees", "M001");
-    execFileSync("git", ["worktree", "add", wt, "milestone/M001"], { cwd: tmp, stdio: "pipe" });
-    mkdirSync(join(tmp, ".gsd", "milestones", "M001"), { recursive: true });
-    writeFileSync(
-      join(tmp, ".gsd", "milestones", "M001", "M001-ROADMAP.md"),
-      "# M001\n- [x] S01: Slice one\n",
-    );
-
+    const wt = setupMergeWorktree(tmp, "M001");
     const s = makeSession({ basePath: wt, originalBasePath: tmp });
     const deps = makeDeps({
       mergeMilestoneToMain: () => { throw new Error("conflict in main"); },
@@ -318,11 +325,56 @@ describe("worktree journal events", () => {
       );
     }
 
+    new WorktreeLifecycle(s, deps).exitMilestone(
+      "M001",
+      { merge: true },
+      makeNotifyCtx(),
+    );
+
     const entries = readJournalEntries(tmp);
-    const failed = entries.find(e => e.eventType === "worktree-merge-failed");
+    const failures = entries.filter(e => e.eventType === "worktree-merge-failed");
+    const failed = failures[0];
     assert.ok(failed, "worktree-merge-failed event should be emitted");
     assert.equal(failed!.data?.milestoneId, "M001");
     assert.equal(failed!.data?.error, "conflict in main");
+    assert.equal(failures.length, 1, "duplicate merge failures are journaled once");
+  });
+
+  test("merge failure dedupe uses stable conflict category and expires", (t) => {
+    let now = 1_000_000;
+    t.mock.method(Date, "now", () => now);
+    const wt = setupMergeWorktree(tmp, "M001");
+    const s = makeSession({ basePath: wt, originalBasePath: tmp });
+    let attempt = 0;
+    const deps = makeDeps({
+      mergeMilestoneToMain: () => {
+        attempt += 1;
+        throw new MergeConflictError(
+          attempt === 1 ? ["src/a.ts"] : ["src/b.ts", "src/c.ts"],
+          "squash",
+          "milestone/M001",
+          "main",
+        );
+      },
+    });
+    const lifecycle = new WorktreeLifecycle(s, deps);
+
+    lifecycle.exitMilestone("M001", { merge: true }, makeNotifyCtx());
+    lifecycle.exitMilestone("M001", { merge: true }, makeNotifyCtx());
+
+    let failures = readJournalEntries(tmp).filter(e => e.eventType === "worktree-merge-failed");
+    assert.equal(failures.length, 1, "variable conflict filenames should not bypass dedupe");
+    assert.match(
+      String(failures[0]!.data?.error),
+      /src\/a\.ts/,
+      "journal payload keeps the original error message",
+    );
+
+    now += 60_001;
+    lifecycle.exitMilestone("M001", { merge: true }, makeNotifyCtx());
+
+    failures = readJournalEntries(tmp).filter(e => e.eventType === "worktree-merge-failed");
+    assert.equal(failures.length, 2, "same merge failure is journaled again after dedupe expiry");
   });
 
   test("journal entries have valid flowId, seq, and ts fields", () => {

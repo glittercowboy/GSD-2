@@ -45,7 +45,7 @@ All commands can be run via `gsd headless [command]`.
 | `knowledge <rule\|pattern\|lesson>` | Add persistent project knowledge |
 | `cleanup` | Remove merged branches or snapshots |
 | `export` | Export results (--json, --markdown) |
-| `migrate` | Migrate v1 .planning directory to .gsd format |
+| `migrate` | Migrate v1 .planning directory to DB-backed .gsd with backup and audit |
 | `remote` | Control remote auto-mode (slack, discord, status, disconnect) |
 | `inspect` | Show SQLite DB diagnostics (schema, row counts) |
 | `forensics` | Post-mortem investigation of auto-mode failures |

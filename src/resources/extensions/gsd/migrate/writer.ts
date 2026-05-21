@@ -37,6 +37,9 @@ export interface WrittenFiles {
 
 /** Pre-write statistics computed from a GSDProject without I/O. */
 export interface MigrationPreview {
+  decisions: {
+    total: number;
+  };
   milestoneCount: number;
   totalSlices: number;
   totalTasks: number;
@@ -374,7 +377,17 @@ export function formatProject(content: string): string {
  */
 export function formatDecisions(content: string): string {
   if (!content || !content.trim()) {
-    return '# Decisions\n\n<!-- Append-only register of architectural and pattern decisions -->\n\n| ID | Decision | Rationale | Date |\n|----|----------|-----------|------|\n';
+    return [
+      '# Decisions Register',
+      '',
+      '<!-- Append-only. Never edit or remove existing rows.',
+      '     To reverse a decision, add a new row that supersedes it.',
+      '     Read this file at the start of any planning or research phase. -->',
+      '',
+      '| # | When | Scope | Decision | Choice | Rationale | Revisable? | Made By |',
+      '|---|------|-------|----------|--------|-----------|------------|---------|',
+      '',
+    ].join('\n');
   }
   return content.endsWith('\n') ? content : content + '\n';
 }

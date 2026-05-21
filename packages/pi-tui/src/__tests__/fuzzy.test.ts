@@ -60,6 +60,14 @@ describe("fuzzyMatch", () => {
 		const result = fuzzyMatch("xyz", "hello");
 		assert.equal(result.matches, false);
 	});
+
+	it("scores astral-plane characters as one match unit", () => {
+		const result = fuzzyMatch("😄", "😄");
+		const ascii = fuzzyMatch("a", "a");
+
+		assert.equal(result.matches, true);
+		assert.equal(result.score, ascii.score);
+	});
 });
 
 describe("fuzzyFilter", () => {

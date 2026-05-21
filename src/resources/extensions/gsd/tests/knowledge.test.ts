@@ -187,7 +187,7 @@ test('loadKnowledgeBlock: uses project knowledge alone when no global file', () 
   writeFileSync(join(cwd, '.gsd', 'KNOWLEDGE.md'), 'K001: Use real DB');
 
   const result = loadKnowledgeBlock(gsdHome, cwd);
-  assert.ok(result.block.includes('[KNOWLEDGE — Rules, patterns, and lessons learned]'));
+  assert.ok(result.block.includes('[KNOWLEDGE — Rules from KNOWLEDGE.md'));
   assert.ok(result.block.includes('## Project Knowledge'));
   assert.ok(result.block.includes('K001: Use real DB'));
   assert.ok(!result.block.includes('## Global Knowledge'));
@@ -205,7 +205,7 @@ test('loadKnowledgeBlock: uses global knowledge alone when no project file', () 
   writeFileSync(join(gsdHome, 'agent', 'KNOWLEDGE.md'), 'G001: Respond in English');
 
   const result = loadKnowledgeBlock(gsdHome, cwd);
-  assert.ok(result.block.includes('[KNOWLEDGE — Rules, patterns, and lessons learned]'));
+  assert.ok(result.block.includes('[KNOWLEDGE — Rules from KNOWLEDGE.md'));
   assert.ok(result.block.includes('## Global Knowledge'));
   assert.ok(result.block.includes('G001: Respond in English'));
   assert.ok(!result.block.includes('## Project Knowledge'));
@@ -230,6 +230,51 @@ test('loadKnowledgeBlock: merges global before project when both exist', () => {
   assert.ok(result.block.includes('K001: Project rule'));
   // Global section appears before project section
   assert.ok(result.block.indexOf('## Global Knowledge') < result.block.indexOf('## Project Knowledge'));
+
+  rmSync(tmp, { recursive: true, force: true });
+});
+
+test('loadKnowledgeBlock: strips patterns and lessons from project knowledge', () => {
+  const tmp = realpathSync(mkdtempSync(join(tmpdir(), 'gsd-kb-strip-')));
+  const gsdHome = join(tmp, 'home');
+  const cwd = join(tmp, 'project');
+  mkdirSync(join(cwd, '.gsd'), { recursive: true });
+  mkdirSync(join(gsdHome, 'agent'), { recursive: true });
+  writeFileSync(
+    join(cwd, '.gsd', 'KNOWLEDGE.md'),
+    [
+      '# Project Knowledge',
+      '',
+      'Intro note that should stay with manual rules.',
+      '',
+      '## Rules',
+      '',
+      '| ID | Rule | Notes |',
+      '|---|---|---|',
+      '| K001 | Use real DB | - |',
+      '',
+      '## Patterns',
+      '',
+      '| ID | Pattern | Where | Notes |',
+      '|---|---|---|---|',
+      '| P001 | Prefer async | server | - |',
+      '',
+      '## Lessons Learned',
+      '',
+      '| ID | What Happened | Root Cause | Fix | Scope |',
+      '|---|---|---|---|---|',
+      '| L001 | Missed cache | N/A | Add TTL | project |',
+    ].join('\n'),
+  );
+
+  const result = loadKnowledgeBlock(gsdHome, cwd);
+  assert.ok(result.block.includes('[KNOWLEDGE — Rules from KNOWLEDGE.md'));
+  assert.ok(result.block.includes('Intro note that should stay with manual rules.'));
+  assert.ok(result.block.includes('K001'), 'rules entry should be present');
+  assert.ok(!result.block.includes('P001'), 'patterns should be stripped and injected via memories');
+  assert.ok(!result.block.includes('L001'), 'lessons should be stripped and injected via memories');
+  assert.ok(!result.block.includes('## Patterns'), 'Patterns heading should not appear');
+  assert.ok(!result.block.includes('## Lessons Learned'), 'Lessons heading should not appear');
 
   rmSync(tmp, { recursive: true, force: true });
 });

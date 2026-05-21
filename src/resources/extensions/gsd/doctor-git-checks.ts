@@ -9,12 +9,13 @@ import { parseRoadmap as parseLegacyRoadmap } from "./parsers-legacy.js";
 import { isDbAvailable, getMilestone } from "./gsd-db.js";
 import { resolveMilestoneFile } from "./paths.js";
 import { deriveState, isMilestoneComplete } from "./state.js";
-import { listWorktrees, resolveGitDir, worktreesDir } from "./worktree-manager.js";
+import { createWorktree, listWorktrees, resolveGitDir, worktreesDir } from "./worktree-manager.js";
 import { abortAndReset } from "./git-self-heal.js";
 import { RUNTIME_EXCLUSION_PATHS, resolveMilestoneIntegrationBranch, writeIntegrationBranch } from "./git-service.js";
 import { nativeIsRepo, nativeWorktreeList, nativeWorktreeRemove, nativeBranchList, nativeBranchDelete, nativeLsFiles, nativeRmCached, nativeHasChanges, nativeLastCommitEpoch, nativeGetCurrentBranch, nativeAddTracked, nativeCommit } from "./native-git-bridge.js";
 import { getAllWorktreeHealth } from "./worktree-health.js";
 import { loadEffectiveGSDPreferences } from "./preferences.js";
+import { listUnmergedGitPaths } from "./git-conflict-state.js";
 
 /**
  * Returns true if the directory contains only doctor artifacts
@@ -52,6 +53,19 @@ function isSameOrNestedPath(candidate: string, container: string): boolean {
   const normalizedContainer = normalizePathForComparison(container);
   return normalizedCandidate === normalizedContainer ||
     normalizedCandidate.startsWith(`${normalizedContainer}/`);
+}
+
+function hasProjectContentOnDisk(dirPath: string): boolean {
+  try {
+    for (const entry of readdirSync(dirPath, { withFileTypes: true })) {
+      if (entry.name === ".git" || entry.name === ".gsd") continue;
+      if (entry.name === ".DS_Store") continue;
+      return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
 }
 
 function getSnapshotDiffCheckFailure(basePath: string): string | null {
@@ -103,6 +117,18 @@ export async function checkGitHealth(
   }
 
   const gitDir = resolveGitDir(basePath);
+  const unmergedPaths = listUnmergedGitPaths(basePath);
+  if (unmergedPaths === null) {
+    issues.push({
+      severity: "error",
+      code: "corrupt_merge_state",
+      scope: "project",
+      unitId: "project",
+      message: "Failed to evaluate unresolved Git conflicts. Resolve Git/worktree state manually before resuming auto-mode.",
+      fixable: false,
+    });
+    return;
+  }
 
   // ── Orphaned auto-worktrees & Stale milestone branches ────────────────
   // These checks only apply in worktree/branch modes — skip in none mode
@@ -110,7 +136,9 @@ export async function checkGitHealth(
   if (isolationMode !== "none") {
   try {
     const worktrees = listWorktrees(basePath);
-    const milestoneWorktrees = worktrees.filter(wt => wt.branch.startsWith("milestone/"));
+    // Orphan entries are milestone branches with no backing worktree; they are
+    // handled by the stale milestone branch check below, not the worktree checks.
+    const milestoneWorktrees = worktrees.filter(wt => wt.branch.startsWith("milestone/") && !wt.orphan);
 
     // Load roadmap state once for cross-referencing
     const state = await deriveState(basePath);
@@ -122,6 +150,37 @@ export async function checkGitHealth(
       const isComplete = milestoneEntry
         ? await isCompletedMilestoneTerminal(basePath, milestoneId)
         : false;
+
+      if (!isComplete && !hasProjectContentOnDisk(wt.path) && hasProjectContentOnDisk(basePath)) {
+        issues.push({
+          severity: "error",
+          code: "worktree_empty_with_project_content",
+          scope: "milestone",
+          unitId: milestoneId,
+          message: `Worktree ${wt.path} has no project content, but project root ${basePath} does. Run doctor --fix to recreate the worktree.`,
+          fixable: true,
+        });
+
+        if (shouldFix("worktree_empty_with_project_content")) {
+          try {
+            nativeWorktreeRemove(basePath, wt.path, true);
+            const recreated = createWorktree(basePath, milestoneId, {
+              branch: wt.branch,
+              reuseExistingBranch: true,
+            });
+            const reset = spawnSync("git", ["reset", "--hard"], {
+              cwd: recreated.path,
+              encoding: "utf-8",
+            });
+            if (reset.status !== 0) {
+              throw new Error(reset.stderr || reset.error?.message || "git reset --hard failed");
+            }
+            fixesApplied.push(`recreated empty worktree ${wt.path}`);
+          } catch {
+            fixesApplied.push(`failed to recreate empty worktree ${wt.path}`);
+          }
+        }
+      }
 
       if (isComplete) {
         issues.push({
@@ -220,6 +279,17 @@ export async function checkGitHealth(
       if (existsSync(join(gitDir, d))) found.push(d);
     }
 
+    if (unmergedPaths.length > 0) {
+      issues.push({
+        severity: "error",
+        code: "unresolved_git_conflicts",
+        scope: "project",
+        unitId: "project",
+        message: `Unresolved Git conflicts detected: ${unmergedPaths.join(", ")}. Resolve these files manually before auto-mode can proceed.`,
+        fixable: false,
+      });
+    }
+
     if (found.length > 0) {
       issues.push({
         severity: "error",
@@ -227,12 +297,14 @@ export async function checkGitHealth(
         scope: "project",
         unitId: "project",
         message: `Corrupt merge/rebase state detected: ${found.join(", ")}`,
-        fixable: true,
+        fixable: unmergedPaths.length === 0,
       });
 
-      if (shouldFix("corrupt_merge_state")) {
+      if (shouldFix("corrupt_merge_state") && unmergedPaths.length === 0) {
         const result = abortAndReset(basePath);
         fixesApplied.push(`cleaned merge state: ${result.cleaned.join(", ")}`);
+      } else if (shouldFix("corrupt_merge_state")) {
+        fixesApplied.push("skipped merge-state reset because unresolved conflicts require manual resolution");
       }
     }
   } catch {

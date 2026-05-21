@@ -1,14 +1,13 @@
 // Project/App: GSD-2
 // File Purpose: ADR-017 unregistered-milestone drift handler. Detects
 // milestones whose on-disk directory has meaningful content (ROADMAP/
-// CONTEXT/SUMMARY) but no DB row, then runs the markdown importer to
-// reconcile. PROJECT.md is the human-facing index — the importer's source
-// of truth is the .gsd/milestones/ directory tree.
+// CONTEXT/SUMMARY) but no DB row, then fails closed with an explicit recovery
+// instruction. Markdown hierarchy import is reserved for operator-controlled
+// migration/recovery commands, not automatic runtime reconciliation.
 
 import { existsSync } from "node:fs";
 
 import { getMilestone, isDbAvailable } from "../../gsd-db.js";
-import { migrateHierarchyToDb } from "../../md-importer.js";
 import { findMilestoneIds } from "../../milestone-ids.js";
 import { resolveMilestoneFile } from "../../paths.js";
 import type { GSDState } from "../../types.js";
@@ -46,20 +45,18 @@ export function detectUnregisteredMilestoneDrift(
 }
 
 /**
- * Repair: invoke the markdown importer. migrateHierarchyToDb walks the same
- * findMilestoneIds list the detector uses and INSERTs OR IGNOREs every
- * missing milestone (and its slices/tasks) — idempotent under cap=2 retry.
- *
- * Note: even though we receive one record at a time, the importer is a
- * project-wide operation. Repeated invocation across multiple drift records
- * in the same pass is wasteful but safe; a future optimization could
- * coalesce by checking whether the importer has already run this pass.
+ * Repair intentionally fails closed. The project-root DB is authoritative at
+ * runtime; markdown-only milestones must be imported through an explicit
+ * migration/recovery command so operators opt into changing canonical state.
  */
 export function repairUnregisteredMilestone(
-  _record: UnregisteredMilestoneDrift,
-  ctx: DriftContext,
+  record: UnregisteredMilestoneDrift,
+  _ctx: DriftContext,
 ): void {
-  migrateHierarchyToDb(ctx.basePath);
+  throw new Error(
+    `Milestone ${record.milestoneId} exists only as markdown projection. ` +
+      "Runtime reconciliation will not import markdown into the authoritative DB; run explicit GSD recovery/migration if this markdown should repopulate the database.",
+  );
 }
 
 export const unregisteredMilestoneHandler: DriftHandler<UnregisteredMilestoneDrift> = {

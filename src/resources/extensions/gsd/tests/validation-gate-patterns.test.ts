@@ -23,9 +23,9 @@ import assert from "node:assert/strict";
 function hasOperationalEvidence(validationContent: string): boolean {
   const structuredMatch =
     validationContent.includes("Operational") &&
-    (validationContent.includes("MET") || validationContent.includes("N/A") || validationContent.includes("SATISFIED"));
+    (validationContent.includes("MET") || validationContent.includes("N/A") || validationContent.includes("SATISFIED") || validationContent.includes("DEFERRED"));
   const proseMatch =
-    /[Oo]perational[\s\S]{0,500}?(?:✅|pass|verified|confirmed|met|complete|true|yes|addressed|covered|satisfied|partially|n\/a|not[\s-]+applicable)/i.test(
+    /[Oo]perational[\s\S]{0,500}?(?:✅|pass|verified|confirmed|met|complete|true|yes|addressed|covered|satisfied|partially|deferred|n\/a|not[\s-]+applicable)/i.test(
       validationContent,
     );
   return structuredMatch || proseMatch;
@@ -101,6 +101,18 @@ test('prose: "Operational: n/a" passes', () => {
 
 test('prose: "Operational: complete" passes', () => {
   const content = `Operational: complete — all health checks green.`;
+  assert.ok(hasOperationalEvidence(content));
+});
+
+test('mixed/table: "Operational: DEFERRED" passes', () => {
+  const content = `| **Operational** | daemon stop → port released → daemon start 成功 | Deferred pending follow-up evidence. | ⚠️ DEFERRED |`;
+  assert.ok(hasOperationalEvidence(content));
+});
+
+test("structured: Operational + DEFERRED passes", () => {
+  const content = `| Criteria       | Status   |
+| Operational    | DEFERRED |
+| Functional     | MET      |`;
   assert.ok(hasOperationalEvidence(content));
 });
 

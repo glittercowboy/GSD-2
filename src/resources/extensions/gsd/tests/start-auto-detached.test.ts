@@ -4,7 +4,10 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { _withDetachedAutoKeepaliveForTest } from "../auto.ts";
-import { _scheduleAutoStartAfterIdleForTest } from "../guided-flow.ts";
+import {
+  _scheduleAutoStartAfterIdleForTest,
+  resolveGuidedExecuteLaunchMode,
+} from "../guided-flow.ts";
 
 const gsdDir = resolve(import.meta.dirname, "..");
 
@@ -44,23 +47,41 @@ test("command entrypoints use startAutoDetached instead of awaiting startAuto (#
   );
 });
 
-test("bare /gsd stays in the foreground smart-entry flow (#5125 regression)", () => {
+test("bare /gsd stays in the foreground home flow (#5125 regression)", () => {
   const autoHandlerSrc = readGsdFile("commands/handlers/auto.ts");
   const bareCommandBranch = autoHandlerSrc.slice(
     autoHandlerSrc.indexOf('if (trimmed === "")'),
   );
 
   assert.ok(
-    bareCommandBranch.includes('await import("../../guided-flow.js")'),
-    "bare /gsd should load the guided smart-entry flow",
+    bareCommandBranch.includes('await import("../../gsd-command-home.js")'),
+    "bare /gsd should load the state-aware home flow",
   );
   assert.ok(
-    bareCommandBranch.includes("await showSmartEntry(ctx, pi, projectRoot(), { step: true })"),
-    "bare /gsd should await the foreground wizard instead of detaching auto-mode",
+    bareCommandBranch.includes("await showGsdHome(ctx, pi, projectRoot())"),
+    "bare /gsd should await the foreground home menu instead of detaching auto-mode",
   );
   assert.ok(
     !bareCommandBranch.includes("startAutoDetached("),
     "bare /gsd must not enter detached auto bootstrap directly",
+  );
+});
+
+test("guided execute uses auto step bootstrap when worktree isolation is enabled", () => {
+  assert.equal(
+    resolveGuidedExecuteLaunchMode("worktree"),
+    "auto-step",
+    "guided execute must enter auto bootstrap so the milestone worktree is created before execution",
+  );
+  assert.equal(
+    resolveGuidedExecuteLaunchMode("none"),
+    "guided-dispatch",
+    "non-isolated projects can keep the foreground guided dispatch path",
+  );
+  assert.equal(
+    resolveGuidedExecuteLaunchMode("branch"),
+    "guided-dispatch",
+    "this regression fix is scoped to worktree isolation",
   );
 });
 
@@ -84,6 +105,8 @@ test("auto bootstrap validates blocked directories before touching .gsd migratio
   const bootstrapIdx = autoStartSrc.indexOf("export async function bootstrapAutoSession(");
   const bootstrapBody = autoStartSrc.slice(bootstrapIdx);
   const bootstrapValidationIdx = bootstrapBody.indexOf("validateDirectory(base)");
+  const staleCrashReadIdx = bootstrapBody.indexOf("const startupLock = readCrashLock(base)");
+  const staleCrashClearIdx = bootstrapBody.indexOf("clearLock(base);");
   const lockIdx = bootstrapBody.indexOf("acquireSessionLock(base)");
   const bootstrapMigrationIdx = bootstrapBody.indexOf("migrateToExternalState(base)");
 
@@ -91,26 +114,62 @@ test("auto bootstrap validates blocked directories before touching .gsd migratio
   assert.ok(bootstrapValidationIdx > -1, "bootstrapAutoSession should validate the base directory");
   assert.ok(lockIdx > -1, "bootstrapAutoSession should acquire a session lock for safe projects");
   assert.ok(bootstrapMigrationIdx > -1, "bootstrapAutoSession should still migrate safe projects");
+  assert.ok(staleCrashReadIdx > -1, "bootstrapAutoSession should probe stale crash lock state before lock acquisition");
+  assert.ok(staleCrashClearIdx > -1, "bootstrapAutoSession should clear stale crash lock state when detected");
   assert.ok(
     bootstrapValidationIdx < lockIdx && bootstrapValidationIdx < bootstrapMigrationIdx,
     "fresh bootstrap must reject blocked directories before locking or migrating .gsd state",
+  );
+  assert.ok(
+    staleCrashReadIdx < lockIdx && staleCrashClearIdx < lockIdx,
+    "fresh bootstrap must auto-clear stale crash lock state before session lock acquisition",
   );
 });
 
 test("fresh start registers the auto worker before bootstrap enters worktree flow (#5405)", () => {
   const autoSrc = readGsdFile("auto.ts");
+  const autoStartSrc = readGsdFile("auto-start.ts");
   const startAutoIdx = autoSrc.indexOf("export async function startAuto(");
   const startAutoBody = autoSrc.slice(startAutoIdx);
+  const bootstrapIdx = autoStartSrc.indexOf("export async function bootstrapAutoSession(");
+  const bootstrapBody = autoStartSrc.slice(bootstrapIdx);
 
-  const preBootstrapRegisterIdx = startAutoBody.indexOf("registerAutoWorkerForSession(s, base);");
   const bootstrapCallIdx = startAutoBody.indexOf("const ready = await bootstrapAutoSession(");
+  const preBootstrapBody = startAutoBody.slice(0, bootstrapCallIdx);
+  const preBootstrapRegisterIdx = preBootstrapBody.lastIndexOf("registerAutoWorkerForSession(s, base);");
+  const resumeSectionIdx = startAutoBody.indexOf("if (s.paused) {");
+  const freshStartSectionIdx = startAutoBody.indexOf("// ── Fresh start path — delegated to auto-start.ts ──");
+  const resumeBody = startAutoBody.slice(resumeSectionIdx, freshStartSectionIdx);
+  const resumeDbOpenIdx = resumeBody.indexOf("await openProjectDbIfPresent(base);");
+  const resumeRegisterIdx = resumeBody.indexOf("registerAutoWorkerForSession(s, base);");
+  const resumeEnterMilestoneIdx = resumeBody.indexOf("buildLifecycle().enterMilestone");
+  const dbOpenIdx = bootstrapBody.indexOf("await openProjectDbIfPresent(base);");
+  const bootstrapRegisterIdx = bootstrapBody.indexOf("registerAutoWorkerForSession(base);");
+  const enterMilestoneIdx = bootstrapBody.indexOf("buildLifecycle().enterMilestone");
 
   assert.ok(startAutoIdx > -1, "startAuto should exist");
   assert.ok(preBootstrapRegisterIdx > -1, "startAuto should register worker before bootstrap");
   assert.ok(bootstrapCallIdx > -1, "startAuto should call bootstrapAutoSession");
+  assert.ok(resumeSectionIdx > -1, "startAuto should have resume milestone entry flow");
+  assert.ok(freshStartSectionIdx > resumeSectionIdx, "resume assertions should be scoped before fresh start");
+  assert.ok(resumeDbOpenIdx > -1, "resume should open DB before milestone entry");
+  assert.ok(resumeRegisterIdx > -1, "resume should register worker before milestone entry");
+  assert.ok(resumeEnterMilestoneIdx > -1, "resume should enter milestones through lifecycle");
+  assert.ok(bootstrapIdx > -1, "bootstrapAutoSession should exist");
+  assert.ok(dbOpenIdx > -1, "bootstrap should open the project DB");
+  assert.ok(bootstrapRegisterIdx > -1, "bootstrap should register worker after DB open");
+  assert.ok(enterMilestoneIdx > -1, "bootstrap should enter milestones through lifecycle");
   assert.ok(
     preBootstrapRegisterIdx < bootstrapCallIdx,
     "worker registration must happen before bootstrap so enterMilestone can claim milestone leases on first entry",
+  );
+  assert.ok(
+    dbOpenIdx < bootstrapRegisterIdx && bootstrapRegisterIdx < enterMilestoneIdx,
+    "bootstrap must open DB and register worker before first enterMilestone",
+  );
+  assert.ok(
+    resumeDbOpenIdx < resumeRegisterIdx && resumeRegisterIdx < resumeEnterMilestoneIdx,
+    "resume must open DB and register worker before first enterMilestone",
   );
 });
 
@@ -239,4 +298,37 @@ test("discussion auto-start waits for the current command context to become idle
   assert.equal(launches.length, 1);
   assert.equal(launches[0][2], "/tmp/gsd-auto-start-idle-test");
   assert.deepEqual(launches[0][4], { step: true });
+});
+
+test("resume path only hard-exits on blocked stop, not blocked pause (#6154)", () => {
+  const autoSrc = readGsdFile("auto.ts");
+  const startAutoIdx = autoSrc.indexOf("export async function startAuto(");
+  const startAutoBody = autoSrc.slice(startAutoIdx);
+  const resumeSectionIdx = startAutoBody.indexOf("if (s.paused) {");
+  const freshStartSectionIdx = startAutoBody.indexOf("// ── Fresh start path — delegated to auto-start.ts ──");
+  const resumeBody = startAutoBody.slice(resumeSectionIdx, freshStartSectionIdx);
+
+  assert.ok(startAutoIdx > -1, "startAuto should exist");
+  assert.ok(resumeSectionIdx > -1, "resume path should exist");
+  assert.ok(freshStartSectionIdx > resumeSectionIdx, "resume assertions should be scoped before fresh start");
+  assert.ok(
+    resumeBody.includes('if (resumeResult?.kind === "blocked" && resumeResult.action === "stop")'),
+    "resume path should only hard-stop blocked resume when action is stop",
+  );
+  assert.ok(
+    resumeBody.includes('if (resumeResult?.kind === "blocked")'),
+    "resume path should still notify blocked resume results",
+  );
+});
+
+test("prepareForUnit skips worktree safety when isolation is not worktree (#6154)", () => {
+  const autoSrc = readGsdFile("auto.ts");
+  const prepareForUnitIdx = autoSrc.indexOf("async prepareForUnit(unitType, unitId) {");
+  const prepareForUnitBody = autoSrc.slice(prepareForUnitIdx, autoSrc.indexOf("async syncAfterUnit() {}", prepareForUnitIdx));
+
+  assert.ok(prepareForUnitIdx > -1, "prepareForUnit should exist");
+  assert.ok(
+    prepareForUnitBody.includes('if (getIsolationMode(runtimeBasePath) !== "worktree")'),
+    "prepareForUnit should bypass worktree safety validation outside worktree isolation mode",
+  );
 });

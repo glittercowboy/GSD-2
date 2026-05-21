@@ -65,7 +65,9 @@ test("plan-slice prompt: DB-backed tool names survive template substitution", ()
   const result = loadPrompt("plan-slice", { ...BASE_VARS, commitInstruction: "Do not commit." });
   assert.ok(result.includes("gsd_plan_slice"), "gsd_plan_slice should appear in rendered prompt");
   assert.ok(result.includes("gsd_plan_task"), "gsd_plan_task should appear in rendered prompt");
+  assert.ok(result.includes("gsd_decision_save"), "structural decisions should use DB-backed decision tool");
   assert.ok(result.includes("canonical write path"), "canonical write path language should survive substitution");
+  assert.doesNotMatch(result, /append them to `.gsd\/DECISIONS\.md`/);
 });
 
 test("plan-slice prompt: compact planning gates survive template substitution", () => {

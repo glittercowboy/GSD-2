@@ -10,7 +10,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 
@@ -37,6 +37,7 @@ import {
   ReconciliationFailedError,
   type DriftHandler,
   type DriftRecord,
+  type ReconciliationDeps,
 } from "../state-reconciliation.ts";
 import { classifyFailure } from "../recovery-classification.ts";
 import type { GSDState } from "../types.ts";
@@ -250,6 +251,14 @@ function rmTreeQuiet(base: string): void {
   }
 }
 
+function resolveGitPathForTest(base: string, gitPath: string): string {
+  const resolvedPath = execFileSync("git", ["rev-parse", "--git-path", gitPath], {
+    cwd: base,
+    encoding: "utf-8",
+  }).trim();
+  return isAbsolute(resolvedPath) ? resolvedPath : resolve(base, resolvedPath);
+}
+
 test("ADR-017 (#5701): merge-state drift detected and repaired end-to-end", async (t) => {
   const base = makeGitBase();
   t.after(() => rmTreeQuiet(base));
@@ -322,6 +331,73 @@ test("ADR-017 (#5701): merge-state drift is detected in linked worktrees", async
   assert.ok(
     result.repaired.some((d) => d.kind === "unmerged-merge-state"),
     "repaired list should include the worktree merge-state drift record",
+  );
+});
+
+test("ADR-017 (#5701): stale clean squash marker is removed without a no-op commit", async (t) => {
+  const base = makeGitBase();
+  t.after(() => rmTreeQuiet(base));
+
+  const squashMsgPath = resolveGitPathForTest(base, "SQUASH_MSG");
+  const beforeHead = execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: base,
+    encoding: "utf-8",
+  }).trim();
+
+  writeFileSync(squashMsgPath, "stale squash message\n");
+  assert.equal(
+    execFileSync("git", ["status", "--porcelain"], { cwd: base, encoding: "utf-8" }).trim(),
+    "",
+    "pre: stale squash marker must not imply worktree/index changes",
+  );
+
+  const result = await reconcileBeforeDispatch(base, {
+    invalidateStateCache: () => {},
+    deriveState: async () => makeState(),
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(existsSync(squashMsgPath), false, "post: stale SQUASH_MSG is cleared");
+  assert.ok(
+    result.repaired.some((d) => d.kind === "unmerged-merge-state"),
+    "repaired list should include the stale squash marker drift",
+  );
+  assert.equal(
+    execFileSync("git", ["rev-parse", "HEAD"], { cwd: base, encoding: "utf-8" }).trim(),
+    beforeHead,
+    "reconciliation must not create a no-op commit for stale marker-only state",
+  );
+});
+
+test("ADR-017 (#5701): stale squash marker is removed after restored local changes", async (t) => {
+  const base = makeGitBase();
+  t.after(() => rmTreeQuiet(base));
+
+  const squashMsgPath = resolveGitPathForTest(base, "SQUASH_MSG");
+  const beforeHead = execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: base,
+    encoding: "utf-8",
+  }).trim();
+
+  writeFileSync(join(base, "local-notes.txt"), "restored local work\n");
+  writeFileSync(squashMsgPath, "stale squash message\n");
+
+  const result = await reconcileBeforeDispatch(base, {
+    invalidateStateCache: () => {},
+    deriveState: async () => makeState(),
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(existsSync(squashMsgPath), false, "post: stale SQUASH_MSG is cleared");
+  assert.equal(
+    readFileSync(join(base, "local-notes.txt"), "utf-8"),
+    "restored local work\n",
+    "reconciliation must preserve restored local work",
+  );
+  assert.equal(
+    execFileSync("git", ["rev-parse", "HEAD"], { cwd: base, encoding: "utf-8" }).trim(),
+    beforeHead,
+    "reconciliation must not commit restored local work",
   );
 });
 
@@ -544,7 +620,7 @@ test("ADR-017 (#5703): live worker lock is not cleared", async (t) => {
 
 // ─── #5704: unregistered-milestone drift ────────────────────────────────────
 
-test("ADR-017 (#5704): unregistered-milestone drift detected and DB row inserted", async (t) => {
+test("ADR-017 (#5704): unregistered-milestone drift fails closed without importing markdown", async (t) => {
   const base = mkdtempSync(join(tmpdir(), "gsd-adr017-projmd-"));
   const milestoneDir = join(base, ".gsd", "milestones", "M042");
   mkdirSync(milestoneDir, { recursive: true });
@@ -571,20 +647,22 @@ test("ADR-017 (#5704): unregistered-milestone drift detected and DB row inserted
   // Pre-condition: filesystem has the milestone, DB does NOT.
   assert.equal(getMilestone("M042"), null, "pre: DB has no row for M042");
 
-  const result = await reconcileBeforeDispatch(base, {
-    invalidateStateCache: () => {},
-    deriveState: async () => makeState(),
-  });
-
-  assert.equal(result.ok, true);
-  assert.ok(getMilestone("M042"), "post: DB row inserted for M042");
-  const milestoneRepaired = result.repaired.find(
-    (d) => d.kind === "unregistered-milestone",
+  await assert.rejects(
+    reconcileBeforeDispatch(base, {
+      invalidateStateCache: () => {},
+      deriveState: async () => makeState(),
+    }),
+    (err: unknown) => {
+      assert.ok(err instanceof ReconciliationFailedError);
+      assert.match(String(err.message), /unregistered-milestone/);
+      assert.equal(err.failures[0]?.drift.kind, "unregistered-milestone");
+      assert.match(String(err.failures[0]?.cause), /M042/);
+      assert.match(String(err.failures[0]?.cause), /markdown projection/);
+      assert.match(String(err.failures[0]?.cause), /recovery\/migration/);
+      return true;
+    },
   );
-  assert.ok(milestoneRepaired, "repaired list should include the unregistered-milestone drift");
-  if (milestoneRepaired?.kind === "unregistered-milestone") {
-    assert.equal(milestoneRepaired.milestoneId, "M042");
-  }
+  assert.equal(getMilestone("M042"), null, "post: DB still has no row for M042");
 });
 
 test("ADR-017 (#5704): registered milestone (DB row present) → no drift", async (t) => {
@@ -627,13 +705,14 @@ test("ADR-017 (#5704): registered milestone (DB row present) → no drift", asyn
 
 // ─── #5705: roadmap-divergence drift ─────────────────────────────────────────
 
-test("ADR-017 (#5705): roadmap-divergence drift detected and DB depends synced", async (t) => {
+test("ADR-017 (#5705): roadmap-divergence re-renders projection without syncing depends into DB", async (t) => {
   const base = mkdtempSync(join(tmpdir(), "gsd-adr017-roadmap-"));
   const milestoneDir = join(base, ".gsd", "milestones", "M001");
+  const roadmapPath = join(milestoneDir, "M001-ROADMAP.md");
   mkdirSync(milestoneDir, { recursive: true });
   // ROADMAP.md declares S02 depends on [S01]
   writeFileSync(
-    join(milestoneDir, "M001-ROADMAP.md"),
+    roadmapPath,
     [
       "# M001: Test",
       "",
@@ -665,7 +744,12 @@ test("ADR-017 (#5705): roadmap-divergence drift detected and DB depends synced",
   });
 
   assert.equal(result.ok, true);
-  assert.deepEqual(getSlice("M001", "S02")?.depends, ["S01"], "post: DB depends matches ROADMAP.md");
+  assert.deepEqual(getSlice("M001", "S02")?.depends, [], "post: DB depends remains authoritative");
+  assert.match(
+    readFileSync(roadmapPath, "utf-8"),
+    /- \[ \] \*\*S02: Feature\*\* `risk:medium` `depends:\[\]`/,
+    "post: ROADMAP projection is regenerated from DB depends",
+  );
   const roadmapRepaired = result.repaired.find((d) => d.kind === "roadmap-divergence");
   assert.ok(roadmapRepaired, "repaired list should include the roadmap-divergence drift");
   if (roadmapRepaired?.kind === "roadmap-divergence") {
@@ -673,13 +757,14 @@ test("ADR-017 (#5705): roadmap-divergence drift detected and DB depends synced",
   }
 });
 
-test("ADR-017 (#5705): ROADMAP declares slice missing from DB → slice inserted and drift reported", async (t) => {
+test("ADR-017 (#5705): ROADMAP-only slice is removed from projection and not inserted into DB", async (t) => {
   const base = mkdtempSync(join(tmpdir(), "gsd-adr017-roadmap-newslice-"));
   const milestoneDir = join(base, ".gsd", "milestones", "M001");
+  const roadmapPath = join(milestoneDir, "M001-ROADMAP.md");
   mkdirSync(milestoneDir, { recursive: true });
   // ROADMAP.md declares S01 and S02; DB will only have S01.
   writeFileSync(
-    join(milestoneDir, "M001-ROADMAP.md"),
+    roadmapPath,
     [
       "# M001: Test",
       "",
@@ -710,15 +795,102 @@ test("ADR-017 (#5705): ROADMAP declares slice missing from DB → slice inserted
   });
 
   assert.equal(result.ok, true);
-  const s02 = getSlice("M001", "S02");
-  assert.ok(s02, "post: S02 inserted into DB after repair");
-  assert.equal(s02?.sequence, 2, "post: S02 sequence matches ROADMAP order");
-  assert.deepEqual(s02?.depends, ["S01"], "post: S02 depends matches ROADMAP");
+  assert.equal(getSlice("M001", "S02"), null, "post: S02 still has no DB row");
+  const rendered = readFileSync(roadmapPath, "utf-8");
+  assert.match(rendered, /- \[ \] \*\*S01: Foundation\*\*/);
+  assert.doesNotMatch(rendered, /S02: Feature/, "post: ROADMAP-only S02 removed from projection");
   const roadmapRepaired = result.repaired.find((d) => d.kind === "roadmap-divergence");
   assert.ok(roadmapRepaired, "repaired list should include the roadmap-divergence drift");
   if (roadmapRepaired?.kind === "roadmap-divergence") {
     assert.equal(roadmapRepaired.milestoneId, "M001");
   }
+});
+
+test("ADR-017 (#5705): ROADMAP sequence drift re-renders from DB order without mutating DB", async (t) => {
+  const base = mkdtempSync(join(tmpdir(), "gsd-adr017-roadmap-sequence-"));
+  const milestoneDir = join(base, ".gsd", "milestones", "M001");
+  const roadmapPath = join(milestoneDir, "M001-ROADMAP.md");
+  mkdirSync(milestoneDir, { recursive: true });
+  writeFileSync(
+    roadmapPath,
+    [
+      "# M001: Test",
+      "",
+      "**Vision:** Verify sequence drift",
+      "",
+      "## Slices",
+      "",
+      "- [ ] **S02: Feature** `risk:medium` `depends:[]`",
+      "- [ ] **S01: Foundation** `risk:medium` `depends:[]`",
+      "",
+    ].join("\n"),
+  );
+  t.after(() => {
+    try { closeDatabase(); } catch { /* noop */ }
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  openDatabase(join(base, ".gsd", "gsd.db"));
+  insertMilestone({ id: "M001", title: "Test", status: "active" });
+  insertSlice({ id: "S01", milestoneId: "M001", title: "Foundation", status: "pending", risk: "medium", depends: [], demo: "", sequence: 1 });
+  insertSlice({ id: "S02", milestoneId: "M001", title: "Feature", status: "pending", risk: "medium", depends: [], demo: "", sequence: 2 });
+
+  const result = await reconcileBeforeDispatch(base, {
+    invalidateStateCache: () => {},
+    deriveState: async () => makeState(),
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(getSlice("M001", "S01")?.sequence, 1, "post: S01 DB sequence remains authoritative");
+  assert.equal(getSlice("M001", "S02")?.sequence, 2, "post: S02 DB sequence remains authoritative");
+  const rendered = readFileSync(roadmapPath, "utf-8");
+  assert.ok(
+    rendered.indexOf("S01: Foundation") < rendered.indexOf("S02: Feature"),
+    "post: ROADMAP projection follows DB sequence",
+  );
+  assert.ok(result.repaired.some((d) => d.kind === "roadmap-divergence"));
+});
+
+test("ADR-017 (#5705): ROADMAP checkbox drift re-renders from DB status without mutating DB", async (t) => {
+  const base = mkdtempSync(join(tmpdir(), "gsd-adr017-roadmap-checkbox-"));
+  const milestoneDir = join(base, ".gsd", "milestones", "M001");
+  const roadmapPath = join(milestoneDir, "M001-ROADMAP.md");
+  mkdirSync(milestoneDir, { recursive: true });
+  writeFileSync(
+    roadmapPath,
+    [
+      "# M001: Test",
+      "",
+      "**Vision:** Verify checkbox drift",
+      "",
+      "## Slices",
+      "",
+      "- [x] **S01: Foundation** `risk:medium` `depends:[]`",
+      "",
+    ].join("\n"),
+  );
+  t.after(() => {
+    try { closeDatabase(); } catch { /* noop */ }
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  openDatabase(join(base, ".gsd", "gsd.db"));
+  insertMilestone({ id: "M001", title: "Test", status: "active" });
+  insertSlice({ id: "S01", milestoneId: "M001", title: "Foundation", status: "pending", risk: "medium", depends: [], demo: "", sequence: 1 });
+
+  const result = await reconcileBeforeDispatch(base, {
+    invalidateStateCache: () => {},
+    deriveState: async () => makeState(),
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(getSlice("M001", "S01")?.status, "pending", "post: DB status remains authoritative");
+  assert.match(
+    readFileSync(roadmapPath, "utf-8"),
+    /- \[ \] \*\*S01: Foundation\*\*/,
+    "post: ROADMAP checkbox reflects DB status",
+  );
+  assert.ok(result.repaired.some((d) => d.kind === "roadmap-divergence"));
 });
 
 test("ADR-017 (#5705): in-sync ROADMAP and DB → no roadmap-divergence drift", async (t) => {
@@ -916,6 +1088,19 @@ test("ADR-017 (#5707): reconcileBeforeSpawn reports repaired drift in ok=true re
   if (result.ok) {
     assert.match(result.reason ?? "", /stale-sketch-flag/);
   }
+});
+
+test("ADR-017 (#6238): reconcileBeforeSpawn does not pass reconcile-only deps object", async () => {
+  let receivedDeps: ReconciliationDeps | undefined;
+  const result = await reconcileBeforeSpawn("/project", {
+    reconcile: async (_basePath, deps) => {
+      receivedDeps = deps;
+      return { ok: true, stateSnapshot: makeState(), repaired: [], blockers: [] };
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(receivedDeps, undefined);
 });
 
 // ─── Lifecycle and classification ────────────────────────────────────────────

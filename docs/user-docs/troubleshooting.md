@@ -42,8 +42,9 @@ It checks:
 - `.gsd/runtime/<unit-type>/<unit-id>.json` shows the latest runtime phase, timeout timestamp, recovery attempts, and progress marker. Timeout recovery uses progress kinds such as `idle-recovery-retry`, `hard-recovery-retry`, `finalize-pre-timeout`, `finalize-post-timeout`, and `finalize-success`.
 - `.gsd/journal/` shows the ordered loop events. Look for `unit-end`, then `post-unit-finalize-start`, `post-unit-finalize-end`, and `iteration-end`.
 - `post-unit-finalize-end.status` tells you whether closeout completed, retried, stopped, or failed. `iteration-end.status` and `iteration-end.reason` show the final loop outcome that caused auto mode to continue, retry, pause, or stop.
+- `.gsd/git-action-failures.log` appends each failed post-unit git action with timestamp and action mode (`commit` or `merge`) so you can inspect the exact git error that paused auto mode.
 
-**Fix:** If the runtime record shows fresh recovery progress, resume with `/gsd auto`; the failsafe defers cancellation while recovery is actively producing durable output. If the journal shows a stopped finalize reason such as a git closeout failure or repeated finalize timeout, resolve that underlying issue first, then resume.
+**Fix:** If the runtime record shows fresh recovery progress, resume with `/gsd auto`; the failsafe defers cancellation while recovery is actively producing durable output. If the journal shows a stopped finalize reason such as a git closeout failure or repeated finalize timeout, inspect `.gsd/git-action-failures.log`, resolve the underlying git issue, then resume.
 
 ### Wrong files in worktree
 
@@ -52,6 +53,29 @@ It checks:
 **Cause:** The LLM wrote to the main repo instead of the worktree.
 
 **Fix:** This was fixed in v2.14+. If you're on an older version, update. The dispatch prompt now includes explicit working directory instructions.
+
+### Milestone entry blocked by degraded worktree isolation
+
+**Symptoms:** Auto mode fails milestone entry with an isolation-degraded warning, often after a previous worktree cleanup/create problem on Windows.
+
+**Current behavior:** When isolation is configured as `worktree`, GSD now attempts a safe fallback to milestone `branch` mode instead of hard-failing immediately. Bootstrap also surfaces a specific isolation-degraded notification so the cause is visible.
+
+**Fix:**
+- Close editors, terminals, or antivirus tools that may be locking `.gsd/worktrees/*` paths.
+- Retry `/gsd auto`; if fallback succeeds, continue in branch mode for that milestone.
+- Run `/gsd doctor` after recovery to verify overall worktree health.
+
+### Windows `EPERM` / `EBUSY` while removing stale worktree directories
+
+**Symptoms:** Startup or milestone entry fails during stale worktree cleanup with `EPERM` or `EBUSY` from directory removal.
+
+**Cause:** A process still holds a handle under an old worktree path, preventing cleanup.
+
+**Current behavior:** GSD now fails with a targeted error explaining that file locks blocked cleanup and advising you to close locking tools before retrying.
+
+**Fix:**
+- Close apps that might hold file locks (editors, shells in old worktree paths, antivirus/indexers).
+- Retry the command after a short delay.
 
 ### `command not found: gsd` after install
 
@@ -134,6 +158,21 @@ If recovery still fails, repair runtime state instead of manually deleting indiv
 **Symptoms:** Worktree merge fails on `.gsd/` files.
 
 **Fix:** GSD auto-resolves conflicts on `.gsd/` runtime files. For content conflicts in code files, the LLM is given an opportunity to resolve them via a fix-merge session. If that fails, manual resolution is needed.
+
+### Auto mode stops before merge with preflight conflict/overlap errors
+
+**Symptoms:** Auto mode stops with a pre-merge reason like unresolved Git conflicts or dirty working tree overlap.
+
+**What it means:** Milestone merge preflight now fail-closes before merge when either:
+- the repo already has unresolved conflict stages (`git diff --name-only --diff-filter=U` is non-empty), or
+- local dirty files overlap files modified by the milestone branch.
+
+In these states GSD does not auto-stash and does not auto-fix; it stops so you can resolve safely.
+
+**Fix:**
+- Resolve conflict markers and stage the resolved files.
+- Commit, stash, or discard overlapping local edits outside GSD.
+- Re-run `/gsd auto` after `git status` is clean (or at least free of overlapping/conflicted paths).
 
 ### Pre-dispatch says the milestone integration branch no longer exists
 
@@ -399,6 +438,14 @@ For non-TTY environments (CI, cron, scripted automation), v2.79 adds `gsd headle
 **Cause:** A description-like string (e.g., `All 10 checks pass (build, lint)`) was treated as a shell command. This can happen when task plans have `verify:` fields with prose instead of actual commands.
 
 **Fix:** Updated in v2.29+ to filter preference commands through `isLikelyCommand()`. Ensure `verification_commands` in preferences contains only valid shell commands, not descriptions.
+
+### Verification command is rejected as unsafe or non-runnable
+
+**Symptoms:** Pre-execution checks fail with `Unsafe or non-runnable Verify command`, often for a command that works in an interactive shell.
+
+**Cause:** GSD only accepts mechanically executable verification commands. Shell control syntax such as pipes (`|`), redirects (`>` or `<`), semicolons, backticks, and command substitution (`$(...)`) is rejected so verification cannot hide failures by trimming or reshaping output.
+
+**Fix:** Put the direct check in the verify field or `verification_commands`. For example, use `python3 -m pytest tests -q --tb=short` instead of `python3 -m pytest tests -q --tb=short 2>&1 | tail -5`.
 
 ## LSP (Language Server Protocol)
 

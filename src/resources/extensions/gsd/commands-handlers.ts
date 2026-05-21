@@ -123,6 +123,8 @@ export async function handleDoctor(args: string, ctx: ExtensionCommandContext, p
   const { jsonMode, dryRun, fixFlag, includeBuild, includeTests, mode, requestedScope } = parseDoctorArgs(args);
   const scope = await selectDoctorScope(projectRoot(), requestedScope);
   const effectiveScope = mode === "audit" ? requestedScope : scope;
+  const { ensureDbOpen } = await import("./bootstrap/dynamic-tools.js");
+  await ensureDbOpen(projectRoot());
   const report = await runGSDDoctor(projectRoot(), {
     fix: mode === "fix" || mode === "heal" || dryRun || fixFlag,
     dryRun,
@@ -368,8 +370,25 @@ export async function handleKnowledge(args: string, ctx: ExtensionCommandContext
     ? `${state.activeMilestone.id}${state.activeSlice ? `/${state.activeSlice.id}` : ""}`
     : "global";
 
-  await appendKnowledge(basePath, type, entryText, scope);
-  ctx.ui.notify(`Added ${type} to KNOWLEDGE.md: "${entryText}"`, "success");
+  // ADR-013 Stage 2c: Patterns and Lessons land in the memories table; the
+  // next session-start projection render emits them back into KNOWLEDGE.md.
+  // Rules stay file-canonical per ADR-013 line 39 — Rules are not migrated.
+  if (type === "rule") {
+    await appendKnowledge(basePath, type, entryText, scope);
+    ctx.ui.notify(`Added rule to KNOWLEDGE.md: "${entryText}"`, "success");
+    return;
+  }
+
+  const { captureKnowledgeEntry } = await import("./knowledge-capture.js");
+  const { id, written } = captureKnowledgeEntry(basePath, type, entryText, scope);
+  if (!written) {
+    ctx.ui.notify(`Could not persist ${type} — see logs for details.`, "error");
+    return;
+  }
+  ctx.ui.notify(
+    `Captured ${type} ${id} to memories; KNOWLEDGE.md will render it on next session start.`,
+    "success",
+  );
 }
 
 export async function handleRunHook(args: string, ctx: ExtensionCommandContext, pi: ExtensionAPI): Promise<void> {

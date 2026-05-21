@@ -22,6 +22,7 @@ import type { IterationContext, LoopState, PreDispatchData, IterationData } from
 import type { SessionLockStatus } from "../session-lock.js";
 import { runDispatch, runUnitPhase, runPreDispatch, runFinalize } from "../auto/phases.js";
 import { readUnitRuntimeRecord } from "../unit-runtime.js";
+import { ModelPolicyDispatchBlockedError } from "../auto-model-selection.js";
 import {
   closeDatabase,
   insertMilestone,
@@ -160,6 +161,8 @@ function makeIC(
     pi: {
       sendMessage: () => {},
       setModel: async () => true,
+      getThinkingLevel: () => "off",
+      setThinkingLevel: () => {},
     } as any,
     s: makeSession(),
     deps,
@@ -333,7 +336,7 @@ test("runDispatch checks prior-slice completion against the project root in work
   ]);
 });
 
-test("runDispatch pauses when complete-milestone summary exists on disk but the unit is still stuck (#4289)", async (t) => {
+test("runDispatch retries when complete-milestone summary exists on disk and stuck recovery can proceed (#4289)", async (t) => {
   const capture = createEventCapture();
   let pauseCalls = 0;
   let stopCalls = 0;
@@ -396,10 +399,9 @@ test("runDispatch pauses when complete-milestone summary exists on disk but the 
     consecutiveFinalizeTimeouts: 0,
   });
 
-  assert.equal(result.action, "break");
-  assert.equal((result as any).reason, "complete-milestone-artifact-db-mismatch");
-  assert.equal(pauseCalls, 1, "complete-milestone disk/db mismatch should pause auto-mode");
-  assert.equal(stopCalls, 0, "mismatch pause should not hard-stop the loop");
+  assert.equal(result.action, "continue");
+  assert.equal(pauseCalls, 0, "artifact-based recovery should retry before pausing");
+  assert.equal(stopCalls, 0, "artifact-based recovery should not hard-stop the loop");
 });
 
 test("runDispatch pauses when execute-task artifacts exist but DB status is still open", async (t) => {
@@ -633,7 +635,7 @@ test("runDispatch clears execute-task stuck state when artifacts and DB status a
   assert.equal(stopCalls, 0, "closed DB task should not hard-stop the loop");
   assert.equal(invalidateCalls, 1, "closed DB task recovery should invalidate caches once");
   assert.deepEqual(loopState.recentUnits, [], "closed DB task recovery should clear the stuck window");
-  assert.equal(loopState.stuckRecoveryAttempts, 0, "closed DB task recovery should reset the recovery counter");
+  assert.equal(loopState.stuckRecoveryAttempts, 1, "closed DB task recovery should preserve the recovery counter");
 });
 
 test("runDispatch clears stuck state after Level 1 artifact recovery", async (t) => {
@@ -700,7 +702,7 @@ test("runDispatch clears stuck state after Level 1 artifact recovery", async (t)
   assert.equal(invalidateCalls, 1, "Level 1 artifact recovery should invalidate caches");
   assert.equal(stopCalls, 0, "Level 1 artifact recovery should not hard-stop");
   assert.deepEqual(loopState.recentUnits, [], "Level 1 artifact recovery should clear the stuck window");
-  assert.equal(loopState.stuckRecoveryAttempts, 0, "Level 1 artifact recovery should reset the recovery counter");
+  assert.equal(loopState.stuckRecoveryAttempts, 1, "Level 1 artifact recovery should preserve the recovery counter");
 });
 
 test("runDispatch escapes Level 2 stuck stop when artifact verifies after cache invalidation", async (t) => {
@@ -767,7 +769,7 @@ test("runDispatch escapes Level 2 stuck stop when artifact verifies after cache 
   assert.equal(invalidateCalls, 1, "Level 2 escape should invalidate caches before rechecking artifacts");
   assert.equal(stopCalls, 0, "verified artifacts should escape Level 2 hard stop");
   assert.deepEqual(loopState.recentUnits, [], "Level 2 artifact escape should clear the stuck window");
-  assert.equal(loopState.stuckRecoveryAttempts, 0, "Level 2 artifact escape should reset the recovery counter");
+  assert.equal(loopState.stuckRecoveryAttempts, 1, "Level 2 artifact escape should preserve the recovery counter");
 });
 
 test("runUnitPhase emits unit-start and unit-end with causedBy reference", async () => {
@@ -825,7 +827,7 @@ test("runUnitPhase emits unit-start and unit-end with causedBy reference", async
   assert.equal(endEvents[0].flowId, ic.flowId);
   assert.equal((endEvents[0].data as any).unitType, "execute-task");
   assert.equal((endEvents[0].data as any).unitId, "M001/S01/T01");
-  assert.equal((endEvents[0].data as any).status, "completed");
+  assert.equal((endEvents[0].data as any).status, "no-artifact");
 
   // Verify causedBy: unit-end references unit-start's seq
   assert.ok(endEvents[0].causedBy, "unit-end must have a causedBy reference");
@@ -866,6 +868,49 @@ test("runUnitPhase increments unitDispatchCount for repeated artifact-missing re
   resolveAgentEnd({ messages: [{ role: "assistant" }] });
   await secondRun;
   assert.equal(ic.s.unitDispatchCount.get("execute-task/M001/S01/T01"), 2);
+});
+
+test("runUnitPhase pre-dispatch model validation failures do not emit unit-start or dispatch runtime state", async (t) => {
+  const capture = createEventCapture();
+  const base = mkdtempSync(join(tmpdir(), `gsd-pre-dispatch-block-${randomUUID()}`));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+
+  const deps = makeMockDeps(capture, {
+    selectAndApplyModel: async () => {
+      throw new ModelPolicyDispatchBlockedError("execute-task", "M001/S01/T01", []);
+    },
+  });
+  const ic = makeIC(deps, {
+    s: {
+      ...makeSession(),
+      basePath: base,
+    } as any,
+  });
+  const iterData: IterationData = {
+    unitType: "execute-task",
+    unitId: "M001/S01/T01",
+    prompt: "do stuff",
+    finalPrompt: "do stuff",
+    pauseAfterUatDispatch: false,
+    state: { phase: "executing", activeMilestone: { id: "M001" }, activeSlice: { id: "S01" }, registry: [], blockers: [] } as any,
+    mid: "M001",
+    midTitle: "Test",
+    isRetry: false,
+    previousTier: undefined,
+  };
+  const loopState: LoopState = { recentUnits: [{ key: "execute-task/M001/S01/T01" }], stuckRecoveryAttempts: 0, consecutiveFinalizeTimeouts: 0 };
+
+  await assert.rejects(() => runUnitPhase(ic, iterData, loopState), ModelPolicyDispatchBlockedError);
+  await assert.rejects(() => runUnitPhase(ic, iterData, loopState), ModelPolicyDispatchBlockedError);
+
+  const startEvents = capture.events.filter(e => e.eventType === "unit-start");
+  assert.equal(startEvents.length, 0, "pre-dispatch validation failures must not emit unit-start");
+  assert.equal(ic.s.unitDispatchCount.get("execute-task/M001/S01/T01") ?? 0, 0, "dispatch count must not increment on pre-dispatch validation failure");
+  assert.equal(
+    readUnitRuntimeRecord(base, "execute-task", "M001/S01/T01"),
+    null,
+    "pre-dispatch validation failures must not persist a dispatched runtime record",
+  );
 });
 
 test("all events from a mock iteration have monotonically increasing seq and same flowId", async () => {

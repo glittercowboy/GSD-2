@@ -185,7 +185,7 @@ gsd headless prefs
 
 ### `knowledge <rule|pattern|lesson>`
 
-Add persistent project knowledge.
+Add persistent project knowledge. Rules append to `KNOWLEDGE.md`; patterns and lessons are captured as memories and projected back into `KNOWLEDGE.md`.
 
 ```bash
 gsd headless knowledge "Always use UTC timestamps in API responses"

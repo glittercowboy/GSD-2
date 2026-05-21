@@ -54,6 +54,7 @@ const DISCUSS_REQUIRED_TOOLS = [
   "gsd_decision_save",         // discuss.md output phase
   "gsd_plan_milestone",        // discuss.md output phase (single + multi milestone)
   "gsd_milestone_generate_id", // discuss.md multi-milestone Phase 1
+  "gsd_requirement_save",      // discuss-headless.md capability contract creation
   "gsd_requirement_update",    // used during discuss for requirement updates
 ];
 

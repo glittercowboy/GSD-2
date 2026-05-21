@@ -19,6 +19,7 @@ import { tmpdir } from "node:os";
 
 import {
   closeDatabase,
+  insertDecision,
   openDatabase,
 } from "../gsd-db.ts";
 import { saveDecisionToDb } from "../db-writer.ts";
@@ -59,8 +60,10 @@ async function seedDecision(
     made_by?: "human" | "agent" | "collaborative";
   },
 ): Promise<string> {
-  // saveDecisionToDb dual-writes to both `decisions` and `memories` per ADR-013
-  // Phase 5 — exactly the steady state this parity test depends on.
+  // saveDecisionToDb writes ONLY to memories post-Stage-3. For parity tests
+  // comparing the legacy `queryDecisions` against `queryDecisionsFromMemories`,
+  // mirror the same row into the legacy decisions table directly so both
+  // surfaces hold the same data and the parity assertion is well-defined.
   const result = await saveDecisionToDb(
     {
       when_context: fields.when_context,
@@ -73,6 +76,17 @@ async function seedDecision(
     },
     base,
   );
+  insertDecision({
+    id: result.id,
+    when_context: fields.when_context,
+    scope: fields.scope,
+    decision: fields.decision,
+    choice: fields.choice,
+    rationale: fields.rationale,
+    revisable: fields.revisable ?? "Yes",
+    made_by: fields.made_by ?? "agent",
+    superseded_by: null,
+  });
   return result.id;
 }
 

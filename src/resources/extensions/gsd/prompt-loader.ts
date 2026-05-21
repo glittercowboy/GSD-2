@@ -200,7 +200,7 @@ export function loadPrompt(name: string, vars: Record<string, string> = {}): str
     if (missing.length > 0) {
       throw new GSDError(
         GSD_PARSE_ERROR,
-        `loadPrompt("${name}"): template declares {{${missing.join("}}, {{")}}}} but no value was provided. ` +
+        `loadPrompt("${name}"): template declares {{${missing.join("}}, {{")}}} but no value was provided. ` +
         `This usually means the extension code in memory is older than the template on disk. ` +
         `Restart pi to reload the extension.`,
       );

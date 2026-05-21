@@ -14,7 +14,7 @@
 | `/gsd discuss` | Discuss architecture and decisions (works alongside auto mode) |
 | `/gsd status` | Progress dashboard |
 | `/gsd widget` | Cycle dashboard widget: full / small / min / off |
-| `/gsd queue` | Queue and reorder future milestones (safe during auto mode) |
+| `/gsd queue` | Queue and reorder future milestones (`pending`, `queued`, and legacy `planned`; safe during auto mode) |
 | `/gsd capture` | Fire-and-forget thought capture (works during auto mode) |
 | `/gsd triage` | Manually trigger triage of pending captures |
 | `/gsd debug` | Create and inspect persistent /gsd debug sessions |
@@ -27,19 +27,45 @@
 | `/gsd forensics` | Full-access GSD debugger — structured anomaly detection, unit traces, and LLM-guided root-cause analysis for auto-mode failures |
 | `/gsd cleanup` | Clean up GSD state files and stale worktrees |
 | `/gsd worktree` (`/gsd wt`) | Manage GSD worktrees from the TUI |
-| `/gsd visualize` | Open workflow visualizer (progress, deps, metrics, timeline) |
+| `/gsd visualize` | Open workflow visualizer (progress, timeline, deps, metrics, health, agent, changes, knowledge, captures, export) |
+| `/gsd brief <mode> [topic] [--slides]` | Generate a self-contained visual HTML brief. Modes: `diagram`, `plan`, `diff`, `recap`, `table`, `slides`. |
 | `/gsd export --html` | Generate self-contained HTML report for current or completed milestone |
 | `/gsd export --html --all` | Generate retrospective reports for all milestones at once |
 | `/gsd update` | Update GSD to the latest version in-session |
-| `/gsd knowledge` | Add persistent project knowledge (rule, pattern, or lesson) |
+| `/gsd knowledge` | Add persistent project knowledge. Rules remain manually maintained in `KNOWLEDGE.md`; patterns and lessons are memory-backed and projected into the file on the next session start. |
 | `/gsd eval-review <sliceId>` | Audit a slice's AI evaluation strategy and write a scored `<sliceId>-EVAL-REVIEW.md`. Flags: `--force` overwrites; `--show` prints the existing audit. See [eval-review](eval-review.md). |
-| `/gsd extract-learnings <MID>` | Extract structured Decisions, Lessons, Patterns, and Surprises from a completed milestone — writes `<MID>-LEARNINGS.md` audit trail, appends Patterns and Lessons to `.gsd/KNOWLEDGE.md`, and persists Decisions via the DECISIONS database. Runs automatically at milestone completion. |
+| `/gsd extract-learnings <MID>` | Extract structured Decisions, Lessons, Patterns, and Surprises from a completed milestone — writes `<MID>-LEARNINGS.md` audit trail, persists durable knowledge through the memory/decision stores, and projects reviewable knowledge into `.gsd/KNOWLEDGE.md` on the next session start. Runs automatically at milestone completion. |
 | `/gsd fast` | Toggle service tier for supported models (prioritized API routing) |
 | `/gsd rate` | Rate last unit's model tier (over/ok/under) — improves adaptive routing |
 | `/gsd changelog` | Show categorized release notes |
 | `/gsd logs` | Browse activity logs, debug logs, and metrics |
 | `/gsd remote` | Control remote auto-mode |
 | `/gsd help` | Categorized command reference with descriptions for all GSD subcommands |
+
+`/gsd discuss` supports optional direct targets: `/gsd discuss M014`, `/gsd discuss M014/S03`, `/gsd discuss --milestone M014`, and `/gsd discuss --slice M014/S03`.
+
+## Visual Briefs
+
+`/gsd brief` asks the agent to gather evidence and write a single responsive HTML artifact for visual review, planning, recap, or presentation. Usage:
+
+```text
+/gsd brief <diagram|plan|diff|recap|table|slides> [topic] [--slides]
+```
+
+Modes:
+
+| Mode | Use it for |
+|------|------------|
+| `diagram` | System, architecture, flow, state, data, or process diagrams. If the first argument is not a known mode, GSD treats the whole request as a diagram topic. |
+| `plan` | Visual implementation plans with scope, likely files, edge cases, risks, and tests. |
+| `diff` | Visual reviews of current staged and unstaged repository changes. If no topic is supplied, it reviews the current repository changes. |
+| `recap` | Context-switching project recaps. If no topic is supplied, it recaps the current project. |
+| `table` | Dense comparisons, audits, matrices, and status reports as readable HTML tables. |
+| `slides` | A concise visual deck. Passing `--slides` with another mode also requests slide-deck output. |
+
+Artifacts are written under the GSD agent directory's `diagrams/` folder with a descriptive kebab-case `.html` filename. The generated file is self-contained with embedded CSS and minimal JavaScript; it may use CDN libraries such as Mermaid for diagrams, but must keep useful written context if a CDN fails.
+
+After writing the file, GSD attempts to open it in a browser using the local platform opener (`open` on macOS, `xdg-open` on Linux, or `cmd /c start` on Windows). If browser opening is unavailable or fails, the command reports the absolute file path.
 
 ## Configuration & Diagnostics
 
@@ -51,7 +77,7 @@
 | `/gsd keys` | API key manager — list, add, remove, test, rotate, doctor |
 | `/gsd doctor` | Runtime health checks with auto-fix — issues surface in real time across widget, visualizer, and HTML reports (v2.40) |
 | `/gsd inspect` | Show SQLite DB diagnostics |
-| `/gsd init` | Project init wizard — detect, configure, bootstrap `.gsd/` |
+| `/gsd init` | Project init wizard — detect, configure, bootstrap `.gsd/`; if `.gsd/` already exists, opens an "Already Initialized" menu with `Re-configure preferences`, `Suggest & install skills`, or `Cancel` |
 | `/gsd setup` | Global setup status and configuration |
 | `/gsd skill-health` | Skill lifecycle dashboard — usage stats, success rates, token trends, staleness warnings |
 | `/gsd skill-health <name>` | Detailed view for a single skill |
@@ -75,6 +101,8 @@
 | `/gsd park` | Park a milestone — skip without deleting |
 | `/gsd unpark` | Reactivate a parked milestone |
 | Discard milestone | Available via `/gsd` wizard → "Milestone actions" → "Discard" |
+
+Milestone and slice titles created during planning must not contain forward slash (`/`), en dash, or em dash characters. GSD reserves those characters as state-document delimiters, so `plan-milestone` rejects titles that include them.
 
 ## Parallel Orchestration
 
@@ -179,6 +207,12 @@ Install sources are auto-detected: starts with `http(s)://` or ends with `.git` 
 | `/gsd cmux notifications on/off` | Toggle cmux desktop notifications |
 | `/gsd cmux sidebar on/off` | Toggle cmux sidebar metadata |
 | `/gsd cmux splits on/off` | Toggle cmux visual subagent splits |
+
+## Subagents
+
+| Command | Description |
+|---------|-------------|
+| `/subagent` | List available user and project subagents. Run records, status checks, and follow-up resume are handled through the `subagent` tool; see [Subagents](./subagents.md). |
 
 ## GitHub Sync (v2.39)
 

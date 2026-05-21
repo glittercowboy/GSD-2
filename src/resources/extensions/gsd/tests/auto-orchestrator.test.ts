@@ -3,10 +3,24 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import { createAutoOrchestrator } from "../auto/orchestrator.js";
+import { createAutoOrchestrator, STUCK_WINDOW_SIZE } from "../auto/orchestrator.js";
 import type { AutoOrchestratorDeps } from "../auto/contracts.js";
 import type { GSDState } from "../types.js";
+import { createWiredDispatchAdapter, resolveLiveOrchestratorBasePath } from "../auto.js";
+import { resolveDispatch, type DispatchContext } from "../auto-dispatch.js";
+import { RuleRegistry, setRegistry, resetRegistry } from "../rule-registry.js";
+import type { UnifiedRule } from "../rule-types.js";
+import { supportsStructuredQuestions } from "../workflow-mcp.js";
+
+function assertBlockedResult(
+  result: Awaited<ReturnType<ReturnType<typeof createAutoOrchestrator>["advance"]>>,
+): asserts result is Extract<typeof result, { kind: "blocked" }> {
+  assert.equal(result.kind, "blocked");
+}
 
 function makeState(): GSDState {
   return {
@@ -62,9 +76,13 @@ function makeDeps(overrides: Partial<AutoOrchestratorDeps> = {}): { deps: AutoOr
       async cleanupOnStop() { calls.push("worktree.cleanup"); },
     },
     health: {
+      checkResourcesStale() {
+        calls.push("health.stale");
+        return null;
+      },
       async preAdvanceGate() {
         calls.push("health.pre");
-        return { allow: true };
+        return { kind: "pass" };
       },
       async postAdvanceRecord() { calls.push("health.post"); },
     },
@@ -75,29 +93,33 @@ function makeDeps(overrides: Partial<AutoOrchestratorDeps> = {}): { deps: AutoOr
     notifications: {
       async notifyLifecycle(event) { calls.push(`notify:${event.name}`); },
     },
+    uokGate: {
+      async emit(input) { calls.push(`gate:${input.gateId}:${input.outcome}`); },
+    },
   };
 
   return { deps: { ...deps, ...overrides }, calls };
 }
 
-test("start() advances and records active unit", async () => {
+test("start() enters running phase without dispatching", async () => {
   const { deps, calls } = makeDeps();
   const orchestrator = createAutoOrchestrator(deps);
 
   const result = await orchestrator.start({ basePath: "/tmp/project", trigger: "manual" });
 
-  assert.equal(result.kind, "advanced");
+  assert.equal(result.kind, "started");
   const status = orchestrator.getStatus();
   assert.equal(status.phase, "running");
-  assert.deepEqual(status.activeUnit, { unitType: "execute-task", unitId: "T01" });
+  assert.equal(status.activeUnit, undefined);
   assert.ok(calls.includes("journal:start"));
-  assert.ok(calls.includes("journal:advance"));
+  assert.ok(!calls.includes("journal:advance"));
 });
 
 test("advance() returns blocked when health gate denies", async () => {
-  const { deps } = makeDeps({
+  const { deps, calls } = makeDeps({
     health: {
-      async preAdvanceGate() { return { allow: false, reason: "doctor-block" }; },
+      checkResourcesStale: () => null,
+      async preAdvanceGate() { return { kind: "fail", reason: "doctor-block" }; },
       async postAdvanceRecord() {},
     },
   });
@@ -105,8 +127,146 @@ test("advance() returns blocked when health gate denies", async () => {
 
   const result = await orchestrator.advance();
 
-  assert.equal(result.kind, "blocked");
+  assertBlockedResult(result);
   assert.equal(result.reason, "doctor-block");
+  assert.equal(result.action, "pause");
+  assert.ok(calls.includes("gate:pre-dispatch-health-gate:manual-attention"));
+});
+
+test("advance() returns blocked pause when resources are stale", async () => {
+  const { deps, calls } = makeDeps({
+    health: {
+      checkResourcesStale: () => "resources changed since session start",
+      async preAdvanceGate() { return { kind: "pass" }; },
+      async postAdvanceRecord() {},
+    },
+  });
+  const orchestrator = createAutoOrchestrator(deps);
+
+  const result = await orchestrator.advance();
+
+  assertBlockedResult(result);
+  assert.equal(result.reason, "resources changed since session start");
+  assert.equal(result.action, "pause");
+  assert.ok(calls.includes("gate:resource-version-guard:fail"));
+  assert.ok(!calls.includes("health.pre"));
+  assert.ok(!calls.includes("state.reconcile"));
+});
+
+test("advance() pre-dispatch parity: gate emissions and control-flow action match legacy branches", async () => {
+  type Scenario = {
+    name: string;
+    staleMsg: string | null;
+    gateResult: Awaited<ReturnType<AutoOrchestratorDeps["health"]["preAdvanceGate"]>>;
+    expectedKind: "advanced" | "blocked";
+    expectedAction?: "pause" | "stop";
+    expectedReason?: string;
+    expectedGates: string[];
+  };
+  const scenarios: Scenario[] = [
+    {
+      name: "pass",
+      staleMsg: null,
+      gateResult: { kind: "pass" },
+      expectedKind: "advanced",
+      expectedGates: [
+        "resource-version-guard:policy:pass:none:resource version guard passed:",
+        "pre-dispatch-health-gate:execution:pass:none:pre-dispatch health gate passed:",
+      ],
+    },
+    {
+      name: "resource-stale",
+      staleMsg: "resources changed since session start",
+      gateResult: { kind: "pass" },
+      expectedKind: "blocked",
+      expectedAction: "pause",
+      expectedReason: "resources changed since session start",
+      expectedGates: [
+        "resource-version-guard:policy:fail:policy:resource version guard blocked dispatch:resources changed since session start",
+      ],
+    },
+    {
+      name: "health-gate-fail",
+      staleMsg: null,
+      gateResult: { kind: "fail", reason: "doctor-block" },
+      expectedKind: "blocked",
+      expectedAction: "pause",
+      expectedReason: "doctor-block",
+      expectedGates: [
+        "resource-version-guard:policy:pass:none:resource version guard passed:",
+        "pre-dispatch-health-gate:execution:manual-attention:manual-attention:pre-dispatch health gate blocked dispatch:doctor-block",
+      ],
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    const gateEvents: string[] = [];
+    const { deps } = makeDeps({
+      health: {
+        checkResourcesStale: () => scenario.staleMsg,
+        async preAdvanceGate() { return scenario.gateResult; },
+        async postAdvanceRecord() {},
+      },
+      uokGate: {
+        async emit(input) {
+          gateEvents.push(
+            `${input.gateId}:${input.gateType}:${input.outcome}:${input.failureClass}:${input.rationale}:${input.findings ?? ""}`,
+          );
+        },
+      },
+    });
+    const orchestrator = createAutoOrchestrator(deps);
+    const result = await orchestrator.advance();
+
+    assert.equal(result.kind, scenario.expectedKind, `${scenario.name} result kind`);
+    if (scenario.expectedKind === "blocked") {
+      assertBlockedResult(result);
+      assert.equal(result.action, scenario.expectedAction, `${scenario.name} blocked action`);
+      assert.equal(result.reason, scenario.expectedReason, `${scenario.name} blocked reason`);
+    }
+    assert.deepEqual(gateEvents, scenario.expectedGates, `${scenario.name} gate parity`);
+  }
+});
+
+test("advance() continues past pre-dispatch health gate when it throws", async () => {
+  const { deps, calls } = makeDeps({
+    health: {
+      checkResourcesStale: () => null,
+      async preAdvanceGate() { return { kind: "threw", error: new Error("boom") }; },
+      async postAdvanceRecord() {},
+    },
+  });
+  const orchestrator = createAutoOrchestrator(deps);
+
+  const result = await orchestrator.advance();
+
+  assert.equal(result.kind, "advanced");
+  assert.ok(calls.includes("gate:pre-dispatch-health-gate:manual-attention"));
+  assert.ok(calls.includes("state.reconcile"));
+  assert.ok(calls.includes("dispatch.decide"));
+});
+
+test("advance() forwards fixesApplied into pre-dispatch-health-gate pass findings", async () => {
+  let observed = "";
+  const { deps } = makeDeps({
+    health: {
+      checkResourcesStale: () => null,
+      async preAdvanceGate() { return { kind: "pass", fixesApplied: ["fix-a", "fix-b"] }; },
+      async postAdvanceRecord() {},
+    },
+    uokGate: {
+      async emit(input) {
+        if (input.gateId === "pre-dispatch-health-gate" && input.outcome === "pass") {
+          observed = input.findings ?? "";
+        }
+      },
+    },
+  });
+  const orchestrator = createAutoOrchestrator(deps);
+
+  await orchestrator.advance();
+
+  assert.equal(observed, "fix-a, fix-b");
 });
 
 test("advance() follows the ADR-015 invariant sequence before journaling advance", async () => {
@@ -116,9 +276,13 @@ test("advance() follows the ADR-015 invariant sequence before journaling advance
   const result = await orchestrator.advance();
 
   assert.equal(result.kind, "advanced");
+  assert.deepEqual(result.unit, { unitType: "execute-task", unitId: "T01" });
   assert.deepEqual(calls, [
     "runtime.lock",
+    "health.stale",
+    "gate:resource-version-guard:pass",
     "health.pre",
+    "gate:pre-dispatch-health-gate:pass",
     "state.reconcile",
     "dispatch.decide",
     "tool.compile",
@@ -142,8 +306,9 @@ test("advance() blocks before dispatch when State Reconciliation blocks", async 
 
   const result = await orchestrator.advance();
 
-  assert.equal(result.kind, "blocked");
+  assertBlockedResult(result);
   assert.equal(result.reason, "state drift blocked");
+  assert.equal(result.action, "pause");
   assert.ok(!calls.includes("dispatch.decide"));
   assert.ok(calls.includes("journal:advance-blocked"));
 });
@@ -161,8 +326,9 @@ test("advance() blocks before Runtime persistence when Tool Contract fails", asy
 
   const result = await orchestrator.advance();
 
-  assert.equal(result.kind, "blocked");
+  assertBlockedResult(result);
   assert.equal(result.reason, "unknown Unit");
+  assert.equal(result.action, "pause");
   assert.ok(!calls.includes("worktree.prepare"));
   assert.ok(!calls.includes("journal:advance"));
   assert.ok(calls.includes("journal:advance-blocked"));
@@ -183,11 +349,32 @@ test("advance() blocks before Runtime persistence when Worktree Safety fails", a
 
   const result = await orchestrator.advance();
 
-  assert.equal(result.kind, "blocked");
+  assertBlockedResult(result);
   assert.equal(result.reason, "worktree invalid");
+  assert.equal(result.action, "pause");
   assert.ok(!calls.includes("journal:advance"));
   assert.ok(!calls.includes("worktree.sync"));
   assert.ok(calls.includes("journal:advance-blocked"));
+});
+
+test("advance() allows non-worktree isolation prepare result", async () => {
+  const { deps, calls } = makeDeps({
+    worktree: {
+      async prepareForUnit() {
+        calls.push("worktree.prepare");
+        return { ok: true, reason: "isolation-not-worktree" };
+      },
+      async syncAfterUnit() { calls.push("worktree.sync"); },
+      async cleanupOnStop() { calls.push("worktree.cleanup"); },
+    },
+  });
+  const orchestrator = createAutoOrchestrator(deps);
+
+  const result = await orchestrator.advance();
+
+  assert.equal(result.kind, "advanced");
+  assert.ok(calls.includes("journal:advance"));
+  assert.ok(calls.includes("worktree.sync"));
 });
 
 test("advance() stops when dispatch has no next unit", async () => {
@@ -202,6 +389,88 @@ test("advance() stops when dispatch has no next unit", async () => {
 
   assert.equal(result.kind, "stopped");
   assert.equal(orchestrator.getStatus().phase, "stopped");
+});
+
+test("advance() reports completion when complete state has no next unit", async () => {
+  const completeState: GSDState = {
+    ...makeState(),
+    activeMilestone: null,
+    phase: "complete",
+    lastCompletedMilestone: { id: "M001", title: "Milestone" },
+    nextAction: "All milestones complete.",
+  };
+  const { deps } = makeDeps({
+    stateReconciliation: {
+      async reconcileBeforeDispatch() {
+        return { ok: true, stateSnapshot: completeState };
+      },
+    },
+    dispatch: {
+      async decideNextUnit() { return null; },
+    },
+  });
+  const orchestrator = createAutoOrchestrator(deps);
+
+  const result = await orchestrator.advance();
+
+  assert.equal(result.kind, "stopped");
+  assert.equal(result.reason, "all milestones complete");
+});
+
+test("advance() keeps running when dispatch intentionally skips a phase", async () => {
+  const { deps, calls } = makeDeps({
+    dispatch: {
+      async decideNextUnit() {
+        return { kind: "skipped", reason: "evaluating-gates skipped after marking gates omitted" };
+      },
+    },
+  });
+  const orchestrator = createAutoOrchestrator(deps);
+
+  const result = await orchestrator.advance();
+
+  assert.equal(result.kind, "skipped");
+  if (result.kind !== "skipped") return;
+  assert.equal(result.reason, "evaluating-gates skipped after marking gates omitted");
+  assert.equal(orchestrator.getStatus().phase, "running");
+  assert.ok(calls.includes("journal:advance-skipped"));
+  assert.ok(!calls.includes("journal:advance-stopped"));
+});
+
+test("advance() surfaces dispatch blocker reason instead of generic no remaining units", async () => {
+  const { deps, calls } = makeDeps({
+    dispatch: {
+      async decideNextUnit() {
+        return {
+          kind: "blocked",
+          reason: "Milestone M001 validation verdict is needs-remediation but all slices are complete.",
+          action: "pause",
+        };
+      },
+    },
+  });
+  const orchestrator = createAutoOrchestrator(deps);
+
+  const result = await orchestrator.advance();
+
+  assert.equal(result.kind, "blocked");
+  if (result.kind !== "blocked") return;
+  assert.equal(result.reason, "Milestone M001 validation verdict is needs-remediation but all slices are complete.");
+  assert.equal(result.action, "pause");
+  assert.ok(calls.includes("journal:advance-blocked"));
+  assert.ok(!calls.includes("journal:advance-stopped"));
+});
+
+test("resume() enters running phase without dispatching", async () => {
+  const { deps, calls } = makeDeps();
+  const orchestrator = createAutoOrchestrator(deps);
+
+  const result = await orchestrator.resume();
+
+  assert.equal(result.kind, "resumed");
+  assert.equal(orchestrator.getStatus().phase, "running");
+  assert.ok(!calls.includes("journal:advance"));
+  assert.ok(!calls.includes("dispatch.decide"));
 });
 
 test("advance() uses recovery on error", async () => {
@@ -232,20 +501,86 @@ test("advance() is idempotent for the same active unit", async () => {
   const second = await orchestrator.advance();
 
   assert.equal(first.kind, "advanced");
+  assert.deepEqual(first.unit, { unitType: "execute-task", unitId: "T01" });
   assert.equal(second.kind, "blocked");
   assert.equal(second.reason, "idempotent advance: unit already active");
+  assert.equal(second.action, "pause");
 
   const prepareCalls = calls.filter((c) => c === "worktree.prepare").length;
   assert.equal(prepareCalls, 1);
 });
 
-test("resume() re-enters running flow via advance", async () => {
+test("completeActiveUnit clears in-flight idempotency and stops stale same-unit advance", async () => {
+  const { deps, calls } = makeDeps();
+  const orchestrator = createAutoOrchestrator(deps);
+
+  const first = await orchestrator.advance();
+  assert.equal(first.kind, "advanced");
+  if (first.kind !== "advanced") throw new Error("expected first advance");
+
+  await orchestrator.completeActiveUnit(first.unit);
+  const second = await orchestrator.advance();
+
+  assert.equal(orchestrator.getStatus().activeUnit, undefined);
+  assert.equal(second.kind, "blocked");
+  if (second.kind !== "blocked") throw new Error("expected stale same-unit block");
+  assert.equal(second.action, "stop");
+  assert.equal(second.reason, "state did not advance after finalized execute-task T01");
+  assert.ok(calls.includes("journal:unit-finalized"));
+  const prepareCalls = calls.filter((c) => c === "worktree.prepare").length;
+  assert.equal(prepareCalls, 1, "stale same-unit advance must not prepare or redispatch");
+});
+
+test("completeActiveUnit allows a different next unit to advance", async () => {
+  let nextTaskId = "T01";
+  const { deps } = makeDeps({
+    dispatch: {
+      async decideNextUnit() {
+        return { unitType: "execute-task", unitId: nextTaskId, reason: "ready", preconditions: [] };
+      },
+    },
+  });
+  const orchestrator = createAutoOrchestrator(deps);
+
+  const first = await orchestrator.advance();
+  assert.equal(first.kind, "advanced");
+  if (first.kind !== "advanced") throw new Error("expected first advance");
+
+  await orchestrator.completeActiveUnit(first.unit);
+  nextTaskId = "T02";
+  const second = await orchestrator.advance();
+
+  assert.equal(second.kind, "advanced");
+  if (second.kind !== "advanced") throw new Error("expected second advance");
+  assert.deepEqual(second.unit, { unitType: "execute-task", unitId: "T02" });
+});
+
+test("retryActiveUnit clears in-flight idempotency without marking the unit finalized", async () => {
+  const { deps, calls } = makeDeps();
+  const orchestrator = createAutoOrchestrator(deps);
+
+  const first = await orchestrator.advance();
+  assert.equal(first.kind, "advanced");
+  if (first.kind !== "advanced") throw new Error("expected first advance");
+
+  await orchestrator.retryActiveUnit(first.unit);
+  const second = await orchestrator.advance();
+
+  assert.equal(second.kind, "advanced");
+  if (second.kind !== "advanced") throw new Error("expected retry advance");
+  assert.deepEqual(second.unit, first.unit);
+  assert.ok(calls.includes("journal:unit-retry"));
+  const prepareCalls = calls.filter((c) => c === "worktree.prepare").length;
+  assert.equal(prepareCalls, 2, "retry should intentionally redispatch the same unit");
+});
+
+test("resume() re-enters running phase", async () => {
   const { deps } = makeDeps();
   const orchestrator = createAutoOrchestrator(deps);
 
   const result = await orchestrator.resume();
 
-  assert.equal(result.kind, "advanced");
+  assert.equal(result.kind, "resumed");
   assert.equal(orchestrator.getStatus().phase, "running");
 });
 
@@ -256,10 +591,12 @@ test("resume() clears idempotent lock and allows re-advance", async () => {
   const first = await orchestrator.advance();
   const blocked = await orchestrator.advance();
   const resumed = await orchestrator.resume();
+  const next = await orchestrator.advance();
 
   assert.equal(first.kind, "advanced");
   assert.equal(blocked.kind, "blocked");
-  assert.equal(resumed.kind, "advanced");
+  assert.equal(resumed.kind, "resumed");
+  assert.equal(next.kind, "advanced");
 });
 
 test("transitionCount increases across lifecycle transitions", async () => {
@@ -374,9 +711,11 @@ test("start() clears prior idempotent lock", async () => {
   await orchestrator.advance();
   const blocked = await orchestrator.advance();
   const restarted = await orchestrator.start({ basePath: "/tmp/project", trigger: "manual" });
+  const next = await orchestrator.advance();
 
   assert.equal(blocked.kind, "blocked");
-  assert.equal(restarted.kind, "advanced");
+  assert.equal(restarted.kind, "started");
+  assert.equal(next.kind, "advanced");
 });
 
 test("error path emits error notification", async () => {
@@ -467,4 +806,495 @@ test("stop() cleans up worktree and transitions to stopped", async () => {
   assert.ok(calls.includes("worktree.cleanup"));
   assert.ok(calls.includes("journal:stop"));
   assert.ok(calls.includes("notify:stop"));
+});
+
+// ────────────────────────────────────────────────────────────────────────
+// Stuck-loop ring buffer (issue #5787)
+// ────────────────────────────────────────────────────────────────────────
+
+test("STUCK_WINDOW_SIZE matches the legacy auto/phases.ts constant", () => {
+  assert.equal(STUCK_WINDOW_SIZE, 6);
+});
+
+test("stuck-loop: empty ring on a freshly constructed orchestrator advances normally", async () => {
+  const { deps } = makeDeps();
+  const orchestrator = createAutoOrchestrator(deps);
+
+  const result = await orchestrator.advance();
+
+  assert.equal(result.kind, "advanced");
+});
+
+test("stuck-loop: partial fill of mixed units does not block", async () => {
+  // Alternate A/B for STUCK_WINDOW_SIZE rounds. No single key saturates the
+  // window, so neither idempotency nor stuck-loop should fire.
+  let i = 0;
+  const sequence = ["A", "B", "A", "B", "A", "B"];
+  const { deps } = makeDeps({
+    dispatch: {
+      async decideNextUnit() {
+        const id = sequence[i++ % sequence.length];
+        return { unitType: "execute-task", unitId: id, reason: "ready", preconditions: [] };
+      },
+    },
+  });
+  const orchestrator = createAutoOrchestrator(deps);
+
+  for (let round = 0; round < STUCK_WINDOW_SIZE; round++) {
+    const result = await orchestrator.advance();
+    assert.equal(result.kind, "advanced", `round ${round} should advance, got ${result.kind}`);
+  }
+});
+
+test("stuck-loop: ring saturated with same unit blocks with action 'stop' and stuck-loop reason", async () => {
+  // Dispatch picks the same unit every time. The first advance succeeds.
+  // Calls 2..STUCK_WINDOW_SIZE-1 are idempotency-blocked while the ring fills.
+  // The STUCK_WINDOW_SIZE'th call sees a saturated ring and returns stuck-loop.
+  const { deps } = makeDeps();
+  const orchestrator = createAutoOrchestrator(deps);
+
+  const results: Awaited<ReturnType<typeof orchestrator.advance>>[] = [];
+  for (let i = 0; i < STUCK_WINDOW_SIZE; i++) {
+    results.push(await orchestrator.advance());
+  }
+
+  // First call advances.
+  assert.equal(results[0].kind, "advanced");
+
+  // Intermediate calls are blocked by idempotency (not stuck-loop yet).
+  for (let i = 1; i < STUCK_WINDOW_SIZE - 1; i++) {
+    const r = results[i];
+    assert.equal(r.kind, "blocked", `round ${i} should be blocked`);
+    if (r.kind !== "blocked") return;
+    assert.equal(r.reason, "idempotent advance: unit already active");
+    assert.equal(r.action, "pause");
+  }
+
+  // The final call (ring now holds STUCK_WINDOW_SIZE copies) returns stuck-loop.
+  const last = results[STUCK_WINDOW_SIZE - 1];
+  assert.equal(last.kind, "blocked");
+  if (last.kind !== "blocked") return;
+  assert.equal(last.action, "stop");
+  assert.equal(last.reason, `stuck-loop: execute-task:T01 picked ${STUCK_WINDOW_SIZE} times`);
+});
+
+test("stuck-loop: idempotency block continues to fire with its own reason before saturation", async () => {
+  // Two identical calls should produce idempotent (not stuck-loop). Ensures the
+  // existing idempotency block is not absorbed by the new check.
+  const { deps } = makeDeps();
+  const orchestrator = createAutoOrchestrator(deps);
+
+  const first = await orchestrator.advance();
+  const second = await orchestrator.advance();
+
+  assert.equal(first.kind, "advanced");
+  assert.equal(second.kind, "blocked");
+  assert.equal(second.reason, "idempotent advance: unit already active");
+  assert.equal(second.action, "pause");
+});
+
+test("stuck-loop: start() resets the ring so a fresh saturation cycle is required", async () => {
+  // Fill the ring to one short of saturation, then start() — the ring should
+  // be cleared, and the next advance must succeed instead of going stuck.
+  const { deps } = makeDeps();
+  const orchestrator = createAutoOrchestrator(deps);
+
+  for (let i = 0; i < STUCK_WINDOW_SIZE - 1; i++) {
+    await orchestrator.advance();
+  }
+
+  const restarted = await orchestrator.start({ basePath: "/tmp/project", trigger: "manual" });
+  assert.equal(restarted.kind, "started");
+
+  // Immediately after start(), the next advance should succeed because start()
+  // no longer pre-dispatches and the ring was reset.
+  const next = await orchestrator.advance();
+  assert.equal(next.kind, "advanced");
+});
+
+test("stuck-loop: resume() resets the ring", async () => {
+  const { deps } = makeDeps();
+  const orchestrator = createAutoOrchestrator(deps);
+
+  for (let i = 0; i < STUCK_WINDOW_SIZE - 1; i++) {
+    await orchestrator.advance();
+  }
+
+  const resumed = await orchestrator.resume();
+  assert.equal(resumed.kind, "resumed");
+
+  const next = await orchestrator.advance();
+  assert.equal(next.kind, "advanced");
+});
+
+test("stuck-loop: stop() resets the ring", async () => {
+  const { deps } = makeDeps();
+  const orchestrator = createAutoOrchestrator(deps);
+
+  for (let i = 0; i < STUCK_WINDOW_SIZE - 1; i++) {
+    await orchestrator.advance();
+  }
+
+  const stopped = await orchestrator.stop("user-request");
+  assert.equal(stopped.kind, "stopped");
+
+  // Ring is cleared by stop(). A subsequent advance is a fresh first-touch.
+  const next = await orchestrator.advance();
+  assert.equal(next.kind, "advanced");
+});
+
+test("stuck-loop: journal records the stuck-loop reason on advance-blocked", async () => {
+  const { deps, calls } = makeDeps();
+  const orchestrator = createAutoOrchestrator(deps);
+
+  for (let i = 0; i < STUCK_WINDOW_SIZE; i++) {
+    await orchestrator.advance();
+  }
+
+  assert.ok(calls.includes("journal:advance-blocked"));
+});
+
+// ─── closeout regression: wired orchestrator must not dispatch from a removed worktree ───
+
+test("wired orchestrator base resolver prefers live project root after worktree cleanup", (t) => {
+  const projectRoot = mkdtempSync(join(tmpdir(), "gsd-orch-root-"));
+  const staleWorktreeRoot = join(projectRoot, ".gsd", "worktrees", "M002");
+  mkdirSync(join(staleWorktreeRoot, ".bg-shell"), { recursive: true });
+  t.after(() => { try { rmSync(projectRoot, { recursive: true, force: true }); } catch { /* */ } });
+
+  assert.equal(
+    resolveLiveOrchestratorBasePath({
+      capturedBasePath: staleWorktreeRoot,
+      runtimeBasePath: projectRoot,
+      sessionBasePath: projectRoot,
+      originalBasePath: projectRoot,
+    }),
+    projectRoot,
+  );
+});
+
+test("wired orchestrator base resolver keeps a captured active git worktree", (t) => {
+  const projectRoot = mkdtempSync(join(tmpdir(), "gsd-orch-worktree-"));
+  const worktreeRoot = join(projectRoot, ".gsd", "worktrees", "M003");
+  mkdirSync(worktreeRoot, { recursive: true });
+  writeFileSync(join(worktreeRoot, ".git"), "gitdir: /tmp/gsd-orch-worktree/.git/worktrees/M003\n");
+  t.after(() => { try { rmSync(projectRoot, { recursive: true, force: true }); } catch { /* */ } });
+
+  assert.equal(
+    resolveLiveOrchestratorBasePath({
+      capturedBasePath: worktreeRoot,
+      runtimeBasePath: projectRoot,
+    }),
+    worktreeRoot,
+  );
+});
+
+// ─── #5789 parity: wired dispatch adapter mirrors runDispatch's resolveDispatch call ───
+
+test("wired DispatchAdapter forwards session-derived dispatch inputs identically to runDispatch", async () => {
+  const stateSnapshot = makeState();
+
+  // Install a capturing registry so we observe the DispatchContext both code paths
+  // build, and force a deterministic dispatch action so the parity assertion is
+  // about *inputs*, not rule evaluation.
+  const captured: DispatchContext[] = [];
+  const captureRule: UnifiedRule = {
+    name: "test-capture",
+    when: "dispatch",
+    evaluation: "first-match",
+    where: async (ctx: DispatchContext) => {
+      captured.push(ctx);
+      return {
+        action: "dispatch" as const,
+        unitType: "execute-task",
+        unitId: "T01",
+        prompt: "parity-fixture",
+      };
+    },
+    then: (r: unknown) => r,
+  };
+  setRegistry(new RuleRegistry([captureRule]));
+
+  try {
+    // Mock ExtensionContext + ExtensionAPI with the surface the wired adapter touches.
+    const fakeModelRegistry = {
+      getAll: () => [],
+      getProviderAuthMode: (_provider: string) => "apiKey" as const,
+    };
+    const ctx = {
+      model: {
+        provider: "anthropic",
+        baseUrl: "https://api.anthropic.com",
+        contextWindow: 200_000,
+      },
+      modelRegistry: fakeModelRegistry,
+    } as any;
+    const pi = {
+      getActiveTools: () => ["read_file", "write_file"],
+    } as any;
+    const basePath = "/tmp/parity-fixture";
+
+    // Path A — wired adapter (what createWiredAutoOrchestrationModule uses).
+    const adapter = createWiredDispatchAdapter(ctx, pi, basePath);
+    const adapterResult = await adapter.decideNextUnit({ stateSnapshot });
+
+    // Path B — direct resolveDispatch call mirroring phases.ts:runDispatch.
+    // Inline the same derivations runDispatch uses so any drift here is a parity break.
+    const prefs = undefined; // loadEffectiveGSDPreferences returns null for /tmp/parity-fixture.
+    const provider = ctx.model?.provider;
+    const authMode = provider && typeof ctx.modelRegistry?.getProviderAuthMode === "function"
+      ? ctx.modelRegistry.getProviderAuthMode(provider)
+      : undefined;
+    const activeTools = typeof pi.getActiveTools === "function" ? pi.getActiveTools() : [];
+    const structuredQuestionsAvailable: "true" | "false" =
+      prefs !== undefined && (prefs as { planning_depth?: string }).planning_depth === "deep"
+        ? "false"
+        : supportsStructuredQuestions(activeTools, {
+            authMode,
+            baseUrl: ctx.model?.baseUrl,
+          })
+          ? "true"
+          : "false";
+
+    const builtDirectCtx: DispatchContext = {
+      basePath,
+      mid: stateSnapshot.activeMilestone!.id,
+      midTitle: stateSnapshot.activeMilestone!.title,
+      state: stateSnapshot,
+      prefs,
+      structuredQuestionsAvailable,
+      sessionContextWindow: ctx.model?.contextWindow,
+      sessionProvider: ctx.model?.provider,
+      modelRegistry: ctx.modelRegistry,
+    };
+    const directAction = await resolveDispatch(builtDirectCtx);
+
+    // Two contexts captured: one per resolveDispatch call.
+    assert.equal(captured.length, 2, "expected two captured dispatch contexts");
+    const [adapterCtx, directCtx] = captured;
+
+    // Parity assertion: session-derived fields are identical.
+    assert.equal(adapterCtx.structuredQuestionsAvailable, directCtx.structuredQuestionsAvailable);
+    assert.equal(adapterCtx.sessionContextWindow, directCtx.sessionContextWindow);
+    assert.equal(adapterCtx.sessionProvider, directCtx.sessionProvider);
+    assert.equal(adapterCtx.modelRegistry, directCtx.modelRegistry);
+    assert.equal(adapterCtx.basePath, directCtx.basePath);
+    assert.equal(adapterCtx.mid, directCtx.mid);
+    assert.equal(adapterCtx.midTitle, directCtx.midTitle);
+
+    // Dispatch action equality: both flows reach the same dispatch decision.
+    if (!adapterResult || !("unitType" in adapterResult)) {
+      assert.fail("expected adapter result to be a dispatch decision");
+    }
+    assert.equal(adapterResult.unitType, "execute-task");
+    assert.equal(adapterResult.unitId, "T01");
+    assert.equal(adapterResult.reason, "test-capture");
+    assert.equal(directAction.action, "dispatch");
+    if (directAction.action === "dispatch") {
+      assert.equal(directAction.unitType, adapterResult.unitType);
+      assert.equal(directAction.unitId, adapterResult.unitId);
+      assert.equal(directAction.matchedRule, adapterResult.reason);
+    }
+  } finally {
+    resetRegistry();
+  }
+});
+
+test("wired DispatchAdapter prefers caller-supplied dispatch inputs over ctx-derived values", async () => {
+  const stateSnapshot = makeState();
+  const captured: DispatchContext[] = [];
+  const captureRule: UnifiedRule = {
+    name: "test-capture-overrides",
+    when: "dispatch",
+    evaluation: "first-match",
+    where: async (ctx: DispatchContext) => {
+      captured.push(ctx);
+      return {
+        action: "dispatch" as const,
+        unitType: "execute-task",
+        unitId: "T01",
+        prompt: "override-fixture",
+      };
+    },
+    then: (r: unknown) => r,
+  };
+  setRegistry(new RuleRegistry([captureRule]));
+
+  try {
+    const ctxModelRegistry = {
+      getAll: () => [],
+      getProviderAuthMode: (_provider: string) => "apiKey" as const,
+    };
+    const overrideModelRegistry = {
+      getAll: () => [],
+      getProviderAuthMode: (_provider: string) => "oauth" as const,
+    };
+    const ctx = {
+      model: {
+        provider: "anthropic",
+        baseUrl: "https://api.anthropic.com",
+        contextWindow: 200_000,
+      },
+      modelRegistry: ctxModelRegistry,
+    } as any;
+    const pi = {
+      getActiveTools: () => [],
+    } as any;
+    const adapter = createWiredDispatchAdapter(ctx, pi, "/tmp/parity-fixture");
+    const session = { basePath: "/tmp/session-fixture" } as any;
+
+    const result = await adapter.decideNextUnit({
+      stateSnapshot,
+      session,
+      structuredQuestionsAvailable: "true",
+      sessionContextWindow: 500_000,
+      sessionProvider: "openai",
+      modelRegistry: overrideModelRegistry,
+    });
+
+    assert.ok(result);
+    assert.equal(captured.length, 1, "expected one captured dispatch context");
+    assert.equal(captured[0].structuredQuestionsAvailable, "true");
+    assert.equal(captured[0].sessionContextWindow, 500_000);
+    assert.equal(captured[0].sessionProvider, "openai");
+    assert.equal(captured[0].modelRegistry, overrideModelRegistry);
+    assert.equal(captured[0].session, session);
+    assert.equal(captured[0].basePath, "/tmp/session-fixture");
+  } finally {
+    resetRegistry();
+  }
+});
+
+test("wired DispatchAdapter forwards constructor session when advance input omits session", async () => {
+  const stateSnapshot = makeState();
+  const captured: DispatchContext[] = [];
+  const captureRule: UnifiedRule = {
+    name: "test-session-fallback",
+    when: "dispatch",
+    evaluation: "first-match",
+    where: async (ctx: DispatchContext) => {
+      captured.push(ctx);
+      return {
+        action: "dispatch" as const,
+        unitType: "execute-task",
+        unitId: "T01",
+        prompt: "session-fallback-fixture",
+      };
+    },
+    then: (r: unknown) => r,
+  };
+  setRegistry(new RuleRegistry([captureRule]));
+
+  try {
+    const ctx = { model: {}, modelRegistry: { getAll: () => [] } } as any;
+    const pi = { getActiveTools: () => [] } as any;
+    const session = {
+      basePath: "/tmp/worktree-fixture",
+      originalBasePath: "/tmp/project-fixture",
+      currentMilestoneId: "M001",
+    } as any;
+    const adapter = createWiredDispatchAdapter(ctx, pi, "/tmp/project-fixture", session);
+
+    const result = await adapter.decideNextUnit({ stateSnapshot });
+
+    assert.ok(result);
+    assert.equal(captured.length, 1, "expected one captured dispatch context");
+    assert.equal(captured[0].session, session);
+    assert.equal(captured[0].basePath, "/tmp/worktree-fixture");
+  } finally {
+    resetRegistry();
+  }
+});
+
+test("wired DispatchAdapter replays pending verification retry dispatch", async () => {
+  const stateSnapshot = makeState();
+  const ctx = { model: {}, modelRegistry: { getAll: () => [] } } as any;
+  const pi = { getActiveTools: () => [] } as any;
+  const session = {
+    basePath: "/tmp/worktree-fixture",
+    pendingOrchestrationDispatch: null,
+    pendingVerificationRetryDispatch: {
+      unitType: "complete-slice",
+      unitId: "M004/S01",
+      prompt: "repair slice closeout",
+      pauseAfterUatDispatch: false,
+      state: stateSnapshot,
+      mid: "M004",
+      midTitle: "Milestone 4",
+    },
+  } as any;
+  const adapter = createWiredDispatchAdapter(ctx, pi, "/tmp/project-fixture", session);
+
+  const result = await adapter.decideNextUnit({ stateSnapshot });
+
+  assert.ok(result);
+  if (!("unitType" in result)) assert.fail("expected dispatch decision");
+  assert.equal(result.unitType, "complete-slice");
+  assert.equal(result.unitId, "M004/S01");
+  assert.equal(result.reason, "verification-retry");
+  assert.equal(session.pendingVerificationRetryDispatch, null);
+  assert.equal(session.pendingOrchestrationDispatch?.prompt, "repair slice closeout");
+  assert.equal(session.pendingOrchestrationDispatch?.state, stateSnapshot);
+});
+
+test("wired DispatchAdapter preserves stop reason as a blocked decision", async () => {
+  const stateSnapshot = makeState();
+  const stopRule: UnifiedRule = {
+    name: "test-stop",
+    when: "dispatch",
+    evaluation: "first-match",
+    where: async () => ({
+      action: "stop" as const,
+      reason: "remediation blocker",
+      level: "warning" as const,
+    }),
+    then: (r: unknown) => r,
+  };
+  setRegistry(new RuleRegistry([stopRule]));
+
+  try {
+    const ctx = { model: {}, modelRegistry: { getAll: () => [] } } as any;
+    const pi = { getActiveTools: () => [] } as any;
+    const adapter = createWiredDispatchAdapter(ctx, pi, "/tmp/parity-fixture");
+
+    const result = await adapter.decideNextUnit({ stateSnapshot });
+
+    assert.deepEqual(result, {
+      kind: "blocked",
+      reason: "remediation blocker",
+      action: "pause",
+    });
+  } finally {
+    resetRegistry();
+  }
+});
+
+test("wired DispatchAdapter preserves dispatch skip instead of collapsing it to no remaining units", async () => {
+  const stateSnapshot = makeState();
+  const skipRule: UnifiedRule = {
+    name: "test-skip-gate",
+    when: "dispatch",
+    evaluation: "first-match",
+    where: async () => ({
+      action: "skip" as const,
+      matchedRule: "evaluating-gates -> omitted",
+    }),
+    then: (r: unknown) => r,
+  };
+  setRegistry(new RuleRegistry([skipRule]));
+
+  try {
+    const ctx = { model: {}, modelRegistry: { getAll: () => [] } } as any;
+    const pi = { getActiveTools: () => [] } as any;
+    const adapter = createWiredDispatchAdapter(ctx, pi, "/tmp/parity-fixture");
+
+    const result = await adapter.decideNextUnit({ stateSnapshot });
+
+    assert.deepEqual(result, {
+      kind: "skipped",
+      reason: "evaluating-gates -> omitted",
+    });
+  } finally {
+    resetRegistry();
+  }
 });

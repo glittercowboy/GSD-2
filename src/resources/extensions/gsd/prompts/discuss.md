@@ -186,7 +186,7 @@ Research is advisory, not auto-binding. Use discussion output to identify table 
 
 ## Capability Contract
 
-Before writing a roadmap, produce or update `.gsd/REQUIREMENTS.md`.
+Before writing a roadmap, persist requirements with `gsd_requirement_save` or `gsd_requirement_update`, then render `.gsd/REQUIREMENTS.md` through `gsd_summary_save` with `artifact_type: "REQUIREMENTS"`.
 
 Use it as the project's explicit capability contract.
 
@@ -226,8 +226,8 @@ Directories use bare IDs. Files use ID-SUFFIX format. Titles live inside file co
 
 Once the user is satisfied, in a single pass:
 1. `mkdir -p .gsd/milestones/{{milestoneId}}/slices`
-2. Write or update `.gsd/PROJECT.md` — use the **Project** output template below. Describe what the project is, its current state, and list the milestone sequence.
-3. Write or update `.gsd/REQUIREMENTS.md` — use the **Requirements** output template below. Confirm requirement states, ownership, and traceability before roadmap creation.
+2. Call `gsd_summary_save` with `artifact_type: "PROJECT"` and full Project template content. The tool persists the DB-backed PROJECT artifact and renders `.gsd/PROJECT.md`. Describe what the project is, its current state, and list the milestone sequence.
+3. Persist requirements with `gsd_requirement_save` or `gsd_requirement_update`, then call `gsd_summary_save` with `artifact_type: "REQUIREMENTS"` so the tool renders `.gsd/REQUIREMENTS.md` from DB rows. Confirm requirement states, ownership, and traceability before roadmap creation.
 **Depth-Preservation Guidance for context.md:**
 When writing context.md, preserve the user's exact terminology, emphasis, and framing. Do not flatten nuance into generic summaries. If the user said "craft feel," write "craft feel," not "high-quality user experience." CONTEXT.md is downstream agents' only window into this conversation.
 
@@ -243,8 +243,8 @@ When writing CONTEXT.md, include discussion-layer sections: **Scope**, **Archite
 
 Before emitting the ready phrase, verify in the CURRENT turn that you have:
 
-- [ ] Written `.gsd/PROJECT.md` (step 2)
-- [ ] Written `.gsd/REQUIREMENTS.md` (step 3)
+- [ ] Called `gsd_summary_save` for the PROJECT artifact (step 2)
+- [ ] Persisted requirements and called `gsd_summary_save` for the REQUIREMENTS artifact (step 3)
 - [ ] Written `{{contextPath}}` (step 4)
 - [ ] Called `gsd_plan_milestone` (step 5)
 
@@ -270,8 +270,8 @@ Once the user confirms the milestone split:
 #### Phase 1: Shared artifacts
 
 1. For each milestone, call `gsd_milestone_generate_id`; never invent IDs. Then `mkdir -p .gsd/milestones/<ID>/slices`.
-2. Write `.gsd/PROJECT.md` — use the **Project** output template below.
-3. Write `.gsd/REQUIREMENTS.md` — use the **Requirements** output template below. Capture Active, Deferred, Out of Scope, and any already Validated requirements. Later milestones may have provisional ownership where slice plans do not exist yet.
+2. Call `gsd_summary_save` with `artifact_type: "PROJECT"` and full Project template content so the tool persists the DB-backed PROJECT artifact and renders `.gsd/PROJECT.md`.
+3. Persist requirements with `gsd_requirement_save` or `gsd_requirement_update`, then call `gsd_summary_save` with `artifact_type: "REQUIREMENTS"` so the tool renders `.gsd/REQUIREMENTS.md` from DB rows. Capture Active, Deferred, Out of Scope, and any already Validated requirements. Later milestones may have provisional ownership where slice plans do not exist yet.
 4. For any architectural or pattern decisions made during discussion, call `gsd_decision_save` — the tool auto-assigns IDs and regenerates `.gsd/DECISIONS.md` automatically.
 
 #### Phase 2: Primary milestone
@@ -344,8 +344,8 @@ For single-milestone projects, do NOT write this file.
 
 Before emitting the ready phrase, verify in the CURRENT turn that you have:
 
-- [ ] Written `.gsd/PROJECT.md` (Phase 1)
-- [ ] Written `.gsd/REQUIREMENTS.md` (Phase 1)
+- [ ] Called `gsd_summary_save` for the PROJECT artifact (Phase 1)
+- [ ] Persisted requirements and called `gsd_summary_save` for the REQUIREMENTS artifact (Phase 1)
 - [ ] Written primary-milestone `CONTEXT.md` (Phase 2)
 - [ ] Called `gsd_plan_milestone` for the primary milestone (Phase 2)
 - [ ] Written `.gsd/DISCUSSION-MANIFEST.json` with `gates_completed === total` (Phase 3)

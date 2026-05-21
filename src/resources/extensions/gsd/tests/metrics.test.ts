@@ -17,6 +17,7 @@ import {
   aggregateBySlice,
   aggregateByModel,
   getProjectTotals,
+  getPromptSizeStats,
   formatCost,
   formatTokenCount,
   initMetrics,
@@ -104,6 +105,25 @@ test("getProjectTotals defaults budget fields to 0 for old units", () => {
   const totals = getProjectTotals([makeUnit(), makeUnit()]);
   assert.equal(totals.totalTruncationSections, 0);
   assert.equal(totals.continueHereFiredCount, 0);
+});
+
+test("getPromptSizeStats summarizes prompt bloat and compression", () => {
+  const stats = getPromptSizeStats([
+    makeUnit({ promptCharCount: 40_000, baselineCharCount: 80_000 }),
+    makeUnit({ promptCharCount: 20_000, baselineCharCount: 40_000 }),
+    makeUnit(),
+  ]);
+
+  assert.ok(stats, "prompt-size stats should exist when units have promptCharCount");
+  assert.equal(stats.units, 2);
+  assert.equal(stats.averagePromptChars, 30_000);
+  assert.equal(stats.maxPromptChars, 40_000);
+  assert.equal(stats.averageBaselineChars, 60_000);
+  assert.equal(stats.averageCompressionSavings, 50);
+});
+
+test("getPromptSizeStats returns null for old units without prompt data", () => {
+  assert.equal(getPromptSizeStats([makeUnit(), makeUnit()]), null);
 });
 
 // ── aggregateByPhase ─────────────────────────────────────────────────────────

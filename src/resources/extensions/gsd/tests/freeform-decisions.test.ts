@@ -14,6 +14,7 @@ import {
 import {
   saveDecisionToDb,
 } from '../db-writer.ts';
+import { getAllDecisionsFromMemories } from '../context-store.ts';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Helpers
@@ -31,11 +32,14 @@ function cleanupDir(dir: string): void {
   } catch { /* swallow */ }
 }
 
-/** Query all decisions from the DB ordered by seq. */
+/**
+ * Query all decisions. ADR-013 Stage 3 (PR #5755): decisions are written
+ * exclusively to memories; this helper returns the same Decision shape the
+ * previous SELECT * FROM decisions produced so the assertions below stay
+ * one-line lookups.
+ */
 function queryAllDecisions(): Array<Record<string, unknown>> {
-  const adapter = _getAdapter();
-  if (!adapter) return [];
-  return adapter.prepare('SELECT * FROM decisions ORDER BY seq').all();
+  return getAllDecisionsFromMemories().map((d) => ({ ...d }));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

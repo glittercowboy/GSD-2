@@ -7,9 +7,14 @@
  */
 
 /**
- * Error codes indicating infrastructure failures that cannot be recovered by
- * retrying. Each retry re-dispatches the unit at full LLM cost, so we bail
- * immediately rather than burning budget on guaranteed failures.
+ * Error codes indicating infrastructure-level failures from the OS,
+ * filesystem, or network. This set includes permanent resource failures
+ * (ENOSPC, ENOMEM, EROFS), transient resource exhaustion (EAGAIN, ENOBUFS),
+ * and network/offline errors (ECONNREFUSED, ENOTFOUND, ENETUNREACH).
+ *
+ * Transient git failures are retried separately through
+ * TRANSIENT_GIT_RETRY_CODES in native-git-bridge.ts before escalating to the
+ * auto-loop.
  */
 export const INFRA_ERROR_CODES: ReadonlySet<string> = new Set([
   "ENOSPC",   // disk full
@@ -19,6 +24,7 @@ export const INFRA_ERROR_CODES: ReadonlySet<string> = new Set([
   "EMFILE",   // too many open files (process)
   "ENFILE",   // too many open files (system)
   "EAGAIN",       // resource temporarily unavailable (resource exhaustion)
+  "ENOBUFS",      // no buffer space available (transient pipe exhaustion)
   "ECONNREFUSED", // connection refused (offline / local server down)
   "ENOTFOUND",    // DNS lookup failed (offline / no network)
   "ENETUNREACH",  // network unreachable (offline / no route)

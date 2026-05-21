@@ -174,6 +174,34 @@ test('Scenario 1: Flat single-milestone', () => {
   assert.deepStrictEqual(result.milestones[0]?.boundaryMap, [], 'flat: boundaryMap defaults to empty');
 });
 
+test('Scenario 1b: Letter-suffixed plan numbers stay ordered and mapped', () => {
+  const project = emptyProject({
+    roadmap: flatRoadmap([
+      roadmapEntry(3, 'type-safety'),
+    ]),
+    phases: {
+      '3-type-safety': makePhase('3-type-safety', 3, 'type-safety', {
+        plans: {
+          '03': makePlan('03'),
+          '03b': makePlan('03b'),
+          '04': makePlan('04'),
+        },
+        summaries: {
+          '03b': makeSummary('03b'),
+        },
+      }),
+    },
+  });
+
+  const result = transformToGSD(project);
+  const tasks = result.milestones[0]?.slices[0]?.tasks ?? [];
+
+  assert.deepStrictEqual(tasks.length, 3, 'letter plan: all plans become tasks');
+  assert.deepStrictEqual(tasks.map((task) => task.id), ['T01', 'T02', 'T03'], 'letter plan: task IDs remain sequential');
+  assert.deepStrictEqual(tasks[1]?.title, '00 03b', 'letter plan: 03b sorts between 03 and 04');
+  assert.deepStrictEqual(tasks[1]?.done, true, 'letter plan: matching 03b summary marks task done');
+});
+
 // ─── Scenario 2: Multi-Milestone (2 milestones with independent numbering) ──
 
 test('Scenario 2: Multi-milestone', () => {
@@ -497,6 +525,7 @@ test('Scenario 11: Requirements edge cases', () => {
       makeRequirement('', 'Another No ID', 'validated'),
       makeRequirement('R005', 'Has ID', 'something-weird'),
       makeRequirement('R006', 'Deferred One', 'DEFERRED'),
+      makeRequirement('AUTH-7', 'Legacy ID', 'active'),
     ],
     phases: {
       '1-req-edge': makePhase('1-req-edge', 1, 'req-edge'),
@@ -510,6 +539,8 @@ test('Scenario 11: Requirements edge cases', () => {
   assert.deepStrictEqual(result.requirements[2]?.id, 'R005', 'req-edge: existing id preserved');
   assert.deepStrictEqual(result.requirements[2]?.status, 'active', 'req-edge: unknown status normalized to active');
   assert.deepStrictEqual(result.requirements[3]?.status, 'deferred', 'req-edge: uppercase DEFERRED normalized');
+  assert.deepStrictEqual(result.requirements[4]?.id, 'R003', 'req-edge: non-R legacy id gets next canonical id');
+  assert.ok(result.requirements[4]?.description.includes('Legacy ID: AUTH-7'), 'req-edge: original legacy id is preserved in description');
 });
 
 // ─── Scenario 12: Vision derivation ────────────────────────────────────────
@@ -553,6 +584,8 @@ test('Scenario 13: Decisions content', () => {
   const result = transformToGSD(project);
 
   assert.ok(result.decisionsContent.includes('decision-01'), 'decisions: extracts key-decisions from summaries');
+  assert.ok(result.decisionsContent.includes('| D001 |'), 'decisions: writes DB-importable decision ID');
+  assert.ok(result.decisionsContent.includes('| # | When | Scope | Decision | Choice | Rationale | Revisable? | Made By |'), 'decisions: writes canonical table header');
 });
 
 // ─── Scenario 14: No undefined values in output ───────────────────────────
@@ -616,4 +649,3 @@ test('Scenario 15: Empty research', () => {
 });
 
 // ─── Results ───────────────────────────────────────────────────────────────
-

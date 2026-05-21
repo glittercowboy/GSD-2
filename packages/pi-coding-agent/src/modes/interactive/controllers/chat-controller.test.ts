@@ -114,6 +114,48 @@ test("handleAgentEvent: agent_start clears stale adaptive blocking error", async
 	assert.equal(requestedRender, true);
 });
 
+test("handleAgentEvent: agent_start suppresses loader when extension requested no working message", async () => {
+	initTheme("dark", false);
+	let addChildCalled = false;
+	let requestedRender = false;
+	const host = {
+		isInitialized: true,
+		clearBlockingError() {},
+		retryEscapeHandler: undefined,
+		retryLoader: undefined,
+		loadingAnimation: undefined,
+		statusContainer: {
+			clear() {},
+			addChild() {
+				addChildCalled = true;
+			},
+		},
+		ui: {
+			requestRender() {
+				requestedRender = true;
+			},
+		},
+		defaultEditor: {},
+		footer: {
+			invalidate() {},
+		},
+		settingsManager: {
+			getTimestampFormat() {
+				return "date-time-iso";
+			},
+		},
+		defaultWorkingMessage: "Working...",
+		pendingWorkingMessage: null,
+	} as any;
+
+	await handleAgentEvent(host, { type: "agent_start" } as any);
+
+	assert.equal(host.loadingAnimation, undefined);
+	assert.equal(host.pendingWorkingMessage, null);
+	assert.equal(addChildCalled, false);
+	assert.equal(requestedRender, true);
+});
+
 test("handleAgentEvent: standalone completed tool events roll up incrementally", async () => {
 	initTheme("dark", false);
 	const chatContainer = new Container();

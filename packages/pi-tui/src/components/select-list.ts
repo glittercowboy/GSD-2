@@ -149,6 +149,12 @@ export class SelectList implements Component {
 
 	handleInput(keyData: string): void {
 		const kb = getEditorKeybindings();
+		// Nothing to navigate or select when the filter matches no items.
+		// Without this guard selectUp would set selectedIndex to -1.
+		if (this.filteredItems.length === 0) {
+			if (kb.matches(keyData, "selectCancel") && this.onCancel) this.onCancel();
+			return;
+		}
 		// Up arrow - wrap to bottom when at top
 		if (kb.matches(keyData, "selectUp")) {
 			this.selectedIndex = this.selectedIndex === 0 ? this.filteredItems.length - 1 : this.selectedIndex - 1;

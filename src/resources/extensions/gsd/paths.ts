@@ -357,6 +357,11 @@ export function resolveGsdPathContract(
   };
 }
 
+export function gsdProjectionRoot(basePath: string): string {
+  const contract = resolveGsdPathContract(basePath);
+  return normalizeRealPath(contract.worktreeGsd ?? contract.projectGsd);
+}
+
 /**
  * Invalidate the gsdRoot cache.
  * Use ONLY at session-reset boundaries: workspace switch, process exit, or

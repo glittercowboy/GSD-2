@@ -6,13 +6,15 @@ import test from "node:test";
 
 import { ensureDbOpen } from "../bootstrap/dynamic-tools.ts";
 import {
-  _getAdapter,
   closeDatabase,
   getAllMilestones,
+  insertMilestone,
+  insertSlice,
+  insertTask,
   getSliceTasks,
 } from "../gsd-db.ts";
 import {
-  autoImportMarkdownHierarchyIfDbMismatch,
+  checkMarkdownHierarchyAgainstDb,
   countMarkdownHierarchy,
 } from "../migration-auto-check.ts";
 import { writeGSDDirectory } from "../migrate/writer.ts";
@@ -70,7 +72,7 @@ function projectFixture(): GSDProject {
   };
 }
 
-test("migration auto-check imports markdown hierarchy when DB is empty", async () => {
+test("migration auto-check preserves empty DB and reports explicit recovery", async () => {
   const base = makeBase();
   try {
     await writeGSDDirectory(projectFixture(), base);
@@ -79,32 +81,35 @@ test("migration auto-check imports markdown hierarchy when DB is empty", async (
     assert.equal(await ensureDbOpen(base), true);
     assert.equal(getAllMilestones().length, 0, "fresh authoritative DB starts empty");
 
-    const result = await autoImportMarkdownHierarchyIfDbMismatch(base);
-    assert.equal(result.action, "imported");
+    const result = await checkMarkdownHierarchyAgainstDb(base);
+    assert.equal(result.action, "recovery-required");
     assert.equal(result.reason, "db-empty");
-    assert.deepEqual(result.afterDb, { milestones: 1, slices: 1, tasks: 1 });
-    assert.equal(getAllMilestones().length, 1);
-    assert.equal(getSliceTasks("M001", "S01").length, 1);
+    assert.deepEqual(result.afterDb, { milestones: 0, slices: 0, tasks: 0 });
+    assert.equal(result.recoveryCommand, "gsd recover");
+    assert.match(result.message ?? "", /will not import markdown automatically/);
+    assert.equal(getAllMilestones().length, 0);
+    assert.equal(getSliceTasks("M001", "S01").length, 0);
   } finally {
     cleanup(base);
   }
 });
 
-test("migration auto-check repairs DB hierarchy count mismatch", async () => {
+test("migration auto-check preserves DB on hierarchy count mismatch", async () => {
   const base = makeBase();
   try {
     await writeGSDDirectory(projectFixture(), base);
-    await autoImportMarkdownHierarchyIfDbMismatch(base);
-
-    _getAdapter()!.prepare("DELETE FROM tasks WHERE milestone_id = ? AND slice_id = ? AND id = ?").run("M001", "S01", "T01");
+    assert.equal(await ensureDbOpen(base), true);
+    insertMilestone({ id: "M001", title: "Legacy Milestone", status: "active" });
+    insertSlice({ id: "S01", milestoneId: "M001", title: "Legacy Slice", status: "pending", risk: "medium", depends: [], demo: "Legacy slice demo", sequence: 1 });
     assert.equal(getSliceTasks("M001", "S01").length, 0, "test fixture simulates stale DB task count");
 
-    const result = await autoImportMarkdownHierarchyIfDbMismatch(base);
-    assert.equal(result.action, "imported");
+    const result = await checkMarkdownHierarchyAgainstDb(base);
+    assert.equal(result.action, "recovery-required");
     assert.equal(result.reason, "count-mismatch");
     assert.deepEqual(result.beforeDb, { milestones: 1, slices: 1, tasks: 0 });
-    assert.deepEqual(result.afterDb, { milestones: 1, slices: 1, tasks: 1 });
-    assert.equal(getSliceTasks("M001", "S01").length, 1);
+    assert.deepEqual(result.afterDb, { milestones: 1, slices: 1, tasks: 0 });
+    assert.equal(result.recoveryCommand, "gsd recover");
+    assert.equal(getSliceTasks("M001", "S01").length, 0);
   } finally {
     cleanup(base);
   }
@@ -114,9 +119,12 @@ test("migration auto-check leaves matching DB hierarchy alone", async () => {
   const base = makeBase();
   try {
     await writeGSDDirectory(projectFixture(), base);
-    await autoImportMarkdownHierarchyIfDbMismatch(base);
+    assert.equal(await ensureDbOpen(base), true);
+    insertMilestone({ id: "M001", title: "Legacy Milestone", status: "active" });
+    insertSlice({ id: "S01", milestoneId: "M001", title: "Legacy Slice", status: "pending", risk: "medium", depends: [], demo: "Legacy slice demo", sequence: 1 });
+    insertTask({ id: "T01", sliceId: "S01", milestoneId: "M001", title: "Legacy Task", status: "pending" });
 
-    const result = await autoImportMarkdownHierarchyIfDbMismatch(base);
+    const result = await checkMarkdownHierarchyAgainstDb(base);
     assert.equal(result.action, "none");
     assert.equal(result.reason, "in-sync");
     assert.deepEqual(result.markdown, { milestones: 1, slices: 1, tasks: 1 });

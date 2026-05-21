@@ -2,9 +2,11 @@
  * phases-merge-error-stops-auto.test.ts — Regression test for #2766.
  *
  * When mergeAndExit throws a non-MergeConflictError, the auto loop must
- * stop instead of continuing with unmerged work. This test verifies that
- * all catch blocks in auto/phases.ts that handle mergeAndExit errors
- * call stopAuto and return { action: "break" } for non-conflict errors.
+ * halt instead of continuing with unmerged work. A merge failure is a
+ * recoverable human checkpoint, so the loop pauses (resumable via
+ * `/gsd auto`) rather than hard-stopping. This test verifies the catch
+ * block in auto/phases.ts calls pauseAuto and returns { action: "break" }
+ * for non-conflict errors.
  */
 
 import { createTestContext } from "./test-helpers.ts";
@@ -92,6 +94,13 @@ const ic = {
     async stopAuto(_ctx: unknown, _pi: unknown, reason?: string) {
       calls.push(`stop:${reason}`);
     },
+    async pauseAuto(
+      _ctx: unknown,
+      _pi: unknown,
+      errorContext?: { message: string },
+    ) {
+      calls.push(`pause:${errorContext?.message}`);
+    },
   },
 } as any;
 
@@ -106,12 +115,12 @@ if (result.action === "break") {
   assertTrue(result.reason === "merge-failed", "non-conflict merge error uses merge-failed reason");
 }
 assertTrue(
-  calls.join(" > ") === "invalidate > health > derive:/tmp/gsd-test > sync-sidebar > set-active:M001 > reconcile > preflight > merge > postflight > stop:Merge error on milestone M001: Error: remote rejected push",
-  `pre-dispatch stops immediately after non-conflict merge failure (${calls.join(" > ")})`,
+  calls.join(" > ") === "invalidate > health > derive:/tmp/gsd-test > sync-sidebar > set-active:M001 > reconcile > preflight > merge > postflight > pause:Merge error on milestone M001: remote rejected push. Resolve and run /gsd auto to resume.",
+  `pre-dispatch pauses immediately after non-conflict merge failure (${calls.join(" > ")})`,
 );
 assertTrue(
-  notifications.some((n) => n.level === "error" && n.message.includes("Merge failed: remote rejected push")),
-  "user is notified with an error that merge failed",
+  notifications.some((n) => n.level === "error" && n.message.includes("Merge error on milestone M001: remote rejected push")),
+  "user is notified with an error that the merge failed",
 );
 
 report();

@@ -32,6 +32,7 @@ import { shouldIgnoreAgentEndForActiveUnit } from "../auto/unit-runner-events.js
 import { resolveModelId } from "../auto-model-selection.js";
 import { resolveProjectRoot } from "../worktree.js";
 import { clearDiscussionFlowState } from "./write-gate.js";
+import { clearGuidedUnitContext } from "../guided-unit-context.js";
 import { resumeAutoAfterProviderDelay } from "./provider-error-resume.js";
 import {
   classifyError,
@@ -48,6 +49,19 @@ const MAX_NETWORK_RETRIES = 2;
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object";
 }
+
+export function _hasEmptyAgentEndContent(content: unknown): boolean {
+  if (content == null) return true;
+  if (!Array.isArray(content)) return false;
+  if (content.length === 0) return true;
+  return content.every((block) => {
+    if (!block || typeof block !== "object") return true;
+    const typedBlock = block as { type?: unknown; text?: unknown };
+    if (typedBlock.type !== "text") return false;
+    return typeof typedBlock.text !== "string" || typedBlock.text.trim() === "";
+  });
+}
+
 /**
  * Cap on auto-resume attempts for sustained transient-provider errors.
  *
@@ -92,6 +106,14 @@ export function _buildAbortedPauseContext(lastMsg: { errorMessage?: unknown }): 
 export function isUserInitiatedAbortMessage(message: string | undefined | null): boolean {
   if (!message) return false;
   return /\b(?:claude code process aborted by user|request aborted by user|process aborted by user)\b/i.test(message);
+}
+
+export function shouldDeferTransientErrorToCoreRetry(
+  cls: ErrorClass,
+  rawErrorMsg: string,
+): boolean {
+  if (!isTransient(cls) || cls.kind === "rate-limit") return false;
+  return !/retry failed after \d+ attempts:/i.test(rawErrorMsg);
 }
 
 function isBareClaudeCodeSessionSwitchAbortMarker(message: string | undefined | null): boolean {
@@ -196,6 +218,42 @@ export function resolveAgentEndErrorDisplay(
   return rawErrorMsg;
 }
 
+export function isTerminalDeletedWorktreeProviderError(
+  message: string | undefined | null,
+): boolean {
+  if (!message) return false;
+  if (!/\bdoes not exist\b/i.test(message)) return false;
+  return /[/\\]\.gsd[/\\](?:projects[/\\][^/\\]+[/\\])?worktrees[/\\][^/\\\s"']+/i.test(message);
+}
+
+type MessageEndLike = {
+  message: unknown;
+};
+
+export function suppressTerminalDeletedWorktreeMessageEnd(event: MessageEndLike): boolean {
+  const message = event.message as {
+    role?: unknown;
+    stopReason?: unknown;
+    errorMessage?: unknown;
+    content?: unknown;
+  };
+  if (!isAutoCompletionStopInProgress()) return false;
+  if (message?.role !== "assistant" || message.stopReason !== "error") return false;
+
+  const rawErrorMsg = message.errorMessage ? String(message.errorMessage) : "";
+  const displayMsg = resolveAgentEndErrorDisplay(rawErrorMsg, message.content);
+  if (!isTerminalDeletedWorktreeProviderError(`${rawErrorMsg}\n${displayMsg}`)) return false;
+
+  message.stopReason = "completed";
+  message.errorMessage = undefined;
+  message.content = [];
+  logWarning(
+    "bootstrap",
+    `Suppressing stale deleted-worktree provider error during terminal completion reroot: ${displayMsg || rawErrorMsg}`,
+  );
+  return true;
+}
+
 async function pauseTransientWithBackoff(
   cls: ErrorClass,
   pi: ExtensionAPI,
@@ -244,9 +302,11 @@ export async function handleAgentEnd(
   // falsely report files as missing — producing a spurious "ready signal
   // rejected" loop even though the files are on disk.
   clearPathCache();
+  const basePath = resolveAgentEndBasePath();
+  clearGuidedUnitContext(basePath);
 
   try {
-    if (await checkDeepProjectSetupAfterTurn(event, ctx, resolveAgentEndBasePath())) {
+    if (await checkDeepProjectSetupAfterTurn(event, ctx, basePath)) {
       return;
     }
   } catch (err) {
@@ -254,8 +314,8 @@ export async function handleAgentEnd(
     logWarning("bootstrap", `checkDeepProjectSetupAfterTurn failed: ${message}`);
   }
 
-  if (checkAutoStartAfterDiscuss()) {
-    clearDiscussionFlowState(resolveAgentEndBasePath() ?? process.cwd());
+  if (checkAutoStartAfterDiscuss(basePath)) {
+    clearDiscussionFlowState(basePath ?? process.cwd());
     return;
   }
 
@@ -263,14 +323,14 @@ export async function handleAgentEnd(
   // are missing, `checkAutoStartAfterDiscuss` returns false silently. Surface
   // that and nudge the LLM to complete the writes before the user hits the
   // downstream "All milestones complete" warning loop.
-  if (maybeHandleReadyPhraseWithoutFiles(event)) return;
+  if (maybeHandleReadyPhraseWithoutFiles(event, basePath)) return;
 
   // #4573 — Empty-turn recovery: if the LLM announced intent in prose but
   // emitted no tool calls, nudge it to execute. Fires only when auto-mode is
   // active or a discussion autostart is pending (non-auto interactive discuss
   // is user-driven). Runs before `isAutoActive` early return so pending
   // discussions (where isAutoActive may be false) still get recovered.
-  if (maybeHandleEmptyIntentTurn(event, isAutoActive())) return;
+  if (maybeHandleEmptyIntentTurn(event, isAutoActive(), basePath)) return;
 
   if (!isAutoActive()) return;
 
@@ -292,9 +352,22 @@ export async function handleAgentEnd(
   }
 
   if (isBareClaudeCodeStreamAbortPlaceholder(lastMsg)) {
-    // The Claude Code adapter can emit this placeholder after a prior turn has
-    // already completed and the next unit is active. It has no user/provider
-    // diagnostic value and must not cancel the newly-dispatched unit.
+    if (isSessionSwitchAbortGraceActive()) {
+      // Old turn leaking through after a session switch — drop it.
+      return;
+    }
+
+    // Mid-unit stream abort with no diagnostic. Treat as non-fatal so the loop
+    // can continue, but surface it to the user and resolve the in-flight unit.
+    ctx.ui.notify("Claude Code stream aborted mid-unit (no diagnostic). Continuing.", "warning");
+    try {
+      resetRetryState(retryState);
+      resolveAgentEnd(event);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      ctx.ui.notify(`Auto-mode error after stream-abort placeholder: ${message}. Stopping auto-mode.`, "error");
+      try { await pauseAuto(ctx, pi); } catch (e) { logWarning("bootstrap", `pauseAuto failed after stream-abort placeholder: ${(e as Error).message}`); }
+    }
     return;
   }
 
@@ -310,7 +383,7 @@ export async function handleAgentEnd(
     // that carry error context — e.g. errorMessage field or non-empty content
     // indicating a mid-stream failure. (#2695)
     const content = "content" in lastMsg ? lastMsg.content : undefined;
-    const hasEmptyContent = Array.isArray(content) && content.length === 0;
+    const hasEmptyContent = _hasEmptyAgentEndContent(content);
     const hasErrorMessage = "errorMessage" in lastMsg && !!lastMsg.errorMessage;
 
     if (hasEmptyContent && !hasErrorMessage) {
@@ -355,6 +428,17 @@ export async function handleAgentEnd(
       rawErrorMsg,
       "content" in lastMsg ? lastMsg.content : undefined,
     );
+    if (
+      isAutoCompletionStopInProgress() &&
+      isTerminalDeletedWorktreeProviderError(`${rawErrorMsg}\n${displayMsg}`)
+    ) {
+      resetRetryState(retryState);
+      logWarning(
+        "bootstrap",
+        `Ignoring stale deleted-worktree provider error during terminal completion reroot: ${displayMsg || rawErrorMsg}`,
+      );
+      return;
+    }
     const errorDetail = displayMsg ? `: ${displayMsg}` : "";
     const explicitRetryAfterMs = ("retryAfterMs" in lastMsg && typeof lastMsg.retryAfterMs === "number") ? lastMsg.retryAfterMs : undefined;
 
@@ -461,7 +545,20 @@ export async function handleAgentEnd(
     // Core retries transient failures in-session after this handler.
     // Keep that behavior for non-rate-limit classes to avoid pause/retry races,
     // but let rate-limit continue into model fallback logic below (#4373).
-    if (isTransient(cls) && cls.kind !== "rate-limit") {
+    if (shouldDeferTransientErrorToCoreRetry(cls, rawErrorMsg)) {
+      return;
+    }
+
+    if (cls.kind === "tool-schema") {
+      await pauseAutoForProviderError(ctx.ui, errorDetail, () => pauseAuto(ctx, pi, {
+        message: `Tool schema error${errorDetail}`,
+        category: "tool-schema",
+        isTransient: false,
+      }), {
+        isRateLimit: false,
+        isTransient: false,
+        retryAfterMs: 0,
+      });
       return;
     }
 

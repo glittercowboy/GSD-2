@@ -45,7 +45,7 @@ describe("headless milestone bootstrap — parity with interactive flow", () => 
 
     // Match only the actual dispatchWorkflow call — comments in the body
     // may mention "plan-milestone" as part of the fix rationale.
-    const dispatchMatches = [...fnBody.matchAll(/dispatchWorkflow\([^)]*,\s*"([^"]+)"\s*\)/g)];
+    const dispatchMatches = [...fnBody.matchAll(/dispatchWorkflow\([\s\S]*?,\s*"([^"]+)"\s*,\s*\{\s*basePath\s*\}\s*\)/g)];
     assert.strictEqual(
       dispatchMatches.length,
       1,
@@ -65,15 +65,15 @@ describe("headless milestone bootstrap — parity with interactive flow", () => 
       /### Ready-phrase pre-condition \(NON-BYPASSABLE\)/.test(section),
       "single-milestone ready-phrase section must be present",
     );
-    // All four required artifacts must appear as checkboxes, not a prose list.
+    // All four required outcomes must appear as checkboxes, not a prose list.
     for (const artifact of [
-      "`.gsd/PROJECT.md`",
-      "`.gsd/REQUIREMENTS.md`",
+      "PROJECT artifact",
+      "REQUIREMENTS artifact",
       "`{{contextPath}}`",
       "`gsd_plan_milestone`",
     ]) {
       assert.ok(
-        new RegExp(`- \\[ \\] [A-Za-z]+ ${artifact.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`).test(section),
+        new RegExp(`- \\[ \\] [^\\n]*${artifact.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`).test(section),
         `single-milestone pre-condition must include a checkbox for ${artifact}`,
       );
     }
@@ -103,8 +103,8 @@ describe("headless milestone bootstrap — parity with interactive flow", () => 
       "multi-milestone ready-phrase section must be present",
     );
     for (const artifact of [
-      "`.gsd/PROJECT.md`",
-      "`.gsd/REQUIREMENTS.md`",
+      "PROJECT artifact",
+      "REQUIREMENTS artifact",
       "`gsd_plan_milestone`",
       "`.gsd/DISCUSSION-MANIFEST.json`",
     ]) {

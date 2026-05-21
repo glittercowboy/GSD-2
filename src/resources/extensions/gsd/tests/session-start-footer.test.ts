@@ -1,9 +1,11 @@
+// Project/App: GSD-2
+// File Purpose: Verifies GSD session hook widget and footer lifecycle behavior.
+
 /**
- * session-start-footer.test.ts
- *
  * Verifies that register-hooks.ts suppresses the gsd-health widget (not the
- * built-in footer) when isAutoActive() is true, and that setFooter is never
- * called by the extension in either session_start or session_switch.
+ * built-in footer) when isAutoActive() is true, clears stale completion widgets
+ * on inactive session switches, and that setFooter is never called by the
+ * extension in either session_start or session_switch.
  *
  * Testing strategy:
  *   1. Source-code regression guards: structural checks on register-hooks.ts.
@@ -120,6 +122,7 @@ test("session_switch toggles gsd-health from runtime auto state without touching
     },
     sessionManager: { getSessionId: () => null },
     model: null,
+    setCompactionThresholdOverride: () => {},
     modelRegistry: {
       setDisabledModelProviders: () => {},
       getProviderAuthMode: () => undefined,
@@ -139,6 +142,16 @@ test("session_switch toggles gsd-health from runtime auto state without touching
   widgetCalls.length = 0;
   autoSession.active = false;
   await sessionSwitch!({ reason: "resume" }, ctx);
+  assert.deepEqual(
+    widgetCalls
+      .filter((call) => call.key === "gsd-progress" || call.key === "gsd-outcome")
+      .map((call) => [call.key, call.value]),
+    [
+      ["gsd-progress", undefined],
+      ["gsd-outcome", undefined],
+    ],
+    "session_switch should clear stale GSD completion widgets when auto is inactive",
+  );
   const healthWidgetValues = widgetCalls
     .filter((call) => call.key === "gsd-health")
     .map((call) => call.value);
@@ -200,6 +213,7 @@ test("session_start does NOT call setFooter or suppress gsd-health when isAutoAc
     },
     sessionManager: { getSessionId: () => null },
     model: null,
+    setCompactionThresholdOverride: () => {},
   } as any);
 
   assert.equal(setFooterCallCount, 0, "setFooter must NOT be called when isAutoActive() is false");
@@ -276,6 +290,7 @@ test("session_start installs the welcome screen as the TUI header", async (t) =>
     },
     sessionManager: { getSessionId: () => null },
     model: null,
+    setCompactionThresholdOverride: () => {},
   } as any);
 
   assert.equal(typeof headerFactory, "function", "session_start should install a header factory");
@@ -337,6 +352,7 @@ test("session_start and session_switch apply disabled model provider policy from
     },
     sessionManager: { getSessionId: () => null },
     model: null,
+    setCompactionThresholdOverride: () => {},
     modelRegistry: {
       setDisabledModelProviders: (providers: string[]) => {
         appliedPolicies.push([...providers]);

@@ -5,7 +5,7 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { minimatch } from "minimatch";
 
 import { getIsolationMode } from "../preferences.js";
-import type { ToolsPolicy } from "../unit-context-manifest.js";
+import { compileSubagentPermissionContract, type ToolsPolicy } from "../unit-context-manifest.js";
 import { logWarning } from "../workflow-logger.js";
 import { isGsdWorktreePath, resolveWorktreeProjectRoot } from "../worktree-root.js";
 
@@ -64,7 +64,8 @@ const QUEUE_SAFE_TOOLS = new Set([
  *   env / printenv      — print environment variables
  *   true / false        — shell no-ops / test exit codes
  */
-const BASH_READ_ONLY_RE = /^\s*(cat|head|tail|less|more|wc|file|stat|du|df|which|type|echo|printf|ls|find|grep|rg|awk|sed\b(?!.*-i)|sort|uniq|diff|comm|tr|cut|tee\s+-a\s+\/dev\/null|git\s+(log|show|diff|status|branch|tag|remote|rev-parse|ls-files|blame|shortlog|describe|stash\s+list|config\s+--get|cat-file)|gh\s+(issue|pr|api|repo|release)\s+(view|list|diff|status|checks)|mkdir\s+-p\s+\.gsd|rtk\s|npm\s+run\s+(test|test:\w+|lint|lint:\w+|typecheck|type-check|type-check:\w+|check|verify|audit|outdated|format:check|ci|validate)\b|npm\s+(ls|list|info|view|show|outdated|audit|explain|doctor|ping|--version|-v)\b|npx\s|tsx\s|node\s+(--print|--version|-v\b)|python[23]?\s+(-c\s+'[^']*'|--version|-V\b|-m\s+(pip\s+show|pip\s+list|site))|pip[23]?\s+(show|list|freeze|check|index\s+versions)\b|jq\s|yq\s|curl\s+(-s\b|--silent\b)(?!\s+[^|>]*\s-[oO]\b)(?!\s+[^|>]*\s--output\b)[^|>]*$|openssl\s+(version|x509|s_client)|env\b|printenv\b|true\b|false\b)/;
+const BASH_READ_ONLY_RE = /^\s*((?:cd|pushd|popd)(?:\s|$)|cat|head|tail|less|more|wc|file|stat|du|df|which|type|echo|printf|ls|find|grep|rg|awk|sed\b(?!.*-i)|sort|uniq|diff|comm|tr|cut|tee\s+-a\s+\/dev\/null|git\s+(log|show|diff|status|branch|tag|remote|rev-parse|ls-files|blame|shortlog|describe|stash\s+list|config\s+--get|cat-file)|gh\s+(issue|pr|api|repo|release)\s+(view|list|diff|status|checks)|mkdir\s+-p\s+\.gsd|rtk\s|npm\s+run\s+(test|test:\w+|lint|lint:\w+|typecheck|type-check|type-check:\w+|check|verify|audit|outdated|format:check|ci|validate)\b|npm\s+(ls|list|info|view|show|outdated|audit|explain|doctor|ping|--version|-v)\b|npx\s|tsx\s|node\s+(--print|--version|-v\b)|python[23]?\s+(-c\s+'[^']*'|--version|-V\b|-m\s+(pip\s+show|pip\s+list|site))|pip[23]?\s+(show|list|freeze|check|index\s+versions)\b|jq\s|yq\s|curl\s+(-s\b|--silent\b)(?!\s+[^|>]*\s-[oO]\b)(?!\s+[^|>]*\s--output\b)[^|>]*$|openssl\s+(version|x509|s_client)|env\b|printenv\b|true\b|false\b)/;
+const BASH_VERIFICATION_RE = /^\s*(npm\s+(run\s+(build|test|test:\w+|lint|lint:\w+|typecheck|type-check|verify|ci|validate)\b|test\b)|pnpm\s+(build|test|lint|typecheck|verify)\b|yarn\s+(build|test|lint|typecheck|verify)\b|vitest\b|jest\b|go\s+test\b)/;
 
 interface InMemoryWriteGateState {
   verifiedDepthMilestones: Set<string>;
@@ -731,9 +732,16 @@ const PLANNING_SAFE_TOOLS = new Set([
 ]);
 
 function isPathUnderGsd(absPath: string, basePath: string): boolean {
-  const gsdRoot = resolve(basePath, ".gsd");
-  const rel = relative(gsdRoot, absPath);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  const localGsdRoot = resolve(basePath, ".gsd");
+  const localRel = relative(localGsdRoot, absPath);
+  if (localRel === "" || (!localRel.startsWith("..") && !isAbsolute(localRel))) return true;
+
+  const projectRoot = resolveWorktreeProjectRoot(basePath);
+  if (projectRoot === basePath) return false;
+
+  const canonicalGsdRoot = resolve(projectRoot, ".gsd");
+  const canonicalRel = relative(canonicalGsdRoot, absPath);
+  return canonicalRel === "" || (!canonicalRel.startsWith("..") && !isAbsolute(canonicalRel));
 }
 
 function matchesAllowedGlob(absPath: string, basePath: string, globs: readonly string[]): boolean {
@@ -747,7 +755,7 @@ function matchesAllowedGlob(absPath: string, basePath: string, globs: readonly s
 function blockReason(unitType: string, mode: string, what: string): string {
   return [
     `HARD BLOCK: unit "${unitType}" runs under tools-policy "${mode}" — ${what}.`,
-    `This is a mechanical gate enforced by manifest.tools (#4934). You MUST NOT proceed,`,
+    `This is a mechanical gate enforced by manifest.tools. You MUST NOT proceed,`,
     `retry the same call, or rationalize past this block. If you need to write user source,`,
     `the work belongs in execute-task, not in a planning unit.`,
   ].join(" ");
@@ -767,6 +775,9 @@ function blockReason(unitType: string, mode: string, what: string): string {
  *                    and listed in the policy's allowedSubagents.
  *   - "docs"       → like "planning" but also allows writes to paths
  *                    matching `allowedPathGlobs` relative to basePath.
+ *   - "verification"
+ *                  → allows Bash for project verification commands, but keeps
+ *                    writes restricted to .gsd/ and blocks subagent dispatch.
  *
  * `pathOrCommand` is the file path for write/edit-shaped tools and the
  * shell command for bash. Other tools ignore this argument.
@@ -804,14 +815,15 @@ export function shouldBlockPlanningUnit(
     return { block: true, reason: blockReason(unitType, policy.mode, `tool "${tool}" is not on the read-only allowlist`) };
   }
 
-  // planning / planning-dispatch / docs modes share the same surface for safe tools, bash, and subagent.
+  // planning / planning-dispatch / docs / verification modes share the same surface for safe tools, bash, and subagent.
   if (PLANNING_SAFE_TOOLS.has(tool)) return { block: false };
   if (tool.startsWith("gsd_")) return { block: false };
 
   if (PLANNING_SUBAGENT_TOOLS.has(tool)) {
     if (policy.mode === "planning-dispatch") {
       const requested = (agentClasses ?? []).map(a => a.trim()).filter(Boolean);
-      const allowedSubagents = Array.isArray(policy.allowedSubagents) ? policy.allowedSubagents : [];
+      const dispatchContract = compileSubagentPermissionContract(policy);
+      const allowedSubagents = dispatchContract.allowedSubagents;
       const allowed = new Set(allowedSubagents);
       // When agentClasses is undefined, the caller has not been updated to extract
       // agent identities yet. Block and warn so stale callers surface in telemetry
@@ -861,6 +873,17 @@ export function shouldBlockPlanningUnit(
   }
 
   if (tool === "bash") {
+    if (policy.mode === "verification") {
+      if (BASH_VERIFICATION_RE.test(pathOrCommand) || BASH_READ_ONLY_RE.test(pathOrCommand)) return { block: false };
+      return {
+        block: true,
+        reason: blockReason(
+          unitType,
+          policy.mode,
+          `bash is restricted to build/test verification commands (npm run build, npm test, etc.); cannot run "${pathOrCommand.slice(0, 80)}${pathOrCommand.length > 80 ? "…" : ""}"`,
+        ),
+      };
+    }
     if (BASH_READ_ONLY_RE.test(pathOrCommand)) return { block: false };
     return {
       block: true,
@@ -951,9 +974,9 @@ function isPathContained(target: string, container: string): boolean {
  * while `git.isolation: worktree` is in effect and auto-mode hasn't created
  * (or flipped cwd into) the milestone worktree.
  *
- * Pure / unit-testable. Callers in `register-hooks.ts` supply the resolved
- * project root and current auto liveness; this function does no I/O beyond
- * realpath resolution.
+ * Pure / unit-testable. Callers in `register-hooks.ts` supply the effective
+ * execution base path (worker cwd or project root) and current auto liveness;
+ * this function does no I/O beyond realpath resolution.
  *
  * Allow rules (in order):
  *   1. Tool isn't a planning-write (write/edit/multi_edit/notebook_edit).
@@ -991,10 +1014,11 @@ export function shouldBlockWorktreeWrite(
     };
   }
 
-  // Resolve the target relative to the project root, then realpath to defeat
+  // Resolve relative targets against the effective execution base path, then
+  // canonicalize against the project root to defeat
   // symlink-based escapes and prefix tricks (e.g. .gsd/worktrees-extra/).
   const projectRoot = resolveWorktreeProjectRoot(effectiveBasePath);
-  const absTarget = isAbsolute(targetPath) ? targetPath : resolve(projectRoot, targetPath);
+  const absTarget = isAbsolute(targetPath) ? targetPath : resolve(effectiveBasePath, targetPath);
   const realTarget = realpathOrResolve(absTarget);
   const realRoot = realpathOrResolve(projectRoot);
   const realGsd = realpathOrResolve(join(projectRoot, ".gsd"));

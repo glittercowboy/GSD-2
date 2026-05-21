@@ -1,6 +1,6 @@
 **Working directory:** `{{workingDirectory}}`. All file reads, writes, and shell commands MUST operate relative to this directory. Do NOT `cd` elsewhere. For `.gsd` files, use absolute paths rooted at `{{workingDirectory}}`, not `Glob`.
 
-Discuss the **project** as a whole: vision, users, anti-goals, constraints, and rough milestone sequence. Ask only real gray areas, then write `.gsd/PROJECT.md` with the **Project** template below. If a `GSD Skill Preferences` block exists, use it; artifact rules still apply.
+Discuss the **project** as a whole: vision, users, anti-goals, constraints, and rough milestone sequence. Ask only real gray areas, then persist the final Project template through `gsd_summary_save` with `artifact_type: "PROJECT"`. The tool renders `.gsd/PROJECT.md`; do not write the projection directly. If a `GSD Skill Preferences` block exists, use it; artifact rules still apply.
 
 This runs once before milestone discussion. Later milestones, requirements, and roadmaps depend on it.
 
@@ -34,7 +34,7 @@ After the opening answer, classify project shape as **`simple`** or **`complex`*
 
 **Default to `complex` when uncertain.** The user can override the verdict in plain text; if they do, accept it and proceed.
 
-Persist the verdict to PROJECT.md -> `## Project Shape`; downstream `discuss-requirements`, `discuss-milestone`, and `discuss-slice` read it from there.
+Persist the verdict through `gsd_summary_save` with `artifact_type: "PROJECT"` into `## Project Shape`; downstream `discuss-requirements`, `discuss-milestone`, and `discuss-slice` read the rendered projection.
 
 ### Before deeper rounds
 
@@ -95,7 +95,7 @@ If they clarify, absorb the correction and re-verify.
 
 The depth verification is the only required confirmation gate. Do not add a second "ready to proceed?" gate after it.
 
-**CRITICAL — Confirmation gate:** Do not write final PROJECT.md until the user selects the "(Recommended)" option (structured path) or explicitly confirms (plain-text path). If the user declines, cancels, does not respond, or the tool fails, re-ask.
+**CRITICAL — Confirmation gate:** Do not persist final PROJECT content until the user selects the "(Recommended)" option (structured path) or explicitly confirms (plain-text path). If the user declines, cancels, does not respond, or the tool fails, re-ask.
 
 ---
 
@@ -104,7 +104,7 @@ The depth verification is the only required confirmation gate. Do not add a seco
 Once the user confirms depth:
 
 1. Use the **Project** output template (inlined above).
-2. Call `gsd_summary_save` with `artifact_type: "PROJECT"` and full project markdown as `content`; omit `milestone_id`. The tool writes `.gsd/PROJECT.md` and persists to DB. Preserve the user's terms and framing.
+2. Call `gsd_summary_save` with `artifact_type: "PROJECT"` and full project markdown as `content`; omit `milestone_id`. The tool persists the DB-backed PROJECT artifact and renders `.gsd/PROJECT.md`. Preserve the user's terms and framing.
 3. The `## Project Shape` section MUST contain `**Complexity:** simple` or `**Complexity:** complex` (matching the verdict you announced) plus a one-line `**Why:**` rationale. Downstream stages read this line.
 4. The `## Capability Contract` section MUST reference `.gsd/REQUIREMENTS.md` — that file does not yet exist; the next stage (`discuss-requirements`) will produce it.
 5. The `## Milestone Sequence` MUST list at least M001 with title and one-liner. Subsequent milestones may be listed as known intents; they will be elaborated in their own discuss-milestone stages.

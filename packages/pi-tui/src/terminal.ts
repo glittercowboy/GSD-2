@@ -58,6 +58,10 @@ export interface Terminal {
 export class ProcessTerminal implements Terminal {
 	private static _vtHandles: { GetConsoleMode: any; SetConsoleMode: any; handle: any } | null = null;
 	private wasRaw = false;
+	private started = false;
+	private readonly processExitHandler = () => {
+		this.stop();
+	};
 	private inputHandler?: (data: string) => void;
 	private resizeHandler?: () => void;
 	private _kittyProtocolActive = false;
@@ -81,6 +85,8 @@ export class ProcessTerminal implements Terminal {
 		if (!this.isTTY) {
 			return;
 		}
+		if (this.started) return;
+		this.started = true;
 
 		this.inputHandler = onInput;
 		this.resizeHandler = onResize;
@@ -115,6 +121,7 @@ export class ProcessTerminal implements Terminal {
 		// The query handler intercepts input temporarily, then installs the user's handler
 		// See: https://sw.kovidgoyal.net/kitty/keyboard-protocol/
 		this.queryAndEnableKittyProtocol();
+		process.once("exit", this.processExitHandler);
 	}
 
 	/**
@@ -267,6 +274,10 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	stop(): void {
+		if (!this.started) return;
+		this.started = false;
+		process.removeListener("exit", this.processExitHandler);
+
 		// Disable bracketed paste mode
 		process.stdout.write("\x1b[?2004l");
 

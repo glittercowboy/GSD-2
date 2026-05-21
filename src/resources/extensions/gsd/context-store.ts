@@ -67,27 +67,19 @@ export function queryDecisions(opts?: DecisionQueryOpts): Decision[] {
 }
 
 /**
- * ADR-013 Phase 6 cutover (Stage 1): read active decisions from the `memories`
- * table instead of the legacy `decisions` table. Returns the same `Decision[]`
- * shape as `queryDecisions` so downstream formatters work unchanged.
+ * Internal: shared core for the two memory-sourced decision queries. Reads
+ * memory rows tagged with `sourceDecisionId` and reconstructs `Decision[]`
+ * from their `structured_fields` JSON.
  *
- * Filter semantics match `queryDecisions` exactly:
- * - active only (memory's own `superseded_by IS NULL`)
- * - `milestoneId`: matches when the JSON value of `structured_fields.when_context`
- *   contains the milestone token, mirroring `when_context LIKE '%milestoneId%'`
- *   on the legacy table
- * - `scope`: exact match on `structured_fields.scope`, mirroring `scope = :scope`
- *
- * Both surfaces filter to active rows, so once the Phase 5 dual-write is
- * caught up (PR #5765's scanner reading zero gaps), `queryDecisions` and
- * `queryDecisionsFromMemories` return byte-equivalent results.
- *
- * `superseded_by` is always `null` here: the `decisions` table's
- * supersedes-chain is not preserved by today's backfill (only active rows
- * are migrated), so the field has no source in memories. Acceptable for
- * prompt inlining, which never reads superseded entries.
+ * @param includeSuperseded — when false, drops rows whose
+ *   `structured_fields.superseded_by` is non-null. The supersedes-chain is
+ *   captured by the backfill (`memory-backfill.ts`) and kept in sync by
+ *   the backfill's drift auto-heal pass.
  */
-export function queryDecisionsFromMemories(opts?: DecisionQueryOpts): Decision[] {
+function readDecisionsFromMemories(
+  opts: DecisionQueryOpts | undefined,
+  includeSuperseded: boolean,
+): Decision[] {
   if (!isDbAvailable()) return [];
   const adapter = _getAdapter();
   if (!adapter) return [];
@@ -96,7 +88,6 @@ export function queryDecisionsFromMemories(opts?: DecisionQueryOpts): Decision[]
     const clauses: string[] = [
       "category = 'architecture'",
       "structured_fields LIKE '%\"sourceDecisionId\":\"%'",
-      "superseded_by IS NULL",
     ];
     const params: Record<string, unknown> = {};
 
@@ -108,6 +99,9 @@ export function queryDecisionsFromMemories(opts?: DecisionQueryOpts): Decision[]
     }
 
     if (opts?.scope) {
+      // Stage 1 used `json_extract` in main (post-merge); preserve that
+      // style here. Exact equality on the JSON value avoids the prefix
+      // collision risk LIKE patterns had (scope=M001 vs scope=M001-S01).
       clauses.push("json_extract(structured_fields, '$.scope') = :scope");
       params[':scope'] = opts.scope;
     }
@@ -129,6 +123,13 @@ export function queryDecisionsFromMemories(opts?: DecisionQueryOpts): Decision[]
       const sourceId = sf['sourceDecisionId'];
       if (typeof sourceId !== 'string' || sourceId.length === 0) continue;
 
+      // Decision-level superseded status lives in structured_fields.superseded_by
+      // (written by mirrorDecisionToMemory / memory-backfill.ts). The top-level
+      // memories.superseded_by column is intentionally never set for decision mirrors,
+      // so active-only filtering must be done here in the JS loop.
+      const supersededBy = typeof sf['superseded_by'] === 'string' ? (sf['superseded_by'] as string) : null;
+      if (!includeSuperseded && supersededBy) continue;
+
       decisions.push({
         seq,
         id: sourceId,
@@ -139,7 +140,7 @@ export function queryDecisionsFromMemories(opts?: DecisionQueryOpts): Decision[]
         rationale: typeof sf['rationale'] === 'string' ? (sf['rationale'] as string) : '',
         revisable: typeof sf['revisable'] === 'string' ? (sf['revisable'] as string) : '',
         made_by: ((typeof sf['made_by'] === 'string' ? sf['made_by'] : 'agent') as DecisionMadeBy),
-        superseded_by: null,
+        superseded_by: supersededBy,
       });
     }
 
@@ -147,6 +148,41 @@ export function queryDecisionsFromMemories(opts?: DecisionQueryOpts): Decision[]
   } catch {
     return [];
   }
+}
+
+/**
+ * ADR-013 Phase 6 cutover (Stage 1): read **active** decisions from the
+ * `memories` table instead of the legacy `decisions` table. Returns the
+ * same `Decision[]` shape as `queryDecisions` so downstream formatters
+ * work unchanged.
+ *
+ * Filter semantics match `queryDecisions` exactly:
+ * - active only (skips rows where `structured_fields.superseded_by` is set)
+ * - `milestoneId`: substring match on `structured_fields.when_context`
+ * - `scope`: exact match on `structured_fields.scope`
+ *
+ * Used by the prompt-inline path (`inlineDecisionsFromDb` in
+ * `auto-prompts.ts`). For the projection regen (which renders superseded
+ * rows too), see `getAllDecisionsFromMemories`.
+ */
+export function queryDecisionsFromMemories(opts?: DecisionQueryOpts): Decision[] {
+  return readDecisionsFromMemories(opts, /* includeSuperseded */ false);
+}
+
+/**
+ * ADR-013 Phase 6 cutover (Stage 2a): read **all** decisions (active +
+ * superseded) from the `memories` table. Used by the DECISIONS.md
+ * projection regen in `saveDecisionToDb`, which must render the full
+ * supersedes-chain for the canonical register format.
+ *
+ * Equivalent to `SELECT * FROM decisions ORDER BY seq` over the legacy
+ * table — but sourced from memories so the legacy table can be retired
+ * in Stage 3. Includes `superseded_by` reconstructed from
+ * `structured_fields.superseded_by` (populated by the backfill's drift
+ * auto-heal pass).
+ */
+export function getAllDecisionsFromMemories(): Decision[] {
+  return readDecisionsFromMemories(undefined, /* includeSuperseded */ true);
 }
 
 /**

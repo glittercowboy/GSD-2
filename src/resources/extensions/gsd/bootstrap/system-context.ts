@@ -13,6 +13,7 @@ import { resolveAllSkillReferences, renderPreferencesForSystemPrompt, loadEffect
 import { resolveModelWithFallbacksForUnit } from "../preferences-models.js";
 import { resolveSkillReference } from "../preferences-skills.js";
 import { resolveGsdRootFile, resolveSliceFile, resolveSlicePath, resolveTaskFile, resolveTaskFiles, resolveTasksDir, relSliceFile, relSlicePath, relTaskFile } from "../paths.js";
+import { extractIntroAndRules } from "../knowledge-parser.js";
 import { ensureCodebaseMapFresh, readCodebaseMap } from "../codebase-generator.js";
 import { hasSkillSnapshot, detectNewSkills, formatSkillsXml } from "../skill-discovery.js";
 import { getActiveAutoWorktreeContext } from "../auto-worktree.js";
@@ -131,9 +132,14 @@ export async function buildBeforeAgentStartResult(
     logWarning("bootstrap", `cmux prompt setup skipped: ${(e as Error).message}`);
   }
 
+  const ctxProjectRoot = (ctx as { projectRoot?: unknown }).projectRoot;
+  const basePath = typeof ctxProjectRoot === "string" && ctxProjectRoot.length > 0
+    ? ctxProjectRoot
+    : process.cwd();
+
   let preferenceBlock = "";
   if (loadedPreferences) {
-    const cwd = process.cwd();
+    const cwd = basePath;
     const report = resolveAllSkillReferences(loadedPreferences.preferences, cwd);
     preferenceBlock = `\n\n${renderPreferencesForSystemPrompt(loadedPreferences.preferences, report.resolutions)}`;
     if (report.warnings.length > 0) {
@@ -144,14 +150,6 @@ export async function buildBeforeAgentStartResult(
     }
   }
 
-  const { block: knowledgeBlock, globalSizeKb } = loadKnowledgeBlock(gsdHome(), process.cwd());
-  if (globalSizeKb > 4) {
-    ctx.ui.notify(
-      `GSD: ~/.gsd/agent/KNOWLEDGE.md is ${globalSizeKb.toFixed(1)}KB — consider trimming to keep system prompt lean.`,
-      "warning",
-    );
-  }
-
   // ADR-013 step 5: opportunistic decisions->memories backfill. Idempotent
   // and best-effort — first run absorbs the existing decisions table into
   // the memory store; subsequent runs are a single sentinel SELECT.
@@ -159,21 +157,48 @@ export async function buildBeforeAgentStartResult(
     const { backfillDecisionsToMemories } = await import("../memory-backfill.js");
     const written = backfillDecisionsToMemories();
     if (written > 0) {
-      ctx.ui.notify(`GSD: backfilled ${written} decision${written === 1 ? "" : "s"} into the memory store (ADR-013).`, "info");
+      ctx.ui.notify(`GSD: backfilled ${written} decision${written === 1 ? "" : "s"} into the memory store.`, "info");
     }
   } catch (e) {
     logWarning("bootstrap", `decisions backfill failed: ${(e as Error).message}`);
   }
 
+  // ADR-013 Stage 2b: KNOWLEDGE.md Patterns + Lessons backfill, then
+  // re-render the hybrid projection (manual Rules + projected Patterns +
+  // projected Lessons). Both are idempotent and best-effort — failures here
+  // can't block agent startup.
+  try {
+    const { backfillKnowledgeToMemories } = await import("../knowledge-backfill.js");
+    const writtenK = backfillKnowledgeToMemories(basePath);
+    if (writtenK > 0) {
+      ctx.ui.notify(`GSD: backfilled ${writtenK} KNOWLEDGE.md row${writtenK === 1 ? "" : "s"} into the memory store.`, "info");
+    }
+  } catch (e) {
+    logWarning("bootstrap", `KNOWLEDGE.md backfill failed: ${(e as Error).message}`);
+  }
+  try {
+    const { renderKnowledgeProjection } = await import("../knowledge-projection.js");
+    renderKnowledgeProjection(basePath);
+  } catch (e) {
+    logWarning("bootstrap", `KNOWLEDGE.md projection render failed: ${(e as Error).message}`);
+  }
+
   // ADR-013 step 6 preflight: warn when decisions / KNOWLEDGE.md rows are not
-  // yet in the memories table. Read-only; never throws. The Phase 6 cutover
-  // is blocked on this signal reading clean, so users see the gap before
-  // any destructive step lands.
+  // yet in the memories table. Read-only; never throws. Runs after the two
+  // backfills above so the gap report reflects post-backfill state.
   try {
     const { reportConsolidationGaps } = await import("../memory-consolidation-scanner.js");
-    reportConsolidationGaps(process.cwd());
+    reportConsolidationGaps(basePath);
   } catch (e) {
     logWarning("bootstrap", `memory consolidation scan failed: ${(e as Error).message}`);
+  }
+
+  const { block: knowledgeBlock, globalSizeKb } = loadKnowledgeBlock(gsdHome(), basePath);
+  if (globalSizeKb > 4) {
+    ctx.ui.notify(
+      `GSD: ~/.gsd/agent/KNOWLEDGE.md is ${globalSizeKb.toFixed(1)}KB — consider trimming to keep system prompt lean.`,
+      "warning",
+    );
   }
 
   let newSkillsBlock = "";
@@ -381,7 +406,9 @@ export async function loadMemoryBlock(
 }
 
 export function loadKnowledgeBlock(gsdHomeDir: string, cwd: string): { block: string; globalSizeKb: number } {
-  // 1. Global knowledge (~/.gsd/agent/KNOWLEDGE.md) — cross-project, user-maintained
+  // 1. Global knowledge (~/.gsd/agent/KNOWLEDGE.md) — cross-project,
+  //    user-maintained. NOT migrated to memories (which are project-scoped),
+  //    so the full file is injected unchanged.
   let globalKnowledge = "";
   let globalSizeKb = 0;
   const globalKnowledgePath = join(gsdHomeDir, "agent", "KNOWLEDGE.md");
@@ -397,13 +424,18 @@ export function loadKnowledgeBlock(gsdHomeDir: string, cwd: string): { block: st
     }
   }
 
-  // 2. Project knowledge (.gsd/KNOWLEDGE.md) — project-specific
+  // 2. Project knowledge (.gsd/KNOWLEDGE.md) — project-specific.
+  //    ADR-013 Stage 2b: Patterns and Lessons are projected from the
+  //    memories table and already reach the LLM via loadMemoryBlock. Inject
+  //    only the intro prose + `## Rules` section here to avoid duplicating
+  //    Patterns/Lessons content in the prompt. Rules stay manual per
+  //    ADR-013 line 39 and have no memory equivalent.
   let projectKnowledge = "";
   const knowledgePath = resolveGsdRootFile(cwd, "KNOWLEDGE");
   if (existsSync(knowledgePath)) {
     try {
-      const content = readFileSync(knowledgePath, "utf-8").trim();
-      if (content) projectKnowledge = content;
+      const raw = readFileSync(knowledgePath, "utf-8").trim();
+      if (raw) projectKnowledge = extractIntroAndRules(raw).trim();
     } catch (e) {
       logWarning("bootstrap", `project knowledge file read failed: ${(e as Error).message}`);
     }
@@ -422,7 +454,7 @@ export function loadKnowledgeBlock(gsdHomeDir: string, cwd: string): { block: st
   }
   const body = limitKnowledgeBlock(parts.join("\n\n"), getKnowledgeCharLimit());
   return {
-    block: `\n\n[KNOWLEDGE — Rules, patterns, and lessons learned]\n\n${body}`,
+    block: `\n\n[KNOWLEDGE — Rules from KNOWLEDGE.md (Patterns and Lessons reach the LLM via the memory block)]\n\n${body}`,
     globalSizeKb,
   };
 }

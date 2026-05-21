@@ -203,9 +203,9 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 		addGuideline("Prefer grep/find/ls tools over bash for file exploration (faster, respects .gitignore)");
 	}
 
-	// Read before edit guideline
-	if (hasRead && hasEdit) {
-		addGuideline("Use read to examine files before editing. You must use this tool instead of cat or sed.");
+	// Read before file mutation guideline
+	if (hasRead && (hasEdit || hasWrite)) {
+		addGuideline("Use read to examine relevant existing files before editing or overwriting. Before write creates or replaces a file, verify the target path; if it exists, read it first. Use read instead of cat or sed for file inspection.");
 	}
 
 	// Edit guideline
@@ -215,7 +215,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 
 	// Write guideline
 	if (hasWrite) {
-		addGuideline("Use write only for new files or complete rewrites");
+		addGuideline("Use write only for new files or complete rewrites after verifying the target path");
 	}
 
 	// LSP guideline

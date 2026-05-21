@@ -24,6 +24,7 @@ Simplified Chinese translation: [`zh-CN/`](./zh-CN/).
 | [Cost Management](./user-docs/cost-management.md) | Budget ceilings, cost tracking, projections, and enforcement modes |
 | [Git Strategy](./user-docs/git-strategy.md) | Worktree isolation, branching model, and merge behavior |
 | [Parallel Orchestration](./user-docs/parallel-orchestration.md) | Run multiple milestones simultaneously with worker isolation and coordination |
+| [Subagents](./user-docs/subagents.md) | Delegate, inspect, and resume isolated child-agent runs |
 | [Working in Teams](./user-docs/working-in-teams.md) | Unique milestone IDs, `.gitignore` setup, and shared planning artifacts |
 | [Skills](./user-docs/skills.md) | Bundled skills, skill discovery, and custom skill authoring |
 | [Migration from v1](./user-docs/migration.md) | Migrating `.planning` directories from the original GSD |

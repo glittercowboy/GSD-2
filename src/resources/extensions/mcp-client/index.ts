@@ -24,28 +24,19 @@ import { Type } from "@sinclair/typebox";
 import { Client } from "@modelcontextprotocol/sdk/client";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
 import { buildHttpTransportOpts } from "./auth.js";
-import type { McpHttpAuthConfig } from "./auth.js";
-import { gsdHome } from "../gsd/gsd-home.js";
+import {
+	buildMcpChildEnv,
+	clearMcpConfigCache,
+	getMcpServerConfig,
+	readMcpServerConfigs,
+	resolveMcpEnv,
+	type ManagedMcpServerConfig,
+} from "./manager.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-interface McpServerConfig {
-	name: string;
-	transport: "stdio" | "http" | "unknown";
-	sourcePath: string;
-	command?: string;
-	args?: string[];
-	env?: Record<string, string>;
-	url?: string;
-	cwd?: string;
-	/** Static headers for HTTP transport (supports ${VAR} env resolution). */
-	headers?: Record<string, string>;
-	/** OAuth config for HTTP transport. */
-	oauth?: McpHttpAuthConfig["oauth"];
-}
+type McpServerConfig = ManagedMcpServerConfig;
 
 interface McpToolSchema {
 	name: string;
@@ -62,28 +53,8 @@ interface ManagedConnection {
 
 const connections = new Map<string, ManagedConnection>();
 const pendingConnections = new Map<string, Promise<Client>>();
-let configCache: McpServerConfig[] | null = null;
 const toolCache = new Map<string, McpToolSchema[]>();
 const trustedStdioServers = new Set<string>();
-
-const CHILD_ENV_ALLOWLIST = new Set([
-	"PATH",
-	"Path",
-	"HOME",
-	"USER",
-	"USERNAME",
-	"USERPROFILE",
-	"SHELL",
-	"TMPDIR",
-	"TEMP",
-	"TMP",
-	"SystemRoot",
-	"WINDIR",
-	"APPDATA",
-	"LOCALAPPDATA",
-	"XDG_CONFIG_HOME",
-	"XDG_CACHE_HOME",
-]);
 
 function stdioTrustKey(config: McpServerConfig): string {
 	return JSON.stringify({
@@ -97,77 +68,11 @@ function stdioTrustKey(config: McpServerConfig): string {
 }
 
 function readConfigs(): McpServerConfig[] {
-	if (configCache) return configCache;
-
-	const servers: McpServerConfig[] = [];
-	const seen = new Set<string>();
-	const configPaths = [
-		join(process.cwd(), ".mcp.json"),
-		join(process.cwd(), ".gsd", "mcp.json"),
-		join(gsdHome(), "mcp.json"),
-	];
-
-	for (const configPath of configPaths) {
-		try {
-			if (!existsSync(configPath)) continue;
-			const raw = readFileSync(configPath, "utf-8");
-			const data = JSON.parse(raw) as Record<string, unknown>;
-			const mcpServers = (data.mcpServers ?? data.servers) as
-				| Record<string, Record<string, unknown>>
-				| undefined;
-			if (!mcpServers || typeof mcpServers !== "object") continue;
-
-			for (const [name, config] of Object.entries(mcpServers)) {
-				if (seen.has(name)) continue;
-				seen.add(name);
-
-				const hasCommand = typeof config.command === "string";
-				const hasUrl = typeof config.url === "string";
-				const transport: McpServerConfig["transport"] = hasCommand
-					? "stdio"
-					: hasUrl
-						? "http"
-						: "unknown";
-
-				const hasHeaders = hasUrl && config.headers && typeof config.headers === "object";
-				const hasOAuth = hasUrl && config.oauth && typeof config.oauth === "object";
-
-				servers.push({
-					name,
-					transport,
-					sourcePath: configPath,
-					...(hasCommand && {
-						command: config.command as string,
-						args: Array.isArray(config.args) ? (config.args as string[]) : undefined,
-						env: config.env && typeof config.env === "object"
-							? (config.env as Record<string, string>)
-							: undefined,
-						cwd: typeof config.cwd === "string" ? config.cwd : undefined,
-					}),
-					...(hasUrl && { url: config.url as string }),
-					headers: hasHeaders ? config.headers as Record<string, string> : undefined,
-					oauth: hasOAuth ? config.oauth as McpHttpAuthConfig["oauth"] : undefined,
-				});
-			}
-		} catch {
-			// Non-fatal — config file may not exist or be malformed
-		}
-	}
-
-	configCache = servers;
-	return servers;
+	return readMcpServerConfigs();
 }
 
 export function _buildMcpChildEnvForTest(configEnv: Record<string, string> | undefined): Record<string, string> {
-	const childEnv: Record<string, string> = {};
-	for (const key of CHILD_ENV_ALLOWLIST) {
-		const value = process.env[key];
-		if (typeof value === "string") childEnv[key] = value;
-	}
-	return {
-		...childEnv,
-		...(configEnv ? resolveEnv(configEnv) : {}),
-	};
+	return buildMcpChildEnv(configEnv);
 }
 
 export function _buildMcpTrustConfirmOptionsForTest(signal?: AbortSignal): { timeout: number; signal?: AbortSignal } {
@@ -209,27 +114,12 @@ async function assertTrustedStdioServer(
 // Exported for tests (see tests/server-name-spaces.test.ts).
 // Production call sites treat this as module-private.
 export function getServerConfig(name: string): McpServerConfig | undefined {
-	const trimmed = name.trim();
-	return readConfigs().find((s) =>
-		s.name === trimmed ||
-		s.name.toLowerCase() === trimmed.toLowerCase(),
-	);
+	return getMcpServerConfig(name);
 }
 
 /** Resolve ${VAR} references in env values against process.env. */
 function resolveEnv(env: Record<string, string>): Record<string, string> {
-	const resolved: Record<string, string> = {};
-	for (const [key, value] of Object.entries(env)) {
-		if (typeof value === "string") {
-			resolved[key] = value.replace(
-				/\$\{([^}]+)\}/g,
-				(_match, varName) => process.env[varName] ?? "",
-			);
-		} else {
-			resolved[key] = value;
-		}
-	}
-	return resolved;
+	return resolveMcpEnv(env);
 }
 
 async function getOrConnect(name: string, signal?: AbortSignal, ctx?: ExtensionContext): Promise<Client> {
@@ -403,14 +293,12 @@ export default function (pi: ExtensionAPI) {
 		}),
 
 		async execute(_id, params) {
-			if (params.refresh) configCache = null;
-
-			const servers = readConfigs();
+			const servers = readMcpServerConfigs({ refresh: !!params.refresh });
 			return {
 				content: [{ type: "text", text: formatServerList(servers) }],
 				details: {
 					serverCount: servers.length,
-					cached: !params.refresh && configCache !== null,
+					cached: !params.refresh,
 				},
 			};
 		},
@@ -633,6 +521,6 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("session_switch", async () => {
 		await closeAll();
-		configCache = null;
+		clearMcpConfigCache();
 	});
 }

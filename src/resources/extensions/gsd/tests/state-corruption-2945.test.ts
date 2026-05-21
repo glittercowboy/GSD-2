@@ -271,6 +271,11 @@ describe("#2945 Bug 3: mergeAndExit must teardown worktree after successful merg
     // a real git fixture and verify the worktree directory is removed
     // from disk after the merge.
     const tmpBase = realpathSync(mkdtempSync(join(tmpdir(), "gsd-2945-bug3-")));
+    // ADR-016 phase 3 (#5693): Lifecycle.restoreToProjectRoot now chdirs to
+    // s.originalBasePath. Save cwd before the test so we can restore it
+    // before rmSync removes tmpBase — otherwise the next test in this file
+    // inherits a deleted cwd and process.cwd() throws ENOENT (uv_cwd).
+    const prevCwd = process.cwd();
     try {
       const git = (args: string[]): void => {
         execFileSync("git", args, { cwd: tmpBase, stdio: "pipe" });
@@ -325,6 +330,7 @@ describe("#2945 Bug 3: mergeAndExit must teardown worktree after successful merg
         `teardownAutoWorktree must be called after successful merge — worktree directory at ${wt} should be removed`,
       );
     } finally {
+      try { process.chdir(prevCwd); } catch { /* noop */ }
       try { rmSync(tmpBase, { recursive: true, force: true }); } catch { /* noop */ }
     }
   });

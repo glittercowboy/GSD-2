@@ -1,3 +1,5 @@
+// Project/App: GSD-2
+// File Purpose: Derive browser workflow action labels and commands from workspace state.
 /**
  * Pure derivation of the primary workflow action based on workspace state.
  * No React dependencies — fully testable with plain imports.
@@ -11,6 +13,7 @@ export interface WorkflowActionInput {
   commandInFlight: string | null
   bootStatus: string
   hasMilestones: boolean
+  stepMode?: boolean
   /** When set, suppresses the action bar if the welcome screen is handling initialization. */
   projectDetectionKind?: string | null
 }
@@ -31,7 +34,7 @@ export interface WorkflowActionResult {
 }
 
 export function deriveWorkflowAction(input: WorkflowActionInput): WorkflowActionResult {
-  const { phase, autoActive, autoPaused, onboardingLocked, commandInFlight, bootStatus, hasMilestones, projectDetectionKind } = input
+  const { phase, autoActive, autoPaused, onboardingLocked, commandInFlight, bootStatus, hasMilestones, stepMode = false, projectDetectionKind } = input
 
   // When the project welcome screen is active, it handles the initialization CTA.
   // Suppress the action bar to avoid duplicate/confusing buttons.
@@ -65,6 +68,8 @@ export function deriveWorkflowAction(input: WorkflowActionInput): WorkflowAction
 
   if (autoActive && !autoPaused) {
     primary = { label: "Stop Auto", command: "/gsd stop", variant: "destructive" }
+  } else if (stepMode && hasMilestones && phase !== "complete" && phase !== "blocked") {
+    primary = { label: "Next Step", command: "/gsd next", variant: "default" }
   } else if (autoPaused) {
     primary = { label: "Resume Auto", command: "/gsd auto", variant: "default" }
   } else {

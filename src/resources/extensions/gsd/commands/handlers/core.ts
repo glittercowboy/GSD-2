@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@gsd/pi-coding-agent";
 import type { Model } from "@gsd/pi-ai";
 import type { GSDState } from "../../types.js";
+import { createRequire } from "node:module";
 
 import { computeProgressScore, formatProgressLine } from "../../progress-score.js";
 import { loadEffectiveGSDPreferences, getGlobalGSDPreferencesPath, getProjectGSDPreferencesPath } from "../../preferences.js";
@@ -11,13 +12,15 @@ import { handleCmux } from "../../commands-cmux.js";
 import { setSessionModelOverride } from "../../session-model-override.js";
 import { projectRoot } from "../context.js";
 import { formattedShortcutPair } from "../../shortcut-defs.js";
+import { getVisualBriefOutputDir } from "../../../visual-brief/artifact-policy.js";
+import { buildVisualBriefPrompt, parseVisualBriefArgs, VISUAL_BRIEF_USAGE } from "../../../visual-brief/prompts.js";
 
 export function showHelp(ctx: ExtensionCommandContext, args = ""): void {
   const summaryLines = [
     "GSD — Get Shit Done\n",
     "QUICK START",
     "  /gsd start <tpl>   Start a workflow template",
-    "  /gsd               Run next unit (same as /gsd next)",
+    "  /gsd               Open the state-aware home menu",
     "  /gsd auto          Run all queued units continuously",
     "  /gsd pause         Pause auto-mode",
     "  /gsd stop          Stop auto-mode gracefully",
@@ -27,6 +30,7 @@ export function showHelp(ctx: ExtensionCommandContext, args = ""): void {
     `  /gsd parallel watch Parallel monitor  (${formattedShortcutPair("parallel")})`,
     `  /gsd notifications  Notification history  (${formattedShortcutPair("notifications")})`,
     "  /gsd visualize      Interactive 10-tab TUI",
+    "  /gsd brief <mode>   Visual HTML brief (diagram, plan, diff, recap, table, slides)",
     "  /gsd queue          Show queued/dispatched units",
     "",
     "COURSE CORRECTION",
@@ -48,6 +52,7 @@ export function showHelp(ctx: ExtensionCommandContext, args = ""): void {
     "  /gsd prefs          Manage preferences (alias for /gsd setup prefs)",
     "  /gsd keys           API key manager (LLM + tool keys)",
     "  /gsd doctor         Diagnose and repair .gsd/ state",
+    "  /gsd closeout       Recover failed git closeout actions",
     "",
     "Use /gsd help full for the complete command reference.",
   ];
@@ -57,7 +62,7 @@ export function showHelp(ctx: ExtensionCommandContext, args = ""): void {
     "WORKFLOW",
     "  /gsd start <tpl>   Start a workflow template (bugfix, spike, feature, hotfix, etc.)",
     "  /gsd templates     List available workflow templates  [info <name>]",
-    "  /gsd               Run next unit in step mode (same as /gsd next)",
+    "  /gsd               Open the state-aware home menu",
     "  /gsd next           Execute next task, then pause  [--dry-run] [--verbose]",
     "  /gsd auto           Run all queued units continuously  [--verbose]",
     "  /gsd stop           Stop auto-mode gracefully",
@@ -67,6 +72,7 @@ export function showHelp(ctx: ExtensionCommandContext, args = ""): void {
     "  /gsd new-project    Bootstrap a new project (use --deep for staged project-level discovery)",
     "  /gsd quick          Execute a quick task without full planning overhead",
     "  /gsd dispatch       Dispatch a specific phase directly  [research|plan|execute|complete|uat|replan]",
+    "  /gsd verdict <v>    Override milestone validation verdict  [pass|needs-attention|needs-remediation] [--milestone Mxxx] [--rationale \"...\"]",
     "  /gsd parallel       Parallel milestone orchestration  [start|status|stop|pause|resume|merge|watch]",
     "  /gsd workflow       Custom workflow lifecycle  [new|run|list|validate|pause|resume]",
     "",
@@ -75,6 +81,7 @@ export function showHelp(ctx: ExtensionCommandContext, args = ""): void {
     `  /gsd parallel watch Open parallel worker monitor  (${formattedShortcutPair("parallel")})`,
     "  /gsd widget         Cycle status widget  [full|small|min|off]",
     "  /gsd visualize      Interactive 10-tab TUI (progress, timeline, deps, metrics, health, agent, changes, knowledge, captures, export)",
+    "  /gsd brief <mode>   Generate a visual HTML brief  [diagram|plan|diff|recap|table|slides] [topic] [--slides]",
     "  /gsd queue          Show queued/dispatched units and execution order",
     "  /gsd history        View execution history  [--cost] [--phase] [--model] [N]",
     "  /gsd changelog      Show categorized release notes  [version]",
@@ -96,7 +103,7 @@ export function showHelp(ctx: ExtensionCommandContext, args = ""): void {
     "  /gsd unpark [id]    Reactivate a parked milestone",
     "",
     "PROJECT KNOWLEDGE",
-    "  /gsd knowledge <type> <text>   Add rule, pattern, or lesson to KNOWLEDGE.md",
+    "  /gsd knowledge <type> <text>   Add a rule to KNOWLEDGE.md or capture a pattern/lesson to memories",
     "  /gsd codebase [generate|update|stats]   Manage the CODEBASE.md cache used in prompt context",
     "",
     "SHIPPING & BACKLOG",
@@ -125,15 +132,16 @@ export function showHelp(ctx: ExtensionCommandContext, args = ""): void {
     "  /gsd skill-health   Skill lifecycle dashboard",
     "  /gsd extensions     Manage extensions  [list|enable|disable|info]",
     "  /gsd fast           Toggle OpenAI service tier  [on|off|flex|status]",
-    "  /gsd mcp            MCP server status and connectivity  [status|check <server>|init [dir]]",
+    "  /gsd mcp            MCP server management  [status|check|test|enable|disable|import|delete|init]",
     "",
     "MAINTENANCE",
     "  /gsd doctor         Diagnose and repair .gsd/ state  [audit|fix|heal] [scope]",
     "  /gsd forensics      Examine execution logs and post-mortem analysis",
     "  /gsd export         Export milestone/slice results  [--json|--markdown|--html] [--all]",
     "  /gsd cleanup        Remove merged branches or snapshots  [branches|snapshots]",
+    "  /gsd closeout       Recover failed git closeout actions  [status|retry|resolve] [unit-id]",
     "  /gsd worktree       Manage worktrees from the TUI  [list|merge|clean|remove]",
-    "  /gsd migrate        Migrate .planning/ (v1) to .gsd/ (v2) format",
+    "  /gsd migrate        Migrate .planning/ (v1) to DB-backed .gsd/ with backup + audit",
     "  /gsd remote         Control remote auto-mode  [slack|discord|status|disconnect]",
     "  /gsd inspect        Show SQLite DB diagnostics (schema, row counts, recent entries)",
     "  /gsd update         Update GSD to the latest version via npm",
@@ -200,6 +208,37 @@ export async function handleVisualize(ctx: ExtensionCommandContext): Promise<voi
 
   if (result === undefined) {
     ctx.ui.notify("Visualizer requires an interactive terminal. Use /gsd status for a text-based overview.", "warning");
+  }
+}
+
+export async function handleBrief(args: string, ctx: ExtensionCommandContext, pi?: ExtensionAPI): Promise<void> {
+  const request = parseVisualBriefArgs(args);
+  if (!request) {
+    ctx.ui.notify(VISUAL_BRIEF_USAGE, "info");
+    return;
+  }
+
+  if (!pi?.sendUserMessage) {
+    ctx.ui.notify("Visual brief generation is unavailable in this context.", "warning");
+    return;
+  }
+
+  const outputDir = getVisualBriefOutputDir();
+  const version = resolveGsdVersion();
+  pi.sendUserMessage(buildVisualBriefPrompt(request, { outputDir, version }));
+}
+
+const briefRequire = createRequire(import.meta.url);
+
+function resolveGsdVersion(): string | undefined {
+  const envVersion = process.env.GSD_VERSION?.trim();
+  if (envVersion) return envVersion;
+  try {
+    const pkg = briefRequire("../../../../../../package.json") as { version?: unknown };
+    const fromPkg = typeof pkg.version === "string" ? pkg.version.trim() : "";
+    return fromPkg || undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -427,6 +466,10 @@ export async function handleCoreCommand(
   }
   if (trimmed === "visualize") {
     await handleVisualize(ctx);
+    return true;
+  }
+  if (trimmed === "brief" || trimmed.startsWith("brief ")) {
+    await handleBrief(trimmed.replace(/^brief\s*/, "").trim(), ctx, pi);
     return true;
   }
   if (trimmed === "widget" || trimmed.startsWith("widget ")) {

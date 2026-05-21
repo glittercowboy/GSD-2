@@ -1,9 +1,14 @@
+// Project/App: GSD-2
+// File Purpose: OAuth provider selector for login and logout actions.
+
 import type { OAuthProviderInterface } from "@gsd/pi-ai";
 import { getOAuthProviders } from "@gsd/pi-ai/oauth";
 import { Container, getEditorKeybindings, Spacer, TruncatedText } from "@gsd/pi-tui";
 import type { AuthStorage } from "../../../core/auth-storage.js";
 import { theme } from "../theme/theme.js";
 import { DynamicBorder } from "./dynamic-border.js";
+import { selectorFooter } from "./keybinding-hints.js";
+import { renderCursor } from "./tree-render-utils.js";
 
 /**
  * Component that renders an OAuth provider selector
@@ -47,6 +52,8 @@ export class OAuthSelectorComponent extends Container {
 		this.addChild(this.listContainer);
 
 		this.addChild(new Spacer(1));
+		this.addChild(new TruncatedText(selectorFooter(), 1, 0));
+		this.addChild(new Spacer(1));
 
 		// Add bottom border
 		this.addChild(new DynamicBorder());
@@ -75,11 +82,10 @@ export class OAuthSelectorComponent extends Container {
 
 			let line = "";
 			if (isSelected) {
-				const prefix = theme.fg("accent", "→ ");
 				const text = theme.fg("accent", provider.name);
-				line = prefix + text + statusIndicator;
+				line = renderCursor(true) + text + statusIndicator;
 			} else {
-				const text = `  ${provider.name}`;
+				const text = renderCursor(false) + provider.name;
 				line = text + statusIndicator;
 			}
 

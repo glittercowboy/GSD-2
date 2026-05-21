@@ -89,6 +89,94 @@ function isRetryableError(status: number, errorText: string): boolean {
 	return /rate.?limit|overloaded|service.?unavailable|upstream.?connect|connection.?refused/i.test(errorText);
 }
 
+function extractRetryDelay(errorText: string, response?: Response | Headers): number | undefined {
+	const normalizeDelay = (ms: number): number | undefined => (ms > 0 ? Math.ceil(ms) : undefined);
+
+	const headers = response instanceof Headers ? response : response?.headers;
+	if (headers) {
+		const retryAfter = headers.get("retry-after");
+		if (retryAfter) {
+			const retryAfterSeconds = Number(retryAfter);
+			if (Number.isFinite(retryAfterSeconds)) {
+				const delay = normalizeDelay(retryAfterSeconds * 1000);
+				if (delay !== undefined) {
+					return delay;
+				}
+			}
+
+			const retryAfterDate = new Date(retryAfter).getTime();
+			if (!Number.isNaN(retryAfterDate)) {
+				const delay = normalizeDelay(retryAfterDate - Date.now());
+				if (delay !== undefined) {
+					return delay;
+				}
+			}
+		}
+
+		const rateLimitReset = headers.get("x-ratelimit-reset");
+		if (rateLimitReset) {
+			const resetSeconds = Number.parseInt(rateLimitReset, 10);
+			if (!Number.isNaN(resetSeconds)) {
+				const delay = normalizeDelay(resetSeconds * 1000 - Date.now());
+				if (delay !== undefined) {
+					return delay;
+				}
+			}
+		}
+
+		const rateLimitResetAfter = headers.get("x-ratelimit-reset-after");
+		if (rateLimitResetAfter) {
+			const resetAfterSeconds = Number(rateLimitResetAfter);
+			if (Number.isFinite(resetAfterSeconds)) {
+				const delay = normalizeDelay(resetAfterSeconds * 1000);
+				if (delay !== undefined) {
+					return delay;
+				}
+			}
+		}
+	}
+
+	const durationMatch = errorText.match(/reset after (?:(\d+)h)?(?:(\d+)m)?(\d+(?:\.\d+)?)s/i);
+	if (durationMatch) {
+		const hours = durationMatch[1] ? parseInt(durationMatch[1], 10) : 0;
+		const minutes = durationMatch[2] ? parseInt(durationMatch[2], 10) : 0;
+		const seconds = parseFloat(durationMatch[3]);
+		if (!Number.isNaN(seconds)) {
+			const totalMs = ((hours * 60 + minutes) * 60 + seconds) * 1000;
+			const delay = normalizeDelay(totalMs);
+			if (delay !== undefined) {
+				return delay;
+			}
+		}
+	}
+
+	const retryInMatch = errorText.match(/Please retry in ([0-9.]+)(ms|s)/i);
+	if (retryInMatch?.[1]) {
+		const value = parseFloat(retryInMatch[1]);
+		if (!Number.isNaN(value) && value > 0) {
+			const ms = retryInMatch[2].toLowerCase() === "ms" ? value : value * 1000;
+			const delay = normalizeDelay(ms);
+			if (delay !== undefined) {
+				return delay;
+			}
+		}
+	}
+
+	const retryDelayMatch = errorText.match(/"retryDelay":\s*"([0-9.]+)(ms|s)"/i);
+	if (retryDelayMatch?.[1]) {
+		const value = parseFloat(retryDelayMatch[1]);
+		if (!Number.isNaN(value) && value > 0) {
+			const ms = retryDelayMatch[2].toLowerCase() === "ms" ? value : value * 1000;
+			const delay = normalizeDelay(ms);
+			if (delay !== undefined) {
+				return delay;
+			}
+		}
+	}
+
+	return undefined;
+}
+
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 	return new Promise((resolve, reject) => {
 		if (signal?.aborted) {
@@ -205,7 +293,9 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 
 					const errorText = await response.text();
 					if (attempt < MAX_RETRIES && isRetryableError(response.status, errorText)) {
-						const delayMs = BASE_DELAY_MS * 2 ** attempt;
+						const backoffMs = BASE_DELAY_MS * 2 ** attempt;
+						const serverDelayMs = extractRetryDelay(errorText, response);
+						const delayMs = Math.max(backoffMs, serverDelayMs ?? 0);
 						await sleep(delayMs, options?.signal);
 						continue;
 					}

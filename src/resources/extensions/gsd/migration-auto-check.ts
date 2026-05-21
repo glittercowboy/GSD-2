@@ -2,21 +2,17 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 
 import { ensureDbOpen } from "./bootstrap/dynamic-tools.js";
 import {
-  clearEngineHierarchy,
   getAllMilestones,
   getMilestoneSlices,
   getSliceTasks,
   isDbAvailable,
-  transaction,
 } from "./gsd-db.js";
-import { migrateHierarchyToDb } from "./md-importer.js";
 import { parsePlan, parseRoadmap } from "./parsers-legacy.js";
 import {
   milestonesDir,
   resolveMilestoneFile,
   resolveSliceFile,
 } from "./paths.js";
-import { invalidateStateCache } from "./state.js";
 
 export interface HierarchyCounts {
   milestones: number;
@@ -25,11 +21,13 @@ export interface HierarchyCounts {
 }
 
 export interface MigrationAutoCheckResult {
-  action: "none" | "imported";
+  action: "none" | "recovery-required";
   reason: "no-markdown" | "in-sync" | "db-empty" | "count-mismatch";
   markdown: HierarchyCounts;
   beforeDb: HierarchyCounts;
   afterDb: HierarchyCounts;
+  recoveryCommand?: string;
+  message?: string;
 }
 
 function zeroCounts(): HierarchyCounts {
@@ -83,7 +81,7 @@ export function countDbHierarchy(): HierarchyCounts {
   return counts;
 }
 
-export async function autoImportMarkdownHierarchyIfDbMismatch(
+export async function checkMarkdownHierarchyAgainstDb(
   basePath: string,
 ): Promise<MigrationAutoCheckResult> {
   const markdown = countMarkdownHierarchy(basePath);
@@ -108,22 +106,16 @@ export async function autoImportMarkdownHierarchyIfDbMismatch(
   }
 
   const reason = sameCounts(beforeDb, zeroCounts()) ? "db-empty" : "count-mismatch";
-  const imported = transaction(() => {
-    clearEngineHierarchy();
-    return migrateHierarchyToDb(basePath);
-  });
-  invalidateStateCache();
-
-  const afterDb = {
-    milestones: imported.milestones,
-    slices: imported.slices,
-    tasks: imported.tasks,
+  return {
+    action: "recovery-required",
+    reason,
+    markdown,
+    beforeDb,
+    afterDb: beforeDb,
+    recoveryCommand: "gsd recover",
+    message:
+      `Markdown planning artifacts (${markdown.milestones}M/${markdown.slices}S/${markdown.tasks}T) ` +
+      `do not match the authoritative DB (${beforeDb.milestones}M/${beforeDb.slices}S/${beforeDb.tasks}T). ` +
+      "Runtime startup will not import markdown automatically; run explicit GSD recovery if markdown should repopulate the database.",
   };
-  if (!sameCounts(markdown, afterDb)) {
-    throw new Error(
-      `migration auto-import verification failed: markdown ${markdown.milestones}M/${markdown.slices}S/${markdown.tasks}T, db ${afterDb.milestones}M/${afterDb.slices}S/${afterDb.tasks}T`,
-    );
-  }
-
-  return { action: "imported", reason, markdown, beforeDb, afterDb };
 }

@@ -200,67 +200,45 @@ describe("Pre-execution fail-closed behavior", () => {
   });
 
   test("error notification includes error message when pre-execution throws", async () => {
-    // This test verifies the error handling path by checking the notify call structure
-    // The actual throw would require mocking runPreExecutionChecks, but we can verify
-    // the error handling code path exists by checking the notification pattern
     writePreferences({
       enhanced_verification: true,
       enhanced_verification_pre: true,
     });
 
-    // Create tasks that will cause a blocking failure (missing file)
-    insertMilestone({ id: "M001" });
-    insertSlice({
-      id: "S01",
-      milestoneId: "M001",
-      title: "Test Slice",
-      risk: "low",
-    });
-    insertTask({
-      id: "T01",
-      sliceId: "S01",
-      milestoneId: "M001",
-      title: "Task with missing file",
-      status: "pending",
-      planning: {
-        description: "References missing file",
-        estimate: "1h",
-        files: [],
-        verify: "npm test",
-        inputs: ["nonexistent-file.ts"],
-        expectedOutput: [],
-        observabilityImpact: "",
-      },
-      sequence: 0,
-    });
+    createTasksWithInvalidData();
 
     const ctx = makeMockCtx();
     const pi = makeMockPi();
     const pauseAutoMock = mock.fn(async () => {});
     const s = makeMockSession(tempDir, { type: "plan-slice", id: "M001/S01" });
+    Object.defineProperty(s, "canonicalProjectRoot", {
+      get: () => {
+        throw new Error("canonical root unavailable");
+      },
+    });
     const pctx = makePostUnitContext(s, ctx, pi, pauseAutoMock);
 
     const result = await postUnitPostVerification(pctx);
 
-    // With a blocking failure, pauseAuto should be called
     assert.equal(
       pauseAutoMock.mock.callCount(),
       1,
-      "pauseAuto should be called when pre-execution checks fail"
+      "pauseAuto should be called when pre-execution checks throw"
     );
 
     assert.equal(
       result,
       "stopped",
-      "postUnitPostVerification should return 'stopped' when checks fail"
+      "postUnitPostVerification should return 'stopped' when checks throw"
     );
 
     // Verify error notification was shown
     const notifyCalls = ctx.ui.notify.mock.calls;
     const errorNotify = notifyCalls.find(
       (call: { arguments: unknown[] }) =>
-        call.arguments[1] === "error"
+        call.arguments[1] === "error" &&
+        String(call.arguments[0]).includes("canonical root unavailable")
     );
-    assert.ok(errorNotify, "Should show error notification when pre-execution checks fail");
+    assert.ok(errorNotify, "Should show error notification when pre-execution checks throw");
   });
 });
