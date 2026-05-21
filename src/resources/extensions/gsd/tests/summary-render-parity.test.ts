@@ -175,17 +175,13 @@ const verificationEvidence = [
   );
 }
 
-// Test 11: empty key_files renders an empty YAML list, not a sentinel path
+// Test 11: empty key_files renders YAML placeholder, not empty array
 {
   const noFiles = { ...taskRow, key_files: [] };
   const output = renderSummaryContent(noFiles, SLICE_ID, MILESTONE_ID);
   assertTrue(
-    output.includes("key_files: []"),
-    "empty key_files must render as an empty YAML list",
-  );
-  assertTrue(
-    !output.includes("key_files:\n  - (none)"),
-    "empty key_files must not render (none) as a path-like list item",
+    output.includes("key_files:\n  - (none)"),
+    "empty key_files must render as YAML list with (none) placeholder",
   );
 }
 

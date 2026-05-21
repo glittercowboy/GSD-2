@@ -123,6 +123,8 @@ For planning units (`plan-slice` / `refine-slice`), pre-execution checks validat
 1. The first blocking failure queues a planning retry with the blocking findings and evidence path injected as failure context.
 2. If blocking failures continue after the retry budget is exhausted, auto mode pauses and surfaces escalation details plus the evidence path.
 
+Auto mode also tracks consecutive dispatch-claim skips with reason `already-active`. If the same unit claim returns `already-active` 3 times in a row, auto mode pauses and requires manual recovery instead of retrying claim skips indefinitely.
+
 ### Timeout supervision
 
 | Timeout | Default | Behavior                   |
