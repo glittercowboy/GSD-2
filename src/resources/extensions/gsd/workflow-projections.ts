@@ -24,7 +24,7 @@ import { logWarning } from "./workflow-logger.js";
 import { isClosedStatus } from "./status-guards.js";
 import { deriveState } from "./state.js";
 import type { GSDState } from "./types.js";
-import { renderRoadmapFromDb } from "./markdown-renderer.js";
+import { renderPlanFromDb, renderRoadmapFromDb } from "./markdown-renderer.js";
 import { readManifest } from "./workflow-manifest.js";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
@@ -242,11 +242,11 @@ export function renderSummaryContent(
 
   // ── Frontmatter (YAML list format, matches parseSummary() expectations) ──
   const keyFilesYaml = taskRow.key_files && taskRow.key_files.length > 0
-    ? `\n${taskRow.key_files.map(f => `  - ${f}`).join("\n")}`
-    : " []";
+    ? taskRow.key_files.map(f => `  - ${f}`).join("\n")
+    : "  - (none)";
   const keyDecisionsYaml = taskRow.key_decisions && taskRow.key_decisions.length > 0
-    ? `\n${taskRow.key_decisions.map(d => `  - ${d}`).join("\n")}`
-    : " []";
+    ? taskRow.key_decisions.map(d => `  - ${d}`).join("\n")
+    : "  - (none)";
 
   // Derive verification_result from evidence if available
   const evidenceList = evidence ?? [];
@@ -277,8 +277,10 @@ export function renderSummaryContent(
 id: ${taskRow.id}
 parent: ${sliceId}
 milestone: ${milestoneId}
-key_files:${keyFilesYaml}
-key_decisions:${keyDecisionsYaml}
+key_files:
+${keyFilesYaml}
+key_decisions:
+${keyDecisionsYaml}
 duration: ${taskRow.duration || ""}
 verification_result: ${verificationResult}
 completed_at: ${taskRow.completed_at || ""}
@@ -549,7 +551,7 @@ export async function regenerateIfMissing(
   try {
     switch (fileType) {
       case "PLAN":
-        renderPlanProjection(basePath, milestoneId, sliceId);
+        await renderPlanFromDb(basePath, milestoneId, sliceId);
         return existsSync(filePath);
       case "ROADMAP":
         await renderRoadmapFromDb(basePath, milestoneId);
