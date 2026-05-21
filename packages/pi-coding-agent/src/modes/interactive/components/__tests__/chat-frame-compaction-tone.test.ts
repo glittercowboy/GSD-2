@@ -2,19 +2,19 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import stripAnsi from "strip-ansi";
-import { renderChatFrame } from "../chat-frame.js";
+import { renderChatFrame } from "../transcript-design.js";
 import { initTheme } from "../../theme/theme.js";
 
 initTheme("dark", false);
 
-// Regression tests for the "compaction" tone added to renderChatFrame.
-// The compaction notice shares the same visual frame as user / assistant
-// messages (top rule, label header, `│ ` body prefix) but uses the
-// purple `customMessageLabel` color key so it is visually distinct from
-// conversation turns.
+// renderChatFrame renders compaction notices and skill invocations as a
+// copy-clean "open" surface (ADR-019): a titled top rule, body lines with
+// no border column, and a closing rule. The compaction tone uses the purple
+// `customMessageLabel` color so it stays visually distinct from conversation
+// turns.
 
 describe("renderChatFrame — compaction tone", () => {
-	test("produces a top rule, compaction header row, and a │ body margin", () => {
+	test("renders a titled rule and copy-clean body lines", () => {
 		const lines = renderChatFrame(
 			["Compacted from 1,224,262 tokens (ctrl+o to expand)"],
 			60,
@@ -26,29 +26,29 @@ describe("renderChatFrame — compaction tone", () => {
 			},
 		);
 
-		// Structure: top rule, header, body line(s)
+		// Structure: titled top rule, body line(s), closing rule.
 		assert.ok(lines.length >= 3, `expected at least 3 frame lines, got ${lines.length}`);
 
 		const plain = lines.map((line) => stripAnsi(line));
 
-		// Top rule is a solid horizontal bar
-		assert.match(plain[0], /^─+$/, "first line should be the solid top rule");
-
-		// Header row contains `compaction`
+		// Top rule carries the label inline and is all rule/title characters.
 		assert.ok(
-			plain[1].includes("compaction"),
-			`expected header to contain "compaction", got ${JSON.stringify(plain[1])}`,
+			plain[0].includes("compaction"),
+			`expected top rule to contain "compaction", got ${JSON.stringify(plain[0])}`,
 		);
-		assert.ok(!plain[1].includes("•"), `header should not render a bullet prefix, got ${JSON.stringify(plain[1])}`);
+		assert.ok(!plain[0].includes("•"), `header should not render a bullet prefix, got ${JSON.stringify(plain[0])}`);
+		// Closing rule is a solid horizontal bar.
+		assert.match(plain[plain.length - 1], /^─+$/, "last line should be the solid closing rule");
 
-		// Body line(s) start with `│ `
+		// Body lines are copy-clean — no border column, no leading glyph — so
+		// a terminal selection copies only the content.
+		for (const body of plain.slice(1, -1)) {
+			assert.ok(!body.startsWith("│"), `body line must not start with │: ${JSON.stringify(body)}`);
+			assert.ok(!body.startsWith("┃"), `body line must not start with ┃: ${JSON.stringify(body)}`);
+		}
 		assert.ok(
-			plain[2].startsWith("│ "),
-			`expected body line to start with "│ ", got ${JSON.stringify(plain[2])}`,
-		);
-		assert.ok(
-			plain[2].includes("Compacted from 1,224,262 tokens"),
-			"body line should include the original content",
+			plain.slice(1, -1).some((body) => body.includes("Compacted from 1,224,262 tokens")),
+			"a body line should include the original content",
 		);
 	});
 
@@ -61,11 +61,11 @@ describe("renderChatFrame — compaction tone", () => {
 			showTimestamp: false,
 		});
 
-		const header = stripAnsi(lines[1]);
-		// No four-digit year should appear anywhere in the header row
+		// No four-digit year should appear anywhere in the frame.
+		const joined = lines.map((line) => stripAnsi(line)).join("\n");
 		assert.ok(
-			!/\b20\d{2}\b/.test(header),
-			`timestamp should be suppressed when showTimestamp=false, got ${JSON.stringify(header)}`,
+			!/\b20\d{2}\b/.test(joined),
+			`timestamp should be suppressed when showTimestamp=false, got ${JSON.stringify(joined)}`,
 		);
 	});
 
@@ -84,8 +84,7 @@ describe("renderChatFrame — compaction tone", () => {
 			showTimestamp: false,
 		}).join("\n");
 
-		// Both frames carry ANSI; the compaction frame should not be identical
-		// to the assistant frame (different color mappings).
+		// Different tones map to different border/label colors.
 		assert.ok(
 			assistantFrame !== compactionFrame,
 			"compaction tone must produce a different styled output than assistant tone",

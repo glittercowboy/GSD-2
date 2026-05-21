@@ -12,7 +12,7 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-import { buildExecuteTaskPrompt, buildPlanSlicePrompt, inlineDependencySummaries } from "../auto-prompts.js";
+import { buildExecuteTaskPrompt, buildPlanSlicePrompt, buildReactiveExecutePrompt, buildResearchSlicePrompt, inlineDependencySummaries } from "../auto-prompts.js";
 import { computeBudgets, truncateAtSectionBoundary } from "../context-budget.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -204,6 +204,46 @@ describe("prompt-budget: plan-slice template", () => {
       cleanup(base);
     }
   });
+
+  it("does not inline milestone-wide decisions when slice title has no specific scope", async () => {
+    const base = createFixtureBase();
+    try {
+      setupDependencyFixture(base, "M001", "S01", ["S00"], { S00: "### Results\n\nDone." });
+      writeFileSync(
+        join(base, ".gsd", "DECISIONS.md"),
+        "# Decisions\n\n- This broad decision body should stay out of generic slice planning prompts.\n",
+      );
+
+      const prompt = await buildPlanSlicePrompt("M001", "Milestone", "S01", "Setup implementation testing", base, "standard");
+
+      assert.match(prompt, /### On-demand Decisions/);
+      assert.match(prompt, /\.gsd\/DECISIONS\.md/);
+      assert.doesNotMatch(prompt, /broad decision body should stay out/);
+    } finally {
+      cleanup(base);
+    }
+  });
+});
+
+describe("prompt-budget: research-slice context", () => {
+  it("does not inline milestone-wide decisions when slice title has no specific scope", async () => {
+    const base = createFixtureBase();
+    try {
+      setupDependencyFixture(base, "M001", "S01", ["S00"], { S00: "### Results\n\nDone." });
+      writeFileSync(
+        join(base, ".gsd", "DECISIONS.md"),
+        "# Decisions\n\n- This broad research decision body should stay out of generic slice research prompts.\n",
+      );
+
+      const prompt = await buildResearchSlicePrompt("M001", "Milestone", "S01", "Setup implementation testing", base);
+
+      assert.match(prompt, /### On-demand Decisions/);
+      assert.match(prompt, /\.gsd\/DECISIONS\.md/);
+      assert.doesNotMatch(prompt, /broad research decision body should stay out/);
+    } finally {
+      cleanup(base);
+    }
+  });
 });
 
 // ─── Executor constraints formatting ──────────────────────────────────────────
@@ -344,6 +384,29 @@ describe("prompt-budget: execute-task template", () => {
       });
       assert.match(prompt, /verification/i);
       assert.match(prompt, /~51K chars/);
+    } finally {
+      cleanup(base);
+    }
+  });
+
+  it("standard execute-task prompt keeps decisions template on demand", async () => {
+    const base = createFixtureBase();
+    try {
+      const sliceDir = join(base, ".gsd", "milestones", "M001", "slices", "S01");
+      const taskDir = join(sliceDir, "tasks");
+      mkdirSync(taskDir, { recursive: true });
+      writeFileSync(join(base, ".gsd", "milestones", "M001", "M001-ROADMAP.md"), "# Roadmap\n");
+      writeFileSync(join(sliceDir, "S01-PLAN.md"), "# Slice Plan\n");
+      writeFileSync(join(taskDir, "T01-PLAN.md"), "# Task Plan\n");
+
+      const prompt = await buildExecuteTaskPrompt("M001", "S01", "Slice", "T01", "Task", base, {
+        level: "standard",
+        sessionContextWindow: 128_000,
+      });
+
+      assert.match(prompt, /### On-demand Decisions Template/);
+      assert.match(prompt, /templates\/decisions\.md/);
+      assert.doesNotMatch(prompt, /### Output Template: Decisions/);
     } finally {
       cleanup(base);
     }
@@ -498,6 +561,67 @@ describe("prompt-budget: execute-task builder truncation pattern", () => {
     if (assembled.length > budget128K.inlineContextBudgetChars) {
       assert.ok(result.content.includes("[...truncated"), "should truncate when content exceeds 128K budget");
       assert.ok(result.droppedSections > 0, "should report dropped sections");
+    }
+  });
+});
+
+describe("prompt-budget: reactive-execute builder", () => {
+  it("caps dependency carry-forward per ready subagent", async () => {
+    const base = createFixtureBase();
+    try {
+      const sliceDir = join(base, ".gsd", "milestones", "M001", "slices", "S01");
+      const taskDir = join(sliceDir, "tasks");
+      mkdirSync(taskDir, { recursive: true });
+      writeFileSync(
+        join(sliceDir, "S01-PLAN.md"),
+        [
+          "# S01: Slice",
+          "",
+          "## Tasks",
+          "",
+          "- [x] **T01: First dep** `est:15m`",
+          "- [x] **T02: Second dep** `est:15m`",
+          "- [ ] **T03: Ready task** `est:15m`",
+        ].join("\n"),
+      );
+      writeFileSync(join(taskDir, "T01-PLAN.md"), "## Expected Output\n\n- `src/a.ts` - A\n");
+      writeFileSync(join(taskDir, "T02-PLAN.md"), "## Expected Output\n\n- `src/b.ts` - B\n");
+      writeFileSync(
+        join(taskDir, "T03-PLAN.md"),
+        [
+          "## Inputs",
+          "",
+          "- `src/a.ts`",
+          "- `src/b.ts`",
+          "",
+          "## Expected Output",
+          "",
+          "- `src/c.ts`",
+        ].join("\n"),
+      );
+      const hugeSummary = [
+        "---",
+        "provides: []",
+        "key_decisions: []",
+        "patterns_established: []",
+        "key_files: []",
+        "---",
+        "# Summary",
+        "",
+        "## Diagnostics",
+        "Large diagnostic ".repeat(3000),
+      ].join("\n");
+      writeFileSync(join(taskDir, "T01-SUMMARY.md"), hugeSummary);
+      writeFileSync(join(taskDir, "T02-SUMMARY.md"), hugeSummary);
+
+      const prompt = await buildReactiveExecutePrompt("M001", "Milestone", "S01", "Slice", ["T03"], base, undefined, {
+        sessionContextWindow: 32_000,
+      });
+
+      assert.match(prompt, /\[\.\.\.truncated/);
+      assert.ok(prompt.length < hugeSummary.length * 2, "reactive prompt should not include full dependency summaries");
+    } finally {
+      cleanup(base);
     }
   });
 });

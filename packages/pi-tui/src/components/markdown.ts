@@ -51,6 +51,12 @@ interface InlineStyleContext {
 	stylePrefix: string;
 }
 
+/** A rendered list-item line. `nested` lines are already fully indented. */
+interface ListItemLine {
+	text: string;
+	nested: boolean;
+}
+
 export class Markdown implements Component {
 	private text: string;
 	private paddingX: number; // Left/right padding
@@ -537,30 +543,25 @@ export class Markdown implements Component {
 			const itemLines = this.renderListItem(item.tokens || [], depth, styleContext);
 
 			if (itemLines.length > 0) {
-				// First line - check if it's a nested list
-				// A nested list will start with indent (spaces) followed by cyan bullet
-				const firstLine = itemLines[0];
-				const isNestedList = /^\s+\x1b\[36m[-\d]/.test(firstLine); // starts with spaces + cyan + bullet char
-
-				if (isNestedList) {
-					// This is a nested list, just add it as-is (already has full indent)
-					lines.push(firstLine);
+				// First line: nested-list lines are already fully indented and
+				// bulleted by the recursive renderList call — add them as-is.
+				const first = itemLines[0];
+				if (first.nested) {
+					lines.push(first.text);
 				} else {
 					// Regular text content - add indent and bullet
-					lines.push(indent + this.theme.listBullet(bullet) + firstLine);
+					lines.push(indent + this.theme.listBullet(bullet) + first.text);
 				}
 
 				// Rest of the lines
 				for (let j = 1; j < itemLines.length; j++) {
-					const line = itemLines[j];
-					const isNestedListLine = /^\s+\x1b\[36m[-\d]/.test(line); // starts with spaces + cyan + bullet char
-
-					if (isNestedListLine) {
+					const entry = itemLines[j];
+					if (entry.nested) {
 						// Nested list line - already has full indent
-						lines.push(line);
+						lines.push(entry.text);
 					} else {
 						// Regular content - add parent indent + 2 spaces for continuation
-						lines.push(`${indent}  ${line}`);
+						lines.push(`${indent}  ${entry.text}`);
 					}
 				}
 			} else {
@@ -572,38 +573,45 @@ export class Markdown implements Component {
 	}
 
 	/**
-	 * Render list item tokens, handling nested lists
-	 * Returns lines WITHOUT the parent indent (renderList will add it)
+	 * Render list item tokens, handling nested lists.
+	 * Returns lines WITHOUT the parent indent (renderList will add it).
+	 * `nested: true` marks lines produced by a recursive renderList call —
+	 * they are already fully indented/bulleted and must be passed through
+	 * verbatim. This replaces a fragile ANSI-color regex with structural info.
 	 */
-	private renderListItem(tokens: Token[], parentDepth: number, styleContext?: InlineStyleContext): string[] {
-		const lines: string[] = [];
+	private renderListItem(
+		tokens: Token[],
+		parentDepth: number,
+		styleContext?: InlineStyleContext,
+	): ListItemLine[] {
+		const lines: ListItemLine[] = [];
 
 		for (const token of tokens) {
 			if (token.type === "list") {
 				// Nested list - render with one additional indent level
 				// These lines will have their own indent, so we just add them as-is
 				const nestedLines = this.renderList(token as any, parentDepth + 1, styleContext);
-				for (let j = 0; j < nestedLines.length; j++) lines.push(nestedLines[j]);
+				for (let j = 0; j < nestedLines.length; j++) lines.push({ text: nestedLines[j], nested: true });
 			} else if (token.type === "text") {
 				// Text content (may have inline tokens)
 				const text =
 					token.tokens && token.tokens.length > 0
 						? this.renderInlineTokens(token.tokens, styleContext)
 						: token.text || "";
-				lines.push(text);
+				lines.push({ text, nested: false });
 			} else if (token.type === "paragraph") {
 				// Paragraph in list item
 				const text = this.renderInlineTokens(token.tokens || [], styleContext);
-				lines.push(text);
+				lines.push({ text, nested: false });
 			} else if (token.type === "code") {
 				// Code block in list item
 				const codeLines = this.renderCodeBlock(token.text, token.lang);
-				for (let j = 0; j < codeLines.length; j++) lines.push(codeLines[j]);
+				for (let j = 0; j < codeLines.length; j++) lines.push({ text: codeLines[j], nested: false });
 			} else {
 				// Other token types - try to render as inline
 				const text = this.renderInlineTokens([token], styleContext);
 				if (text) {
-					lines.push(text);
+					lines.push({ text, nested: false });
 				}
 			}
 		}

@@ -30,9 +30,11 @@ import { join } from "node:path";
 import {
   findStaleWorkerForProject,
   getAllAutoWorkers,
-  markWorkerCrashed,
+  markWorkerStopping,
+  markWorkerStoppingByPid,
   type AutoWorkerRow,
 } from "./db/auto-workers.js";
+import { forceReleaseLeasesForWorker } from "./db/milestone-leases.js";
 import { markLatestActiveForWorkerCanceled, type DispatchStatus } from "./db/unit-dispatches.js";
 import { getRuntimeKv, setRuntimeKv, deleteRuntimeKv } from "./db/runtime-kv.js";
 import { _getAdapter, isDbAvailable } from "./gsd-db.js";
@@ -195,12 +197,18 @@ export function writeLock(
     // Best-effort — never throw from the lock writer.
   }
 
-  if (!isDbAvailable() || !sessionFile) return;
+  if (!isDbAvailable()) return;
   try {
     const projectRoot = normalizeRealPath(basePath);
     const worker = findActiveWorkerForCurrentProcess(projectRoot);
     if (!worker) return;
-    setRuntimeKv("worker", worker.worker_id, SESSION_FILE_KV_KEY, sessionFile);
+    if (sessionFile) {
+      setRuntimeKv("worker", worker.worker_id, SESSION_FILE_KV_KEY, sessionFile);
+    } else {
+      // Preliminary unit locks (before runUnit/newSession settles) must clear
+      // any prior pointer so crash recovery cannot ingest stale cross-unit context.
+      deleteRuntimeKv("worker", worker.worker_id, SESSION_FILE_KV_KEY);
+    }
   } catch {
     // Best-effort — never throw from the lock writer.
   }
@@ -219,9 +227,23 @@ export function clearLock(basePath: string): void {
   if (!isDbAvailable()) return;
   try {
     const projectRoot = normalizeRealPath(basePath);
+    const staleWorker = findStaleWorkerForProject(projectRoot);
+    if (staleWorker) {
+      markWorkerStopping(staleWorker.worker_id);
+      forceReleaseLeasesForWorker(staleWorker.worker_id);
+      deleteRuntimeKv("worker", staleWorker.worker_id, SESSION_FILE_KV_KEY);
+      return;
+    }
+    const lock = readLegacyLock(basePath);
+    if (lock?.pid) markWorkerStoppingByPid(projectRoot, lock.pid);
     const worker = findActiveWorkerForCurrentProcess(projectRoot);
-    if (!worker) return;
-    deleteRuntimeKv("worker", worker.worker_id, SESSION_FILE_KV_KEY);
+    if (worker) deleteRuntimeKv("worker", worker.worker_id, SESSION_FILE_KV_KEY);
+
+    const stale = findStaleWorkerForProject(projectRoot);
+    if (stale) {
+      markWorkerStopping(stale.worker_id);
+      deleteRuntimeKv("worker", stale.worker_id, SESSION_FILE_KV_KEY);
+    }
   } catch {
     // Best-effort.
   }
@@ -241,7 +263,8 @@ export function clearStaleWorkerLock(basePath: string): void {
     const worker = findStaleWorkerForProject(projectRoot);
     if (!worker) return;
     markLatestActiveForWorkerCanceled(worker.worker_id, "crash-recovered");
-    markWorkerCrashed(worker.worker_id);
+    markWorkerStopping(worker.worker_id);
+    forceReleaseLeasesForWorker(worker.worker_id);
     deleteRuntimeKv("worker", worker.worker_id, SESSION_FILE_KV_KEY);
   } catch {
     // Best-effort.
@@ -320,6 +343,14 @@ export function emitCrashRecoveredUnitEnd(basePath: string, lock: LockData): voi
   emitOpenUnitEndForUnit(basePath, lock.unitType, lock.unitId, "crash-recovered");
 }
 
+/**
+ * Emit a synthetic unit-end journal event for a unit whose unit-start has
+ * no matching unit-end. Returns true if an event was emitted, false if the
+ * unit was already closed or no open start was found.
+ *
+ * Used by emitCrashRecoveredUnitEnd and the dispatch loop crash closeout
+ * path. Never throws — journal failure must not block recovery.
+ */
 export function emitOpenUnitEndForUnit(
   basePath: string,
   unitType: string,

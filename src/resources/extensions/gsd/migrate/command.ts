@@ -5,13 +5,13 @@
  * preview → write pipeline, and shows confirmation UI via showNextAction.
  * All business logic lives in the pipeline modules (S01–S03).
  *
- * After a successful write, offers an agent-driven review that audits the
- * output for GSD-2 standards compliance.
+ * After a successful write, offers a read-only review that audits the output
+ * for GSD-2 standards compliance.
  */
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@gsd/pi-coding-agent";
 import { existsSync, readFileSync } from "node:fs";
-import { resolve, join, dirname } from "node:path";
+import { join, dirname } from "node:path";
 import { gsdRoot } from "../paths.js";
 import { fileURLToPath } from "node:url";
 import { showNextAction } from "../../shared/tui.js";
@@ -23,14 +23,38 @@ import {
   writeGSDDirectory,
 } from "./index.js";
 
-import type { MigrationPreview } from "./writer.js";
-import { homedir } from "node:os";
+import type { MigrationPreview, WrittenFiles } from "./writer.js";
 import { ensureDbOpen } from "../bootstrap/dynamic-tools.js";
-import { clearEngineHierarchy, transaction } from "../gsd-db.js";
+import { clearArtifacts, clearDecisions, clearRequirements, clearEngineHierarchy, transaction } from "../gsd-db.js";
 import { migrateFromMarkdown } from "../md-importer.js";
 import { invalidateStateCache } from "../state.js";
+import {
+  archiveLegacyPlanningDirectory,
+  verifyMigrationProjection,
+  writeMigrationAudit,
+  type LegacyArchiveResult,
+  type MigrationAuditResult,
+  type MigrationProjectionVerification,
+} from "./audit.js";
+import {
+  assertMigrationHasSlices,
+  assertMigrationTargetAvailable,
+  prepareMigrationTarget,
+  resolveMigrationPaths,
+  restoreMigrationTarget,
+  type MigrationBackup,
+} from "./safety.js";
 
 export type MigrationImportCounts = ReturnType<typeof migrateFromMarkdown>;
+
+export interface MigrationExecutionResult {
+  backup: MigrationBackup;
+  written: WrittenFiles;
+  imported: MigrationImportCounts;
+  legacyArchive: LegacyArchiveResult;
+  verification: MigrationProjectionVerification;
+  audit: MigrationAuditResult;
+}
 
 function assertMigrationImportMatchesPreview(imported: MigrationImportCounts, preview: MigrationPreview): void {
   const mismatches: string[] = [];
@@ -65,12 +89,49 @@ export async function importWrittenMigrationToDb(
 
   const counts = transaction(() => {
     clearEngineHierarchy();
+    clearArtifacts();
+    clearDecisions();
+    clearRequirements();
     const imported = migrateFromMarkdown(basePath);
     if (preview) assertMigrationImportMatchesPreview(imported, preview);
     return imported;
   });
   invalidateStateCache();
   return counts;
+}
+
+export async function executeMigrationWrite(
+  sourcePath: string,
+  targetRoot: string,
+  project: ReturnType<typeof transformToGSD>,
+  preview: MigrationPreview,
+  startedAt: string = new Date().toISOString(),
+): Promise<MigrationExecutionResult> {
+  const backup = prepareMigrationTarget(targetRoot);
+
+  try {
+    const written = await writeGSDDirectory(project, targetRoot);
+    const legacyArchive = await archiveLegacyPlanningDirectory(sourcePath, targetRoot);
+    const imported = await importWrittenMigrationToDb(targetRoot, preview);
+    const verification = await verifyMigrationProjection(targetRoot, preview);
+    const audit = await writeMigrationAudit({
+      sourcePath,
+      targetRoot,
+      backupPath: backup.backupPath,
+      preview,
+      written,
+      imported,
+      legacyArchive,
+      verification,
+      startedAt,
+      completedAt: new Date().toISOString(),
+    });
+
+    return { backup, written, imported, legacyArchive, verification, audit };
+  } catch (err) {
+    restoreMigrationTarget(backup);
+    throw err;
+  }
 }
 
 /** Format preview stats for embedding in the review prompt. */
@@ -131,18 +192,7 @@ export async function handleMigrate(
   pi: ExtensionAPI,
 ): Promise<void> {
   // ── Resolve source path ────────────────────────────────────────────────────
-  // Default to cwd when no args given; expand ~ to HOME
-  let rawPath = args.trim() || ".";
-  if (rawPath.startsWith("~/")) {
-    rawPath = join(homedir(), rawPath.slice(2));
-  } else if (rawPath === "~") {
-    rawPath = homedir();
-  }
-
-  let sourcePath = resolve(process.cwd(), rawPath);
-  if (!sourcePath.endsWith(".planning")) {
-    sourcePath = join(sourcePath, ".planning");
-  }
+  const { sourcePath, targetRoot } = resolveMigrationPaths(args);
 
   if (!existsSync(sourcePath)) {
     ctx.ui.notify(
@@ -180,6 +230,13 @@ export async function handleMigrate(
   const parsed = await parsePlanningDirectory(sourcePath);
   const project = transformToGSD(parsed);
   const preview = generatePreview(project);
+  try {
+    assertMigrationHasSlices(preview);
+    await assertMigrationTargetAvailable(targetRoot);
+  } catch (err) {
+    ctx.ui.notify((err as Error).message, "error");
+    return;
+  }
 
   // ── Build preview text ─────────────────────────────────────────────────────
   const lines: string[] = [
@@ -195,10 +252,11 @@ export async function handleMigrate(
     );
   }
 
-  const targetGsdExists = existsSync(gsdRoot(process.cwd()));
+  const targetGsdExists = existsSync(gsdRoot(targetRoot));
   if (targetGsdExists) {
     lines.push("");
-    lines.push("⚠ A .gsd directory already exists in the current working directory — it will be overwritten.");
+    lines.push(`⚠ A .gsd directory already exists at ${gsdRoot(targetRoot)}.`);
+    lines.push("It will be backed up, deleted, and rewritten fresh before DB import.");
   }
 
   // ── Confirmation via showNextAction ────────────────────────────────────────
@@ -209,7 +267,7 @@ export async function handleMigrate(
       {
         id: "confirm",
         label: "Write .gsd directory",
-        description: `Migrate ${preview.milestoneCount} milestone(s) to ${process.cwd()}/.gsd`,
+        description: `Migrate ${preview.milestoneCount} milestone(s) to ${gsdRoot(targetRoot)}`,
         recommended: true,
       },
       {
@@ -227,14 +285,24 @@ export async function handleMigrate(
   }
 
   // ── Write ──────────────────────────────────────────────────────────────────
-  ctx.ui.notify("Writing .gsd directory…", "info");
+  ctx.ui.notify("Writing .gsd directory and importing DB state…", "info");
 
-  const result = await writeGSDDirectory(project, process.cwd());
-  const gsdPath = gsdRoot(process.cwd());
-  const imported = await importWrittenMigrationToDb(process.cwd(), preview);
+  let execution: MigrationExecutionResult;
+  try {
+    execution = await executeMigrationWrite(sourcePath, targetRoot, project, preview);
+  } catch (err) {
+    ctx.ui.notify(
+      `Migration failed and the previous .gsd state was restored: ${(err as Error).message}`,
+      "error",
+    );
+    return;
+  }
+
+  const gsdPath = gsdRoot(targetRoot);
+  const { written, imported } = execution;
 
   ctx.ui.notify(
-    `✓ Migration complete — ${result.paths.length} file(s) written to .gsd/ and ${imported.hierarchy.milestones}M/${imported.hierarchy.slices}S/${imported.hierarchy.tasks}T imported to the database`,
+    `✓ Migration complete — ${written.paths.length} file(s) written to .gsd/, ${imported.hierarchy.milestones}M/${imported.hierarchy.slices}S/${imported.hierarchy.tasks}T imported to the database, and ${execution.audit.importedArtifacts} audit artifact(s) recorded`,
     "info",
   );
 
@@ -242,12 +310,14 @@ export async function handleMigrate(
   const reviewChoice = await showNextAction(ctx, {
     title: "Migration written",
     summary: [
-      `${result.paths.length} files written to .gsd/`,
+      `${written.paths.length} files written to .gsd/`,
       `${imported.hierarchy.milestones} milestone(s), ${imported.hierarchy.slices} slice(s), and ${imported.hierarchy.tasks} task(s) imported to gsd.db`,
+      `Legacy source archived at ${execution.legacyArchive.archivePath}`,
+      `Migration audit written at ${execution.audit.migrationPath}`,
       "",
       "The agent can now review the migrated output against GSD-2 standards —",
       "checking structure, content quality, deriveState() round-trip, and",
-      "requirement statuses. It will fix minor issues in-place.",
+      "requirement statuses. The review is read-only by default.",
     ],
     actions: [
       {

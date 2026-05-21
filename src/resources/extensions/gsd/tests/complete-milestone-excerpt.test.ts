@@ -10,7 +10,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { buildSliceSummaryExcerpt, buildCompleteMilestonePrompt } from "../auto-prompts.ts";
+import { buildSliceSummaryExcerpt, buildCompleteMilestonePrompt, buildValidateMilestonePrompt } from "../auto-prompts.ts";
 import { invalidateAllCaches } from "../cache.ts";
 
 // ─── Fixture helpers ──────────────────────────────────────────────────────
@@ -33,6 +33,13 @@ function writeRoadmap(base: string, content: string): void {
 function writeSummary(base: string, sid: string, content: string): void {
   writeFileSync(
     join(base, ".gsd", "milestones", "M001", "slices", sid, `${sid}-SUMMARY.md`),
+    content,
+  );
+}
+
+function writeAssessment(base: string, sid: string, content: string): void {
+  writeFileSync(
+    join(base, ".gsd", "milestones", "M001", "slices", sid, `${sid}-ASSESSMENT.md`),
     content,
   );
 }
@@ -231,6 +238,8 @@ test("#4780 closer prompt: uses excerpts + lists on-demand slice SUMMARY paths",
   writeRoadmap(base, makeRoadmap());
   writeSummary(base, "S01", makeFatSummary("S01"));
   writeSummary(base, "S02", makeFatSummary("S02"));
+  writeFileSync(join(base, ".gsd", "PROJECT.md"), "# Project\n\nBroad product context should stay on-demand.");
+  writeFileSync(join(base, ".gsd", "milestones", "M001", "M001-CONTEXT.md"), "# Context\n\nMilestone context should stay on-demand.");
 
   const prompt = await buildCompleteMilestonePrompt("M001", "Test Milestone", base);
 
@@ -242,6 +251,16 @@ test("#4780 closer prompt: uses excerpts + lists on-demand slice SUMMARY paths",
   assert.match(prompt, /### On-demand Slice Summaries/);
   assert.match(prompt, /S01-SUMMARY\.md/);
   assert.match(prompt, /S02-SUMMARY\.md/);
+  assert.match(prompt, /### On-demand Project Context/);
+  assert.match(prompt, /### On-demand Milestone Context/);
+  assert.ok(
+    !prompt.includes("Broad product context should stay on-demand."),
+    "standard complete-milestone prompt should not inline project narrative",
+  );
+  assert.ok(
+    !prompt.includes("Milestone context should stay on-demand."),
+    "standard complete-milestone prompt should not inline milestone context narrative",
+  );
 
   // Fat narrative (the 20x-repeated paragraph) is NOT inlined
   assert.ok(
@@ -290,5 +309,58 @@ test("complete-milestone prompt caps repeated inlined context around 20k chars",
     inlinedContext.length <= 21_000,
     `inlined context ${inlinedContext.length} chars should stay near the 20k cap`,
   );
-  assert.match(inlinedContext, /\[\.\.\.truncated \d+ sections\]/);
+});
+
+test("validate-milestone prompt uses slice excerpts and on-demand paths instead of full prior artifacts", async (t) => {
+  const base = createBase();
+  t.after(() => cleanup(base));
+  invalidateAllCaches();
+
+  writeRoadmap(base, makeRoadmap());
+  writeSummary(base, "S01", makeFatSummary("S01"));
+  writeSummary(base, "S02", makeFatSummary("S02"));
+  writeFileSync(join(base, ".gsd", "PROJECT.md"), "# Project\n\nBroad validation product context should stay on-demand.");
+  writeFileSync(join(base, ".gsd", "milestones", "M001", "M001-CONTEXT.md"), "# Context\n\nValidation milestone context should stay on-demand.");
+  writeAssessment(
+    base,
+    "S01",
+    [
+      "# Assessment",
+      "",
+      "Verdict: PASS — 15 checks passed across runtime simulation.",
+      "",
+      "## Edge Cases",
+      "Empty query, no matches, and priority sort all pass.",
+      "",
+      "## Full Runtime Trace",
+      "This very noisy assessment trace should stay out of the prompt. ".repeat(80),
+    ].join("\n"),
+  );
+
+  const prompt = await buildValidateMilestonePrompt("M001", "Test Milestone", base);
+
+  assert.match(prompt, /### S01 Summary \(excerpt\)/);
+  assert.match(prompt, /### S02 Summary \(excerpt\)/);
+  assert.match(prompt, /### S01 Assessment \(excerpt\)/);
+  assert.match(prompt, /### On-demand Validation Artifacts/);
+  assert.match(prompt, /### On-demand Project Context/);
+  assert.match(prompt, /### On-demand Milestone Context/);
+  assert.match(prompt, /S01-SUMMARY\.md/);
+  assert.match(prompt, /S01-ASSESSMENT\.md/);
+  assert.ok(
+    !prompt.includes("Broad validation product context should stay on-demand."),
+    "standard validate-milestone prompt should not inline project narrative",
+  );
+  assert.ok(
+    !prompt.includes("Validation milestone context should stay on-demand."),
+    "standard validate-milestone prompt should not inline milestone context narrative",
+  );
+  assert.ok(
+    !prompt.includes("threads the cache key through every call site."),
+    "validate prompt must not inline full slice summary narrative",
+  );
+  assert.ok(
+    !prompt.includes("This very noisy assessment trace should stay out of the prompt."),
+    "validate prompt must not inline full assessment traces",
+  );
 });

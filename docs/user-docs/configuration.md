@@ -160,6 +160,69 @@ Recommended verification order:
 - If a server is team-shared and safe to commit, `.mcp.json` is usually the better home.
 - If a server depends on machine-local paths, personal services, or local-only secrets, prefer `.gsd/mcp.json`.
 
+### Per-Model MCP Filtering
+
+Small-context models (e.g. Claude Haiku) suffer prompt-size blowouts when every available MCP server is announced to them. A subagent that only needs `gsd-workflow` does not need the 28 other servers in the prompt. GSD lets you restrict, per model, which MCP servers are exposed to the SDK by configuring `claude_code_mcp.per_model` in `.gsd/PREFERENCES.md`.
+
+#### YAML shape
+
+The block lives in the YAML frontmatter of `.gsd/PREFERENCES.md` under `claude_code_mcp.per_model`. Each key is a **model-ID prefix**; each value has optional `allowed_servers` and `blocked_servers` arrays of MCP server names:
+
+```yaml
+claude_code_mcp:
+  per_model:
+    <model-prefix>:
+      allowed_servers: [server-a, server-b]
+      blocked_servers: [server-c]
+```
+
+Both fields are optional. A model with no matching prefix gets the unfiltered set.
+
+#### Longest-prefix-wins matching
+
+Keys are matched against the active model ID by prefix; when multiple keys match, the **longest matching prefix wins** (longest-prefix-wins). This lets you set a coarse default for a model family and override it for a specific variant without tracking every date-stamped ID:
+
+| Model ID at runtime           | Keys configured                       | Winner             |
+|-------------------------------|---------------------------------------|--------------------|
+| `claude-haiku-4-5-20251001`   | `claude-haiku`, `claude-haiku-4-5`    | `claude-haiku-4-5` |
+| `claude-haiku-3-5-20241022`   | `claude-haiku`, `claude-haiku-4-5`    | `claude-haiku`     |
+| `claude-sonnet-4-6-20250101`  | `claude-haiku`                        | (no match)         |
+
+#### Resolution order: allowlist-first, blocklist-removes
+
+When `allowed_servers` is present, only those servers (plus the implicit `gsd-workflow` allow described below) are exposed; everything else is blocked. `blocked_servers` then removes entries from the resulting set. On overlap, **the blocklist wins** — a server listed in both `allowed_servers` and `blocked_servers` is blocked.
+
+| `allowed_servers` | `blocked_servers` | Effective exposure                                                |
+|-------------------|-------------------|-------------------------------------------------------------------|
+| absent / empty    | absent / empty    | All discovered servers exposed                                    |
+| `[a, b]`          | absent / empty    | Only `a`, `b`, and `gsd-workflow`                                 |
+| absent / empty    | `[c]`             | All discovered servers except `c`                                 |
+| `[a, b]`          | `[b]`             | Only `a` and `gsd-workflow` (`b` removed by blocklist)            |
+
+Blocking is implemented two ways depending on how the server arrives: user MCPs loaded by the SDK from `.mcp.json` / `.claude/settings.json` are blocked via `disallowedTools` patterns (`mcp__<name>__*`); the `gsd-workflow` server, which GSD controls directly, is dropped from the `mcpServers` map when explicitly blocked.
+
+#### `gsd-workflow` implicit allow
+
+GSD's own workflow MCP server (`gsd-workflow`) is **always allowed**, even when not listed in `allowed_servers`, because the GSD engine itself depends on it. The only way to remove `gsd-workflow` from a model's exposure is to name it explicitly in `blocked_servers`. Do this only if you understand that auto-mode tooling on that model will stop working.
+
+#### Worked example
+
+A Haiku subagent that only needs `gsd-workflow` and a single search MCP, and a Sonnet model that has everything except a noisy analytics server:
+
+```yaml
+claude_code_mcp:
+  per_model:
+    claude-haiku-4-5:
+      allowed_servers:
+        - google-search
+      # gsd-workflow is allowed implicitly; no need to list it.
+    claude-sonnet-4-6:
+      blocked_servers:
+        - analytics-noisy
+```
+
+With this configuration, a Haiku-4-5 subagent sees only `gsd-workflow` and `google-search` regardless of how many servers `.mcp.json` defines; a Sonnet-4-6 session sees every discovered server except `analytics-noisy`. Other models match no prefix and are unaffected.
+
 ## Environment Variables
 
 | Variable | Default | Description |
@@ -171,6 +234,7 @@ Recommended verification order:
 | `GSD_ALLOW_MARKDOWN_DERIVE_FALLBACK` | (unset) | Set to literal `1` only for tests or explicit recovery workflows that must derive state from rendered markdown when the database is unavailable. Normal runtime treats the database as authoritative and refuses silent markdown fallback. |
 | `GSD_ALLOWED_COMMAND_PREFIXES` | (built-in list) | Comma-separated command prefixes allowed for `!command` value resolution. Overrides `allowedCommandPrefixes` in settings.json. See [Custom Models — Command Allowlist](custom-models.md#command-allowlist). |
 | `GSD_FETCH_ALLOWED_URLS` | (none) | Comma-separated hostnames exempted from `fetch_page` URL blocking. Overrides `fetchAllowedUrls` in settings.json. See [URL Blocking](#url-blocking-fetch_page). |
+| `PI_DISABLE_SYNC_OUTPUT` | (unset) | Set to literal `1` to disable synchronized terminal output mode in the TUI on non-Windows platforms. By default synchronized output is enabled on macOS/Linux and always disabled on Windows. |
 | `PI_TOKEN_TELEMETRY` | (unset) | Set to literal `1` to emit opt-in per-call token telemetry as JSONL on stderr. Other values are ignored. |
 
 ### Token Telemetry
@@ -339,6 +403,31 @@ Enable deep mode for the current project with `/gsd new-project --deep` or `/gsd
 
 In deep mode, `research-decision` writes `.gsd/runtime/research-decision.json` with `research` or `skip`. A `research` decision dispatches `research-project`, which writes `.gsd/research/STACK.md`, `FEATURES.md`, `ARCHITECTURE.md`, and `PITFALLS.md`; a `skip` decision proceeds directly to milestone work.
 
+### `workspace`
+
+Declares repository targets for project or parent workspaces. `plan-slice` validates `targetRepositories` against these IDs and scopes task file/input/output paths to the selected repository roots.
+
+```yaml
+workspace:
+  mode: parent   # "project" or "parent"
+  repositories:
+    frontend:
+      path: frontend
+      role: ui
+      verification:
+        - npm run test
+      commit_policy: auto   # "auto" or "skip"
+    backend:
+      path: backend
+```
+
+- `workspace.mode`: `project` (single-repo default) or `parent` (multi-repo workspace rooted at the current project).
+- `workspace.repositories.<id>.path`: required repository path (relative or absolute).
+- `workspace.repositories.<id>.role`: optional label used for planning/reporting context.
+- `workspace.repositories.<id>.verification`: optional default verification commands for that repository.
+- `workspace.repositories.<id>.commit_policy`: optional per-repository auto-commit policy (`auto` or `skip`).
+- Omitted slice/task `targetRepositories` default to `["project"]`.
+
 ### `reactive_execution`
 
 Controls automatic parallel task dispatch inside a slice. This is enabled by default and only dispatches when task-plan IO annotations produce a non-ambiguous graph with enough ready, non-conflicting tasks.
@@ -445,6 +534,8 @@ Enable automatic UAT (User Acceptance Test) runs after slice completion:
 uat_dispatch: true
 ```
 
+When enabled, auto-mode runs UAT after slice completion. Non-PASS verdicts on closed slices do not hard-stop dispatch progression, so downstream remediation slices can continue, but automatic milestone closure is still gated on explicit UAT PASS sign-off for closed slices.
+
 ### Verification (v2.26)
 
 Configure shell commands that run automatically after every task execution. Failures trigger auto-fix retries before advancing.
@@ -466,6 +557,46 @@ verification_max_retries: 2       # max retry attempts (default: 2)
 Verification commands must be simple executable commands, not shell pipelines or scripts packed into one line. GSD rejects pipes (`|`), redirects (`>` and `<`), semicolons, backticks, and command substitution (`$(...)`) because verification is run as a controlled command list, not as an arbitrary shell program. Use `python3 -m pytest tests -q` instead of `python3 -m pytest tests -q 2>&1 | tail -5`.
 
 When `verification_commands` is empty and no task-level `verify` command is available, GSD can auto-discover project checks. JavaScript projects use `package.json` scripts in this order: `typecheck`, `lint`, `test`. Python projects use the `python-project` discovery source and run `python3 -m pytest` when GSD finds files matching pytest's default test file patterns (`test_*.py` or `*_test.py`) under `tests/` or an explicit pytest configuration marker: `pytest.ini`, `[tool.pytest]`, `[tool.pytest.*]`, `[pytest]`, or `[tool:pytest]` in `pyproject.toml`.
+
+### `workspace`
+
+Multi-repository workspace configuration for a parent project that coordinates child repositories.
+
+```yaml
+workspace:
+  mode: parent
+  repositories:
+    frontend:
+      path: apps/frontend
+      role: web
+      verification:
+        - pnpm -C apps/frontend test
+      commit_policy: auto
+    backend:
+      path: services/backend
+      role: api
+      verification:
+        - pnpm -C services/backend test
+      commit_policy: skip
+```
+
+`project` is always available as an implicit repository ID pointing at the project root. If plan/task `targetRepositories` is omitted, GSD defaults to `["project"]`.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `workspace.mode` | `"project" \| "parent"` | `"project"` | Workspace operating mode. Use `parent` to declare and resolve child repositories. |
+| `workspace.repositories` | object | `{}` | Mapping of repository IDs to repository config. |
+| `workspace.repositories.<id>.path` | string | required | Child repository path, resolved relative to project root. Must stay inside the project root. |
+| `workspace.repositories.<id>.role` | string | optional | Human-oriented label used by prompts/reporting. |
+| `workspace.repositories.<id>.verification` | string[] | optional | Default verification commands for that repository. |
+| `workspace.repositories.<id>.commit_policy` | `"auto" \| "skip"` | optional | Per-repository auto-mode turn-commit policy. |
+
+Validation rules:
+
+- Repository IDs must match `^[A-Za-z0-9][A-Za-z0-9._-]*$`.
+- Repository paths are normalized and must be unique (case-insensitive).
+- Paths resolving outside the project root are rejected.
+- Unknown keys under `workspace` and each repository entry are ignored with warnings.
 
 ### URL Blocking (`fetch_page`)
 
@@ -637,6 +768,38 @@ github:
 **Commands:**
 - `/github-sync bootstrap` — initial setup and sync
 - `/github-sync status` — show sync mapping counts
+
+### `workspace` (v2.49)
+
+Multi-repository parent workspace configuration. This lets one `.gsd` state manage multiple child repositories and constrains planning file paths to declared repository roots.
+
+```yaml
+workspace:
+  mode: parent                  # "project" (default) or "parent"
+  repositories:
+    frontend:
+      path: frontend            # relative to project root (or absolute path within project root)
+      role: ui                  # optional
+      verification:             # optional default verification commands
+        - npm run test
+      commit_policy: auto       # optional: "auto" or "skip"
+    backend:
+      path: backend
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `mode` | string | `project` | Workspace mode. `parent` enables multi-repo registry behavior. |
+| `repositories` | object | `{}` | Map of repository ids to repository config objects. |
+| `repositories.<id>.path` | string | required | Repository root path. Relative paths resolve from project root and must stay inside project root. |
+| `repositories.<id>.role` | string | (none) | Optional human-oriented label for prompts/reporting. |
+| `repositories.<id>.verification` | string[] | (none) | Optional default verification commands for that repository. |
+| `repositories.<id>.commit_policy` | string | (none) | Optional per-repo auto-mode turn commit policy: `auto` or `skip`. |
+
+**Path-scope behavior:**
+- During planning (`plan-slice`/`replan-slice`), file paths are validated against the selected `targetRepositories`.
+- Absolute and relative paths are both checked; paths that resolve outside declared repository roots are rejected.
+- If no explicit `targetRepositories` are provided, planning defaults to `["project"]`.
 
 ### `notifications`
 

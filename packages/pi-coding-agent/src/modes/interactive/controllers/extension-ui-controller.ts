@@ -12,6 +12,16 @@ export function createExtensionUIContext(host: any): ExtensionUIContext {
 		onTerminalInput: (handler) => host.addExtensionTerminalInputListener(handler),
 		setStatus: (key, text) => host.setExtensionStatus(key, text),
 		setWorkingMessage: (message) => {
+			if (message === null) {
+				host.pendingWorkingMessage = null;
+				if (host.loadingAnimation) {
+					host.loadingAnimation.stop();
+					host.loadingAnimation = undefined;
+					host.statusContainer.clear();
+					host.ui.requestRender();
+				}
+				return;
+			}
 			if (host.loadingAnimation) {
 				if (message) {
 					host.loadingAnimation.setMessage(message);
@@ -56,4 +66,3 @@ export function createExtensionUIContext(host: any): ExtensionUIContext {
 		setToolsExpanded: (expanded) => host.setToolsExpanded(expanded),
 	};
 }
-

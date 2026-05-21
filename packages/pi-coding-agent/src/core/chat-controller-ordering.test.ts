@@ -1,3 +1,5 @@
+// Project/App: GSD-2
+// File Purpose: Regression tests for streamed interactive chat ordering.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
@@ -97,9 +99,7 @@ function createHost() {
 	return host;
 }
 
-test("chat-controller renders content blocks in content[] index order (tool-first stream)", async () => {
-	// ToolExecutionComponent uses the global theme singleton.
-	// Install a minimal no-op theme implementation for this unit test.
+function installTheme() {
 	(globalThis as any)[Symbol.for("@gsd/pi-coding-agent:theme")] = {
 		fg: (_key: string, text: string) => text,
 		bg: (_key: string, text: string) => text,
@@ -107,6 +107,12 @@ test("chat-controller renders content blocks in content[] index order (tool-firs
 		italic: (text: string) => text,
 		truncate: (text: string) => text,
 	};
+}
+
+test("chat-controller renders content blocks in content[] index order (tool-first stream)", async () => {
+	// ToolExecutionComponent uses the global theme singleton.
+	// Install a minimal no-op theme implementation for this unit test.
+	installTheme();
 
 	const host = createHost();
 	const toolId = "mcp-tool-1";
@@ -166,6 +172,50 @@ test("chat-controller renders content blocks in content[] index order (tool-firs
 	assert.equal(host.chatContainer.children.length, 2, "text run should render after tool in content[] order");
 	assert.equal(host.chatContainer.children[0]?.constructor?.name, "ToolExecutionComponent");
 	assert.equal(host.chatContainer.children[1]?.constructor?.name, "AssistantMessageComponent");
+});
+
+test("chat-controller skips empty GPT reasoning blocks before tool-only turns", async () => {
+	installTheme();
+
+	const host = createHost();
+	host.getMarkdownThemeWithSettings = () => ({});
+	const toolId = "gpt-tool-1";
+	const toolCall = {
+		type: "toolCall",
+		id: toolId,
+		name: "read",
+		arguments: { filePath: "todo.js" },
+	};
+	const content = [
+		{ type: "thinking", thinking: "", thinkingSignature: "encrypted" },
+		toolCall,
+	];
+
+	await handleAgentEvent(host, { type: "message_start", message: makeAssistant([]) } as any);
+
+	await handleAgentEvent(
+		host,
+		{
+			type: "message_update",
+			message: makeAssistant(content),
+			assistantMessageEvent: {
+				type: "toolcall_end",
+				contentIndex: 1,
+				toolCall: {
+					...toolCall,
+					externalResult: {
+						content: [{ type: "text", text: "todo contents" }],
+						details: {},
+						isError: false,
+					},
+				},
+				partial: makeAssistant(content),
+			},
+		} as any,
+	);
+
+	assert.equal(host.chatContainer.children.length, 1, "empty reasoning should not create a blank assistant block");
+	assert.equal(host.chatContainer.children[0]?.constructor?.name, "ToolExecutionComponent");
 });
 
 test("chat-controller renders serverToolUse before trailing text matching content[] index order", async () => {

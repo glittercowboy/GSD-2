@@ -27,7 +27,22 @@ export { writeCrashLog } from "./crash-log.js";
 
 export function handleRecoverableExtensionProcessError(err: Error): boolean {
   if ((err as NodeJS.ErrnoException).code === "EPIPE") {
-    process.exit(0);
+    writeCrashLog(err, "EPIPE");
+    const stdoutGone = process.stdout.destroyed || process.stdout.writableEnded;
+    if (stdoutGone) {
+      process.exit(0);
+    }
+    process.stderr.write(
+      `[gsd] swallowed EPIPE (syscall=${(err as NodeJS.ErrnoException).syscall ?? "?"}); see ~/.gsd/crash/ for details\n`,
+    );
+    return true;
+  }
+  if ((err as NodeJS.ErrnoException).code === "EIO") {
+    const syscall = (err as NodeJS.ErrnoException).syscall;
+    if (syscall === "read") {
+      process.stderr.write(`[gsd] EIO: ${err.message}\n`);
+      return true;
+    }
   }
   if ((err as NodeJS.ErrnoException).code === "ENOENT") {
     const syscall = (err as NodeJS.ErrnoException).syscall;

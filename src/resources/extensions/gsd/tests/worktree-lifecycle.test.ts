@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import {
   WorktreeLifecycle,
+  mergeMilestoneStandalone,
   resolvePausedResumeBasePath,
   type WorktreeLifecycleDeps,
   type WorktreeLifecycleTestOverrides,
@@ -213,7 +214,7 @@ test("enterMilestone returns ok:true mode:none when isolation disabled", () => {
 
 test("enterMilestone returns ok:false reason:isolation-degraded when session degraded", () => {
   const s = makeSession({ isolationDegraded: true });
-  const deps = makeDeps();
+  const deps = makeDeps({ getIsolationMode: () => "branch" });
   const ctx = makeCtx();
   const lifecycle = new WorktreeLifecycle(s, deps);
 
@@ -225,7 +226,37 @@ test("enterMilestone returns ok:false reason:isolation-degraded when session deg
   }
   assert.equal(s.basePath, "/project");
   assert.equal(s.milestoneLeaseToken, null);
-  assert.equal(deps.calls.filter((c) => c.fn === "getIsolationMode").length, 0);
+});
+
+test("enterMilestone falls back to branch mode when session is degraded in worktree isolation", (t) => {
+  const previousCwd = process.cwd();
+  const base = makeGitRepoBase({ isolation: "worktree" });
+  t.after(() => cleanupRepoBase(base, previousCwd));
+
+  const s = makeSession({
+    basePath: base,
+    originalBasePath: base,
+    isolationDegraded: true,
+  });
+  const deps = makeDeps();
+  const ctx = makeCtx();
+  const lifecycle = new WorktreeLifecycle(s, deps);
+
+  const result = lifecycle.enterMilestone("M001", ctx);
+
+  assert.equal(result.ok, true, `expected ok:true, got: ${JSON.stringify(result)}`);
+  if (result.ok) {
+    assert.equal(result.mode, "branch");
+    assert.equal(result.path, base);
+  }
+  assert.equal(s.basePath, base);
+  assert.equal(
+    ctx.messages.some((m) =>
+      m.level === "warning" &&
+      m.msg.includes("Worktree isolation is degraded. Fell back to branch"),
+    ),
+    true,
+  );
 });
 
 test("enterMilestone returns ok:false reason:creation-failed and degrades session on worktree throw", (t) => {
@@ -397,6 +428,29 @@ test("enterMilestone returns ok:false reason:invalid-milestone-id on path traver
 // drive Lifecycle through Resolver delegation until step E retires the
 // Resolver class entirely). When that retirement lands, those tests move
 // here verbatim.
+test("exitMilestone forwards preserveWorktree to teardown on non-merge exit", () => {
+  let capturedOpts: { preserveBranch?: boolean; preserveWorktree?: boolean } | undefined;
+  const s = makeSession({
+    basePath: "/project/.gsd/worktrees/M001",
+    originalBasePath: "/project",
+  });
+  const deps = makeDeps({
+    isInAutoWorktree: () => true,
+    teardownAutoWorktree: (_basePath, _mid, opts) => {
+      capturedOpts = opts;
+    },
+  });
+  const lifecycle = new WorktreeLifecycle(s, deps);
+
+  const result = lifecycle.exitMilestone(
+    "M001",
+    { merge: false, preserveBranch: true, preserveWorktree: true },
+    makeCtx(),
+  );
+
+  assert.deepEqual(result, { ok: true, merged: false, codeFilesChanged: false });
+  assert.deepEqual(capturedOpts, { preserveBranch: true, preserveWorktree: true });
+});
 
 // ─── Queries (issue #5587) ────────────────────────────────────────────────────
 
@@ -620,13 +674,26 @@ test("adoptSessionRoot does not chdir, rebuild git service, or invalidate caches
   assert.equal(deps.calls.filter((c) => c.fn === "invalidateAllCaches").length, 0);
 });
 
+test("mergeMilestoneStandalone fails loud when both base paths are empty", () => {
+  const deps = makeDeps();
+  assert.throws(
+    () =>
+      mergeMilestoneStandalone(deps, {
+        originalBasePath: "",
+        worktreeBasePath: "",
+        milestoneId: "M001",
+        isolationDegraded: false,
+        notify: () => {},
+      }),
+    /requires originalBasePath or worktreeBasePath/,
+  );
+});
+
 // ─── resumeFromPausedSession (ADR-016 phase 2 / B3, issue #5621) ──────────────
 
-test("resumeFromPausedSession adopts the persisted worktree path when it exists", (t) => {
-  // Use a real temp directory so the existsSync check inside the verb
-  // succeeds. Earlier `process.cwd()` ran into ENOENT after sibling tests
-  // deleted their basePaths and left cwd dangling.
+test("resumeFromPausedSession adopts the persisted worktree path when it is a git worktree", (t) => {
   const wtDir = realpathSync(mkdtempSync(join(tmpdir(), "gsd-resume-test-")));
+  writeFileSync(join(wtDir, ".git"), "gitdir: /tmp/gsd-resume-test/.git/worktrees/M001\n");
   t.after(() => { try { rmSync(wtDir, { recursive: true, force: true }); } catch { /* */ } });
 
   const s = makeSession();
@@ -635,10 +702,7 @@ test("resumeFromPausedSession adopts the persisted worktree path when it exists"
 
   // Verify the pure helper's contract first (folded in from the legacy
   // _resolvePausedResumeBasePathForTest)
-  assert.equal(
-    resolvePausedResumeBasePath("/project", "/persisted/worktree/M001", () => true),
-    "/persisted/worktree/M001",
-  );
+  assert.equal(resolvePausedResumeBasePath("/project", wtDir), wtDir);
 
   // Exercise the verb with a real path that exists.
   lifecycle.resumeFromPausedSession("/project", wtDir);
@@ -663,6 +727,21 @@ test("resumeFromPausedSession falls back to base when persisted worktree does no
     "/project",
     "/this/path/does/not/exist/abc/xyz",
   );
+  assert.equal(s.basePath, "/project");
+});
+
+test("resumeFromPausedSession falls back to base when persisted directory is not a git worktree", (t) => {
+  const wtDir = realpathSync(mkdtempSync(join(tmpdir(), "gsd-resume-stub-")));
+  mkdirSync(join(wtDir, ".bg-shell"), { recursive: true });
+  t.after(() => { try { rmSync(wtDir, { recursive: true, force: true }); } catch { /* */ } });
+
+  const s = makeSession();
+  s.basePath = "/old";
+  const lifecycle = new WorktreeLifecycle(s, makeDeps());
+
+  assert.equal(resolvePausedResumeBasePath("/project", wtDir), "/project");
+
+  lifecycle.resumeFromPausedSession("/project", wtDir);
   assert.equal(s.basePath, "/project");
 });
 

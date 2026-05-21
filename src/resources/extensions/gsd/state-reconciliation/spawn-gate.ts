@@ -34,9 +34,14 @@ export async function reconcileBeforeSpawn(
   basePath: string,
   deps: SpawnGateDeps = {},
 ): Promise<SpawnGateResult> {
-  const reconcileFn = deps.reconcile ?? reconcileBeforeDispatch;
+  const { reconcile, ...reconcileDeps } = deps;
+  const reconcileFn = reconcile ?? reconcileBeforeDispatch;
+  const hasReconcileDeps = Object.keys(reconcileDeps).length > 0;
   try {
-    const result = await reconcileFn(basePath, deps as ReconciliationDeps);
+    const result = await reconcileFn(
+      basePath,
+      hasReconcileDeps ? (reconcileDeps as ReconciliationDeps) : undefined,
+    );
     if (result.blockers.length > 0) {
       return {
         ok: false,

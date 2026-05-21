@@ -33,7 +33,7 @@ Prompt: "Review milestone {{milestoneId}} requirements coverage. Working directo
 Prompt: "Review milestone {{milestoneId}} cross-slice integration. Working directory: {{workingDirectory}}. Read `{{roadmapPath}}` and find the boundary map (produces/consumes contracts). For each boundary, confirm producer SUMMARY produced the artifact and consumer SUMMARY consumed it. Output table: Boundary | Producer Summary | Consumer Summary | Status. End with one-line verdict: PASS if all boundaries honored, NEEDS-ATTENTION if any gaps."
 
 **Reviewer C - Assessment & Acceptance Criteria**
-Prompt: "Review milestone {{milestoneId}} assessment evidence and acceptance criteria. Working directory: {{workingDirectory}}. Read `.gsd/milestones/{{milestoneId}}/{{milestoneId}}-CONTEXT.md` for criteria. Check slice SUMMARY/UAT files under `.gsd/milestones/{{milestoneId}}/slices/`. Verify each criterion maps to passing evidence. Then review inlined milestone verification classes. For each non-empty planned class, output table: Class | Planned Check | Evidence | Verdict. Use the exact class names `Contract`, `Integration`, `Operational`, and `UAT` whenever those classes are present. If no verification classes were planned, say that explicitly. Output sections `Acceptance Criteria` with checklist `[ ] Criterion | Evidence`, and `Verification Classes` with the table. End with one-line verdict: PASS if all criteria and classes are covered, NEEDS-ATTENTION if gaps exist."
+Prompt: "Review milestone {{milestoneId}} assessment evidence and acceptance criteria. Working directory: {{workingDirectory}}. Read `.gsd/milestones/{{milestoneId}}/{{milestoneId}}-CONTEXT.md` for criteria. Check slice SUMMARY and ASSESSMENT files under `.gsd/milestones/{{milestoneId}}/slices/`; UAT files are specs, not evidence. Verify each criterion maps to passing evidence. Then review inlined milestone verification classes. For each non-empty planned class, output table: Class | Planned Check | Evidence | Verdict. Use the exact class names `Contract`, `Integration`, `Operational`, and `UAT` whenever those classes are present. If a planned browser/UAT class has no ASSESSMENT with browser/runtime actions and assertions, return NEEDS-ATTENTION. If no verification classes were planned, say that explicitly. Output sections `Acceptance Criteria` with checklist `[ ] Criterion | Evidence`, and `Verification Classes` with the table. End with one-line verdict: PASS if all criteria and classes are covered by evidence, NEEDS-ATTENTION if gaps exist."
 
 ### Step 2 - Synthesize Findings
 
@@ -77,8 +77,9 @@ Extract the `Verification Classes` subsection from Reviewer C and pass it verbat
 **DB access safety:** Do NOT query `.gsd/gsd.db` directly via `sqlite3` or `node -e require('better-sqlite3')` - the engine owns the WAL connection. Use `gsd_milestone_status` for milestone and slice state. Data is already inlined or available via `gsd_*` tools. Direct DB access risks WAL corruption and bypasses validation.
 
 If verdict is `needs-remediation`:
-- Use `gsd_reassess_roadmap` to add remediation slices instead of editing `{{roadmapPath}}` manually.
-- Those slices will be planned and executed before validation re-runs
+- First call `gsd_validate_milestone` to persist this failed validation verdict.
+- Then use `gsd_reassess_roadmap` to add remediation slices instead of editing `{{roadmapPath}}` manually.
+- Those slices will be planned and executed before validation re-runs.
 
 **You MUST call `gsd_validate_milestone` before finishing. Do not manually write `{{validationPath}}`.**
 

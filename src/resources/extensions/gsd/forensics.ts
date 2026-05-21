@@ -258,11 +258,13 @@ export async function handleForensics(
   });
 
   ctx.ui.notify(`Forensic report saved: ${relative(basePath, savedPath)}`, "info");
+  ctx.ui.setStatus("gsd-forensics", "running");
 
   pi.sendMessage(
     { customType: "gsd-forensics", content, display: false },
     { triggerTurn: true },
   );
+  ctx.ui.setStatus("gsd-forensics", undefined);
 
   // Persist forensics context so follow-up turns can re-inject it (#2941)
   writeForensicsMarker(basePath, savedPath, content);
@@ -293,6 +295,10 @@ export async function buildForensicReport(basePath: string): Promise<ForensicRep
 
   // 4. Load completed keys (legacy) and DB completion counts
   const completedKeys = loadCompletedKeys(basePath);
+  try {
+    const { ensureDbOpen } = await import("./bootstrap/dynamic-tools.js");
+    await ensureDbOpen(basePath);
+  } catch { /* best-effort DB open for report enrichment */ }
   const dbCompletionCounts = getDbCompletionCounts();
 
   // 5. Check crash lock
@@ -714,8 +720,10 @@ export function detectStuckLoops(units: UnitMetrics[], anomalies: ForensicAnomal
     const count = hasSessionAwareData
       ? Math.max(...Array.from(sessionBuckets.values(), (starts) => starts.size))
       : (sessionBuckets.get("__legacy__")?.size ?? 0);
+    const isParallelResearchSentinel = key.endsWith("/parallel-research");
+    const dispatchThreshold = isParallelResearchSentinel ? 2 : 1;
 
-    if (count > 1) {
+    if (count > dispatchThreshold) {
       const [unitType, ...idParts] = key.split("/");
       anomalies.push({
         type: "stuck-loop",
@@ -837,7 +845,7 @@ export function detectWorktreeOrphans(
       type: "worktree-unmerged-exit",
       severity: "warning",
       summary: `${summary.exitsWithUnmergedWork} auto-exit(s) left milestone work unmerged`,
-      details: `Exit reasons: ${reasonBreakdown || "(none)"} · Producer-side signal for #4761-class orphans. Inspect .gsd/journal/*.jsonl with eventType:"auto-exit" for per-exit detail.`,
+      details: `Exit reasons: ${reasonBreakdown || "(none)"} · Producer-side signal for orphaned worktrees. Inspect .gsd/journal/*.jsonl with eventType:"auto-exit" for per-exit detail.`,
     });
   }
 }
@@ -1056,7 +1064,7 @@ function saveForensicReport(basePath: string, report: ForensicReport, problemDes
         .map(([r, n]) => `${r}=${n}`).join(", ");
       sections.push(`  - Exit reasons: ${breakdown}`);
     }
-    sections.push(`- Canonical-root redirects (#4761 fix fired): ${t.canonicalRedirects}`);
+    sections.push(`- Canonical-root redirects: ${t.canonicalRedirects}`);
     // #4765 slice-cadence counters
     if (t.slicesMerged + t.sliceMergeConflicts + t.milestoneResquashes > 0) {
       sections.push(`- Slices merged: ${t.slicesMerged} · Slice merge conflicts: ${t.sliceMergeConflicts}`);
@@ -1220,7 +1228,7 @@ function formatReportForPrompt(report: ForensicReport): string {
     if (hasSignal) {
       sections.push("### Worktree Telemetry");
       sections.push(`- Created: ${t.worktreesCreated} · Merged: ${t.worktreesMerged} · Conflicts: ${t.mergeConflicts}`);
-      sections.push(`- Orphans: ${t.orphansDetected} · Unmerged exits: ${t.exitsWithUnmergedWork} · Redirects (#4761): ${t.canonicalRedirects}`);
+      sections.push(`- Orphans: ${t.orphansDetected} · Unmerged exits: ${t.exitsWithUnmergedWork} · Redirects: ${t.canonicalRedirects}`);
       if (t.orphansDetected > 0) {
         const breakdown = Object.entries(t.orphansByReason)
           .map(([r, n]) => `${r}=${n}`).join(", ");

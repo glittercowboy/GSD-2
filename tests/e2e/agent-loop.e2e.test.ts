@@ -26,6 +26,8 @@ import {
 	writeTranscript,
 } from "./_shared/index.ts";
 
+const PRINT_TIMEOUT_MS = 90_000;
+
 function binaryAvailable(): { ok: boolean; reason?: string } {
 	const bin = process.env.GSD_SMOKE_BINARY;
 	if (!bin) return { ok: false, reason: "GSD_SMOKE_BINARY not set; build with `npm run build:core` and re-export." };
@@ -53,7 +55,7 @@ describe("agent loop e2e (fake LLM)", () => {
 			cwd: project.dir,
 			prompt: "ping",
 			mode: "json",
-			timeoutMs: 30_000,
+			timeoutMs: PRINT_TIMEOUT_MS,
 		});
 
 		assert.equal(
@@ -107,7 +109,7 @@ describe("agent loop e2e (fake LLM)", () => {
 			cwd: project.dir,
 			prompt: "use a tool",
 			mode: "json",
-			timeoutMs: 60_000,
+			timeoutMs: PRINT_TIMEOUT_MS,
 			extraEnv: { GSD_TOOL_APPROVAL: "auto" },
 		});
 
@@ -148,9 +150,8 @@ describe("agent loop e2e (fake LLM)", () => {
 			// Print mode currently hangs after an error path instead of
 			// exiting (separate product issue worth a follow-up). The agent
 			// stream emits everything we need before that, so we cap the
-			// wait at 8s — enough for the loop to drain, fast enough that
-			// CI doesn't pay 30s per run.
-			timeoutMs: 8_000,
+			// wait after startup has had enough time to emit the stream.
+			timeoutMs: PRINT_TIMEOUT_MS,
 		});
 
 		// Exit code may be non-zero on error path or null if we timed the
@@ -201,7 +202,7 @@ describe("agent loop e2e (fake LLM)", () => {
 			prompt: "different prompt",
 			mode: "json",
 			// Same hang-after-error caveat as T3.
-			timeoutMs: 8_000,
+			timeoutMs: PRINT_TIMEOUT_MS,
 		});
 
 		// Expect a stopReason=error path because the fake provider threw

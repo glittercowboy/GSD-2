@@ -13,13 +13,15 @@ concurrency:
 
 permissions:
   contents: write
+  id-token: write
   packages: write
   pull-requests: write
 
 jobs:
   prod-release:
     name: Production Release
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # npm trusted publishing requires GitHub-hosted runners for OIDC.
+    runs-on: ubuntu-latest
     environment: prod
     steps:
       - uses: actions/checkout@v6
@@ -32,10 +34,15 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
-          cache: 'npm'
+          package-manager-cache: false
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Verify trusted publishing toolchain
+        run: |
+          node -e "const [major, minor] = process.versions.node.split('.').map(Number); if (major < 22 || (major === 22 && minor < 14)) { throw new Error('Trusted publishing requires Node >= 22.14.0'); }"
+          node -e "const v=require('child_process').execSync('npm --version',{encoding:'utf8'}).trim().split('.').map(Number); if (v[0] < 11 || (v[0] === 11 && v[1] < 5) || (v[0] === 11 && v[1] === 5 && v[2] < 1)) { throw new Error('Trusted publishing requires npm >= 11.5.1'); }"
 
       - name: Cache Next.js build
         uses: useblacksmith/cache@v5
@@ -95,23 +102,26 @@ jobs:
       - name: Run live regression tests (against release build)
         run: |
           chmod +x dist/loader.js
-          export GSD_SMOKE_BINARY="$(pwd)/dist/loader.js"
+          GSD_SMOKE_BINARY="$(pwd)/dist/loader.js"
+          export GSD_SMOKE_BINARY
           npm run test:live-regression
 
       - name: Publish release to npm @latest
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
         run: |
-          OUTPUT=$(npm publish 2>&1) && echo "$OUTPUT" || {
+          if OUTPUT=$(npm publish 2>&1); then
+            echo "$OUTPUT"
+          else
             if echo "$OUTPUT" | grep -q "cannot publish over the previously published"; then
-              echo "Version already published — promoting to latest"
-              npm dist-tag add "gsd-pi@${RELEASE_VERSION}" latest
+              echo "::error::Version ${RELEASE_VERSION} already exists. Trusted publishing only authenticates npm publish, not dist-tag mutation."
+              echo "::error::Promote manually if intended: npm dist-tag add gsd-pi@${RELEASE_VERSION} latest"
+              exit 1
             else
               echo "$OUTPUT"
               exit 1
             fi
-          }
+          fi
 
       - name: Push release commit and tag
         env:

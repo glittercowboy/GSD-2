@@ -143,7 +143,7 @@ test("updateProgressWidget gracefully no-ops when ctx.ui lacks setHeader/setStat
 
 // ── NEXT-mode footer guidance ───────────────────────────────────────────
 
-test("auto-dashboard widget render output includes Ctrl+N guidance when isStepMode is true", (t) => {
+test("auto-dashboard widget render output includes /gsd next guidance when isStepMode is true", (t) => {
   const dir = makeTempDir("step-hint");
   mkdirSync(join(dir, ".gsd"), { recursive: true });
   t.after(() => cleanup(dir));
@@ -175,13 +175,13 @@ test("auto-dashboard widget render output includes Ctrl+N guidance when isStepMo
   const component = widgetFactory!(fakeTui, fakeTheme);
   const lines = component.render(120);
 
-  const hasStepHint = lines.some((line: string) => line.includes("Ctrl+N to advance"));
+  const hasStepHint = lines.some((line: string) => line.includes("/gsd next to advance one step"));
   assert.ok(hasStepHint, `expected step-mode hint in render output; got:\n${lines.join("\n")}`);
 
   if (component.dispose) component.dispose();
 });
 
-test("auto-dashboard widget render output omits Ctrl+N guidance when isStepMode is false", (t) => {
+test("auto-dashboard widget render output omits /gsd next guidance when isStepMode is false", (t) => {
   const dir = makeTempDir("no-step-hint");
   mkdirSync(join(dir, ".gsd"), { recursive: true });
   t.after(() => cleanup(dir));
@@ -213,7 +213,7 @@ test("auto-dashboard widget render output omits Ctrl+N guidance when isStepMode 
   const component = widgetFactory!(fakeTui, fakeTheme);
   const lines = component.render(120);
 
-  const hasStepHint = lines.some((line: string) => line.includes("Ctrl+N to advance"));
+  const hasStepHint = lines.some((line: string) => line.includes("/gsd next to advance one step"));
   assert.equal(hasStepHint, false, "step-mode hint must NOT appear when isStepMode is false");
 
   if (component.dispose) component.dispose();

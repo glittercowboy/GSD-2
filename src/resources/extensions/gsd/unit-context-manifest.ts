@@ -99,7 +99,8 @@ export type ContextModePolicy =
   | "execution"
   | "verification"
   | "orchestration"
-  | "docs";
+  | "docs"
+  | "triage";
 
 /**
  * Tool-access policy per unit type (#4934).
@@ -343,6 +344,9 @@ export const KNOWN_UNIT_TYPES = [
   "run-uat",
   "gate-evaluate",
   "rewrite-docs",
+  // Sidecar units (triage, quick-task)
+  "triage-captures",
+  "quick-task",
   // Deep planning mode (project-level) units
   "workflow-preferences",
   "discuss-project",
@@ -364,11 +368,11 @@ export const UNIT_MANIFESTS: Record<UnitType, UnitContextManifest> = {
     contextMode: "research",
     tools: TOOLS_PLANNING,
     artifacts: {
-      // Phase 3 migration (#4782): matches today's actual
-      // buildResearchMilestonePrompt inlining order.
-      inline: ["milestone-context", "project", "requirements", "decisions", "templates"],
+      // Keep the milestone-specific prompt compact. Broader project docs
+      // stay addressable without being loaded into every research turn.
+      inline: ["milestone-context", "templates"],
       excerpt: [],
-      onDemand: [],
+      onDemand: ["project", "requirements", "decisions"],
     },
     maxSystemPromptChars: COMMON_BUDGET_MEDIUM,
   },
@@ -381,9 +385,9 @@ export const UNIT_MANIFESTS: Record<UnitType, UnitContextManifest> = {
     contextMode: "planning",
     tools: TOOLS_PLANNING,
     artifacts: {
-      inline: ["project", "requirements", "decisions", "milestone-research", "templates"],
+      inline: ["milestone-context", "requirements", "milestone-research", "templates"],
       excerpt: [],
-      onDemand: [],
+      onDemand: ["project", "decisions"],
     },
     maxSystemPromptChars: COMMON_BUDGET_LARGE,
   },
@@ -409,15 +413,13 @@ export const UNIT_MANIFESTS: Record<UnitType, UnitContextManifest> = {
     codebaseMap: false,
     preferences: "active-only",
     contextMode: "verification",
-    // planning-dispatch: validation is a verification-fan-out unit. It reads
-    // the milestone surface and dispatches reviewer/security/tester subagents
-    // to report findings without touching user source. Write isolation to
-    // .gsd/ is preserved.
-    tools: TOOLS_PLANNING_DISPATCH_REVIEW,
+    // Validation may need to run shell verification commands and apply source
+    // fixes before milestone closeout can proceed.
+    tools: TOOLS_ALL,
     artifacts: {
-      inline: ["roadmap", "slice-summary", "slice-uat", "requirements", "decisions", "templates"],
-      excerpt: [],
-      onDemand: [],
+      inline: ["roadmap", "requirements", "templates"],
+      excerpt: ["slice-summary", "slice-assessment"],
+      onDemand: ["slice-summary", "slice-assessment", "decisions", "project", "milestone-context"],
     },
     maxSystemPromptChars: COMMON_BUDGET_LARGE,
   },
@@ -435,9 +437,9 @@ export const UNIT_MANIFESTS: Record<UnitType, UnitContextManifest> = {
       // #4780 landed slice-summary as excerpt for this unit; phase 2 of
       // the architecture will read this manifest as the source of truth
       // and retire the special-case wiring in auto-prompts.ts.
-      inline: ["roadmap", "milestone-context", "requirements", "decisions", "project", "templates"],
+      inline: ["roadmap", "requirements", "templates"],
       excerpt: ["slice-summary"],
-      onDemand: ["slice-summary"],
+      onDemand: ["slice-summary", "decisions", "project", "milestone-context"],
     },
     maxSystemPromptChars: COMMON_BUDGET_MEDIUM,
   },
@@ -456,7 +458,7 @@ export const UNIT_MANIFESTS: Record<UnitType, UnitContextManifest> = {
     artifacts: {
       inline: ["roadmap", "milestone-research", "dependency-summaries", "templates"],
       excerpt: [],
-      onDemand: [],
+      onDemand: ["decisions"],
     },
     maxSystemPromptChars: COMMON_BUDGET_MEDIUM,
   },
@@ -518,10 +520,9 @@ export const UNIT_MANIFESTS: Record<UnitType, UnitContextManifest> = {
     codebaseMap: false,
     preferences: "active-only",
     contextMode: "verification",
-    // See complete-milestone — same rationale: dispatch to reviewer / security /
-    // tester subagents to fan out review work without bloating this unit's
-    // context.
-    tools: TOOLS_PLANNING_DISPATCH_REVIEW,
+    // Slice closeout may need to run shell verification commands and apply
+    // source fixes before completion can be recorded.
+    tools: TOOLS_ALL,
     artifacts: {
       // Phase 3 migration (#4782): matches today's actual
       // buildCompleteSlicePrompt inlining order. Overrides prepend +
@@ -542,12 +543,9 @@ export const UNIT_MANIFESTS: Record<UnitType, UnitContextManifest> = {
     contextMode: "planning",
     tools: TOOLS_PLANNING,
     artifacts: {
-      // Phase 2 pilot (#4782): manifest now matches today's actual
-      // buildReassessRoadmapPrompt behavior for equivalence. Phase 3
-      // will tighten this list once the composer reports real telemetry.
-      inline: ["roadmap", "slice-context", "slice-summary", "project", "requirements", "decisions"],
-      excerpt: [],
-      onDemand: [],
+      inline: ["roadmap", "slice-context"],
+      excerpt: ["slice-summary"],
+      onDemand: ["project", "requirements", "decisions"],
     },
     maxSystemPromptChars: COMMON_BUDGET_MEDIUM,
   },
@@ -594,13 +592,9 @@ export const UNIT_MANIFESTS: Record<UnitType, UnitContextManifest> = {
     contextMode: "verification",
     tools: TOOLS_VERIFICATION,
     artifacts: {
-      // Phase 3 migration (#4782): manifest matches today's actual
-      // buildRunUatPrompt inlining. Prior phase-1 entry listed
-      // `slice-plan` aspirationally — the real builder inlines the UAT
-      // file, the slice SUMMARY (optional), and the project row.
-      inline: ["slice-uat", "slice-summary", "project"],
-      excerpt: [],
-      onDemand: [],
+      inline: ["slice-uat"],
+      excerpt: ["slice-summary"],
+      onDemand: ["slice-summary", "project"],
     },
     maxSystemPromptChars: COMMON_BUDGET_SMALL,
   },
@@ -631,6 +625,36 @@ export const UNIT_MANIFESTS: Record<UnitType, UnitContextManifest> = {
     tools: TOOLS_DOCS,
     artifacts: {
       inline: ["project", "requirements", "decisions", "templates"],
+      excerpt: [],
+      onDemand: [],
+    },
+    maxSystemPromptChars: COMMON_BUDGET_MEDIUM,
+  },
+  "triage-captures": {
+    skills: { mode: "all" },
+    knowledge: "scoped",
+    memory: "prompt-relevant",
+    codebaseMap: false,
+    preferences: "active-only",
+    contextMode: "triage",
+    tools: TOOLS_PLANNING,
+    artifacts: {
+      inline: ["roadmap", "slice-plan", "slice-summary", "requirements", "decisions", "templates"],
+      excerpt: [],
+      onDemand: [],
+    },
+    maxSystemPromptChars: COMMON_BUDGET_MEDIUM,
+  },
+  "quick-task": {
+    skills: { mode: "all" },
+    knowledge: "full",
+    memory: "prompt-relevant",
+    codebaseMap: true,
+    preferences: "active-only",
+    contextMode: "execution",
+    tools: TOOLS_ALL,
+    artifacts: {
+      inline: ["roadmap", "slice-plan", "task-plan", "requirements", "decisions", "templates"],
       excerpt: [],
       onDemand: [],
     },

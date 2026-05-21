@@ -1,4 +1,14 @@
-import { Editor, type EditorOptions, type EditorTheme, type TUI, isKittyProtocolActive } from "@gsd/pi-tui";
+// GSD-2 + packages/pi-coding-agent/src/modes/interactive/components/custom-editor.ts - App-level editor key handling.
+
+import {
+	Editor,
+	type EditorOptions,
+	type EditorTheme,
+	Key,
+	type TUI,
+	isKittyProtocolActive,
+	matchesKey,
+} from "@gsd/pi-tui";
 import type { AppAction, KeybindingsManager } from "../../../core/keybindings.js";
 
 /**
@@ -73,7 +83,7 @@ export class CustomEditor extends Editor {
 				// it could be alt+enter (followUp) or shift+enter mapped via /terminal-setup.
 				// Prioritize newLine since that's what terminal-setup configures.
 				// Alt+enter followUp still works in kitty-protocol terminals.
-				if (action === "followUp" && !isKittyProtocolActive() && data === "\x1b\r") {
+				if (action === "followUp" && !isKittyProtocolActive() && matchesKey(data, Key.alt("enter"))) {
 					break; // Fall through to parent editor's newLine handling
 				}
 				handler();

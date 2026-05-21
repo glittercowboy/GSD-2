@@ -1,3 +1,4 @@
+// GSD-2 + packages/pi-coding-agent/src/modes/interactive/components/extension-input.ts - Extension text input dialog.
 /**
  * Simple text input component for extensions.
  */
@@ -75,7 +76,7 @@ export class ExtensionInputComponent extends Container implements Focusable {
 
 	handleInput(keyData: string): void {
 		const kb = getEditorKeybindings();
-		if (kb.matches(keyData, "selectConfirm") || keyData === "\n") {
+		if (kb.matches(keyData, "selectConfirm")) {
 			if (this.input.getValue().trim() === "") return;
 			this.onSubmitCallback(this.input.getValue());
 		} else if (kb.matches(keyData, "selectCancel")) {

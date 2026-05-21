@@ -2,6 +2,7 @@
 // File Purpose: Auto Orchestration module implementation and ADR-015 invariant pipeline owner.
 
 import type { AutoAdvanceResult, AutoOrchestrationModule, AutoOrchestratorDeps, AutoSessionContext, AutoStatus } from "./contracts.js";
+import type { GSDState } from "../types.js";
 
 function now(): number {
   return Date.now();
@@ -17,6 +18,13 @@ function now(): number {
  */
 export const STUCK_WINDOW_SIZE = 6;
 
+function noRemainingUnitsReason(stateSnapshot: GSDState): string {
+  if (stateSnapshot.phase === "complete") {
+    return "all milestones complete";
+  }
+  return "no remaining units";
+}
+
 export class AutoOrchestrator implements AutoOrchestrationModule {
   private status: AutoStatus = {
     phase: "idle",
@@ -24,6 +32,7 @@ export class AutoOrchestrator implements AutoOrchestrationModule {
   };
   private readonly deps: AutoOrchestratorDeps;
   private lastAdvanceKey: string | null = null;
+  private lastFinalizedUnitKey: string | null = null;
   private dispatchKeyWindow: string[] = [];
 
   public constructor(deps: AutoOrchestratorDeps) {
@@ -32,12 +41,13 @@ export class AutoOrchestrator implements AutoOrchestrationModule {
 
   public async start(_sessionContext: AutoSessionContext): Promise<AutoAdvanceResult> {
     this.lastAdvanceKey = null;
+    this.lastFinalizedUnitKey = null;
     this.dispatchKeyWindow = [];
     this.status.phase = "running";
     this.bumpTransition();
     await this.deps.runtime.journalTransition({ name: "start" });
     await this.deps.notifications.notifyLifecycle({ name: "start" });
-    return this.advance();
+    return { kind: "started" };
   }
 
   public async advance(): Promise<AutoAdvanceResult> {
@@ -54,7 +64,7 @@ export class AutoOrchestrator implements AutoOrchestrationModule {
           rationale: "resource version guard blocked dispatch",
           findings: staleMsg,
         });
-        const blocked: AutoAdvanceResult = { kind: "blocked", reason: staleMsg, action: "stop" };
+        const blocked: AutoAdvanceResult = { kind: "blocked", reason: staleMsg, action: "pause" };
         await this.deps.runtime.journalTransition({ name: "advance-blocked", reason: blocked.reason });
         await this.deps.health.postAdvanceRecord(blocked);
         return blocked;
@@ -118,7 +128,11 @@ export class AutoOrchestrator implements AutoOrchestrationModule {
 
       const decision = await this.deps.dispatch.decideNextUnit({ stateSnapshot: reconciliation.stateSnapshot });
       if (!decision) {
-        const stopped: AutoAdvanceResult = { kind: "stopped", reason: "no remaining units", stateSnapshot: reconciliation.stateSnapshot };
+        const stopped: AutoAdvanceResult = {
+          kind: "stopped",
+          reason: noRemainingUnitsReason(reconciliation.stateSnapshot),
+          stateSnapshot: reconciliation.stateSnapshot,
+        };
         this.status.phase = "stopped";
         this.status.activeUnit = undefined;
         this.lastAdvanceKey = null;
@@ -127,6 +141,19 @@ export class AutoOrchestrator implements AutoOrchestrationModule {
         await this.deps.runtime.journalTransition({ name: "advance-stopped", reason: stopped.reason });
         await this.deps.health.postAdvanceRecord(stopped);
         return stopped;
+      }
+      if ("kind" in decision && decision.kind === "skipped") {
+        const skipped: AutoAdvanceResult = {
+          kind: "skipped",
+          reason: decision.reason,
+          stateSnapshot: reconciliation.stateSnapshot,
+        };
+        this.status.phase = "running";
+        this.status.activeUnit = undefined;
+        this.bumpTransition();
+        await this.deps.runtime.journalTransition({ name: "advance-skipped", reason: skipped.reason });
+        await this.deps.health.postAdvanceRecord(skipped);
+        return skipped;
       }
       if (!("unitType" in decision)) {
         const blocked: AutoAdvanceResult = {
@@ -151,15 +178,32 @@ export class AutoOrchestrator implements AutoOrchestrationModule {
         this.dispatchKeyWindow.shift();
       }
 
+      const matchingCount = this.dispatchKeyWindow.filter((k) => k === nextKey).length;
+      if (this.lastFinalizedUnitKey === nextKey) {
+        const blocked: AutoAdvanceResult = {
+          kind: "blocked",
+          reason: `state did not advance after finalized ${decision.unitType} ${decision.unitId}`,
+          action: "stop",
+          stateSnapshot: reconciliation.stateSnapshot,
+        };
+        await this.deps.runtime.journalTransition({
+          name: "advance-blocked",
+          reason: blocked.reason,
+          unitType: decision.unitType,
+          unitId: decision.unitId,
+        });
+        await this.deps.health.postAdvanceRecord(blocked);
+        return blocked;
+      }
+
       // Idempotency: same key as immediately previous successful advance.
       // This is the soft, fast-path block kept from #5786. It only fires when
       // the ring is NOT yet saturated for this key — once the ring is full of
       // `nextKey`, the stuck-loop verdict takes precedence (see below). Both
       // checks coexist: idempotency for the common immediate-repeat case,
       // stuck-loop for the saturated-window case.
-      const matchingCount = this.dispatchKeyWindow.filter((k) => k === nextKey).length;
       if (this.lastAdvanceKey === nextKey && matchingCount < STUCK_WINDOW_SIZE) {
-        const blocked: AutoAdvanceResult = { kind: "blocked", reason: "idempotent advance: unit already active", action: "stop" };
+        const blocked: AutoAdvanceResult = { kind: "blocked", reason: "idempotent advance: unit already active", action: "pause" };
         await this.deps.runtime.journalTransition({
           name: "advance-blocked",
           reason: blocked.reason,
@@ -229,6 +273,7 @@ export class AutoOrchestrator implements AutoOrchestrationModule {
       this.status.activeUnit = { unitType: decision.unitType, unitId: decision.unitId };
       this.status.phase = "running";
       this.lastAdvanceKey = nextKey;
+      this.lastFinalizedUnitKey = null;
       this.bumpTransition();
 
       await this.deps.runtime.journalTransition({
@@ -268,6 +313,7 @@ export class AutoOrchestrator implements AutoOrchestrationModule {
 
       if (result.kind === "stopped") {
         this.lastAdvanceKey = null;
+        this.lastFinalizedUnitKey = null;
         this.dispatchKeyWindow = [];
         this.status.activeUnit = undefined;
       }
@@ -294,12 +340,13 @@ export class AutoOrchestrator implements AutoOrchestrationModule {
 
   public async resume(): Promise<AutoAdvanceResult> {
     this.lastAdvanceKey = null;
+    this.lastFinalizedUnitKey = null;
     this.dispatchKeyWindow = [];
     this.status.phase = "running";
     this.bumpTransition();
     await this.deps.runtime.journalTransition({ name: "resume" });
     await this.deps.notifications.notifyLifecycle({ name: "resume" });
-    return this.advance();
+    return { kind: "resumed" };
   }
 
   public async stop(reason: string): Promise<AutoAdvanceResult> {
@@ -310,6 +357,7 @@ export class AutoOrchestrator implements AutoOrchestrationModule {
     this.status.phase = "stopped";
     this.status.activeUnit = undefined;
     this.lastAdvanceKey = null;
+    this.lastFinalizedUnitKey = null;
     this.dispatchKeyWindow = [];
     this.bumpTransition();
     await this.deps.runtime.journalTransition({ name: "stop", reason });
@@ -319,6 +367,43 @@ export class AutoOrchestrator implements AutoOrchestrationModule {
 
   public getStatus(): AutoStatus {
     return { ...this.status, activeUnit: this.status.activeUnit ? { ...this.status.activeUnit } : undefined };
+  }
+
+  public async completeActiveUnit(unit: { unitType: string; unitId: string }): Promise<void> {
+    const unitKey = `${unit.unitType}:${unit.unitId}`;
+    const activeUnitKey = this.status.activeUnit
+      ? `${this.status.activeUnit.unitType}:${this.status.activeUnit.unitId}`
+      : null;
+    if (activeUnitKey !== unitKey) return;
+
+    this.status.activeUnit = undefined;
+    this.lastAdvanceKey = null;
+    this.lastFinalizedUnitKey = unitKey;
+    this.bumpTransition();
+    await this.deps.runtime.journalTransition({
+      name: "unit-finalized",
+      unitType: unit.unitType,
+      unitId: unit.unitId,
+    });
+  }
+
+  public async retryActiveUnit(unit: { unitType: string; unitId: string }): Promise<void> {
+    const unitKey = `${unit.unitType}:${unit.unitId}`;
+    const activeUnitKey = this.status.activeUnit
+      ? `${this.status.activeUnit.unitType}:${this.status.activeUnit.unitId}`
+      : null;
+    if (activeUnitKey !== unitKey) return;
+
+    this.status.activeUnit = undefined;
+    this.lastAdvanceKey = null;
+    this.lastFinalizedUnitKey = null;
+    this.bumpTransition();
+    await this.deps.runtime.journalTransition({
+      name: "unit-retry",
+      reason: "finalize-retry",
+      unitType: unit.unitType,
+      unitId: unit.unitId,
+    });
   }
 
   private bumpTransition(): void {

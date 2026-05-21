@@ -23,6 +23,7 @@ import { nativeAddPaths, nativeCommit } from "./native-git-bridge.js";
 import { loadEffectiveGSDPreferences } from "./preferences.js";
 import { loadQueueOrder, sortByQueueOrder, saveQueueOrder } from "./queue-order.js";
 import { findMilestoneIds, nextMilestoneId } from "./milestone-ids.js";
+import { isFutureMilestoneStatus } from "./status-guards.js";
 
 // ─── Queue Entry Point ──────────────────────────────────────────────────────
 
@@ -63,7 +64,7 @@ export async function showQueue(
 
   // ── Count pending milestones ────────────────────────────────────────
   const pendingMilestones = state.registry.filter(
-    m => m.status === "pending" || m.status === "active",
+    m => isFutureMilestoneStatus(m.status) || m.status === "active",
   );
   const completeCount = state.registry.filter(m => m.status === "complete").length;
   const parkedCount = state.registry.filter(m => m.status === "parked").length;
@@ -182,7 +183,7 @@ export async function showQueueAdd(
     ? `Currently executing: ${state.activeMilestone.id} — ${state.activeMilestone.title} (phase: ${state.phase}).`
     : "No milestone currently active.";
 
-  const pendingCount = state.registry.filter(m => m.status === "pending").length;
+  const pendingCount = state.registry.filter(m => isFutureMilestoneStatus(m.status)).length;
   const completeCount = state.registry.filter(m => m.status === "complete").length;
 
   const preamble = [
@@ -284,7 +285,7 @@ export async function buildExistingMilestonesContext(
 
     // For active/pending/parked milestones, include the roadmap if it exists
     // (shows what's planned but not yet built)
-    if (status === "active" || status === "pending" || status === "parked") {
+    if (status === "active" || isFutureMilestoneStatus(status) || status === "parked") {
       const roadmapFile = resolveMilestoneFile(basePath, mid, "ROADMAP");
       if (roadmapFile) {
         const content = await loadFile(roadmapFile);

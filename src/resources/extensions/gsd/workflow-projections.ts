@@ -19,11 +19,13 @@ import type { VerificationEvidenceRow } from "./db-verification-evidence-rows.js
 import { atomicWriteSync } from "./atomic-write.js";
 import { join } from "node:path";
 import { mkdirSync, existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { logWarning } from "./workflow-logger.js";
 import { isClosedStatus } from "./status-guards.js";
 import { deriveState } from "./state.js";
 import type { GSDState } from "./types.js";
 import { renderRoadmapFromDb } from "./markdown-renderer.js";
+import { readManifest } from "./workflow-manifest.js";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
 
@@ -166,6 +168,51 @@ export function renderRoadmapProjection(basePath: string, milestoneId: string): 
   const dir = join(basePath, ".gsd", "milestones", milestoneId);
   mkdirSync(dir, { recursive: true });
   atomicWriteSync(join(dir, `${milestoneId}-ROADMAP.md`), content);
+}
+
+function milestoneStatusGlyph(status: string): string {
+  if (status === "complete" || status === "done") return "\u2705";
+  if (status === "active" || status === "in_progress") return "\uD83D\uDD04";
+  if (status === "parked") return "\u23F8\uFE0F";
+  return "\u2B1C";
+}
+
+export function renderTopLevelRoadmapFromDb(basePath: string): void {
+  const milestones = getAllMilestones();
+  const lines: string[] = ["# Roadmap", "", "## Milestones", ""];
+
+  for (const milestone of milestones) {
+    const title = stripIdPrefix(milestone.title || milestone.id, milestone.id);
+    const depends = milestone.depends_on && milestone.depends_on.length > 0
+      ? milestone.depends_on.join(", ")
+      : "\u2014";
+    lines.push(`- ${milestoneStatusGlyph(milestone.status)} **${milestone.id}: ${title}** (\`depends:[${depends}]\`)`);
+  }
+
+  lines.push("");
+  const dir = join(basePath, ".gsd");
+  mkdirSync(dir, { recursive: true });
+  atomicWriteSync(join(dir, "ROADMAP.md"), lines.join("\n"));
+}
+
+export function renderTopLevelQueueFromDb(basePath: string): void {
+  const milestones = getAllMilestones();
+  const pending = milestones.filter(m => m.status !== "complete" && m.status !== "done");
+  const lines: string[] = ["# Queue", ""];
+
+  if (pending.length === 0) {
+    lines.push("- No queued milestones.");
+  } else {
+    for (const milestone of pending) {
+      const title = stripIdPrefix(milestone.title || milestone.id, milestone.id);
+      lines.push(`- ${milestoneStatusGlyph(milestone.status)} **${milestone.id}: ${title}**`);
+    }
+  }
+
+  lines.push("");
+  const dir = join(basePath, ".gsd");
+  mkdirSync(dir, { recursive: true });
+  atomicWriteSync(join(dir, "QUEUE.md"), lines.join("\n"));
 }
 
 // ─── SUMMARY.md Projection ──────────────────────────────────────────────
@@ -364,8 +411,22 @@ export async function renderStateProjection(basePath: string): Promise<void> {
     const state = await deriveState(basePath);
     const content = renderStateContent(state);
     const dir = join(basePath, ".gsd");
+    const statePath = join(dir, "STATE.md");
+    const milestoneTotal = state.progress?.milestones?.total ?? 0;
+    if (milestoneTotal === 0 && existsSync(statePath)) {
+      try {
+        const manifest = readManifest(basePath);
+        const existingContent = (await readFile(statePath, "utf-8")).trim();
+        if (Array.isArray(manifest?.milestones) && manifest.milestones.length > 0 && existingContent.length > 0) {
+          logWarning("projection", "renderStateProjection: refusing to overwrite non-empty STATE.md with empty state while manifest has milestones");
+          return;
+        }
+      } catch (err) {
+        logWarning("projection", `renderStateProjection: unable to inspect existing STATE.md guard, proceeding with write: ${(err as Error).message}`);
+      }
+    }
     mkdirSync(dir, { recursive: true });
-    atomicWriteSync(join(dir, "STATE.md"), content);
+    atomicWriteSync(statePath, content);
   } catch (err) {
     logWarning("projection", `renderStateProjection failed: ${(err as Error).message}`);
   }
@@ -385,6 +446,16 @@ export async function renderAllProjections(basePath: string, milestoneId: string
     await renderRoadmapFromDb(basePath, milestoneId);
   } catch (err) {
     logWarning("projection", `renderRoadmapFromDb failed for ${milestoneId}: ${(err as Error).message}`);
+  }
+  try {
+    renderTopLevelRoadmapFromDb(basePath);
+  } catch (err) {
+    logWarning("projection", `renderTopLevelRoadmapFromDb failed: ${(err as Error).message}`);
+  }
+  try {
+    renderTopLevelQueueFromDb(basePath);
+  } catch (err) {
+    logWarning("projection", `renderTopLevelQueueFromDb failed: ${(err as Error).message}`);
   }
 
   // Query all slices for this milestone

@@ -1,3 +1,6 @@
+// Project/App: GSD-2
+// File Purpose: Auto runtime state snapshot regression tests.
+
 import test from "node:test";
 import assert from "node:assert/strict";
 
@@ -14,6 +17,8 @@ test("getAutoRuntimeSnapshot includes orchestration phase when available", () =>
   autoSession.orchestration = {
     async start() { return { kind: "stopped" as const, reason: "test" }; },
     async advance() { return { kind: "stopped" as const, reason: "test" }; },
+    async completeActiveUnit() {},
+    async retryActiveUnit() {},
     async resume() { return { kind: "stopped" as const, reason: "test" }; },
     async stop() { return { kind: "stopped" as const, reason: "test" }; },
     getStatus() {

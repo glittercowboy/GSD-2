@@ -4,7 +4,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { formatAutoStopNotification } from "../auto.ts";
+import { formatAutoStopNotification, formatAutoStopNotificationPrefix } from "../auto.ts";
 
 test("auto stop notification keeps session totals on a separate line", () => {
   const message = formatAutoStopNotification(
@@ -16,5 +16,16 @@ test("auto stop notification keeps session totals on a separate line", () => {
   assert.equal(
     message,
     "Auto-mode stopped.\nSession: $0.652 · 87.0k tokens · 2 units",
+  );
+});
+
+test("blocked stop notification uses blocked headline without repeating the marker", () => {
+  const prefix = formatAutoStopNotificationPrefix(
+    "Blocked: M012 is already active in another GSD worker. Retry with /gsd auto after 1:58:59 PM.",
+  );
+
+  assert.equal(
+    prefix,
+    "Auto-mode blocked — M012 is already active in another GSD worker. Retry with /gsd auto after 1:58:59 PM.",
   );
 });

@@ -11,9 +11,11 @@ export type DispatchClaimOutcome =
 
 export type DispatchLeaseOutcome =
   | { kind: "ready"; token: number; recovered: boolean }
-  | { kind: "degraded"; reason: "missing-worker" | "missing-milestone" }
-  | { kind: "blocked"; reason: string }
+  | { kind: "degraded"; reason: "missing-worker" | "missing-milestone" | "virtual-milestone" }
+  | { kind: "blocked"; reason: string; holderWorkerId?: string }
   | { kind: "failed"; reason: string };
+
+const VIRTUAL_MILESTONE_IDS = new Set(["PROJECT"]);
 
 type ClaimMilestoneLeaseResult =
   | { ok: true; token: number; expiresAt: string }
@@ -69,6 +71,16 @@ export interface EnsureDispatchLeaseDeps {
   }) => void;
 }
 
+/**
+ * Claim or reconfirm the milestone lease for the current session.
+ *
+ * Returns "ready" when the lease is held, "blocked" (with holderWorkerId)
+ * when another worker holds it, "degraded" when session state is
+ * incomplete, and "failed" on unexpected errors.
+ *
+ * Pass forceReclaim: true after force-releasing a dead holder's lease to
+ * bypass the in-memory token cache and re-acquire from the DB.
+ */
 export function ensureDispatchLease(
   s: AutoSession,
   milestoneId: string | undefined,
@@ -77,6 +89,7 @@ export function ensureDispatchLease(
 ): DispatchLeaseOutcome {
   if (!s.workerId) return { kind: "degraded", reason: "missing-worker" };
   if (!milestoneId) return { kind: "degraded", reason: "missing-milestone" };
+  if (VIRTUAL_MILESTONE_IDS.has(milestoneId)) return { kind: "degraded", reason: "virtual-milestone" };
   if (!opts.forceReclaim && typeof s.milestoneLeaseToken === "number") {
     return { kind: "ready", token: s.milestoneLeaseToken, recovered: false };
   }
@@ -87,7 +100,7 @@ export function ensureDispatchLease(
     if (!claim.ok) {
       const reason = `Milestone ${milestoneId} is held by worker ${claim.byWorker} until ${claim.expiresAt}.`;
       deps.logLeaseRecoveryFailed({ milestoneId, workerId: s.workerId, reason });
-      return { kind: "blocked", reason };
+      return { kind: "blocked", reason, holderWorkerId: claim.byWorker };
     }
 
     s.currentMilestoneId = milestoneId;
@@ -106,6 +119,13 @@ export function ensureDispatchLease(
   }
 }
 
+/**
+ * Record a new unit dispatch claim in the DB for this iteration.
+ *
+ * Returns "opened" with the new dispatch ID on success, "skip" when the
+ * unit is already active or the lease is stale, and "degraded" when
+ * required session state (workerId, milestoneLeaseToken) is absent.
+ */
 export function openDispatchClaim(
   s: AutoSession,
   flowId: string,

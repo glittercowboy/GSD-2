@@ -1,6 +1,6 @@
 ## Review Migrated .gsd Directory
 
-A `/gsd migrate` command just wrote a `.gsd/` directory from an old `.planning` source. Your job is to audit the output and verify it meets GSD-2 standards before the user starts working with it.
+A `/gsd migrate` command just wrote a `.gsd/` directory from an old `.planning` source. Your job is to audit the output and verify it meets GSD-2 standards before the user starts working with it. This review is read-only: report issues and recommended fixes, but do not edit files in place.
 
 ### Source
 - Old `.planning` directory: `{{sourcePath}}`
@@ -11,7 +11,7 @@ A `/gsd migrate` command just wrote a `.gsd/` directory from an old `.planning` 
 
 ### Review Checklist
 
-Work through each check. Report PASS/FAIL with specifics. Fix anything fixable in-place.
+Work through each check. Report PASS/FAIL with specifics. Do not fix files in place; migration repairs must go through DB-backed migration repair paths.
 
 #### 1. Structure Validation
 - Run `deriveState()` on the `.gsd` directory (import from `state.ts`, pass the **project root** as basePath)
@@ -60,7 +60,7 @@ Decisions:     PASS/FAIL/SKIP — <details>
 
 Overall: PASS / PASS WITH NOTES / FAIL
 Issues: <list any problems found>
-Fixes applied: <list any in-place fixes made>
+Recommended fixes: <list any fixes needed>
 ```
 
 If the overall result is FAIL, explain what needs manual attention. If PASS WITH NOTES, explain what's imperfect but acceptable. If PASS, confirm the `.gsd` directory is ready for GSD-2 auto-mode.

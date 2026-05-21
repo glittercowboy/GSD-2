@@ -23,6 +23,7 @@ import {
   buildExecuteTaskPrompt,
   buildCompleteSlicePrompt,
   buildCompleteMilestonePrompt,
+  buildValidateMilestonePrompt,
   buildReassessRoadmapPrompt,
   buildRunUatPrompt,
   buildReplanSlicePrompt,
@@ -207,6 +208,14 @@ export async function dispatchDirectPhase(
       break;
     }
 
+    case "validate":
+    case "validate-milestone": {
+      unitType = "validate-milestone";
+      unitId = mid;
+      prompt = await buildValidateMilestonePrompt(mid, midTitle, dispatchBase);
+      break;
+    }
+
     case "uat":
     case "run-uat": {
       // UAT targets the most recently completed slice, not the active (next
@@ -265,7 +274,7 @@ export async function dispatchDirectPhase(
 
     default:
       ctx.ui.notify(
-        `Unknown phase "${phase}". Valid phases: research, plan, execute, complete, reassess, uat, replan.`,
+        `Unknown phase "${phase}". Valid phases: research, plan, execute, complete, validate, reassess, uat, replan.`,
         "warning",
       );
       return;
@@ -280,6 +289,7 @@ export async function dispatchDirectPhase(
       unitType,
       authMode: ctx.model?.provider ? ctx.modelRegistry.getProviderAuthMode(ctx.model.provider) : undefined,
       baseUrl: ctx.model?.baseUrl,
+      activeTools: typeof pi.getActiveTools === "function" ? pi.getActiveTools() : [],
     },
   );
   if (compatibilityError) {

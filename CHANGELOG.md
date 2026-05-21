@@ -6,6 +6,128 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-05-14
+
+### Added
+- **gsd**: add /gsd verdict command for milestone override recovery
+- **gsd**: add visual brief command
+- **subagent**: add random tracking names
+- **subagent**: add resumable isolated launch records
+- **web**: update visualizer tabs
+- **gsd**: dispatch adapter receives full session inputs (#5789)
+- **gsd**: orchestrator parity with runPreDispatch (#5788)
+- **gsd**: move stuck-loop detection into Auto Orchestration (#5787)
+- **gsd**: widen AutoAdvanceResult with unit + action (#5786)
+- **adr-013**: stop decisions-table writes from gsd_save_decision (stage 3)
+- **adr-013**: /gsd knowledge routes pattern + lesson to memories (stage 2c)
+- **adr-013**: KNOWLEDGE.md backfill + hybrid projection (stage 2b)
+- **adr-013**: DECISIONS.md projection sources from memories (stage 2a)
+- **adr-013**: switch prompt-inline decisions read to memories (stage 1)
+- **adr-013**: memory-store cutover preflight scanner
+- **adr-011**: ROADMAP shows [sketch] badge on unrefined slices
+- **adr-005**: declare producesImages on always-image browser tools
+- **adr-005**: surface ProviderSwitchReport via audit, notification, counter
+
+### Fixed
+- **pi-agent**: default tool output expanded
+- **gsd**: preserve paused cleanup and verify guidance
+- **gsd**: refresh db before post-unit verification
+- **gsd**: clarify step mode next action
+- **gsd**: preserve step-mode completion surface
+- **gsd**: remove tracker refs from user messages
+- **pi-coding-agent**: skip empty reasoning transcript rails
+- **issue**: Worktree plan-slice renders artifacts to project .gsd instead of worktree-local .gsd
+- **issue**: clearLock() never marks stale DB worker as stopping — blocks resume after crash
+- **issue**: Auto-mode artifact retry budget resets across pause/resume, causing repeated execute-task redispatch
+- **issue**: [Bug]: gsd causes cmux to become unusable after exit
+- **issue**: gsd.db corrupts repeatedly on WSL2 9p mounts (/mnt/d, /mnt/c) — WAL+mmap pragmas unsafe
+- **auto**: rollback model state on workflow-capability block
+- **issue**: crash-recovery: stale lock not cleared when worker PID is dead
+- **issue**: [Bug]: Model Preference Selection does not include discovered models
+- **issue**: GSD milestone completion falsely reports no implementation files when .gsd is external/ignored
+- **issue**: auto: state mutations + journal emission happen before pre-dispatch validation succeeds (Change 4-B from #4959)
+- **issue**: [Bug]: auto-mode aborts on provider 500 errors instead of pausing and retrying
+- **issue**: [Bug]: Milestone merge fails silently on Windows when gsd.db has SQLite WAL lock
+- **issue**: [Bug]: Misleading Cloud Code Assist 404 error when Antigravity models are removed
+- **issue**: [Bug]: Queue reorder overlay does not scroll with arrow keys
+- **issue**: [Bug]: Web UI cannot access projects outside C: drive
+- **issue**: claude-code-cli adapter misclassifies SDK abort throws as generic errors, surfacing 'aborted by user' for non-user aborts
+- **issue**: [Bug]: run-uat stuck in dispatched loop — slice already complete but runtime unit never resolves
+- **issue**: Auto-mode crash: MCP tool resolution failure causes research-slice false success and dispatch loop
+- **issue**: [Bug]: auto-mode: milestone completed without user UAT — needs-attention verdict not guarded in dispatch
+- **issue**: validate-milestone unit gets stuck in infinite loop if LLM fails to call gsd_validate_milestone tool
+- **issue**: Milestone status drift makes planned future milestones inconsistently discoverable
+- **issue**: Bug: Milestone completion blocked by 'no implementation files' check for planning-only milestones
+- **issue**: Branch-mode milestone entry fails on dirty working tree (no stash guard)
+- **issue**: bug: milestone integration branch can be corrupted to milestone/* and break complete-milestone artifact checks
+- **gsd**: repair empty milestone worktree recovery
+- **gsd**: preserve phase handoff outcome
+- **gsd**: route guided execute through worktree bootstrap
+- **gsd**: route planning prompts through db tools
+- **gsd**: keep markdown projections subordinate to db
+- **gsd**: reject unsafe verify commands before execution
+- **issue**: DB-backed stale worker cleanup leaves crashed hook dispatch active
+- **issue**: auto-mode silently disables milestone lease + dispatch ledger because enterMilestone runs before registerAutoWorkerForSession
+- **issue**: worktree-sync: git ls-files cleanup fails on .gsd-managed dirs ("fuera del repositorio")
+- **issue**: /gsd doctor command crashes/exits prematurely during health checks
+- **gsd**: clean orphan worktree dirs whose milestone branch was already deleted
+- **issue**: [Bug]: Auto-commit fails when keyFiles is empty — 'git add -- (none)' causes GSD_GIT_ERROR
+- **issue**: [Bug]: Bedrock models fail with context overflow in --print mode
+- **issue**: auto-mode: crashed-worker dispatch rows poison next-session stuck-detector window (getRecentUnitKeysForProjectRoot)
+- **issue**: Dispatch guard ignores DB status "parked"/"deferred", blocks newer milestones with no escape in DB-mode
+- **issue**: [Bug]: Auto-commit fails when keyFiles are inside git submodule — git add throws 'pathspec is in submodule'
+- **issue**: Post-exec import checker treats import-looking strings as blocking missing imports
+- validate memory pressure check interval
+- **issue**: gsd_plan_slice persists invalid task input paths before pre-exec validation
+- **issue**: Memory guard blindspot: first 4 iterations of each auto-mode session unprotected from jetsam kill
+- **issue**: loadPrompt("guided-discuss-milestone") crash: 6 callsites in guided-flow.js missing workingDirectory arg + format-string typo at prompt-loader.js:154
+- **issue**: Slice title with '/' causes empty ROADMAP.md + TypeError 'Cannot read properties of undefined (reading indexOf)' stuck loop
+- **issue**: isLikelyCommand() treats Chinese/non-ASCII prose as shell command - verification gate false failure
+- **issue**: ENOBUFS from spawnSync git is not treated as transient — git commit fails with no retry
+- **issue**: plan-slice/plan-task stuck loops due to prompt/schema drift and subagent extension block
+- **issue**: Auto-mode 3-strike hard-stop on git dubious ownership: getMainBranch() uncaught in dispatch guard path
+- **issue**: gsd-progress widget not torn down after step-mode natural loop exit (cleanupAfterLoopExit missing setWidget teardown)
+- **issue**: v1→v2 migration parser doesn't handle emoji markers or version-prefix milestones
+- **issue**: gsd_plan_slice leaves omitted stale tasks in DB, causing pre-exec to validate old task plans
+- **ci**: remove unpublished pi-tui native dependency
+- **issue**: openai-codex-responses.ts — 429 retries fire inside provider cooldown window, Gemini path handles it correctly
+- **issue**: [Bug]: thinkingLevel "off" persists silently to global default and propagates across reasoning models
+- **gsd**: harden GSD HTML shell and brief flow
+- **issue**: Auto resume does not clearly surface needs-remediation/all-slices-complete blocker
+- **issue**: [Feature]: Unify HTML artifact shell across /gsd export and /gsd brief
+- **issue**: Bug: auto-mode complete-slice 死循环 + run-uat tools-policy 阻断
+- **issue**: [Bug]: Auto-mode can get stuck retrying a unit when the underlying milestone worktree is no longer a valid Git worktree.
+- **issue**: [Feature]: Add security-audit pipeline (Dependabot + CI npm audit workflow)
+- **issue**: auto-mode: git-closeout-failure after verified task causes hard stop with no recovery retry
+- **issue**: step mode exits after complete-milestone before mergeAndExit, orphaning milestone branch/worktree
+- **issue**: dispatch-rule fires discuss-milestone for complete milestones with no CONTEXT file; squash-merge guard has double-trigger on teardown
+- **issue**: auto-mode stops on aborted plan-slice after clean complete-slice (two bugs in abort recovery path)
+- **issue**: stuck detection key mismatch: derivedKey uses unitType/unitId but DB persistence uses bare unitId — cross-session stuck detection defeated
+- **issue**: bug: /gsd park refuses active milestone with blocked SUMMARY.md
+- **issue**: complete-milestone blocked by planning-dispatch tools policy — stuck loop on bash verification commands
+- **issue**: GSD auto-mode loops completing milestone when validation verdict is needs-attention
+- **issue**: Premature auto-compaction with claude-code provider: SDK result.usage is cumulative across agentic loop, mistaken for current context size
+- **issue**: plan-slice infinite loop: is_sketch never cleared after full plan written (progressive_planning=OFF)
+- **gsd**: fail closed execute-task verification
+- **gsd**: reconcile preflight stash collisions
+- **gsd**: order restoreToProjectRoot chdir before throwable work (#5693)
+- **mcp-server**: expose reopen workflow tools
+- **gsd**: verify migration imports
+- **pi-tui**: keep turn end visible after tall shrink
+- **gsd**: clear completion rollup on session switch
+- **prompts**: require read before write
+- **doctor**: block snapshots with conflict markers
+- **gsd**: pause transient aborted units
+
+### Changed
+- clarify integration branch fallback logic
+- **gsd**: enforce guided unit tool contracts
+- **gsd**: isolate pending auto start state
+- **gsd**: pass guided dispatch project root
+- **gsd**: extract smart entry task routing
+- **gsd**: close ADR-016 phase 3 chdir residuals (#5693)
+- **adr-013**: loadKnowledgeBlock injects Rules from project KNOWLEDGE.md only
+
 ## [2.82.0] - 2026-05-10
 
 ### Added
@@ -4384,7 +4506,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - License updated to MIT
 
-[Unreleased]: https://github.com/gsd-build/gsd-2/compare/v2.82.0...HEAD
+[Unreleased]: https://github.com/gsd-build/gsd-2/compare/v3.0.0...HEAD
+[3.0.0]: https://github.com/gsd-build/gsd-2/compare/v2.82.0...v3.0.0
 [2.82.0]: https://github.com/gsd-build/gsd-2/compare/v2.81.0...v2.82.0
 [2.81.0]: https://github.com/gsd-build/gsd-2/compare/v2.80.0...v2.81.0
 [2.80.0]: https://github.com/gsd-build/gsd-2/compare/v2.79.0...v2.80.0
