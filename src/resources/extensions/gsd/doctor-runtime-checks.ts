@@ -7,12 +7,40 @@ import { milestonesDir, gsdRoot, resolveGsdRootFile } from "./paths.js";
 import { deriveState, isGhostMilestone, isReusableGhostMilestone } from "./state.js";
 import { saveFile } from "./files.js";
 import { nativeIsRepo, nativeForEachRef, nativeUpdateRef } from "./native-git-bridge.js";
-import { readCrashLock, isLockProcessAlive, clearLock } from "./crash-recovery.js";
+import { readCrashLock, isLockProcessAlive, clearStaleWorkerLock } from "./crash-recovery.js";
+import { getActiveAutoWorkers } from "./db/auto-workers.js";
+import { normalizeRealPath } from "./paths.js";
 import { ensureGitignore, isGsdGitignored } from "./gitignore.js";
 import { readAllSessionStatuses, isSessionStale, removeSessionStatus } from "./session-status-io.js";
 import { recoverFailedMigration } from "./migrate-external.js";
 import { splitCompletedKey } from "./forensics.js";
 import { findMilestoneIds } from "./milestone-ids.js";
+import { loadEffectiveGSDPreferences } from "./preferences.js";
+
+const MAX_UAT_ATTEMPTS = 3;
+
+function isCurrentGsdStateIntactForMigratingCleanup(basePath: string): boolean {
+  try {
+    const stateFile = resolveGsdRootFile(basePath, "STATE");
+    const milestonesPath = milestonesDir(basePath);
+    const dbPath = join(gsdRoot(basePath), "gsd.db");
+    const hasDbFile = existsSync(dbPath);
+    const hasNonEmptyDb = hasDbFile && statSync(dbPath).size > 0;
+    return existsSync(stateFile) && existsSync(milestonesPath) && hasNonEmptyDb;
+  } catch {
+    return false;
+  }
+}
+
+function hasAssessmentVerdict(basePath: string, mid: string, sid: string): boolean {
+  const assessmentPath = join(gsdRoot(basePath), "milestones", mid, "slices", sid, `${sid}-ASSESSMENT.md`);
+  if (!existsSync(assessmentPath)) return false;
+  try {
+    return /^\s*verdict\s*:\s*(PASS|FAIL|PARTIAL)\b/im.test(readFileSync(assessmentPath, "utf-8"));
+  } catch {
+    return false;
+  }
+}
 
 export async function checkRuntimeHealth(
   basePath: string,
@@ -21,8 +49,13 @@ export async function checkRuntimeHealth(
   shouldFix: (code: DoctorIssueCode) => boolean,
 ): Promise<void> {
   const root = gsdRoot(basePath);
+  const gitPrefs = loadEffectiveGSDPreferences(basePath)?.preferences?.git;
+  const manageGitignore = gitPrefs?.manage_gitignore;
 
   // ── Stale crash lock ──────────────────────────────────────────────────
+  // Phase C pt 2: the lock state lives in the workers + unit_dispatches
+  // tables now, not auto.lock. readCrashLock synthesizes a LockData from
+  // the DB; isLockProcessAlive is a pure OS PID check.
   try {
     const lock = readCrashLock(basePath);
     if (lock) {
@@ -33,14 +66,14 @@ export async function checkRuntimeHealth(
           code: "stale_crash_lock",
           scope: "project",
           unitId: "project",
-          message: `Stale auto.lock from PID ${lock.pid} (started ${lock.startedAt}, was executing ${lock.unitType} ${lock.unitId}) — process is no longer running`,
-          file: ".gsd/auto.lock",
+          message: `Stale auto-mode worker (PID ${lock.pid}, started ${lock.startedAt}, was executing ${lock.unitType} ${lock.unitId}) — process is no longer running`,
+          file: "<workers table>",
           fixable: true,
         });
 
         if (shouldFix("stale_crash_lock")) {
-          clearLock(basePath);
-          fixesApplied.push("cleared stale auto.lock");
+          clearStaleWorkerLock(basePath);
+          fixesApplied.push("cleared stale auto-mode worker state");
         }
       }
     }
@@ -58,9 +91,34 @@ export async function checkRuntimeHealth(
     if (existsSync(lockDir)) {
       const statRes = statSync(lockDir);
       if (statRes.isDirectory()) {
-        // Check if any live process actually holds this lock
-        const lock = readCrashLock(basePath);
-        const lockHolderAlive = lock ? isLockProcessAlive(lock) : false;
+        // Phase C pt 2: "any live process holds the lock?" check now means
+        // "is any worker registered with status='active' AND a fresh
+        // heartbeat for this project?" — readCrashLock returns null for
+        // healthy live workers (it surfaces stale ones only), so we must
+        // consult getActiveAutoWorkers directly.
+        let lockHolderAlive = false;
+        try {
+          const projectRoot = normalizeRealPath(basePath);
+          for (const worker of getActiveAutoWorkers()) {
+            if (worker.project_root_realpath !== projectRoot) continue;
+            try {
+              if (isLockProcessAlive({
+                pid: worker.pid,
+                startedAt: worker.started_at,
+                unitType: "starting",
+                unitId: "bootstrap",
+                unitStartedAt: worker.started_at,
+              })) {
+                lockHolderAlive = true;
+                break;
+              }
+            } catch {
+              // Ignore malformed worker rows or transient PID probe failures.
+            }
+          }
+        } catch {
+          // If worker lookup fails, continue with the stranded lock diagnosis.
+        }
         if (!lockHolderAlive) {
           issues.push({
             severity: "error",
@@ -189,6 +247,47 @@ export async function checkRuntimeHealth(
     }
   } catch {
     // Non-fatal — hook state check failed
+  }
+
+  // ── Exhausted run-uat retry counters ──────────────────────────────────
+  try {
+    const runtimeDir = join(root, "runtime");
+    if (existsSync(runtimeDir)) {
+      const uatCounterPattern = /^uat-count-(M\d+)-(S\d+)\.json$/;
+      for (const fileName of readdirSync(runtimeDir)) {
+        const match = fileName.match(uatCounterPattern);
+        if (!match) continue;
+        const [, mid, sid] = match;
+        if (!mid || !sid || hasAssessmentVerdict(basePath, mid, sid)) continue;
+
+        const filePath = join(runtimeDir, fileName);
+        let count = 0;
+        try {
+          const parsed = JSON.parse(readFileSync(filePath, "utf-8"));
+          count = typeof parsed.count === "number" ? parsed.count : 0;
+        } catch {
+          count = MAX_UAT_ATTEMPTS + 1;
+        }
+        if (count <= MAX_UAT_ATTEMPTS) continue;
+
+        issues.push({
+          severity: "warning",
+          code: "uat_retry_exhausted",
+          scope: "slice",
+          unitId: `${mid}/${sid}`,
+          message: `run-uat for ${mid}/${sid} exhausted ${count - 1} retry attempt(s) without an ASSESSMENT verdict. Reset the retry counter after fixing the underlying UAT/tool issue, then rerun /gsd auto.`,
+          file: `.gsd/runtime/${fileName}`,
+          fixable: true,
+        });
+
+        if (shouldFix("uat_retry_exhausted")) {
+          rmSync(filePath, { force: true });
+          fixesApplied.push(`reset exhausted run-uat retry counter for ${mid}/${sid}`);
+        }
+      }
+    }
+  } catch {
+    // Non-fatal — UAT retry counter check failed
   }
 
   // ── Activity log bloat ────────────────────────────────────────────────
@@ -331,7 +430,7 @@ export async function checkRuntimeHealth(
           });
 
           if (shouldFix("gitignore_missing_patterns")) {
-            ensureGitignore(basePath);
+            ensureGitignore(basePath, { manageGitignore });
             fixesApplied.push("added missing GSD runtime patterns to .gitignore");
           }
         }
@@ -363,6 +462,13 @@ export async function checkRuntimeHealth(
         if (shouldFix("failed_migration")) {
           if (recoverFailedMigration(basePath)) {
             fixesApplied.push("recovered failed migration (.gsd.migrating → .gsd)");
+          } else if (isCurrentGsdStateIntactForMigratingCleanup(basePath)) {
+            try {
+              rmSync(migratingPath, { recursive: true, force: true });
+              fixesApplied.push("removed stale .gsd.migrating orphan after validating current .gsd state");
+            } catch (err) {
+              fixesApplied.push(`failed to remove stale .gsd.migrating orphan at ${migratingPath}: ${err instanceof Error ? err.message : String(err)}`);
+            }
           }
         }
       }
@@ -399,7 +505,7 @@ export async function checkRuntimeHealth(
           });
 
           if (shouldFix("symlinked_gsd_unignored")) {
-            const modified = ensureGitignore(basePath);
+            const modified = ensureGitignore(basePath, { manageGitignore });
             if (modified) fixesApplied.push("added .gsd to .gitignore (symlinked external state)");
           }
         }

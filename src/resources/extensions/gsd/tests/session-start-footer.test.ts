@@ -1,9 +1,11 @@
+// Project/App: GSD-2
+// File Purpose: Verifies GSD session hook widget and footer lifecycle behavior.
+
 /**
- * session-start-footer.test.ts
- *
  * Verifies that register-hooks.ts suppresses the gsd-health widget (not the
- * built-in footer) when isAutoActive() is true, and that setFooter is never
- * called by the extension in either session_start or session_switch.
+ * built-in footer) when isAutoActive() is true, clears stale completion widgets
+ * on inactive session switches, and that setFooter is never called by the
+ * extension in either session_start or session_switch.
  *
  * Testing strategy:
  *   1. Source-code regression guards: structural checks on register-hooks.ts.
@@ -120,6 +122,7 @@ test("session_switch toggles gsd-health from runtime auto state without touching
     },
     sessionManager: { getSessionId: () => null },
     model: null,
+    setCompactionThresholdOverride: () => {},
     modelRegistry: {
       setDisabledModelProviders: () => {},
       getProviderAuthMode: () => undefined,
@@ -139,6 +142,16 @@ test("session_switch toggles gsd-health from runtime auto state without touching
   widgetCalls.length = 0;
   autoSession.active = false;
   await sessionSwitch!({ reason: "resume" }, ctx);
+  assert.deepEqual(
+    widgetCalls
+      .filter((call) => call.key === "gsd-progress" || call.key === "gsd-outcome")
+      .map((call) => [call.key, call.value]),
+    [
+      ["gsd-progress", undefined],
+      ["gsd-outcome", undefined],
+    ],
+    "session_switch should clear stale GSD completion widgets when auto is inactive",
+  );
   const healthWidgetValues = widgetCalls
     .filter((call) => call.key === "gsd-health")
     .map((call) => call.value);
@@ -200,10 +213,89 @@ test("session_start does NOT call setFooter or suppress gsd-health when isAutoAc
     },
     sessionManager: { getSessionId: () => null },
     model: null,
+    setCompactionThresholdOverride: () => {},
   } as any);
 
   assert.equal(setFooterCallCount, 0, "setFooter must NOT be called when isAutoActive() is false");
   assert.equal(healthWidgetHideCount, 0, "gsd-health must NOT be hidden when isAutoActive() is false");
+});
+
+test("session_start installs the welcome screen as the TUI header", async (t) => {
+  const dir = join(
+    tmpdir(),
+    `gsd-welcome-header-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+  );
+  mkdirSync(join(dir, "bin"), { recursive: true });
+  mkdirSync(join(dir, "dist"), { recursive: true });
+  writeFileSync(join(dir, "bin", "welcome-screen.js"), "export const stale = true;\n", "utf-8");
+  writeFileSync(
+    join(dir, "dist", "welcome-screen.js"),
+    [
+      "export function buildWelcomeScreenLines(opts) {",
+      "  return [`welcome ${opts.version} ${opts.remoteChannel ?? 'none'} ${opts.width}`];",
+      "}",
+      "",
+    ].join("\n"),
+    "utf-8",
+  );
+
+  const originalCwd = process.cwd();
+  const originalGsdPkgRoot = process.env.GSD_PKG_ROOT;
+  const originalGsdBinPath = process.env.GSD_BIN_PATH;
+  const originalGsdVersion = process.env.GSD_VERSION;
+  const originalFirstRunBanner = process.env.GSD_FIRST_RUN_BANNER;
+  process.chdir(dir);
+  process.env.GSD_PKG_ROOT = dir;
+  process.env.GSD_BIN_PATH = join(dir, "bin", "loader.js");
+  process.env.GSD_VERSION = "9.9.9-test";
+  delete process.env.GSD_FIRST_RUN_BANNER;
+  t.after(() => {
+    process.chdir(originalCwd);
+    if (originalGsdPkgRoot === undefined) delete process.env.GSD_PKG_ROOT;
+    else process.env.GSD_PKG_ROOT = originalGsdPkgRoot;
+    if (originalGsdBinPath === undefined) delete process.env.GSD_BIN_PATH;
+    else process.env.GSD_BIN_PATH = originalGsdBinPath;
+    if (originalGsdVersion === undefined) delete process.env.GSD_VERSION;
+    else process.env.GSD_VERSION = originalGsdVersion;
+    if (originalFirstRunBanner === undefined) delete process.env.GSD_FIRST_RUN_BANNER;
+    else process.env.GSD_FIRST_RUN_BANNER = originalFirstRunBanner;
+    try { rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ }
+  });
+
+  const handlers = new Map<string, (event: unknown, ctx: any) => Promise<void> | void>();
+  const pi = {
+    on(event: string, handler: (event: unknown, ctx: any) => Promise<void> | void) {
+      handlers.set(event, handler);
+    },
+  } as any;
+
+  registerHooks(pi, []);
+
+  const sessionStart = handlers.get("session_start");
+  assert.ok(sessionStart, "session_start handler must be registered");
+
+  let headerFactory: ((tui: unknown, theme: unknown) => { render(width: number): string[] }) | undefined;
+  await sessionStart!({}, {
+    hasUI: true,
+    ui: {
+      notify: () => {},
+      setStatus: () => {},
+      setFooter: () => {},
+      setHeader: (factory: typeof headerFactory) => {
+        headerFactory = factory;
+      },
+      setWorkingMessage: () => {},
+      onTerminalInput: () => () => {},
+      setWidget: () => {},
+    },
+    sessionManager: { getSessionId: () => null },
+    model: null,
+    setCompactionThresholdOverride: () => {},
+  } as any);
+
+  assert.equal(typeof headerFactory, "function", "session_start should install a header factory");
+  const header = headerFactory!({}, {});
+  assert.deepEqual(header.render(123), ["welcome 9.9.9-test none 123"]);
 });
 
 test("session_start and session_switch apply disabled model provider policy from current preferences", async (t) => {
@@ -260,6 +352,7 @@ test("session_start and session_switch apply disabled model provider policy from
     },
     sessionManager: { getSessionId: () => null },
     model: null,
+    setCompactionThresholdOverride: () => {},
     modelRegistry: {
       setDisabledModelProviders: (providers: string[]) => {
         appliedPolicies.push([...providers]);

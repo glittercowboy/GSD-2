@@ -1,8 +1,12 @@
+// Project/App: GSD-2
+// File Purpose: Assistant message rail renderer for interactive terminal sessions.
 import type { AssistantMessage } from "@gsd/pi-ai";
 import { Container, Markdown, type MarkdownTheme, Spacer, Text } from "@gsd/pi-tui";
 import { getMarkdownTheme, theme } from "../theme/theme.js";
 import { type TimestampFormat } from "./timestamp.js";
-import { renderChatFrame } from "./chat-frame.js";
+import { formatTimestamp } from "./timestamp.js";
+import { RenderCache } from "./render-cache.js";
+import { renderAssistantRail } from "./transcript-design.js";
 
 export interface ContentRange {
 	startIndex: number;
@@ -22,6 +26,8 @@ export class AssistantMessageComponent extends Container {
 	private timestampFormat: TimestampFormat;
 	private range?: ContentRange;
 	private showMetadata: boolean;
+	private renderCache = new RenderCache();
+	private renderVersion = 0;
 
 	constructor(
 		message?: AssistantMessage,
@@ -66,17 +72,25 @@ export class AssistantMessageComponent extends Container {
 
 	override invalidate(): void {
 		super.invalidate();
+		this.clearRenderCache();
 		if (this.lastMessage) {
 			this.updateContent(this.lastMessage);
 		}
 	}
 
 	setHideThinkingBlock(hide: boolean): void {
+		if (this.hideThinkingBlock === hide) return;
 		this.hideThinkingBlock = hide;
+		if (this.lastMessage) {
+			this.updateContent(this.lastMessage);
+		} else {
+			this.clearRenderCache();
+		}
 	}
 
 	updateContent(message: AssistantMessage): void {
 		this.lastMessage = message;
+		this.clearRenderCache();
 
 		// Clear content container
 		this.contentContainer.clear();
@@ -161,20 +175,26 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	override render(width: number): string[] {
+		const cached = this.renderCache.get(`${width}:${this.renderVersion}`);
+		if (cached) return cached;
+
 		const frameWidth = Math.max(20, width);
-		const contentWidth = Math.max(1, frameWidth - 4);
+		const contentWidth = Math.max(1, frameWidth - 2);
 		const lines = super.render(contentWidth);
-		const headerLabel = this.lastMessage?.model ? `GSD - ${this.lastMessage.model}` : "GSD";
-		const framed = renderChatFrame(lines, frameWidth, {
-			label: headerLabel,
-			tone: "assistant",
-			timestamp: this.lastMessage?.timestamp,
-			timestampFormat: this.timestampFormat,
-			showTimestamp: this.showMetadata,
-		});
-		if (framed.length === 0) {
-			return framed;
+		const metaParts = [];
+		if (this.lastMessage?.model) metaParts.push(this.lastMessage.model);
+		if (this.showMetadata && this.lastMessage?.timestamp != null) {
+			metaParts.push(formatTimestamp(this.lastMessage.timestamp, this.timestampFormat));
 		}
-		return ["", ...framed];
+		const rendered = renderAssistantRail(lines, frameWidth, {
+			label: "GSD",
+			meta: metaParts.length > 0 ? `· ${metaParts.join(" · ")}` : undefined,
+		});
+		return this.renderCache.set(`${width}:${this.renderVersion}`, rendered.length > 0 ? ["", ...rendered] : rendered);
+	}
+
+	private clearRenderCache(): void {
+		this.renderVersion++;
+		this.renderCache.clear();
 	}
 }

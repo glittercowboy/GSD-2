@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { verifyExpectedArtifact } from "./auto-recovery.js";
@@ -16,6 +16,7 @@ import {
 } from "./session-forensics.js";
 import { deriveState } from "./state.js";
 import type { GSDState } from "./types.js";
+import { getRuntimeKv, deleteRuntimeKv } from "./db/runtime-kv.js";
 
 export type InterruptedSessionClassification =
   | "none"
@@ -36,6 +37,7 @@ export interface PausedSessionMetadata {
   activeRunDir?: string | null;
   autoStartTime?: number;
   milestoneLock?: string | null;
+  pauseReason?: string;
 }
 
 export interface InterruptedSessionAssessment {
@@ -82,22 +84,28 @@ function isStalePseudoMilestonePause(meta: PausedSessionMetadata): boolean {
     && LEGACY_DEEP_SETUP_UNITS.has(`${meta.unitType}:${meta.unitId}`);
 }
 
+/**
+ * runtime_kv key (global scope) that stores the most recent paused-session
+ * metadata. Phase C pt 2: replaces runtime/paused-session.json. The key is
+ * project-wide (not worker-scoped) because the paused state represents the
+ * last time auto-mode paused on this project — there is at most one paused
+ * session per project at a time.
+ */
+export const PAUSED_SESSION_KV_KEY = "paused_session";
+
 export function readPausedSessionMetadata(
   basePath: string,
 ): PausedSessionMetadata | null {
-  const pausedPath = join(gsdRoot(basePath), "runtime", "paused-session.json");
-  if (!existsSync(pausedPath)) return null;
-
-  try {
-    const meta = JSON.parse(readFileSync(pausedPath, "utf-8")) as PausedSessionMetadata;
-    if (isStalePseudoMilestonePause(meta)) {
-      try { unlinkSync(pausedPath); } catch { /* non-fatal */ }
-      return null;
-    }
-    return meta;
-  } catch {
+  // basePath is unused now (the DB is workspace-scoped via the connection
+  // openDatabase opened on it) but kept in the signature for callers.
+  void basePath;
+  const meta = getRuntimeKv<PausedSessionMetadata>("global", "", PAUSED_SESSION_KV_KEY);
+  if (!meta) return null;
+  if (isStalePseudoMilestonePause(meta)) {
+    deleteRuntimeKv("global", "", PAUSED_SESSION_KV_KEY);
     return null;
   }
+  return meta;
 }
 
 export function isBootstrapCrashLock(lock: LockData | null): boolean {
@@ -120,8 +128,7 @@ export async function assessInterruptedSession(
     ? existsSync(pausedSession.worktreePath)
     : false;
   const assessmentBasePath = worktreeExists ? pausedSession!.worktreePath! : basePath;
-  const rawLock = readCrashLock(basePath);
-  const lock = rawLock && rawLock.pid !== process.pid ? rawLock : null;
+  const lock = readCrashLock(basePath);
 
   if (!lock && !pausedSession) {
     return {
@@ -138,7 +145,7 @@ export async function assessInterruptedSession(
     };
   }
 
-  if (lock && isLockProcessAlive(lock)) {
+  if (lock && lock.pid !== process.pid && isLockProcessAlive(lock)) {
     return {
       classification: "running",
       lock,

@@ -6,6 +6,7 @@
 // execSync calls because git2 credential handling is too complex.
 
 import { execSync, execFileSync } from "node:child_process";
+import type { ExecFileSyncOptionsWithStringEncoding } from "node:child_process";
 import { existsSync, readFileSync, unlinkSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { GSDError, GSD_GIT_ERROR } from "./errors.js";
@@ -16,6 +17,8 @@ import { isInfrastructureError } from "./auto/infra-errors.js";
 // Issue #453: keep auto-mode bookkeeping on the stable git CLI path unless a
 // caller explicitly opts into the native helper.
 const NATIVE_GSD_GIT_ENABLED = process.env.GSD_ENABLE_NATIVE_GSD_GIT === "1";
+const TRANSIENT_GIT_RETRY_CODES = new Set(["ENOBUFS", "EAGAIN"]);
+const GIT_RETRY_DELAY_MS = 200;
 
 // ─── Native Module Types ──────────────────────────────────────────────────
 
@@ -144,9 +147,46 @@ function gitExec(basePath: string, args: string[], allowFailure = false): string
       encoding: "utf-8",
       env: GIT_NO_PROMPT_ENV,
     }).trim();
-  } catch {
+  } catch (err) {
     if (allowFailure) return "";
-    throw new GSDError(GSD_GIT_ERROR, `git ${args.join(" ")} failed in ${basePath}`);
+    throw new GSDError(GSD_GIT_ERROR, `git ${args.join(" ")} failed in ${basePath}: ${getErrorMessage(err)}`);
+  }
+}
+
+/** sleepSync uses Atomics.wait for a blocking pause without busy-waiting; it blocks the current thread and requires Atomics.wait support. */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function isRetryableGitError(err: unknown): boolean {
+  const code = isInfrastructureError(err)
+    ?? isInfrastructureError((err as { stderr?: string })?.stderr ?? "");
+  return code !== null && TRANSIENT_GIT_RETRY_CODES.has(code);
+}
+
+function execGitFileSyncWithRetry(
+  basePath: string,
+  args: string[],
+  options: Partial<ExecFileSyncOptionsWithStringEncoding>,
+): string {
+  try {
+    return execFileSync("git", args, {
+      cwd: basePath,
+      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf-8",
+      env: GIT_NO_PROMPT_ENV,
+      ...options,
+    }).trim();
+  } catch (err) {
+    if (!isRetryableGitError(err)) throw err;
+    sleepSync(GIT_RETRY_DELAY_MS);
+    return execFileSync("git", args, {
+      cwd: basePath,
+      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf-8",
+      env: GIT_NO_PROMPT_ENV,
+      ...options,
+    }).trim();
   }
 }
 
@@ -159,9 +199,9 @@ function gitFileExec(basePath: string, args: string[], allowFailure = false): st
       encoding: "utf-8",
       env: GIT_NO_PROMPT_ENV,
     }).trim();
-  } catch {
+  } catch (err) {
     if (allowFailure) return "";
-    throw new GSDError(GSD_GIT_ERROR, `git ${args.join(" ")} failed in ${basePath}`);
+    throw new GSDError(GSD_GIT_ERROR, `git ${args.join(" ")} failed in ${basePath}: ${getErrorMessage(err)}`);
   }
 }
 
@@ -428,16 +468,21 @@ export function nativeDiffNameStatus(
 
 /**
  * Get numstat diff between two refs.
+ * useMergeBase: if true, uses three-dot semantics.
  * Native: libgit2 patch line stats.
  * Fallback: `git diff --numstat`.
  */
-export function nativeDiffNumstat(basePath: string, fromRef: string, toRef: string): GitNumstat[] {
+export function nativeDiffNumstat(basePath: string, fromRef: string, toRef: string, useMergeBase?: boolean): GitNumstat[] {
   const native = loadNative();
-  if (native) {
+  if (native && !useMergeBase) {
     return native.gitDiffNumstat(basePath, fromRef, toRef);
   }
 
-  const result = gitExec(basePath, ["diff", "--numstat", fromRef, toRef], true);
+  const refspec = useMergeBase ? `${fromRef}...${toRef}` : undefined;
+  const args = refspec
+    ? ["diff", "--numstat", refspec]
+    : ["diff", "--numstat", fromRef, toRef];
+  const result = gitExec(basePath, args, true);
   if (!result) return [];
 
   return result.split("\n").filter(Boolean).map(line => {
@@ -553,7 +598,10 @@ export function nativeBranchList(basePath: string, pattern?: string): string[] {
   const result = gitFileExec(basePath, args, true);
   if (!result) return [];
 
-  return result.split("\n").map(b => b.trim().replace(/^\* /, "")).filter(Boolean);
+  return result
+    .split("\n")
+    .map(b => b.trim().replace(/^[*+]\s+/, ""))
+    .filter(Boolean);
 }
 
 /**
@@ -705,20 +753,21 @@ export function nativeAddTracked(basePath: string): void {
   gitFileExec(basePath, ["add", "-u"]);
 }
 
-function isDotGsdIgnored(basePath: string): boolean {
-  for (const path of [".gsd", ".gsd/"]) {
-    try {
-      execFileSync("git", ["check-ignore", "-q", path], {
-        cwd: basePath,
-        stdio: "pipe",
-        env: GIT_NO_PROMPT_ENV,
-      });
-      return true;
-    } catch {
-      // exit 1 means this form is not ignored; try the next variant
-    }
+export function nativeIsIgnored(basePath: string, path: string): boolean {
+  try {
+    execFileSync("git", ["check-ignore", "-q", "--", path], {
+      cwd: basePath,
+      stdio: "pipe",
+      env: GIT_NO_PROMPT_ENV,
+    });
+    return true;
+  } catch {
+    return false;
   }
-  return false;
+}
+
+function isDotGsdIgnored(basePath: string): boolean {
+  return [".gsd", ".gsd/"].some(path => nativeIsIgnored(basePath, path));
 }
 
 /**
@@ -915,32 +964,9 @@ export function nativeResetPaths(basePath: string, paths: string[]): void {
 }
 
 /**
- * Read `commit.gpgsign` from the repo config. Returns true only if the value
- * is the literal string "true". Any other state (unset, false, error) → false.
- *
- * Used by nativeCommit to route signing-required commits through the git CLI,
- * because the libgit2 native path does not invoke configured signers.
- * (Issue #4980 CRIT-2)
- */
-function shouldSignCommits(basePath: string): boolean {
-  try {
-    const result = execFileSync("git", ["config", "--get", "commit.gpgsign"], {
-      cwd: basePath,
-      stdio: ["ignore", "pipe", "pipe"],
-      encoding: "utf-8",
-      env: GIT_NO_PROMPT_ENV,
-    }).trim();
-    return result === "true";
-  } catch {
-    return false;
-  }
-}
-
-/**
  * Create a commit from the current index.
  * Returns the commit SHA on success, or null if nothing to commit.
- * Native: libgit2 commit create.
- * Fallback: `git commit -F -` (runs hooks; honors commit.gpgsign).
+ * Uses `git commit -F -` so normal user hooks run and commit.gpgsign is honored.
  *
  * The fallback intentionally does NOT use --no-verify — user pre-commit /
  * commit-msg / prepare-commit-msg hooks must fire on every GSD-automated
@@ -951,32 +977,16 @@ export function nativeCommit(
   message: string,
   options?: { allowEmpty?: boolean; input?: string },
 ): string | null {
-  const native = loadNative();
-  // libgit2's commit-create does not invoke configured GPG/SSH signers. When
-  // commit.gpgsign=true, route through the git CLI fallback so signing
-  // happens. (Issue #4980 CRIT-2)
-  if (native && !shouldSignCommits(basePath)) {
-    try {
-      return native.gitCommit(basePath, message, options?.allowEmpty);
-    } catch (e) {
-      const msg = getErrorMessage(e);
-      if (msg.includes("nothing to commit")) return null;
-      throw e;
-    }
-  }
-
-  // Fallback / signed-commit path: use git CLI with stdin pipe for safe
-  // multi-line messages. Hooks run; commit.gpgsign honored.
+  // Use git CLI with stdin pipe for safe multi-line messages. Hooks run;
+  // commit.gpgsign honored. libgit2 commit-create bypasses hooks, so automated
+  // GSD commits intentionally stay on the CLI path even when native git is on.
   try {
     const args = ["commit", "-F", "-"];
     if (options?.allowEmpty) args.push("--allow-empty");
-    const result = execFileSync("git", args, {
-      cwd: basePath,
+    const result = execGitFileSyncWithRetry(basePath, args, {
       stdio: ["pipe", "pipe", "pipe"],
-      encoding: "utf-8",
-      env: GIT_NO_PROMPT_ENV,
       input: message,
-    }).trim();
+    });
     return result;
   } catch (err: unknown) {
     const errObj = err as { stdout?: string; stderr?: string; message?: string };
@@ -984,7 +994,11 @@ export function nativeCommit(
     if (combined.includes("nothing to commit") || combined.includes("nothing added to commit") || combined.includes("no changes added")) {
       return null;
     }
-    throw err;
+    const commitDetail = errObj.stderr?.trim() || errObj.message || "git commit failed";
+    const wrapped = new Error(`git commit failed: ${commitDetail}`);
+    (wrapped as Error & { stdout?: string; stderr?: string }).stdout = errObj.stdout;
+    (wrapped as Error & { stdout?: string; stderr?: string }).stderr = errObj.stderr;
+    throw wrapped;
   }
 }
 
@@ -1162,7 +1176,7 @@ export function nativeBranchDelete(basePath: string, branch: string, force = tru
     native.gitBranchDelete(basePath, branch, force);
     return;
   }
-  gitFileExec(basePath, ["branch", force ? "-D" : "-d", branch], true);
+  gitFileExec(basePath, ["branch", force ? "-D" : "-d", branch]);
 }
 
 /**
@@ -1219,6 +1233,33 @@ export function nativeRmForce(basePath: string, paths: string[]): void {
   }
 }
 
+function runGitWorktreeAdd(
+  basePath: string,
+  wtPath: string,
+  branch: string,
+  createBranch?: boolean,
+  startPoint?: string,
+): void {
+  if (createBranch) {
+    const branchRef = gitExec(basePath, ["show-ref", "--verify", `refs/heads/${branch}`], true);
+    if (branchRef) {
+      gitExec(basePath, ["worktree", "add", wtPath, branch]);
+      return;
+    }
+    gitExec(basePath, ["worktree", "add", "-b", branch, wtPath, startPoint ?? "HEAD"]);
+  } else {
+    gitExec(basePath, ["worktree", "add", wtPath, branch]);
+  }
+}
+
+export function assertWorktreeMaterialized(wtPath: string): void {
+  if (existsSync(join(wtPath, ".git"))) return;
+  throw new GSDError(
+    GSD_GIT_ERROR,
+    `git worktree add did not materialize a valid worktree at ${wtPath}: missing .git file`,
+  );
+}
+
 /**
  * Add a new git worktree.
  * Native: libgit2 worktree API.
@@ -1234,14 +1275,20 @@ export function nativeWorktreeAdd(
   const native = loadNative();
   if (native) {
     native.gitWorktreeAdd(basePath, wtPath, branch, createBranch, startPoint);
-    return;
+    try {
+      assertWorktreeMaterialized(wtPath);
+      return;
+    } catch {
+      rmSync(wtPath, { recursive: true, force: true });
+      gitExec(basePath, ["worktree", "prune"], true);
+      runGitWorktreeAdd(basePath, wtPath, branch, createBranch, startPoint);
+      assertWorktreeMaterialized(wtPath);
+      return;
+    }
   }
 
-  if (createBranch) {
-    gitExec(basePath, ["worktree", "add", "-b", branch, wtPath, startPoint ?? "HEAD"]);
-  } else {
-    gitExec(basePath, ["worktree", "add", wtPath, branch]);
-  }
+  runGitWorktreeAdd(basePath, wtPath, branch, createBranch, startPoint);
+  assertWorktreeMaterialized(wtPath);
 }
 
 /**

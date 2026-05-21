@@ -1,12 +1,24 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import type { Model } from "../types.js";
 
-import { usesAnthropicBearerAuth, resolveAnthropicBaseUrl } from "./anthropic.js";
+import { buildAnthropicClientOptions, usesAnthropicBearerAuth, resolveAnthropicBaseUrl } from "./anthropic.js";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
+function anthropicModel(overrides: Partial<Model<"anthropic-messages">> = {}): Model<"anthropic-messages"> {
+	return {
+		id: "claude-sonnet-4",
+		name: "Claude Sonnet 4",
+		api: "anthropic-messages",
+		provider: "anthropic",
+		baseUrl: "https://api.anthropic.com",
+		reasoning: true,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 200000,
+		maxTokens: 8192,
+		...overrides,
+	};
+}
 
 test("usesAnthropicBearerAuth covers Bearer-only Anthropic-compatible providers (#3783)", () => {
 	assert.equal(usesAnthropicBearerAuth("alibaba-coding-plan"), true);
@@ -16,19 +28,10 @@ test("usesAnthropicBearerAuth covers Bearer-only Anthropic-compatible providers 
 });
 
 test("createClient routes Bearer-auth providers through authToken (#3783)", () => {
-	const source = readFileSync(join(__dirname, "..", "..", "src", "providers", "anthropic.ts"), "utf-8");
-	assert.ok(
-		source.includes("const usesBearerAuth = usesAnthropicBearerAuth(model.provider)"),
-		"createClient should derive auth mode from usesAnthropicBearerAuth",
-	);
-	assert.ok(
-		source.includes("apiKey: usesBearerAuth ? null : apiKey"),
-		"Bearer-auth providers should skip x-api-key auth",
-	);
-	assert.ok(
-		source.includes("authToken: usesBearerAuth ? apiKey : undefined"),
-		"Bearer-auth providers should send authToken instead",
-	);
+	const options = buildAnthropicClientOptions(anthropicModel({ provider: "minimax" }), "bearer-token", false);
+
+	assert.equal(options.apiKey, null, "Bearer-auth providers should skip x-api-key auth");
+	assert.equal(options.authToken, "bearer-token", "Bearer-auth providers should send authToken instead");
 });
 
 // Minimal model stub — only the field resolveAnthropicBaseUrl cares about.
@@ -68,11 +71,22 @@ test("resolveAnthropicBaseUrl ignores whitespace-only ANTHROPIC_BASE_URL (#4140)
 });
 
 test("createClient uses resolveAnthropicBaseUrl for all auth paths (#4140)", () => {
-	const source = readFileSync(join(__dirname, "..", "..", "src", "providers", "anthropic.ts"), "utf-8");
-	const directUsages = (source.match(/baseURL:\s*model\.baseUrl/g) ?? []).length;
-	assert.equal(directUsages, 0, "createClient must not use model.baseUrl directly — use resolveAnthropicBaseUrl(model)");
-	assert.ok(
-		source.includes("baseURL: resolveAnthropicBaseUrl(model)"),
-		"all createClient branches should pass baseURL through resolveAnthropicBaseUrl",
-	);
+	const saved = process.env.ANTHROPIC_BASE_URL;
+	try {
+		process.env.ANTHROPIC_BASE_URL = "https://proxy.example.com";
+		const apiKeyOptions = buildAnthropicClientOptions(anthropicModel(), "api-key", false);
+		const bearerOptions = buildAnthropicClientOptions(anthropicModel({ provider: "minimax" }), "bearer-token", false);
+		const copilotOptions = buildAnthropicClientOptions(
+			anthropicModel({ provider: "github-copilot", baseUrl: "https://api.githubcopilot.com" }),
+			"copilot-token",
+			false,
+		);
+
+		assert.equal(apiKeyOptions.baseURL, "https://proxy.example.com");
+		assert.equal(bearerOptions.baseURL, "https://proxy.example.com");
+		assert.equal(copilotOptions.baseURL, "https://proxy.example.com");
+	} finally {
+		if (saved === undefined) delete process.env.ANTHROPIC_BASE_URL;
+		else process.env.ANTHROPIC_BASE_URL = saved;
+	}
 });

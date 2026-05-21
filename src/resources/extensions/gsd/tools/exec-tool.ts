@@ -1,8 +1,5 @@
-// GSD Exec Tool — executor for the gsd_exec MCP tool.
-//
-// Thin wrapper around exec-sandbox.ts that reads effective options from
-// the project preferences (context_mode block) and formats the result
-// for MCP return.
+// Project/App: GSD-2
+// File Purpose: Executor for the gsd_exec MCP tool.
 
 import {
   EXEC_DEFAULTS,
@@ -11,7 +8,10 @@ import {
   type ExecSandboxRequest,
   type ExecSandboxResult,
 } from "../exec-sandbox.js";
+import { realpathSync } from "node:fs";
+import path from "node:path";
 import { isContextModeEnabled, type ContextModeConfig } from "../preferences-types.js";
+import { contextModeDisabledResult, type ToolExecutionResult } from "./context-mode-tool-result.js";
 
 export interface ExecToolParams {
   runtime: ExecSandboxRequest["runtime"];
@@ -20,17 +20,12 @@ export interface ExecToolParams {
   timeout_ms?: number;
 }
 
-export interface ToolExecutionResult {
-  content: Array<{ type: "text"; text: string }>;
-  details: Record<string, unknown>;
-  isError?: boolean;
-}
-
 export interface ExecToolDeps {
   baseDir: string;
   preferences: { context_mode?: ContextModeConfig } | null;
   /** Optional override for testing. */
   run?: (req: ExecSandboxRequest, opts: ExecSandboxOptions) => Promise<ExecSandboxResult>;
+  env?: NodeJS.ProcessEnv;
   now?: () => Date;
   generateId?: () => string;
 }
@@ -77,21 +72,6 @@ function isEnabled(prefs: ExecToolDeps["preferences"]): boolean {
   return isContextModeEnabled(prefs);
 }
 
-function disabledResult(): ToolExecutionResult {
-  return {
-    content: [
-      {
-        type: "text",
-        text:
-          "gsd_exec is disabled by `context_mode.enabled: false` in preferences. Remove that " +
-          "override (or set it to true) to re-enable sandboxed tool-output execution.",
-      },
-    ],
-    details: { operation: "gsd_exec", error: "context_mode_disabled" },
-    isError: true,
-  };
-}
-
 function paramError(message: string): ToolExecutionResult {
   return {
     content: [{ type: "text", text: `Error: ${message}` }],
@@ -100,11 +80,126 @@ function paramError(message: string): ToolExecutionResult {
   };
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function normalizeScanPath(value: string): string {
+  const normalized = value.replace(/\\/g, "/").replace(/\/+$/, "");
+  return normalized.startsWith("/private/var/")
+    ? normalized.slice("/private".length)
+    : normalized;
+}
+
+function parseWorktreeBase(baseDir: string): { originalRoot: string; worktreeRoot: string } | null {
+  const normalizedBase = normalizeScanPath(baseDir);
+  const marker = "/.gsd/worktrees/";
+  const markerIndex = normalizedBase.indexOf(marker);
+  if (markerIndex <= 0) return null;
+  return {
+    originalRoot: normalizedBase.slice(0, markerIndex),
+    worktreeRoot: normalizedBase,
+  };
+}
+
+function pathInside(parent: string, target: string): boolean {
+  const parentWithSep = parent.endsWith("/") ? parent : `${parent}/`;
+  return target === parent || target.startsWith(parentWithSep);
+}
+
+function comparablePathVariants(value: string): string[] {
+  const variants = new Set<string>();
+  const normalized = normalizeScanPath(path.resolve(value));
+  variants.add(normalized);
+  try {
+    variants.add(normalizeScanPath(realpathSync(normalized)));
+  } catch {
+    // Nonexistent paths are still compared lexically.
+  }
+  if (normalized.startsWith("/private/var/")) {
+    variants.add(normalized.replace(/^\/private\/var\//, "/var/"));
+  } else if (normalized.startsWith("/var/")) {
+    variants.add(`/private${normalized}`);
+  }
+  return [...variants];
+}
+
+function pathInsideAny(parents: readonly string[], targets: readonly string[]): boolean {
+  return targets.some((target) => parents.some((parent) => pathInside(parent, target)));
+}
+
+function stripWrappingQuotes(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length < 2) return trimmed;
+  const first = trimmed[0];
+  const last = trimmed[trimmed.length - 1];
+  if ((first === "'" || first === '"' || first === "`") && last === first) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
+}
+
+function extractPathLikeValues(script: string): string[] {
+  const values: string[] = [];
+  const push = (candidate: string) => {
+    const cleaned = stripWrappingQuotes(candidate).trim();
+    if (!cleaned) return;
+    values.push(cleaned);
+  };
+  const pushQuotedLiterals = (source: string, depth = 0) => {
+    for (const match of source.matchAll(/(["'`])((?:\\.|(?!\1).)*)\1/g)) {
+      push(match[2]);
+      if (depth < 2 && /["'`]/.test(match[2])) {
+        pushQuotedLiterals(match[2], depth + 1);
+      }
+    }
+  };
+
+  for (const match of script.matchAll(/(?:^|[;\n\r]|\&\&|\|\|)\s*cd\s+([^\n\r;|&]+)/g)) {
+    push(match[1]);
+  }
+  for (const match of script.matchAll(/process\.chdir\(\s*([^\n\r;]+?)\s*\)/g)) {
+    push(match[1]);
+    pushQuotedLiterals(match[1]);
+  }
+  pushQuotedLiterals(script);
+  return values;
+}
+
+function resolvesToOriginalRootOutsideWorktree(script: string, baseDir: string): boolean {
+  const parsed = parseWorktreeBase(baseDir);
+  if (!parsed) return false;
+
+  const normalizedWorktree = normalizeScanPath(path.resolve(parsed.worktreeRoot));
+  const normalizedOriginalRoot = normalizeScanPath(path.resolve(parsed.originalRoot));
+  const worktreeRoots = comparablePathVariants(normalizedWorktree);
+  const originalRoots = comparablePathVariants(normalizedOriginalRoot);
+  for (const value of extractPathLikeValues(script)) {
+    const resolved = comparablePathVariants(path.resolve(normalizedWorktree, value));
+    if (pathInsideAny(originalRoots, resolved) && !pathInsideAny(worktreeRoots, resolved)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function scriptReferencesOriginalRootFromWorktree(script: string, baseDir: string): boolean {
+  const parsed = parseWorktreeBase(baseDir);
+  if (!parsed) return false;
+  const normalizedScript = script.replace(/\\/g, "/");
+  return comparablePathVariants(parsed.originalRoot).some((originalRoot) => {
+    const originalRootPattern = new RegExp(
+      `${escapeRegExp(originalRoot)}(?=$|[\\s'"\\\`;)&|<>]|/(?!\\.gsd/worktrees(?:/|$)))`,
+    );
+    return originalRootPattern.test(normalizedScript);
+  });
+}
+
 export async function executeGsdExec(
   params: ExecToolParams,
   deps: ExecToolDeps,
 ): Promise<ToolExecutionResult> {
-  if (!isEnabled(deps.preferences)) return disabledResult();
+  if (!isEnabled(deps.preferences)) return contextModeDisabledResult("gsd_exec");
 
   const runtime = params.runtime;
   if (runtime !== "bash" && runtime !== "node" && runtime !== "python") {
@@ -117,11 +212,19 @@ export async function executeGsdExec(
   if (Buffer.byteLength(script, "utf8") > 200_000) {
     return paramError("script exceeds the 200 KB length limit");
   }
+  if (
+    resolvesToOriginalRootOutsideWorktree(script, deps.baseDir)
+    || scriptReferencesOriginalRootFromWorktree(script, deps.baseDir)
+  ) {
+    return paramError(
+      "script references the original project root while running inside a milestone worktree; use the active worktree path or relative paths",
+    );
+  }
 
   const opts = buildExecOptions(
     deps.baseDir,
     deps.preferences?.context_mode,
-    { now: deps.now, generateId: deps.generateId },
+    { env: deps.env, now: deps.now, generateId: deps.generateId },
   );
   const run = deps.run ?? runExecSandbox;
 

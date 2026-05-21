@@ -22,6 +22,10 @@ Plan (with integrated research) → Execute (per task) → Complete → Reassess
 - **Reassess**：检查 roadmap 是否仍然合理
 - **Validate Milestone**：在所有 slices 完成后做一致性校验，把 roadmap 的成功标准与实际结果对照，避免在封板前漏掉关键缺口
 
+### Milestone 完成的幂等行为
+
+Milestone completion 可以安全重试。如果 `complete-milestone` 单元在数据库已经把该 milestone 标记为关闭后再次派发，GSD 会把这次调用视为成功，而不是返回错误。已有的 summary projection 会保持不变，不会追加重复的 completion event，并且工具响应的 details 中会包含 `alreadyComplete: true`，方便 operator 和集成方区分重试与首次完成。
+
 ## 关键特性
 
 ### 每个单元都用全新会话
@@ -83,7 +87,9 @@ GSD 会对 provider 错误分类，并在安全时自动恢复：
 
 ### 增量记忆（v2.26）
 
-GSD 会维护一个 `KNOWLEDGE.md` 文件，作为项目特有规则、模式和经验的追加式记录。agent 在每个工作单元开始时都会读取它；当发现反复出现的问题、非显而易见的模式或未来会话需要遵循的规则时，也会把内容追加进去。这样一来，自动模式就有了跨会话、跨上下文窗口的持久记忆。
+GSD 会在 `memories` 表中维护项目持久记忆，并把其中一部分知识投影回 `.gsd/KNOWLEDGE.md` 方便审阅。`KNOWLEDGE.md` 中的 Rules 仍由文件本身保存；Patterns 和 Lessons 会作为 memories 捕获，从已有行回填，并在会话启动时重新渲染到文件中。
+
+每个工作单元开始时，GSD 会从项目 `KNOWLEDGE.md` 注入手写 Rules；Patterns 和 Lessons 则通过 memory block 提供给 agent。全局的 `~/.gsd/agent/KNOWLEDGE.md` 仍由用户维护，并按原样注入。
 
 ### 上下文压力监视器（v2.26）
 

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 
-import { deriveState, isValidationTerminal } from "../state.ts";
+import { deriveState, invalidateStateCache, isValidationTerminal } from "../state.ts";
 import { resolveExpectedArtifactPath, diagnoseExpectedArtifact } from "../auto-artifact-paths.ts";
 import { verifyExpectedArtifact, buildLoopRemediationSteps } from "../auto-recovery.ts";
 import { resolveDispatch, type DispatchContext } from "../auto-dispatch.ts";
@@ -13,7 +13,7 @@ import { buildCompleteMilestonePrompt, buildValidateMilestonePrompt } from "../a
 import type { GSDState } from "../types.ts";
 import { clearPathCache } from "../paths.ts";
 import { clearParseCache } from "../files.ts";
-import { closeDatabase, insertMilestone, insertSlice, openDatabase, getMilestone } from "../gsd-db.ts";
+import { closeDatabase, insertAssessment, insertMilestone, insertSlice, openDatabase, getMilestone } from "../gsd-db.ts";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
@@ -24,6 +24,7 @@ function makeTmpBase(): string {
 }
 
 function cleanup(base: string): void {
+  invalidateStateCache();
   clearPathCache();
   clearParseCache();
   closeDatabase();
@@ -204,6 +205,53 @@ test("deriveState returns blocked when needs-remediation has no incomplete slice
   }
 });
 
+test("deriveState blocks milestone when validation verdict is needs-attention and no summary", async () => {
+  const base = makeTmpBase();
+  try {
+    writeRoadmap(base, "M001", ALL_DONE_ROADMAP);
+    writeValidation(base, "M001", "---\nverdict: needs-attention\nremediation_round: 0\n---\n\n# Validation\nNeeds attention.");
+
+    const state = await deriveState(base);
+    assert.equal(state.phase, "blocked");
+    assert.equal(state.activeMilestone?.id, "M001");
+    assert.equal(state.registry.find(entry => entry.id === "M001")?.status, "active");
+    assert.ok(
+      state.blockers.some(b => b.includes("needs-attention") && b.includes("/gsd park M001")),
+      "blocker message should explain explicit resolution paths",
+    );
+  } finally {
+    cleanup(base);
+  }
+});
+
+test("deriveState blocks DB-backed milestone when validation verdict is needs-attention", async () => {
+  const base = makeTmpBase();
+  try {
+    openTestDb(base);
+    insertMilestone({ id: "M001", title: "Test Milestone", status: "active" });
+    insertSlice({ id: "S01", milestoneId: "M001", title: "First slice", status: "complete", depends: [] });
+    writeRoadmap(base, "M001", ALL_DONE_ROADMAP);
+    insertAssessment({
+      path: join(".gsd", "milestones", "M001", "M001-VALIDATION.md"),
+      milestoneId: "M001",
+      status: "needs-attention",
+      scope: "milestone-validation",
+      fullContent: "---\nverdict: needs-attention\nremediation_round: 0\n---\n\n# Validation\nNeeds attention.",
+    });
+
+    const state = await deriveState(base);
+    assert.equal(state.phase, "blocked");
+    assert.equal(state.activeMilestone?.id, "M001");
+    assert.equal(state.registry.find(entry => entry.id === "M001")?.status, "active");
+    assert.ok(
+      state.blockers.some(b => b.includes("needs-attention") && b.includes("/gsd park M001")),
+      "blocker message should explain explicit resolution paths",
+    );
+  } finally {
+    cleanup(base);
+  }
+});
+
 test("deriveState returns complete when both VALIDATION and SUMMARY exist", async () => {
   const base = makeTmpBase();
   try {
@@ -357,6 +405,47 @@ test("dispatch rule matches validating-milestone phase", async () => {
   }
 });
 
+test("dispatch rule backfills missing slice ASSESSMENT from existing SUMMARY before validation dispatch (#6225)", async () => {
+  const state: GSDState = {
+    activeMilestone: { id: "M001", title: "Test" },
+    activeSlice: null,
+    activeTask: null,
+    phase: "validating-milestone",
+    recentDecisions: [],
+    blockers: [],
+    nextAction: "Validate milestone M001.",
+    registry: [{ id: "M001", title: "Test", status: "active" }],
+    progress: { milestones: { done: 0, total: 1 } },
+  };
+
+  const base = makeTmpBase();
+  try {
+    openTestDb(base);
+    insertMilestone({ id: "M001", title: "Test Milestone", status: "active" });
+    insertSlice({ id: "S01", milestoneId: "M001", title: "First slice", status: "complete", depends: [] });
+
+    writeContext(base, "M001");
+    writeRoadmap(base, "M001", ALL_DONE_ROADMAP);
+    writeSliceSummary(base, "M001", "S01", "# S01 Summary\nDone.");
+
+    const assessmentPath = join(base, ".gsd", "milestones", "M001", "slices", "S01", "S01-ASSESSMENT.md");
+    assert.equal(existsSync(assessmentPath), false, "precondition: ASSESSMENT does not exist");
+
+    const ctx: DispatchContext = {
+      basePath: base,
+      mid: "M001",
+      midTitle: "Test",
+      state,
+      prefs: undefined,
+    };
+    const result = await resolveDispatch(ctx);
+    assert.equal(result.action, "dispatch");
+    assert.ok(existsSync(assessmentPath), "ASSESSMENT should be backfilled before validation dispatch");
+  } finally {
+    cleanup(base);
+  }
+});
+
 test("dispatch rule skips when skip_milestone_validation preference is set", async () => {
   const state: GSDState = {
     activeMilestone: { id: "M001", title: "Test" },
@@ -394,7 +483,46 @@ test("dispatch rule skips when skip_milestone_validation preference is set", asy
   }
 });
 
-test("dispatch rule fails closed for failure-path SUMMARY when DB milestone is not complete (#4658)", async () => {
+test("skip write immediately advances deriveState out of validating-milestone", async () => {
+  const base = makeTmpBase();
+  try {
+    openTestDb(base);
+    insertMilestone({ id: "M001", title: "Test", status: "active" } as any);
+    insertSlice({ id: "S01", milestoneId: "M001", title: "Slice 1", status: "complete" } as any);
+
+    writeContext(base, "M001");
+    writeRoadmap(base, "M001", ALL_DONE_ROADMAP);
+    writeSliceSummary(base, "M001", "S01", "# S01 Summary\nDone.");
+
+    invalidateStateCache();
+    clearPathCache();
+    clearParseCache();
+
+    const before = await deriveState(base);
+    assert.equal(before.phase, "validating-milestone", "precondition: missing VALIDATION keeps phase in validation");
+
+    const ctx: DispatchContext = {
+      basePath: base,
+      mid: "M001",
+      midTitle: "Test",
+      state: before,
+      prefs: { phases: { skip_milestone_validation: true } },
+    };
+    const result = await resolveDispatch(ctx);
+    assert.equal(result.action, "skip");
+
+    const after = await deriveState(base);
+    assert.equal(
+      after.phase,
+      "completing-milestone",
+      "post-skip deriveState should see the new VALIDATION file without manual cache invalidation",
+    );
+  } finally {
+    cleanup(base);
+  }
+});
+
+test("dispatch rule ignores failure-path SUMMARY projection when DB milestone is not complete (#4658 superseded)", async () => {
   const state: GSDState = {
     activeMilestone: { id: "M001", title: "Test" },
     activeSlice: null,
@@ -422,17 +550,14 @@ test("dispatch rule fails closed for failure-path SUMMARY when DB milestone is n
       prefs: undefined,
     };
     const result = await resolveDispatch(ctx);
-    assert.equal(result.action, "stop");
-    if (result.action === "stop") {
-      assert.equal(result.level, "warning");
-      assert.match(result.reason, /failure-path SUMMARY/i);
-    }
+    assert.equal(result.action, "dispatch");
+    assert.equal(getMilestone("M001")?.status, "active");
   } finally {
     cleanup(base);
   }
 });
 
-test("dispatch rule reconciles DB for successful stale SUMMARY (#4658)", async () => {
+test("dispatch rule does not reconcile DB from successful stale SUMMARY projection (#4658 superseded)", async () => {
   const state: GSDState = {
     activeMilestone: { id: "M001", title: "Test" },
     activeSlice: null,
@@ -473,15 +598,15 @@ test("dispatch rule reconciles DB for successful stale SUMMARY (#4658)", async (
       prefs: undefined,
     };
     const result = await resolveDispatch(ctx);
-    assert.equal(result.action, "skip");
+    assert.equal(result.action, "dispatch");
     const milestone = getMilestone("M001");
-    assert.equal(milestone?.status, "complete");
+    assert.equal(milestone?.status, "active");
   } finally {
     cleanup(base);
   }
 });
 
-test("dispatch rule fails closed for ambiguous stale SUMMARY (#4658)", async () => {
+test("dispatch rule ignores ambiguous stale SUMMARY projection (#4658 superseded)", async () => {
   const state: GSDState = {
     activeMilestone: { id: "M001", title: "Test" },
     activeSlice: null,
@@ -509,11 +634,8 @@ test("dispatch rule fails closed for ambiguous stale SUMMARY (#4658)", async () 
       prefs: undefined,
     };
     const result = await resolveDispatch(ctx);
-    assert.equal(result.action, "stop");
-    if (result.action === "stop") {
-      assert.equal(result.level, "warning");
-      assert.match(result.reason, /ambiguous SUMMARY/i);
-    }
+    assert.equal(result.action, "dispatch");
+    assert.equal(getMilestone("M001")?.status, "active");
   } finally {
     cleanup(base);
   }

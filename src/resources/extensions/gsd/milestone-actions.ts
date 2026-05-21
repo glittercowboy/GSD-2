@@ -24,6 +24,7 @@ import { deleteMilestone, getMilestone, isDbAvailable, updateMilestoneStatus } f
 import { removeWorktree } from "./worktree-manager.js";
 import { logWarning } from "./workflow-logger.js";
 import { isAutoActive } from "./auto.js";
+import { isClosedStatus } from "./status-guards.js";
 
 /**
  * Writer-side assert for mutations that race with auto-mode's squash merge (#4704).
@@ -44,7 +45,7 @@ function assertNotAutoActive(action: string): void {
 /**
  * Park a milestone — creates a PARKED.md marker file with reason and timestamp.
  * Parked milestones are skipped during active-milestone discovery but stay on disk.
- * Returns true if successfully parked, false if milestone not found or already parked.
+ * Returns true if successfully parked, false if milestone not found, already parked, or complete.
  */
 export function parkMilestone(basePath: string, milestoneId: string, reason: string): boolean {
   assertNotAutoActive("park milestone");
@@ -52,8 +53,13 @@ export function parkMilestone(basePath: string, milestoneId: string, reason: str
   if (!mDir || !existsSync(mDir)) return false;
 
   // Guard: do not park a completed milestone — it would corrupt depends_on satisfaction
-  const summaryFile = resolveMilestoneFile(basePath, milestoneId, "SUMMARY");
-  if (summaryFile) return false;
+  const dbAvailable = isDbAvailable();
+  const milestone = dbAvailable ? getMilestone(milestoneId) : null;
+  if (milestone && isClosedStatus(milestone.status)) return false;
+  if (!dbAvailable) {
+    const summaryFile = resolveMilestoneFile(basePath, milestoneId, "SUMMARY");
+    if (summaryFile) return false;
+  }
 
   const parkedPath = join(mDir, buildMilestoneFileName(milestoneId, "PARKED"));
   if (existsSync(parkedPath)) return false; // already parked
@@ -72,7 +78,7 @@ export function parkMilestone(basePath: string, milestoneId: string, reason: str
 
   writeFileSync(parkedPath, content, "utf-8");
   // Sync DB status so deriveStateFromDb also skips this milestone (#2694)
-  if (isDbAvailable()) {
+  if (dbAvailable) {
     try {
       updateMilestoneStatus(milestoneId, "parked");
     } catch (err) {

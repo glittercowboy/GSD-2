@@ -1,59 +1,48 @@
 /**
- * Regression test for #3673 — auto-remediate stale slice DB status
+ * Regression test for DB-authoritative rogue detection.
  *
- * When complete-slice fails after writing SUMMARY.md but before calling
- * updateSliceStatus(), the DB stays stale and the post-unit check
- * previously reported this as a "rogue" artifact, causing infinite
- * re-dispatch. The fix calls updateSliceStatus() to sync the DB.
- *
- * This structural test verifies updateSliceStatus is imported and called
- * in the complete-slice branch of auto-post-unit.ts.
+ * A SUMMARY.md on disk is a projection/diagnostic. Runtime post-unit checks
+ * must not use it to mark the DB slice complete; explicit import/recovery
+ * commands own markdown-to-DB behavior.
  */
 
-import { describe, test } from 'node:test';
-import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
-import { extractSourceRegion } from "./test-helpers.ts";
+import { afterEach, describe, test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+import { detectRogueFileWrites } from "../auto-post-unit.ts";
+import {
+  closeDatabase,
+  getSlice,
+  insertMilestone,
+  insertSlice,
+  isDbAvailable,
+  openDatabase,
+} from "../gsd-db.ts";
 
-const source = readFileSync(join(__dirname, '..', 'auto-post-unit.ts'), 'utf-8');
+afterEach(() => {
+  if (isDbAvailable()) closeDatabase();
+});
 
-describe('auto-remediate stale slice status (#3673)', () => {
-  test('updateSliceStatus is imported from gsd-db', () => {
-    assert.match(source, /import\s*\{[^}]*updateSliceStatus[^}]*\}\s*from\s*["']\.\/gsd-db/,
-      'updateSliceStatus should be imported from gsd-db');
-  });
+describe("DB-authoritative slice rogue detection", () => {
+  test("complete-slice SUMMARY.md is reported as rogue without marking DB complete", (t) => {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), "gsd-rogue-slice-")));
+    t.after(() => rmSync(base, { recursive: true, force: true }));
 
-  test('updateSliceStatus is called with "complete" status', () => {
-    assert.match(source, /updateSliceStatus\(mid,\s*sid,\s*["']complete["']/,
-      'updateSliceStatus should be called with "complete" status');
-  });
+    mkdirSync(join(base, ".gsd"), { recursive: true });
+    openDatabase(join(base, ".gsd", "gsd.db"));
+    insertMilestone({ id: "M001", title: "Milestone", status: "active" });
+    insertSlice({ milestoneId: "M001", id: "S01", title: "Slice", status: "pending", sequence: 1 });
 
-  test('remediation is wrapped in try-catch for fallback to rogue detection', () => {
-    // The updateSliceStatus call should be in a try block with a catch
-    // that falls back to rogues.push
-    const updateIdx = source.indexOf('updateSliceStatus(mid, sid');
-    assert.ok(updateIdx > 0, 'updateSliceStatus call should exist');
+    const summaryPath = join(base, ".gsd", "milestones", "M001", "slices", "S01", "S01-SUMMARY.md");
+    mkdirSync(dirname(summaryPath), { recursive: true });
+    writeFileSync(summaryPath, "# Summary\n", "utf-8");
 
-    // Find surrounding try-catch
-    const before = source.slice(Math.max(0, updateIdx - 200), updateIdx);
-    assert.match(before, /try\s*\{/,
-      'updateSliceStatus should be inside a try block');
+    const rogues = detectRogueFileWrites("complete-slice", "M001/S01", base);
 
-    // Bound the region to stop before the rogue fallback so /catch/ only
-    // matches this try block's catch, not an unrelated later one.
-    const after = extractSourceRegion(source, 'updateSliceStatus(mid, sid', 'rogues.push({');
-    assert.match(after, /catch/,
-      'try block should have a catch for fallback');
-  });
-
-  test('rogue detection still exists as fallback', () => {
-    // rogues.push should appear in the catch block
-    assert.match(source, /rogues\.push\(\{.*path:\s*summaryPath/,
-      'rogues.push fallback should still exist');
+    assert.deepEqual(rogues, [{ path: summaryPath, unitType: "complete-slice", unitId: "M001/S01" }]);
+    assert.equal(getSlice("M001", "S01")?.status, "pending");
   });
 });

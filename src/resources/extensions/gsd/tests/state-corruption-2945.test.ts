@@ -10,9 +10,10 @@
 
 import { describe, test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
 import {
   openDatabase,
   closeDatabase,
@@ -69,6 +70,7 @@ function makeMilestoneRow(overrides: Partial<MilestoneRow> = {}): MilestoneRow {
     definition_of_done: [],
     requirement_coverage: "",
     boundary_map_markdown: "",
+    sequence: 0,
     ...overrides,
   };
 }
@@ -262,61 +264,75 @@ describe("#2945 Bug 2: workflow-reconcile bypasses task validation for complete_
 
 describe("#2945 Bug 3: mergeAndExit must teardown worktree after successful merge", () => {
 
-  test("_mergeWorktreeMode calls teardownAutoWorktree after successful merge", async () => {
-    // Test the WorktreeResolver to verify teardown is called after merge.
-    // We use a mock-based approach since actual worktrees require a git repo.
-    let teardownCalled = false;
-    let teardownMilestoneId = "";
+  test("_mergeWorktreeMode tears down worktree directory after successful merge", async () => {
+    // ADR-016 phase 2 / C2 (#5625): the worktree-manager primitives
+    // including `teardownAutoWorktree` are inlined into Lifecycle, so
+    // this test can no longer assert via a deps mock. Rewritten to use
+    // a real git fixture and verify the worktree directory is removed
+    // from disk after the merge.
+    const tmpBase = realpathSync(mkdtempSync(join(tmpdir(), "gsd-2945-bug3-")));
+    // ADR-016 phase 3 (#5693): Lifecycle.restoreToProjectRoot now chdirs to
+    // s.originalBasePath. Save cwd before the test so we can restore it
+    // before rmSync removes tmpBase — otherwise the next test in this file
+    // inherits a deleted cwd and process.cwd() throws ENOENT (uv_cwd).
+    const prevCwd = process.cwd();
+    try {
+      const git = (args: string[]): void => {
+        execFileSync("git", args, { cwd: tmpBase, stdio: "pipe" });
+      };
+      git(["init", "-b", "main"]);
+      git(["config", "user.email", "test@test.com"]);
+      git(["config", "user.name", "Test"]);
+      writeFileSync(join(tmpBase, "README.md"), "# test\n");
+      writeFileSync(join(tmpBase, ".gitignore"), ".gsd/worktrees/\n");
+      mkdirSync(join(tmpBase, ".gsd"), { recursive: true });
+      writeFileSync(
+        join(tmpBase, ".gsd", "preferences.md"),
+        "## Git\n- isolation: worktree\n",
+      );
+      git(["add", "."]);
+      git(["commit", "-m", "init"]);
+      git(["checkout", "-b", "milestone/M001"]);
+      git(["checkout", "main"]);
+      const wt = join(tmpBase, ".gsd", "worktrees", "M001");
+      git(["worktree", "add", wt, "milestone/M001"]);
+      mkdirSync(join(tmpBase, ".gsd", "milestones", "M001"), { recursive: true });
+      writeFileSync(
+        join(tmpBase, ".gsd", "milestones", "M001", "M001-ROADMAP.md"),
+        "# M001\n- [x] S01: Slice one\n",
+      );
 
-    const mockSession = {
-      basePath: "/mock/worktree/M001",
-      originalBasePath: "/mock/project",
-      isolationDegraded: false,
-      gitService: {} as unknown,
-    } as unknown as AutoSession;
+      const { WorktreeStateProjection } = await import("../worktree-state-projection.ts");
+      const session = {
+        basePath: wt,
+        originalBasePath: tmpBase,
+        isolationDegraded: false,
+        gitService: {} as unknown,
+        milestoneStartShas: new Map(),
+      } as unknown as AutoSession;
 
-    const mockDeps = {
-      isInAutoWorktree: () => true,
-      shouldUseWorktreeIsolation: () => true,
-      getIsolationMode: () => "worktree" as const,
-      mergeMilestoneToMain: () => ({ pushed: false, codeFilesChanged: true }),
-      syncWorktreeStateBack: () => ({ synced: [] }),
-      teardownAutoWorktree: (basePath: string, mid: string) => {
-        teardownCalled = true;
-        teardownMilestoneId = mid;
-      },
-      createAutoWorktree: () => "",
-      enterAutoWorktree: () => "",
-      getAutoWorktreePath: () => null,
-      autoCommitCurrentBranch: () => {},
-      getCurrentBranch: () => "main",
-      autoWorktreeBranch: () => "gsd/M001",
-      resolveMilestoneFile: () => "/mock/roadmap.md",
-      readFileSync: () => "# Roadmap content",
-      GitServiceImpl: class {} as unknown as new (p: string, c: unknown) => unknown,
-      loadEffectiveGSDPreferences: () => undefined,
-      invalidateAllCaches: () => {},
-      captureIntegrationBranch: () => {},
-      enterBranchModeForMilestone: () => {},
-    };
+      const deps = {
+        mergeMilestoneToMain: () => ({ pushed: false, codeFilesChanged: true }),
+        worktreeProjection: new WorktreeStateProjection(),
+        gitServiceFactory: () => ({}) as unknown as ReturnType<
+          import("../worktree-lifecycle.js").WorktreeLifecycleDeps["gitServiceFactory"]
+        >,
+      };
 
-    // Import and create resolver
-    // We test the behavior contract: after a successful merge, teardown must be called
-    const { WorktreeResolver } = await import("../worktree-resolver.ts");
-    const resolver = new WorktreeResolver(mockSession, mockDeps);
+      const { WorktreeLifecycle } = await import("../worktree-lifecycle.ts");
+      const lifecycle = new WorktreeLifecycle(session, deps as never);
 
-    const ctx = { notify: () => {} };
-    resolver.mergeAndExit("M001", ctx);
+      const ctx = { notify: () => {} };
+      lifecycle.exitMilestone("M001", { merge: true }, ctx);
 
-    assert.ok(
-      teardownCalled,
-      "teardownAutoWorktree must be called after successful merge in worktree mode",
-    );
-    assert.strictEqual(
-      teardownMilestoneId,
-      "M001",
-      "teardown must be called with the correct milestone ID",
-    );
+      assert.ok(
+        !existsSync(wt),
+        `teardownAutoWorktree must be called after successful merge — worktree directory at ${wt} should be removed`,
+      );
+    } finally {
+      try { process.chdir(prevCwd); } catch { /* noop */ }
+      try { rmSync(tmpBase, { recursive: true, force: true }); } catch { /* noop */ }
+    }
   });
 });
 

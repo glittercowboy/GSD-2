@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react"
 
 import {
   AlertTriangle,
+  Cable,
   CheckCircle2,
   CircleDashed,
   Cpu,
@@ -13,13 +14,17 @@ import {
   FlaskConical,
   KeyRound,
   LoaderCircle,
+  Plus,
+  Power,
+  PowerOff,
   Radio,
   RefreshCw,
   RotateCcw,
   Settings,
   SkipForward,
   SlidersHorizontal,
-  Type,
+  Server,
+  Trash2,
   Wand2,
 } from "lucide-react"
 import { useDevOverrides } from "@/lib/dev-overrides"
@@ -31,6 +36,15 @@ import type {
   SettingsPatternHistory,
   SettingsRoutingHistory,
 } from "@/lib/settings-types"
+import type {
+  WebMcpConnectionTestResult,
+  WebMcpImportableServer,
+  WebMcpManagementPayload,
+  WebMcpMutationRequest,
+  WebMcpMutationResponse,
+  WebMcpServer,
+  WebMcpTransport,
+} from "@/lib/mcp-management-types"
 import { cn } from "@/lib/utils"
 import {
   formatCost,
@@ -616,7 +630,6 @@ export function RemoteQuestionsPanel() {
   const { data, busy, refresh } = useSettingsData()
   const existingConfig = data?.preferences?.remoteQuestions ?? null
 
-  const [envVarSet, setEnvVarSet] = useState(false)
   const [envVarName, setEnvVarName] = useState<string | null>(null)
   const [apiLoading, setApiLoading] = useState(true)
   const [tokenSet, setTokenSet] = useState(false)
@@ -647,7 +660,6 @@ export function RemoteQuestionsPanel() {
         return
       }
       const json: RemoteQuestionsApiResponse = await res.json()
-      setEnvVarSet(json.envVarSet)
       setEnvVarName(json.envVarName)
       setTokenSet(json.tokenSet)
       setIsConfigured(json.status === "configured" && json.config !== null)
@@ -664,15 +676,21 @@ export function RemoteQuestionsPanel() {
     }
   }, [])
 
-  useEffect(() => { void fetchApiStatus() }, [fetchApiStatus])
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void fetchApiStatus() }, 0)
+    return () => window.clearTimeout(timer)
+  }, [fetchApiStatus])
 
   useEffect(() => {
-    if (existingConfig?.channel) {
-      setChannel(existingConfig.channel)
+    if (!existingConfig?.channel) return
+    const nextChannel = existingConfig.channel
+    const timer = window.setTimeout(() => {
+      setChannel(nextChannel)
       setChannelId(existingConfig.channelId ?? "")
       setTimeoutMinutes(existingConfig.timeoutMinutes ?? 5)
       setPollIntervalSeconds(existingConfig.pollIntervalSeconds ?? 5)
-    }
+    }, 0)
+    return () => window.clearTimeout(timer)
   }, [existingConfig])
 
   const channelIdValid = channelId.trim().length > 0 && CHANNEL_ID_PATTERNS[channel].test(channelId.trim())
@@ -887,7 +905,7 @@ export function RemoteQuestionsPanel() {
         />
         {channelId.trim().length > 0 && !CHANNEL_ID_PATTERNS[channel].test(channelId.trim()) && (
           <p className="text-[11px] text-destructive/70">
-            Doesn't match the expected format for {selectedChannelOption.label}
+            Does not match the expected format for {selectedChannelOption.label}
           </p>
         )}
       </div>
@@ -1019,6 +1037,347 @@ export function RemoteQuestionsPanel() {
           </Button>
         </div>
       </div>
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// MCP CONNECTIONS PANEL
+// ═══════════════════════════════════════════════════════════════════════
+
+function formatRecordLines(record: Record<string, string> | undefined): string {
+  if (!record) return ""
+  return Object.entries(record).map(([key, value]) => `${key}=${value}`).join("\n")
+}
+
+function parseRecordLines(text: string): Record<string, string> | undefined {
+  const entries = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const equals = line.indexOf("=")
+      if (equals <= 0) throw new Error(`Invalid key=value line: ${line}`)
+      return [line.slice(0, equals).trim(), line.slice(equals + 1)] as const
+    })
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined
+}
+
+function formatArgs(args: string[] | undefined): string {
+  return args?.join("\n") ?? ""
+}
+
+function parseArgs(text: string): string[] | undefined {
+  const args = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+  return args.length > 0 ? args : undefined
+}
+
+function serverTone(server: WebMcpServer): "default" | "warning" | "success" | "info" {
+  if (server.disabled || server.transport === "unsupported") return "warning"
+  if (server.connected || server.toolCount > 0) return "success"
+  return "info"
+}
+
+export function McpConnectionsPanel() {
+  const [payload, setPayload] = useState<WebMcpManagementPayload | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [testing, setTesting] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [success, setSuccess] = useState<string | null>(null)
+  const [testResult, setTestResult] = useState<WebMcpConnectionTestResult | null>(null)
+  const [editingName, setEditingName] = useState<string | null>(null)
+  const [name, setName] = useState("")
+  const [transport, setTransport] = useState<Exclude<WebMcpTransport, "unsupported">>("stdio")
+  const [command, setCommand] = useState("")
+  const [argsText, setArgsText] = useState("")
+  const [cwd, setCwd] = useState("")
+  const [url, setUrl] = useState("")
+  const [envText, setEnvText] = useState("")
+  const [headersText, setHeadersText] = useState("")
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await authFetch("/api/mcp-connections", { cache: "no-store" })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error ?? `MCP request failed (${res.status})`)
+      setPayload(json as WebMcpManagementPayload)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void load() }, 0)
+    return () => window.clearTimeout(timer)
+  }, [load])
+
+  useEffect(() => {
+    if (!success) return
+    const timer = setTimeout(() => setSuccess(null), 3000)
+    return () => clearTimeout(timer)
+  }, [success])
+
+  function resetForm() {
+    setEditingName(null)
+    setName("")
+    setTransport("stdio")
+    setCommand("")
+    setArgsText("")
+    setCwd("")
+    setUrl("")
+    setEnvText("")
+    setHeadersText("")
+  }
+
+  function editServer(server: WebMcpServer) {
+    if (server.transport === "unsupported") return
+    setEditingName(server.name)
+    setName(server.name)
+    setTransport(server.transport)
+    setCommand(server.command ?? "")
+    setArgsText(formatArgs(server.args))
+    setCwd(server.cwd ?? "")
+    setUrl(server.url ?? "")
+    setEnvText(formatRecordLines(server.env))
+    setHeadersText(formatRecordLines(server.headers))
+  }
+
+  async function mutate(request: WebMcpMutationRequest) {
+    const res = await authFetch("/api/mcp-connections", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    })
+    const json = await res.json() as WebMcpMutationResponse
+    if (json.status === "error") throw new Error(json.error)
+    if (!res.ok) throw new Error(`MCP request failed (${res.status})`)
+    setPayload(json.data)
+    return json
+  }
+
+  async function saveServer() {
+    setSaving(true)
+    setError(null)
+    setSuccess(null)
+    try {
+      const server = transport === "stdio"
+        ? {
+          name: name.trim(),
+          transport,
+          command: command.trim(),
+          args: parseArgs(argsText),
+          env: parseRecordLines(envText),
+          cwd: cwd.trim() || undefined,
+        }
+        : {
+          name: name.trim(),
+          transport,
+          url: url.trim(),
+          headers: parseRecordLines(headersText),
+        }
+      await mutate({ action: "save", previousName: editingName ?? undefined, server })
+      setSuccess(editingName ? "MCP server updated" : "MCP server saved")
+      resetForm()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function toggleServer(server: WebMcpServer) {
+    setError(null)
+    try {
+      await mutate({ action: server.disabled ? "enable" : "disable", name: server.name })
+      setSuccess(server.disabled ? "MCP server enabled" : "MCP server disabled")
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  async function deleteServer(server: WebMcpServer) {
+    if (!window.confirm(`Delete local MCP server "${server.name}"?`)) return
+    setError(null)
+    try {
+      await mutate({ action: "delete", name: server.name })
+      setSuccess("MCP server deleted")
+      if (editingName === server.name) resetForm()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  async function testServer(server: WebMcpServer) {
+    setTesting(server.name)
+    setError(null)
+    setTestResult(null)
+    try {
+      const json = await mutate({ action: "test", name: server.name })
+      setTestResult(json.result ?? null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setTesting(null)
+    }
+  }
+
+  async function importServer(server: WebMcpImportableServer) {
+    const nextName = server.conflicts
+      ? window.prompt(`Rename imported MCP server "${server.name}"`, `${server.name}-local`)
+      : server.name
+    if (!nextName) return
+    setError(null)
+    try {
+      await mutate({ action: "import", server, name: nextName })
+      setSuccess("MCP server imported")
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  const canSave = name.trim().length > 0 && (
+    transport === "stdio" ? command.trim().length > 0 : url.trim().length > 0
+  )
+
+  return (
+    <div className="space-y-5" data-testid="settings-mcp-connections">
+      <SettingsHeader
+        title="MCP Connections"
+        icon={<Cable className="h-3.5 w-3.5" />}
+        subtitle={payload ? `${payload.servers.length} configured` : null}
+        onRefresh={() => void load()}
+        refreshing={loading}
+      />
+
+      {error && <SettingsError message={error} />}
+      {success && (
+        <div className="flex items-center gap-2 rounded-lg border border-success/15 bg-success/[0.04] px-3 py-2 text-xs text-muted-foreground">
+          <CheckCircle2 className="h-3.5 w-3.5 text-success" />
+          {success}
+        </div>
+      )}
+      {loading && !payload && <SettingsLoading label="Loading MCP connections…" />}
+
+      {payload && (
+        <>
+          <div className="flex flex-wrap gap-2">
+            <Pill label="Local config" value={payload.localConfigPath} />
+            <Pill label="Importable" value={payload.importableServers.length} variant="info" />
+            {payload.duplicates.length > 0 && <Pill label="Duplicates" value={payload.duplicates.length} variant="warning" />}
+          </div>
+
+          {payload.warnings.length > 0 && (
+            <div className="space-y-1 rounded-lg border border-warning/20 bg-warning/5 px-3 py-2 text-[11px] text-warning">
+              {payload.warnings.map((warning) => <div key={warning}>{warning}</div>)}
+            </div>
+          )}
+
+          <div className="grid gap-2">
+            {payload.servers.length === 0 && <SettingsEmpty message="No MCP servers configured" />}
+            {payload.servers.map((server) => (
+              <div key={`${server.sourcePath}:${server.name}`} className="rounded-lg border border-border/50 bg-card/50 px-3 py-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 space-y-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Server className="h-3.5 w-3.5 text-muted-foreground" />
+                      <span className="font-mono text-xs text-foreground">{server.name}</span>
+                      <Pill label={server.transport} value={server.disabled ? "disabled" : "enabled"} variant={serverTone(server)} />
+                    </div>
+                    <div className="truncate font-mono text-[10px] text-muted-foreground">{server.sourcePath}</div>
+                    {server.envWarnings.length > 0 && (
+                      <div className="text-[11px] text-warning">{server.envWarnings[0]}</div>
+                    )}
+                  </div>
+                  <div className="flex shrink-0 flex-wrap justify-end gap-1">
+                    <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => void testServer(server)} disabled={testing === server.name || server.disabled || server.transport === "unsupported"}>
+                      {testing === server.name ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <FlaskConical className="h-3.5 w-3.5" />}
+                      Test
+                    </Button>
+                    <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => void toggleServer(server)}>
+                      {server.disabled ? <Power className="h-3.5 w-3.5" /> : <PowerOff className="h-3.5 w-3.5" />}
+                      {server.disabled ? "Enable" : "Disable"}
+                    </Button>
+                    <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => editServer(server)} disabled={server.transport === "unsupported"}>
+                      Edit
+                    </Button>
+                    <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs text-destructive/80" onClick={() => void deleteServer(server)} disabled={server.sourceKind !== "project-local"}>
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {testResult && (
+            <div className={cn(
+              "rounded-lg border px-3 py-2 text-xs",
+              testResult.ok ? "border-success/20 bg-success/5 text-success" : "border-warning/20 bg-warning/5 text-warning",
+            )}>
+              {testResult.ok
+                ? `${testResult.server} responded with ${testResult.toolCount} tools`
+                : `${testResult.server} failed: ${testResult.error ?? "unknown error"}`}
+            </div>
+          )}
+
+          <div className="space-y-3 rounded-lg border border-border/50 bg-card/50 px-3 py-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-xs font-medium text-muted-foreground">{editingName ? "Edit local server" : "Add local server"}</div>
+              {editingName && (
+                <Button type="button" size="sm" variant="ghost" className="h-7 text-xs" onClick={resetForm}>Cancel</Button>
+              )}
+            </div>
+            <div className="grid gap-2 md:grid-cols-2">
+              <input value={name} onChange={(event) => setName(event.target.value)} placeholder="server-name" className="rounded-lg border border-border/50 bg-background px-3 py-2 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
+              <select value={transport} onChange={(event) => setTransport(event.target.value as Exclude<WebMcpTransport, "unsupported">)} className="rounded-lg border border-border/50 bg-background px-3 py-2 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
+                <option value="stdio">stdio</option>
+                <option value="http">http</option>
+              </select>
+              {transport === "stdio" ? (
+                <>
+                  <input value={command} onChange={(event) => setCommand(event.target.value)} placeholder="/absolute/path/to/server" className="rounded-lg border border-border/50 bg-background px-3 py-2 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
+                  <input value={cwd} onChange={(event) => setCwd(event.target.value)} placeholder="cwd (optional)" className="rounded-lg border border-border/50 bg-background px-3 py-2 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
+                  <textarea value={argsText} onChange={(event) => setArgsText(event.target.value)} placeholder="args, one per line" rows={3} className="rounded-lg border border-border/50 bg-background px-3 py-2 font-mono text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
+                  <textarea value={envText} onChange={(event) => setEnvText(event.target.value)} placeholder="ENV_KEY=value" rows={3} className="rounded-lg border border-border/50 bg-background px-3 py-2 font-mono text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
+                </>
+              ) : (
+                <>
+                  <input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://server.example/mcp" className="md:col-span-2 rounded-lg border border-border/50 bg-background px-3 py-2 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
+                  <textarea value={headersText} onChange={(event) => setHeadersText(event.target.value)} placeholder="Authorization=Bearer ${TOKEN}" rows={3} className="md:col-span-2 rounded-lg border border-border/50 bg-background px-3 py-2 font-mono text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
+                </>
+              )}
+            </div>
+            <Button type="button" size="sm" onClick={() => void saveServer()} disabled={!canSave || saving} className="gap-1.5">
+              {saving ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+              {editingName ? "Update server" : "Save server"}
+            </Button>
+          </div>
+
+          {payload.importableServers.length > 0 && (
+            <div className="space-y-2">
+              <div className="text-xs font-medium text-muted-foreground">Discovered imports</div>
+              <div className="grid gap-2">
+                {payload.importableServers.slice(0, 6).map((server) => (
+                  <div key={`${server.sourcePath}:${server.name}`} className="flex items-center justify-between gap-3 rounded-lg border border-border/50 bg-card/50 px-3 py-2">
+                    <div className="min-w-0">
+                      <div className="font-mono text-xs text-foreground">{server.name}</div>
+                      <div className="truncate text-[10px] text-muted-foreground">{server.sourceTool} · {server.sourcePath}</div>
+                    </div>
+                    <Button type="button" size="sm" variant="ghost" className="h-7 text-xs" disabled={server.transport === "unsupported"} onClick={() => void importServer(server)}>
+                      Import
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
     </div>
   )
 }
@@ -1300,7 +1659,10 @@ export function ExperimentalPanel() {
   // Sync local state from loaded prefs
   useEffect(() => {
     if (!prefs) return
-    setFlags({ rtk: prefs.experimental?.rtk === true })
+    const timer = window.setTimeout(() => {
+      setFlags({ rtk: prefs.experimental?.rtk === true })
+    }, 0)
+    return () => window.clearTimeout(timer)
   }, [prefs])
 
   async function toggle(flagKey: string, next: boolean) {

@@ -39,6 +39,8 @@ function toStrArray(v: unknown): string[] {
  * CompleteMilestoneParams, tolerating type mismatches from LLM JSON quirks.
  */
 export function sanitizeCompleteMilestoneParams(raw: Record<string, unknown>): CompleteMilestoneParams {
+  const actorName = toStr(raw.actorName);
+  const triggerReason = toStr(raw.triggerReason);
   return {
     milestoneId: toStr(raw.milestoneId),
     title: toStr(raw.title),
@@ -53,5 +55,7 @@ export function sanitizeCompleteMilestoneParams(raw: Record<string, unknown>): C
     followUps: toStr(raw.followUps),
     deviations: toStr(raw.deviations),
     verificationPassed: raw.verificationPassed === true || raw.verificationPassed === "true",
+    ...(actorName ? { actorName } : {}),
+    ...(triggerReason ? { triggerReason } : {}),
   };
 }

@@ -22,6 +22,10 @@ import { bumpTurnGeneration } from "./turn-epoch.js";
 
 let _currentResolve: ((result: UnitResult) => void) | null = null;
 let _sessionSwitchInFlight = false;
+let _pendingSwitchCancellation: { errorContext?: ErrorContext } | null = null;
+let _sessionSwitchAbortGraceUntil = 0;
+
+const DEFAULT_SESSION_SWITCH_ABORT_GRACE_MS = 2_000;
 
 // ─── Setters (needed for cross-module mutation) ─────────────────────────────
 
@@ -33,8 +37,29 @@ export function _setSessionSwitchInFlight(v: boolean): void {
   _sessionSwitchInFlight = v;
 }
 
+export function _markSessionSwitchAbortGraceWindow(durationMs = DEFAULT_SESSION_SWITCH_ABORT_GRACE_MS): void {
+  _sessionSwitchAbortGraceUntil = Math.max(
+    _sessionSwitchAbortGraceUntil,
+    Date.now() + durationMs,
+  );
+}
+
+export function _clearSessionSwitchAbortGraceWindow(): void {
+  _sessionSwitchAbortGraceUntil = 0;
+}
+
+export function isSessionSwitchAbortGraceActive(now = Date.now()): boolean {
+  return now < _sessionSwitchAbortGraceUntil;
+}
+
 export function _clearCurrentResolve(): void {
   _currentResolve = null;
+}
+
+export function _consumePendingSwitchCancellation(): { errorContext?: ErrorContext } | null {
+  const pending = _pendingSwitchCancellation;
+  _pendingSwitchCancellation = null;
+  return pending;
 }
 
 // ─── resolveAgentEnd ─────────────────────────────────────────────────────────
@@ -96,7 +121,7 @@ export function bumpAndResolveSynthetic(reason: string): void {
  * blocks to ensure the autoLoop is never stuck awaiting a promise that
  * will never resolve. Safe to call when no resolver is pending (no-op).
  */
-export function resolveAgentEndCancelled(errorContext?: ErrorContext): void {
+export function resolveAgentEndCancelled(errorContext?: ErrorContext): boolean {
   if (_currentResolve) {
     // Cancellation supersedes the in-flight turn the same way timeout
     // recovery does — bump the turn epoch so any lingering writes from the
@@ -107,8 +132,22 @@ export function resolveAgentEndCancelled(errorContext?: ErrorContext): void {
     debugLog("resolveAgentEndCancelled", { status: "resolving-cancelled" });
     const r = _currentResolve;
     _currentResolve = null;
+    _pendingSwitchCancellation = null;
     r({ status: "cancelled", ...(errorContext ? { errorContext } : {}) });
+    return true;
   }
+
+  if (_sessionSwitchInFlight) {
+    bumpTurnGeneration(
+      `cancelled-during-switch:${errorContext?.category ?? "unknown"}`,
+    );
+    _pendingSwitchCancellation = errorContext ? { errorContext } : {};
+    debugLog("resolveAgentEndCancelled", { status: "queued-during-switch" });
+    return false;
+  }
+
+  debugLog("resolveAgentEndCancelled", { status: "no-pending-resolve" });
+  return false;
 }
 
 // ─── resetPendingResolve (test helper) ───────────────────────────────────────
@@ -120,6 +159,8 @@ export function resolveAgentEndCancelled(errorContext?: ErrorContext): void {
 export function _resetPendingResolve(): void {
   _currentResolve = null;
   _sessionSwitchInFlight = false;
+  _pendingSwitchCancellation = null;
+  _sessionSwitchAbortGraceUntil = 0;
 }
 
 export function _hasPendingResolveForTest(): boolean {

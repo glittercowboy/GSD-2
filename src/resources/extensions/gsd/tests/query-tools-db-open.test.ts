@@ -6,42 +6,46 @@
  * The fix imports ensureDbOpen from dynamic-tools and calls it before
  * querying the DB.
  *
- * This structural test verifies the ensureDbOpen import and usage exist
- * in query-tools.ts.
+ * This behavior test registers the query tool and executes it against a
+ * temp workspace where the DB must be opened on demand.
  */
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
-const source = readFileSync(join(__dirname, '..', 'bootstrap', 'query-tools.ts'), 'utf-8');
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { closeDatabase, insertMilestone, openDatabase } from '../gsd-db.ts';
+import { registerQueryTools } from '../bootstrap/query-tools.ts';
 
 describe('query-tools ensureDbOpen usage (#3672)', () => {
-  test('imports ensureDbOpen from dynamic-tools', () => {
-    assert.match(source, /ensureDbOpen.*import\(|import.*ensureDbOpen/,
-      'query-tools should import ensureDbOpen');
-  });
+  test('gsd_milestone_status opens the workspace DB before querying', async () => {
+    const base = mkdtempSync(join(tmpdir(), 'gsd-query-tools-'));
+    const dbPath = join(base, '.gsd', 'gsd.db');
+    const tools: Record<string, any> = {};
+    const originalCwd = process.cwd();
+    try {
+      mkdirSync(join(base, '.gsd'), { recursive: true });
+      openDatabase(dbPath);
+      insertMilestone({ id: 'M001', title: 'Query me', status: 'active' });
+      closeDatabase();
 
-  test('calls ensureDbOpen() before DB queries', () => {
-    assert.match(source, /await ensureDbOpen\(\)/,
-      'query-tools should call await ensureDbOpen()');
-  });
+      registerQueryTools({ registerTool(tool: any) { tools[tool.name] = tool; } } as any);
+      process.chdir(base);
+      const result = await tools.gsd_milestone_status.execute(
+        'call-1',
+        { milestoneId: 'M001' },
+        undefined,
+        undefined,
+        undefined,
+      );
 
-  test('no longer imports isDbAvailable in the execute path', () => {
-    // The old code imported isDbAvailable and checked it; the fix removed that
-    // The execute function should not destructure isDbAvailable from gsd-db
-    const executeBlock = source.slice(source.indexOf('async execute('));
-    assert.doesNotMatch(executeBlock, /isDbAvailable,/,
-      'execute path should not destructure isDbAvailable (replaced by ensureDbOpen)');
-  });
-
-  test('uses dbAvailable result from ensureDbOpen', () => {
-    assert.match(source, /dbAvailable\s*=\s*await ensureDbOpen\(\)/,
-      'should store ensureDbOpen result in dbAvailable');
+      assert.notEqual(result.details?.error, 'db_unavailable');
+      assert.equal(result.details?.milestoneId ?? result.details?.milestone?.id, 'M001');
+    } finally {
+      process.chdir(originalCwd);
+      closeDatabase();
+      rmSync(base, { recursive: true, force: true });
+    }
   });
 });

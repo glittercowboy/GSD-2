@@ -1,13 +1,16 @@
+// Project/App: GSD-2
+// File Purpose: Browser slash command parity tests for built-in and GSD command routing.
 import test from "node:test"
 import assert from "node:assert/strict"
-import { readFileSync } from "node:fs"
-import { resolve } from "node:path"
 
 const { BUILTIN_SLASH_COMMANDS } = await import("../../../packages/pi-coding-agent/src/core/slash-commands.ts")
 const {
   dispatchBrowserSlashCommand,
   getBrowserSlashCommandTerminalNotice,
 } = await import("../../../web/lib/browser-slash-command-dispatch.ts")
+const {
+  GSDWorkspaceStore,
+} = await import("../../../web/lib/gsd-workspace-store.tsx")
 const {
   applyCommandSurfaceActionResult,
   createInitialCommandSurfaceState,
@@ -40,11 +43,24 @@ const EXPECTED_BUILTIN_OUTCOMES = new Map<string, "rpc" | "surface" | "reject">(
   ["thinking", "surface"],
   ["edit-mode", "reject"],
   ["terminal", "reject"],
+  ["tui", "reject"],
   ["quit", "reject"],
 ])
 
 const BUILTIN_DESCRIPTIONS = new Map(BUILTIN_SLASH_COMMANDS.map((command) => [command.name, command.description]))
-const DEFERRED_BROWSER_REJECTS = ["share", "copy", "changelog", "hotkeys", "tree", "provider", "reload", "edit-mode", "terminal", "quit"] as const
+const DEFERRED_BROWSER_REJECTS = [
+  "share",
+  "copy",
+  "changelog",
+  "hotkeys",
+  "tree",
+  "provider",
+  "reload",
+  "edit-mode",
+  "terminal",
+  "tui",
+  "quit",
+] as const
 
 async function collectRegisteredGsdCommandRoots(): Promise<string[]> {
   const commands = new Map<string, unknown>()
@@ -156,15 +172,17 @@ test("registered GSD command roots stay on the prompt/extension path", async () 
     assertPromptPassthrough(`/${root}`)
   }
 
-  // Bare /gsd passes through to bridge (equivalent to /gsd next)
+  // Bare /gsd passes through to the extension-owned Smart Entry wizard.
   const bareGsd = dispatchBrowserSlashCommand("/gsd")
   assert.equal(bareGsd.kind, "prompt", "bare /gsd should pass through to bridge")
   assert.equal(bareGsd.command.message, "/gsd", "bare /gsd should preserve exact input")
 })
 
 test("current GSD command family samples dispatch to correct outcomes after S02", async (t) => {
-  await t.test("/gsd (bare) still passes through to bridge", () => {
-    assertPromptPassthrough("/gsd")
+  await t.test("/gsd (bare) stays on Smart Entry prompt path", () => {
+    const outcome = dispatchBrowserSlashCommand("/gsd")
+    assert.equal(outcome.kind, "prompt", "bare /gsd should stay on the Smart Entry prompt path")
+    assert.equal(outcome.command.message, "/gsd", "bare /gsd should preserve exact input")
   })
 
   await t.test("/gsd status now dispatches to surface", () => {
@@ -275,10 +293,11 @@ test("every registered /gsd subcommand has an explicit browser dispatch outcome"
 })
 
 test("GSD dispatch edge cases", async (t) => {
-  await t.test("/gsd (bare, no subcommand) passes through to bridge", () => {
+  await t.test("/gsd (bare, no subcommand) passes through to Smart Entry instead of status", () => {
     const outcome = dispatchBrowserSlashCommand("/gsd")
     assert.equal(outcome.kind, "prompt")
     assert.equal(outcome.command.message, "/gsd")
+    assert.notEqual(outcome.kind, "surface", "bare /gsd must not open the status surface")
   })
 
   await t.test("/gsd help dispatches to local gsd_help action", () => {
@@ -679,18 +698,16 @@ test("surface action state keeps compaction summaries inspectable", () => {
   assert.equal(succeeded.lastCompaction?.summary, "Summary of the kept work")
 })
 
-test("command-surface session affordances use the shared store action path", () => {
-  const commandSurfacePath = resolve(import.meta.dirname, "../../../web/components/gsd/command-surface.tsx")
-  const commandSurfaceSource = readFileSync(commandSurfacePath, "utf-8")
+test("shared store session actions keep command-surface mutation state inspectable", async () => {
+  const store = new GSDWorkspaceStore("/tmp/project")
 
-  assert.match(
-    commandSurfaceSource,
-    /void switchSessionFromSurface\(selectedResumeTarget\.sessionPath\)/,
-    "command-surface resume apply button should reuse the shared session-switch store action",
-  )
-  assert.match(
-    commandSurfaceSource,
-    /void renameSessionFromSurface\(selectedNameTarget\.sessionPath, selectedNameTarget\.name\)/,
-    "command-surface rename apply button should reuse the shared session-rename store action",
-  )
+  assert.equal(typeof store.switchSessionFromSurface, "function")
+  assert.equal(typeof store.renameSessionFromSurface, "function")
+
+  await store.renameSessionFromSurface("/tmp/sessions/current.jsonl", "   ")
+
+  const state = store.getSnapshot().commandSurface
+  assert.equal(state.renameRequest.pending, false)
+  assert.equal(state.renameRequest.sessionPath, "/tmp/sessions/current.jsonl")
+  assert.equal(state.renameRequest.error, "Session name cannot be empty")
 })

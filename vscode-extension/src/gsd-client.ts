@@ -1,60 +1,24 @@
+// Project/App: GSD-2
+// File Purpose: VS Code extension RPC client for communicating with the GSD agent.
+
 import { ChildProcess, spawn } from "node:child_process";
 import * as vscode from "vscode";
+import type {
+	BashResult,
+	ModelInfo,
+	RpcSessionState,
+	RpcSlashCommand,
+	SessionStats,
+	ThinkingLevel,
+} from "@gsd-build/contracts" with { "resolution-mode": "import" };
+import { buildGsdClientSpawnPlan } from "./gsd-client-spawn.js";
 
 /**
  * Mirrors the RPC command/response protocol from the GSD agent.
- * These types are intentionally kept minimal and self-contained so the
- * extension has no dependency on the agent packages at runtime.
+ * Shared command and response payloads come from @gsd-build/contracts.
  */
-
-export type ThinkingLevel = "off" | "low" | "medium" | "high";
-
-export interface RpcSessionState {
-	model?: { provider: string; id: string; contextWindow?: number };
-	thinkingLevel: ThinkingLevel;
-	isStreaming: boolean;
-	isCompacting: boolean;
-	steeringMode: "all" | "one-at-a-time";
-	followUpMode: "all" | "one-at-a-time";
-	sessionFile?: string;
-	sessionId: string;
-	sessionName?: string;
-	autoCompactionEnabled: boolean;
-	messageCount: number;
-	pendingMessageCount: number;
-}
-
-export interface ModelInfo {
-	provider: string;
-	id: string;
-	contextWindow?: number;
-	reasoning?: boolean;
-}
-
-export interface SessionStats {
-	inputTokens?: number;
-	outputTokens?: number;
-	cacheReadTokens?: number;
-	cacheWriteTokens?: number;
-	totalCost?: number;
-	messageCount?: number;
-	turnCount?: number;
-	duration?: number;
-}
-
-export interface BashResult {
-	stdout: string;
-	stderr: string;
-	exitCode: number | null;
-}
-
-export interface SlashCommand {
-	name: string;
-	description?: string;
-	source: "extension" | "prompt" | "skill";
-	location?: "user" | "project" | "path";
-	path?: string;
-}
+export type { BashResult, ModelInfo, SessionStats, ThinkingLevel };
+export type SlashCommand = RpcSlashCommand;
 
 export interface RpcResponse {
 	id?: string;
@@ -123,12 +87,8 @@ export class GsdClient implements vscode.Disposable {
 			return;
 		}
 
-		const proc = spawn(this.binaryPath, ["--mode", "rpc"], {
-			cwd: this.cwd,
-			stdio: ["pipe", "pipe", "pipe"],
-			env: { ...process.env },
-			shell: process.platform === "win32",
-		});
+		const spawnPlan = buildGsdClientSpawnPlan(this.binaryPath, this.cwd);
+		const proc = spawn(spawnPlan.command, spawnPlan.args, spawnPlan.options);
 		this.process = proc;
 
 		this.buffer = "";

@@ -306,7 +306,7 @@ function importRequirements(gsdDir: string): number {
 // ─── Hierarchy Artifact Walker ─────────────────────────────────────────────
 
 /** Artifact suffixes to look for at each hierarchy level */
-const MILESTONE_SUFFIXES = ['ROADMAP', 'CONTEXT', 'RESEARCH', 'ASSESSMENT'];
+const MILESTONE_SUFFIXES = ['ROADMAP', 'CONTEXT', 'RESEARCH', 'ASSESSMENT', 'SUMMARY', 'VALIDATION'];
 const SLICE_SUFFIXES = ['PLAN', 'SUMMARY', 'RESEARCH', 'CONTEXT', 'ASSESSMENT', 'UAT'];
 const TASK_SUFFIXES = ['PLAN', 'SUMMARY', 'CONTINUE', 'CONTEXT', 'RESEARCH'];
 

@@ -1,56 +1,58 @@
 /**
- * /gsd show-config command — structural tests.
- *
- * Verifies the config overlay class and command handler exist
- * with correct structure.
+ * /gsd show-config command behavior tests.
  */
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
+import { GSDConfigOverlay, formatConfigText } from "../config-overlay.ts";
+import { handleCoreCommand } from "../commands/handlers/core.ts";
 
-const overlaySrc = readFileSync(join(__dirname, "..", "config-overlay.ts"), "utf-8");
-const coreSrc = readFileSync(join(__dirname, "..", "commands", "handlers", "core.ts"), "utf-8");
+const theme = {
+  bold: (s: string) => s,
+  fg: (_name: string, s: string) => s,
+};
 
-// ─── Config overlay ───────────────────────────────────────────────────────
-
-test("GSDConfigOverlay class is exported", () => {
-  assert.ok(
-    overlaySrc.includes("export class GSDConfigOverlay"),
-    "GSDConfigOverlay should be exported",
+test("GSDConfigOverlay renders and responds to input", () => {
+  let renderRequests = 0;
+  let closed = false;
+  const overlay = new GSDConfigOverlay(
+    { requestRender: () => { renderRequests++; } },
+    theme as any,
+    () => { closed = true; },
   );
+
+  const lines = overlay.render(60);
+  assert.ok(lines.some((line) => line.includes("GSD Configuration")));
+
+  overlay.handleInput("j");
+  assert.equal(renderRequests, 1);
+
+  overlay.handleInput("q");
+  assert.equal(closed, true);
 });
 
-test("GSDConfigOverlay implements Component interface methods", () => {
-  assert.ok(overlaySrc.includes("render("), "should have render method");
-  assert.ok(overlaySrc.includes("handleInput("), "should have handleInput method");
-  assert.ok(overlaySrc.includes("invalidate("), "should have invalidate method");
-  assert.ok(overlaySrc.includes("dispose("), "should have dispose method");
+test("formatConfigText provides a text fallback", () => {
+  const text = formatConfigText();
+  assert.match(text, /GSD Configuration/);
+  assert.match(text, /SOURCES/);
 });
 
-test("formatConfigText function is exported", () => {
-  assert.ok(
-    overlaySrc.includes("export function formatConfigText"),
-    "formatConfigText should be exported for non-overlay fallback",
-  );
-});
+test("core handler routes show-config to overlay with text fallback", async () => {
+  const notifications: Array<{ message: string; level: string }> = [];
+  const ctx = {
+    ui: {
+      custom: async () => undefined,
+      notify: (message: string, level: string) => {
+        notifications.push({ message, level });
+      },
+    },
+  };
 
-// ─── Command handler ──────────────────────────────────────────────────────
+  const handled = await handleCoreCommand("show-config", ctx as any);
 
-test("core handler routes show-config command", () => {
-  assert.ok(
-    coreSrc.includes('"show-config"'),
-    "core handler should match show-config command",
-  );
-});
-
-test("show-config has text fallback via formatConfigText", () => {
-  assert.ok(
-    coreSrc.includes("formatConfigText"),
-    "show-config should use formatConfigText as fallback",
-  );
+  assert.equal(handled, true);
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0]?.level, "info");
+  assert.match(notifications[0]?.message ?? "", /GSD Configuration/);
 });

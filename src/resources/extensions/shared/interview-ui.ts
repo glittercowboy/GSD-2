@@ -1,3 +1,4 @@
+// GSD2 — Shared interview round UI widget
 /**
  * Shared interview round UI widget.
  *
@@ -224,12 +225,24 @@ export async function showInterviewRound(
 		let showingExitConfirm = false;
 		let exitCursor = 0; // 0 = keep going (default), 1 = end interview
 		let cachedLines: string[] | undefined;
+		let completed = false;
+		let removeAbortListener: (() => void) | undefined;
+
+		function finish(result: RoundResult) {
+			if (completed) return;
+			completed = true;
+			removeAbortListener?.();
+			done(result);
+		}
 
 		// External cancellation (e.g. remote channel won the race)
 		if (opts.signal) {
-			const onAbort = () => done({ endInterview: false, answers: {} });
+			const onAbort = () => finish({ endInterview: false, answers: {} });
 			if (opts.signal.aborted) { onAbort(); }
-			else { opts.signal.addEventListener("abort", onAbort, { once: true }); }
+			else {
+				opts.signal.addEventListener("abort", onAbort, { once: true });
+				removeAbortListener = () => opts.signal?.removeEventListener("abort", onAbort);
+			}
 		}
 
 		// Editor is created once; editorTheme comes from the design system
@@ -298,9 +311,10 @@ export async function showInterviewRound(
 					if (selected.length > 0 || notes) answers[q.id] = { selected, notes };
 				} else {
 					if (st.committedIndex === null && !notes) continue;
+					const effectiveCommittedIndex = st.committedIndex ?? st.cursorIndex;
 					let selected = OTHER_OPTION_LABEL;
-					if (st.committedIndex !== null) {
-						const idx = st.committedIndex;
+					if (effectiveCommittedIndex !== null) {
+						const idx = effectiveCommittedIndex;
 						if (idx < q.options.length) selected = q.options[idx].label;
 						else if (idx === noneOrDoneIdx(i)) selected = OTHER_OPTION_LABEL;
 					}
@@ -312,7 +326,7 @@ export async function showInterviewRound(
 
 		function submit() {
 			saveEditorToState();
-			done(buildResult());
+			finish(buildResult());
 		}
 
 		function goNextOrSubmit() {
@@ -355,10 +369,10 @@ export async function showInterviewRound(
 				if (matchesKey(data, Key.up) || matchesKey(data, Key.left)) { exitCursor = 0; refresh(); return; }
 				if (matchesKey(data, Key.down) || matchesKey(data, Key.right)) { exitCursor = 1; refresh(); return; }
 				if (data === "1") { showingExitConfirm = false; refresh(); return; }
-				if (data === "2") { done({ endInterview: false, answers: {} }); return; }
+				if (data === "2") { finish({ endInterview: false, answers: {} }); return; }
 				if (matchesKey(data, Key.enter) || matchesKey(data, Key.space)) {
 					if (exitCursor === 0) { showingExitConfirm = false; refresh(); }
-					else { done({ endInterview: false, answers: {} }); }
+					else { finish({ endInterview: false, answers: {} }); }
 					return;
 				}
 				if (matchesKey(data, Key.escape)) { showingExitConfirm = false; refresh(); return; }
@@ -471,9 +485,10 @@ export async function showInterviewRound(
 					const selected = Array.from(st.checkedIndices).sort((a, b) => a - b).map((idx) => q.options[idx].label);
 					for (const label of selected) push(ui.answer(`    ${INDENT.cursor}${label}`));
 				} else {
+					const effectiveCommittedIndex = st.committedIndex ?? st.cursorIndex;
 					let label = OTHER_OPTION_LABEL;
-					if (st.committedIndex !== null && st.committedIndex < q.options.length) {
-						label = q.options[st.committedIndex].label;
+					if (effectiveCommittedIndex < q.options.length) {
+						label = q.options[effectiveCommittedIndex].label;
 					}
 					push(ui.answer(`    ${INDENT.cursor}${label}`));
 				}

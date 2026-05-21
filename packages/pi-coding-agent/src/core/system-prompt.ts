@@ -59,13 +59,12 @@ export interface BuildSystemPromptOptions {
 	 * Append a `Current date and time: <toLocaleString>` line to the system
 	 * prompt. Default: `false`.
 	 *
-	 * Anthropic prompt caching matches on byte-for-byte prefix equality.
-	 * Embedding a per-call timestamp in the system prompt invalidates the
-	 * cache on every request, forcing a full re-write that costs *more*
-	 * than an uncached call (cache-write premium). Most agentic flows do
-	 * not need wall-clock awareness in the system prompt — opt in only
-	 * when the consumer genuinely needs it (e.g. a clock-sensitive agent),
-	 * and inject it via a non-cached channel (user message) when possible.
+	 * Provider prompt caches generally depend on stable prompt prefixes.
+	 * Embedding a per-call timestamp in the system prompt invalidates that
+	 * stability on every request, often forcing full prompt reprocessing.
+	 * Most agentic flows do not need wall-clock awareness in the system
+	 * prompt — opt in only when the consumer genuinely needs it, and inject
+	 * it via a non-cached channel (user message) when possible.
 	 */
 	includeDateTime?: boolean;
 }
@@ -86,9 +85,8 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 	} = options;
 	const resolvedCwd = toPosixPath(cwd ?? process.cwd());
 
-	// Per-call timestamps invalidate Anthropic prompt caching (the cache
-	// matches on byte-for-byte prefix equality). Compute lazily and only
-	// when explicitly opted in via `includeDateTime`.
+	// Per-call timestamps invalidate provider prompt cache stability. Compute
+	// lazily and only when explicitly opted in via `includeDateTime`.
 	const dateTimeLine = includeDateTime
 		? `\nCurrent date and time: ${new Date().toLocaleString("en-US", {
 			weekday: "long",
@@ -205,9 +203,9 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 		addGuideline("Prefer grep/find/ls tools over bash for file exploration (faster, respects .gitignore)");
 	}
 
-	// Read before edit guideline
-	if (hasRead && hasEdit) {
-		addGuideline("Use read to examine files before editing. You must use this tool instead of cat or sed.");
+	// Read before file mutation guideline
+	if (hasRead && (hasEdit || hasWrite)) {
+		addGuideline("Use read to examine relevant existing files before editing or overwriting. Before write creates or replaces a file, verify the target path; if it exists, read it first. Use read instead of cat or sed for file inspection.");
 	}
 
 	// Edit guideline
@@ -217,7 +215,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 
 	// Write guideline
 	if (hasWrite) {
-		addGuideline("Use write only for new files or complete rewrites");
+		addGuideline("Use write only for new files or complete rewrites after verifying the target path");
 	}
 
 	// LSP guideline

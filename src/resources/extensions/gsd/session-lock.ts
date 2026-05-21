@@ -19,8 +19,9 @@
 import { createRequire } from "node:module";
 import { existsSync, readFileSync, readdirSync, mkdirSync, unlinkSync, rmSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { gsdRoot } from "./paths.js";
+import { gsdRoot, normalizeRealPath } from "./paths.js";
 import { atomicWriteSync } from "./atomic-write.js";
+import { markWorkerStoppingByPid } from "./db/auto-workers.js";
 
 const _require = createRequire(import.meta.url);
 
@@ -281,6 +282,13 @@ export function acquireSessionLock(basePath: string): SessionLockResult {
   // Clean up numbered lock file variants from cloud sync conflicts (#1315)
   cleanupStrayLockFiles(basePath);
 
+  // If lock metadata points to a dead PID, mark that worker row stopping so
+  // crash diagnostics do not keep surfacing it as active.
+  const existingPreflight = readExistingLockData(lp);
+  if (existingPreflight?.pid && !isPidAlive(existingPreflight.pid)) {
+    markWorkerStoppingByPid(normalizeRealPath(basePath), existingPreflight.pid);
+  }
+
   // Write our lock data first (the content is informational; the OS lock is the real guard)
   const lockData: SessionLockData = {
     pid: process.pid,
@@ -308,7 +316,9 @@ export function acquireSessionLock(basePath: string): SessionLockResult {
   const lockDir = lockTarget + ".lock";
   if (existsSync(lockDir)) {
     const existingData = readExistingLockData(lp);
-    const isOrphan = !existingData || (existingData.pid && !isPidAlive(existingData.pid));
+    const deadPid = existingData?.pid && !isPidAlive(existingData.pid) ? existingData.pid : null;
+    if (deadPid) markWorkerStoppingByPid(normalizeRealPath(basePath), deadPid);
+    const isOrphan = !existingData || !!deadPid;
     if (isOrphan) {
       try { rmSync(lockDir, { recursive: true, force: true }); } catch { /* best-effort */ }
       try { if (existsSync(lp)) unlinkSync(lp); } catch { /* best-effort */ }
@@ -344,6 +354,9 @@ export function acquireSessionLock(basePath: string): SessionLockResult {
     // Check: if auto.lock is gone and no process is alive, the lock dir is stale.
     const existingData = readExistingLockData(lp);
     const existingPid = existingData?.pid;
+    if (existingPid && !isPidAlive(existingPid)) {
+      markWorkerStoppingByPid(normalizeRealPath(basePath), existingPid);
+    }
 
     // If no lock file or no alive process, try to clean up and re-acquire (#1245)
     if (!existingData || (existingPid && !isPidAlive(existingPid))) {
@@ -595,6 +608,47 @@ export function readSessionLockData(basePath: string): SessionLockData | null {
  */
 export function isSessionLockProcessAlive(data: SessionLockData): boolean {
   return isPidAlive(data.pid);
+}
+
+/**
+ * ADR-017 raw primitive: remove orphaned lock artifacts (lock dir + lock file)
+ * when the recorded PID is dead or no metadata is present. Mirrors the
+ * pre-flight cleanup logic in acquireSessionLock so the stale-worker drift
+ * handler can clear the orphan proactively without going through the full
+ * acquire path. No-op when the lock is held by an alive process.
+ *
+ * Returns true when artifacts were removed (drift was present).
+ */
+export function removeStaleSessionLock(basePath: string): boolean {
+  const lp = lockPath(basePath);
+  const gsdDir = gsdRoot(basePath);
+  const lockTarget = effectiveLockTarget(gsdDir);
+  const lockDir = lockTarget + ".lock";
+
+  const existingData = readExistingLockData(lp);
+  const isOrphan =
+    !existingData ||
+    (typeof existingData.pid === "number" && !isPidAlive(existingData.pid));
+  if (!isOrphan) return false;
+
+  let removed = false;
+  if (existsSync(lockDir)) {
+    try {
+      rmSync(lockDir, { recursive: true, force: true });
+      removed = true;
+    } catch {
+      /* best-effort */
+    }
+  }
+  if (existsSync(lp)) {
+    try {
+      unlinkSync(lp);
+      removed = true;
+    } catch {
+      /* best-effort */
+    }
+  }
+  return removed;
 }
 
 /**

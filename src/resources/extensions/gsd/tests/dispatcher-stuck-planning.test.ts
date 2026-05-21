@@ -1,38 +1,55 @@
 /**
- * dispatcher-stuck-planning.test.ts — #3656
+ * dispatcher-stuck-planning.test.ts
  *
- * Verify that state.ts contains the disk-to-DB task reconciliation logic
- * that prevents the dispatcher from getting stuck in an infinite planning
- * loop when the planner writes a PLAN.md but never calls the persistence
- * tool, leaving the DB with zero or partial task rows.
+ * Verify that state.ts no longer imports disk PLAN.md tasks into the runtime
+ * DB. PLAN.md is a projection; task rows must be created through DB-backed
+ * planning/import APIs.
  */
 
-import { describe, test } from "node:test";
+import { afterEach, beforeEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const sourceFile = join(__dirname, "..", "state.ts");
+import { closeDatabase, insertMilestone, insertSlice, openDatabase } from "../gsd-db.ts";
+import { deriveStateFromDb, invalidateStateCache } from "../state.ts";
 
-describe("dispatcher stuck-planning reconciliation (#3656)", () => {
-  const source = readFileSync(sourceFile, "utf-8");
+describe("dispatcher DB-authoritative planning boundary", () => {
+  let base: string;
 
-  test("imports insertTask from gsd-db", () => {
-    assert.match(source, /import\s*\{[^}]*insertTask[^}]*\}\s*from/);
+  beforeEach(() => {
+    base = mkdtempSync(join(tmpdir(), "gsd-dispatcher-planning-"));
+    mkdirSync(join(base, ".gsd", "milestones", "M001", "S01"), { recursive: true });
+    writeFileSync(join(base, ".gsd", "milestones", "M001", "CONTEXT.md"), "# M001\n");
+    writeFileSync(join(base, ".gsd", "milestones", "M001", "ROADMAP.md"), [
+      "## Slices",
+      "- [ ] **S01: Build** `risk:low` `depends:[]`",
+    ].join("\n"));
+    writeFileSync(join(base, ".gsd", "milestones", "M001", "S01", "PLAN.md"), [
+      "## Tasks",
+      "- [ ] **T01: Projection-only task**",
+    ].join("\n"));
+    openDatabase(join(base, ".gsd", "gsd.db"));
   });
 
-  test("contains plan-file task reconciliation block", () => {
-    assert.match(source, /if\s*\(\s*planFile\s*\)/);
-    assert.match(source, /dbTaskIds\.has\(t\.id\)/);
+  afterEach(() => {
+    closeDatabase();
+    invalidateStateCache();
+    rmSync(base, { recursive: true, force: true });
   });
 
-  test("calls insertTask for each disk plan task", () => {
-    assert.match(source, /insertTask\(\{/);
-  });
+  test("PLAN.md projection tasks are not imported into runtime DB state", async () => {
+    insertMilestone({ id: "M001", title: "Milestone 1", status: "active", depends_on: [] });
+    insertSlice({ id: "S01", milestoneId: "M001", title: "Build", status: "active", depends: [] });
 
-  test("references issue #3600 in reconciliation comment", () => {
-    assert.match(source, /#3600/);
+    const state = await deriveStateFromDb(base);
+
+    assert.equal(state.phase, "planning");
+    assert.equal(state.activeTask, null);
+    assert.match(
+      state.nextAction ?? "",
+      /Slice S01 has no DB tasks\. Plan slice tasks before execution\./,
+    );
   });
 });

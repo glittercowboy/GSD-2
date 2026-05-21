@@ -1,3 +1,6 @@
+// Project/App: GSD-2
+// File Purpose: Pre-execution validation checks for GSD task plans.
+
 /**
  * Pre-Execution Checks — Validate task plans before execution begins.
  *
@@ -14,12 +17,13 @@
  *   - No AST parsers — interface parsing is heuristic (regex on code blocks)
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { homedir } from "node:os";
-import { resolve } from "node:path";
-import type { TaskRow } from "./gsd-db.ts";
+import { isAbsolute, relative, resolve } from "node:path";
+import type { TaskRow } from "./db-task-slice-rows.js";
 import type { PreExecutionCheckJSON } from "./verification-evidence.ts";
+import { validateVerificationCommand } from "./verification-gate.js";
 
 const NPM_COMMAND = process.platform === "win32" ? "npm.cmd" : "npm";
 
@@ -32,6 +36,83 @@ export interface PreExecutionResult {
   checks: PreExecutionCheckJSON[];
   /** Total duration in milliseconds */
   durationMs: number;
+}
+
+export interface PreExecutionCheckContext {
+  additionalRoots?: string[];
+  canonicalProjectRoot?: string;
+}
+
+function inputExistsOnDisk(
+  normalizedFile: string,
+  basePath: string,
+  context?: PreExecutionCheckContext,
+): boolean {
+  if (existsSync(resolve(basePath, normalizedFile))) return true;
+
+  // Worktree mode: a referenced file may live at the canonical project root
+  // rather than inside the isolated worktree checkout — either project
+  // metadata (.gsd/...) or source from already-merged work that has not yet
+  // reached this worktree. Accept either as satisfying the input.
+  if (context?.canonicalProjectRoot) {
+    if (existsSync(resolve(context.canonicalProjectRoot, normalizedFile))) return true;
+  }
+
+  if ((context?.additionalRoots ?? []).some((root) => existsSync(resolve(root, normalizedFile)))) {
+    return true;
+  }
+
+  // Monorepo fallback: when plans emit paths relative to a sub-project
+  // root (e.g. src/...) while basePath points at the workspace root, accept
+  // a unique immediate-subdirectory match (e.g. frontend/src/...).
+  if (normalizedFile.startsWith("/") || normalizedFile.startsWith("../")) {
+    return false;
+  }
+
+  let matches = 0;
+  try {
+    for (const entry of readdirSync(basePath, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      if (entry.name === ".git" || entry.name === ".gsd" || entry.name === "node_modules") continue;
+      if (existsSync(resolve(basePath, entry.name, normalizedFile))) {
+        matches += 1;
+        if (matches > 1) return false;
+      }
+    }
+  } catch {
+    return false;
+  }
+
+  return matches === 1;
+}
+
+export function checkVerificationCommands(tasks: TaskRow[]): PreExecutionCheckJSON[] {
+  const results: PreExecutionCheckJSON[] = [];
+
+  for (const task of tasks) {
+    const verify = task.verify.trim();
+    if (!verify) continue;
+
+    const commands = verify
+      .split("&&")
+      .map((command) => command.trim())
+      .filter(Boolean);
+
+    for (const command of commands) {
+      const validation = validateVerificationCommand(command);
+      if (!validation.ok) {
+        results.push({
+          category: "tool",
+          target: `${task.id} Verify`,
+          passed: false,
+          message: `Unsafe or non-runnable Verify command: ${command} (${validation.reason})`,
+          blocking: true,
+        });
+      }
+    }
+  }
+
+  return results;
 }
 
 // ─── Package Existence Check ─────────────────────────────────────────────────
@@ -53,8 +134,9 @@ export function extractPackageReferences(description: string): string[] {
   ]);
 
   // npm install <pkg> patterns (handles npm i, npm add, yarn add, pnpm add)
-  // Use a global pattern to find all install commands, then parse following tokens
-  const installCmdPattern = /(?:npm\s+(?:install|i|add)|yarn\s+add|pnpm\s+add)\s+/g;
+  // Anchor to start-of-line command shape so prose mentions like
+  // "npm install hits worktree symlink breakage" are not parsed as packages.
+  const installCmdPattern = /(^|\n)\s*(?:[$>]\s*)?(?:npm\s+(?:install|i|add)|yarn\s+add|pnpm\s+add)\s+/g;
   let cmdMatch: RegExpExecArray | null;
   
   while ((cmdMatch = installCmdPattern.exec(description)) !== null) {
@@ -102,7 +184,7 @@ export function extractPackageReferences(description: string): string[] {
   while ((importMatch = importPattern.exec(description)) !== null) {
     // Skip relative imports and node builtins
     const pkg = importMatch[1];
-    if (!pkg.startsWith(".") && !pkg.startsWith("node:")) {
+    if (!pkg.startsWith(".") && !pkg.startsWith("node:") && !pkg.startsWith("@/")) {
       packages.add(normalizePackageName(pkg));
     }
   }
@@ -325,7 +407,12 @@ function extractPathFromAnnotation(raw: string): string {
 
   const backtickMatch = trimmed.match(/^(`+)([^`]+)\1(?:(?:\s+[—–-]\s+.+)|(?:\s+\([^()]+\)))?$/);
   if (backtickMatch) {
-    return backtickMatch[2].trim();
+    const inner = backtickMatch[2].trim();
+    const innerParenMatch = inner.match(/^(.+?)\s+\([^()]+\)$/);
+    if (innerParenMatch) return innerParenMatch[1].trim();
+    const innerAnnotatedMatch = inner.match(/^(.+?)\s+[—–-]\s+.+$/);
+    if (innerAnnotatedMatch) return innerAnnotatedMatch[1].trim();
+    return inner;
   }
 
   // Strip leading/trailing double or single quotes wrapping the whole value.
@@ -338,7 +425,7 @@ function extractPathFromAnnotation(raw: string): string {
     return quoteMatch[2].trim();
   }
 
-  const annotatedMatch = trimmed.match(/^(.+?)\s+[—–-]\s+.+$/);
+  const annotatedMatch = trimmed.match(/^(.+?)(?:\s+[—–-]\s+.+|\s+\([^()]+\))$/);
   if (annotatedMatch) {
     const prefix = annotatedMatch[1].trim();
     const prefixBacktickMatch = prefix.match(/`([^`]+)`/);
@@ -377,6 +464,8 @@ function shouldValidateInputAsPath(raw: string): boolean {
   const trimmed = raw.trim();
   if (!trimmed) return false;
 
+  if (isRuntimeOnlyInput(trimmed)) return false;
+
   const candidate = extractPathFromAnnotation(trimmed);
   if (!candidate) return false;
 
@@ -402,8 +491,20 @@ function shouldValidateInputAsPath(raw: string): boolean {
   );
 }
 
+function isRuntimeOnlyInput(raw: string): boolean {
+  return /\(\s*runtime\s*\)/i.test(raw);
+}
+
 function containsGlobPattern(candidate: string): boolean {
   return ["*", "?", "[", "]", "{", "}"].some((char) => candidate.includes(char));
+}
+
+function toComparisonPath(filePath: string, basePath: string): string {
+  const normalized = normalizeFilePath(filePath);
+  if (!isAbsolute(normalized)) return normalized;
+  const normalizedBasePath = normalizeFilePath(basePath);
+  const rel = normalizeFilePath(relative(normalizedBasePath, normalized));
+  return rel && !rel.startsWith("..") && rel !== "." ? rel : normalized;
 }
 
 /**
@@ -441,14 +542,27 @@ function getExpectedOutputsUpTo(tasks: TaskRow[], taskIndex: number): Set<string
  */
 export function checkFilePathConsistency(
   tasks: TaskRow[],
-  basePath: string
+  basePath: string,
+  context?: PreExecutionCheckContext,
 ): PreExecutionCheckJSON[] {
   const results: PreExecutionCheckJSON[] = [];
 
+  // Build a set of all files created by any task at any position (normalized).
+  // Used to suppress consistency errors for files that will be caught with a
+  // more precise message by checkTaskOrdering (sequence violation).
+  const allTaskOutputs = new Set<string>();
+  for (const t of tasks) {
+    for (const f of t.expected_output) {
+      allTaskOutputs.add(toComparisonPath(f, basePath));
+    }
+  }
+
   for (let i = 0; i < tasks.length; i++) {
     const task = tasks[i];
-    const priorOutputs = getExpectedOutputsUpTo(tasks, i);
-    const ownOutputs = new Set<string>(task.expected_output.map(normalizeFilePath));
+    const priorOutputs = new Set<string>(
+      Array.from(getExpectedOutputsUpTo(tasks, i), (filePath) => toComparisonPath(filePath, basePath)),
+    );
+    const ownOutputs = new Set<string>(task.expected_output.map((filePath) => toComparisonPath(filePath, basePath)));
     const filesToCheck = [...task.inputs];
 
     for (const file of filesToCheck) {
@@ -457,12 +571,11 @@ export function checkFilePathConsistency(
       if (!shouldValidateInputAsPath(file)) continue;
 
       // Normalize path for consistent comparison
-      const normalizedFile = normalizeFilePath(file);
+      const normalizedFile = toComparisonPath(file, basePath);
       if (containsGlobPattern(normalizedFile)) continue;
 
       // Check if file exists on disk
-      const absolutePath = resolve(basePath, normalizedFile);
-      const existsOnDisk = existsSync(absolutePath);
+      const existsOnDisk = inputExistsOnDisk(normalizedFile, basePath, context);
 
       // Check if file is in prior expected outputs (priorOutputs already normalized)
       const inPriorOutputs = priorOutputs.has(normalizedFile);
@@ -478,6 +591,12 @@ export function checkFilePathConsistency(
       }
 
       if (!existsOnDisk && !inPriorOutputs && !inOwnOutputs && !directorySatisfied) {
+        // If a later task claims to create this file, the ordering check will
+        // fire a more precise "sequence violation" error for the same file.
+        // Suppress the consistency error here to avoid duplicate noise.
+        if (allTaskOutputs.has(normalizedFile) && !ownOutputs.has(normalizedFile)) {
+          continue;
+        }
         results.push({
           category: "file",
           target: file,
@@ -502,7 +621,8 @@ export function checkFilePathConsistency(
  */
 export function checkTaskOrdering(
   tasks: TaskRow[],
-  basePath: string
+  basePath: string,
+  context?: PreExecutionCheckContext,
 ): PreExecutionCheckJSON[] {
   const results: PreExecutionCheckJSON[] = [];
 
@@ -511,7 +631,7 @@ export function checkTaskOrdering(
   for (let i = 0; i < tasks.length; i++) {
     const task = tasks[i];
     for (const file of task.expected_output) {
-      const normalizedFile = normalizeFilePath(file);
+      const normalizedFile = toComparisonPath(file, basePath);
       const existing = fileCreators.get(normalizedFile);
       if (!existing || (!existing.completed && task.status === "completed")) {
         fileCreators.set(normalizedFile, {
@@ -532,17 +652,17 @@ export function checkTaskOrdering(
     const filesToCheck = [...task.inputs];
 
     for (const file of filesToCheck) {
+      if (isRuntimeOnlyInput(file)) continue;
       if (!shouldValidateInputAsPath(file)) continue;
 
-      const normalizedFile = normalizeFilePath(file);
+      const normalizedFile = toComparisonPath(file, basePath);
       if (containsGlobPattern(normalizedFile)) continue;
       // A directory reference like `artifacts/M009-S03/` is never a concrete
       // read-before-create dependency: the fileCreators map is keyed by leaf
       // files, and a same-task output under the directory satisfies it.
       if (isDirectoryReference(file)) continue;
       const creator = fileCreators.get(normalizedFile);
-      const absolutePath = resolve(basePath, normalizedFile);
-      const existsOnDisk = existsSync(absolutePath);
+      const existsOnDisk = inputExistsOnDisk(normalizedFile, basePath, context);
       // Skip if the creating task has already completed — its output is available
       // regardless of disk state (e.g. file was a temp artifact cleaned up after
       // the task ran, or a replan introduced a new earlier-sequence task that
@@ -722,17 +842,19 @@ export function checkInterfaceContracts(
  */
 export async function runPreExecutionChecks(
   tasks: TaskRow[],
-  basePath: string
+  basePath: string,
+  context?: PreExecutionCheckContext,
 ): Promise<PreExecutionResult> {
   const startTime = Date.now();
   const allChecks: PreExecutionCheckJSON[] = [];
 
   // Run sync checks first
-  const fileChecks = checkFilePathConsistency(tasks, basePath);
-  const orderingChecks = checkTaskOrdering(tasks, basePath);
+  const fileChecks = checkFilePathConsistency(tasks, basePath, context);
+  const orderingChecks = checkTaskOrdering(tasks, basePath, context);
   const contractChecks = checkInterfaceContracts(tasks, basePath);
+  const verificationChecks = checkVerificationCommands(tasks);
 
-  allChecks.push(...fileChecks, ...orderingChecks, ...contractChecks);
+  allChecks.push(...fileChecks, ...orderingChecks, ...contractChecks, ...verificationChecks);
 
   // Run async package checks
   const packageChecks = await checkPackageExistence(tasks, basePath);

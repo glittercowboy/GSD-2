@@ -1,6 +1,17 @@
 import * as vscode from "vscode";
 import * as fs from "node:fs";
+import * as path from "node:path";
 import type { GsdClient, AgentEvent } from "./gsd-client.js";
+import {
+	captureCurrentSnapshots,
+	captureOriginalContent,
+	describeAction,
+	getToolInput,
+	getToolUseId,
+	isFileMutationTool,
+	normalizeToolName,
+	resolveToolPath,
+} from "./change-tracker-core.js";
 
 export interface FileSnapshot {
 	uri: vscode.Uri;
@@ -12,8 +23,8 @@ export interface Checkpoint {
 	id: number;
 	label: string;
 	timestamp: number;
-	/** Map of file path → original content at checkpoint creation time */
-	snapshots: Map<string, string>;
+	/** Map of file path -> content at checkpoint creation time; null means the file did not exist. */
+	snapshots: Map<string, string | null>;
 }
 
 /**
@@ -23,7 +34,7 @@ export interface Checkpoint {
  */
 export class GsdChangeTracker implements vscode.Disposable {
 	/** file path → original content (before first agent modification this session) */
-	private originals = new Map<string, string>();
+	private originals = new Map<string, string | null>();
 	/** Set of file paths modified in the current agent turn */
 	private currentTurnFiles = new Set<string>();
 	/** Ordered list of checkpoints */
@@ -43,7 +54,10 @@ export class GsdChangeTracker implements vscode.Disposable {
 
 	private disposables: vscode.Disposable[] = [];
 
-	constructor(private readonly client: GsdClient) {
+	constructor(
+		private readonly client: GsdClient,
+		private readonly workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd(),
+	) {
 		this.disposables.push(this._onDidChange, this._onCheckpointChange);
 
 		this.disposables.push(
@@ -63,7 +77,8 @@ export class GsdChangeTracker implements vscode.Disposable {
 
 	/** Get the original content of a file (before agent first modified it) */
 	getOriginal(filePath: string): string | undefined {
-		return this.originals.get(filePath);
+		const original = this.originals.get(filePath);
+		return original === undefined ? undefined : original ?? "";
 	}
 
 	/** Whether the tracker has any modifications */
@@ -85,7 +100,11 @@ export class GsdChangeTracker implements vscode.Disposable {
 		if (original === undefined) return false;
 
 		try {
-			await fs.promises.writeFile(filePath, original, "utf8");
+			if (original === null) {
+				await fs.promises.rm(filePath, { force: true });
+			} else {
+				await fs.promises.writeFile(filePath, original, "utf8");
+			}
 			this.originals.delete(filePath);
 			this._onDidChange.fire([filePath]);
 			return true;
@@ -140,7 +159,12 @@ export class GsdChangeTracker implements vscode.Disposable {
 
 		for (const [filePath, content] of checkpoint.snapshots) {
 			try {
-				await fs.promises.writeFile(filePath, content, "utf8");
+				if (content === null) {
+					await fs.promises.rm(filePath, { force: true });
+				} else {
+					await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+					await fs.promises.writeFile(filePath, content, "utf8");
+				}
 				count++;
 			} catch {
 				// skip files that can't be restored
@@ -188,8 +212,9 @@ export class GsdChangeTracker implements vscode.Disposable {
 
 			case "tool_execution_start": {
 				const toolName = String(evt.toolName ?? "");
-				const toolInput = (evt.toolInput ?? {}) as Record<string, unknown>;
-				const toolUseId = String(evt.toolUseId ?? "");
+				const normalizedToolName = normalizeToolName(toolName);
+				const toolInput = getToolInput(evt);
+				const toolUseId = getToolUseId(evt);
 
 				// Update checkpoint label with first action description
 				if (!this.turnDescribed) {
@@ -197,25 +222,18 @@ export class GsdChangeTracker implements vscode.Disposable {
 					this.updateLatestCheckpointLabel(describeAction(toolName, toolInput));
 				}
 
-				if (toolName !== "Write" && toolName !== "Edit") break;
+				if (!isFileMutationTool(normalizedToolName)) break;
 
-				const filePath = String(toolInput.file_path ?? toolInput.path ?? "");
+				const filePath = this.resolveToolPath(toolInput);
 
 				if (!filePath) break;
 
 				// Store the original content before the agent modifies it
 				// Only capture on FIRST modification (don't overwrite)
 				if (!this.originals.has(filePath)) {
-					try {
-						if (fs.existsSync(filePath)) {
-							const content = fs.readFileSync(filePath, "utf8");
-							this.originals.set(filePath, content);
-						} else {
-							// File doesn't exist yet — original is "empty" (new file)
-							this.originals.set(filePath, "");
-						}
-					} catch {
-						// Can't read file, skip tracking
+					const original = captureOriginalContent(filePath, fs);
+					if (original !== undefined) {
+						this.originals.set(filePath, original);
 					}
 				}
 
@@ -226,7 +244,7 @@ export class GsdChangeTracker implements vscode.Disposable {
 			}
 
 			case "tool_execution_end": {
-				const toolUseId = String(evt.toolUseId ?? "");
+				const toolUseId = getToolUseId(evt);
 				const filePath = this.pendingTools.get(toolUseId);
 				if (filePath) {
 					this.pendingTools.delete(toolUseId);
@@ -236,6 +254,10 @@ export class GsdChangeTracker implements vscode.Disposable {
 				break;
 			}
 		}
+	}
+
+	private resolveToolPath(input: Record<string, unknown>): string {
+		return resolveToolPath(this.workspaceRoot, input);
 	}
 
 	private createCheckpoint(): void {
@@ -250,10 +272,14 @@ export class GsdChangeTracker implements vscode.Disposable {
 			id: this.nextCheckpointId++,
 			label,
 			timestamp: now,
-			snapshots: new Map(this.originals),
+			snapshots: this.captureCurrentSnapshots(),
 		};
 		this._checkpoints.push(checkpoint);
 		this._onCheckpointChange.fire();
+	}
+
+	private captureCurrentSnapshots(): Map<string, string | null> {
+		return captureCurrentSnapshots(this.originals.keys(), fs);
 	}
 
 	/**
@@ -266,30 +292,5 @@ export class GsdChangeTracker implements vscode.Disposable {
 		const time = new Date(latest.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 		latest.label = `${time} — ${description}`;
 		this._onCheckpointChange.fire();
-	}
-}
-
-function describeAction(toolName: string, input: Record<string, unknown>): string {
-	switch (toolName) {
-		case "Read": {
-			const p = String(input.file_path ?? input.path ?? "");
-			return `Read ${p.split(/[\\/]/).pop() ?? p}`;
-		}
-		case "Write": {
-			const p = String(input.file_path ?? "");
-			return `Write ${p.split(/[\\/]/).pop() ?? p}`;
-		}
-		case "Edit": {
-			const p = String(input.file_path ?? "");
-			return `Edit ${p.split(/[\\/]/).pop() ?? p}`;
-		}
-		case "Bash":
-			return `$ ${String(input.command ?? "").slice(0, 40)}`;
-		case "Grep":
-			return `Grep: ${String(input.pattern ?? "").slice(0, 30)}`;
-		case "Glob":
-			return `Glob: ${String(input.pattern ?? "").slice(0, 30)}`;
-		default:
-			return toolName;
 	}
 }

@@ -1,4 +1,4 @@
-// Browser-safe TypeScript interfaces for the workflow visualizer.
+// GSD-2 Web — Browser-safe TypeScript interfaces for the workflow visualizer.
 // Mirrors upstream types from src/resources/extensions/gsd/visualizer-data.ts
 // and src/resources/extensions/gsd/metrics.ts — do NOT import from those
 // modules directly, as they use Node.js APIs unavailable in the browser.
@@ -10,6 +10,7 @@ export interface VisualizerTask {
   title: string
   done: boolean
   active: boolean
+  estimate?: string
 }
 
 export interface VisualizerSlice {
@@ -68,6 +69,133 @@ export interface ChangelogInfo {
   entries: ChangelogEntry[]
 }
 
+export interface VisualizerSliceRef {
+  milestoneId: string
+  sliceId: string
+  title: string
+}
+
+export interface VisualizerSliceActivity extends VisualizerSliceRef {
+  completedAt: string
+}
+
+export interface VisualizerStats {
+  missingCount: number
+  missingSlices: VisualizerSliceRef[]
+  updatedCount: number
+  updatedSlices: VisualizerSliceActivity[]
+  recentEntries: ChangelogEntry[]
+}
+
+export type DiscussionState = "undiscussed" | "draft" | "discussed"
+
+export interface VisualizerDiscussionState {
+  milestoneId: string
+  title: string
+  state: DiscussionState
+  hasContext: boolean
+  hasDraft: boolean
+  lastUpdated: string | null
+}
+
+export interface SliceVerification {
+  milestoneId: string
+  sliceId: string
+  verificationResult: string
+  blockerDiscovered: boolean
+  keyDecisions: string[]
+  patternsEstablished: string[]
+  provides: string[]
+  requires: { slice: string; provides: string }[]
+}
+
+export interface KnowledgeInfo {
+  rules: { id: string; scope: string; content: string }[]
+  patterns: { id: string; content: string }[]
+  lessons: { id: string; content: string }[]
+  exists: boolean
+}
+
+export type CaptureClassification = "quick-task" | "inject" | "defer" | "replan" | "note" | "stop" | "backtrack"
+
+export interface CaptureEntry {
+  id: string
+  text: string
+  timestamp: string
+  status: "pending" | "triaged" | "resolved"
+  classification?: CaptureClassification
+  resolution?: string
+  rationale?: string
+  resolvedAt?: string
+  resolvedInMilestone?: string
+  executed?: boolean
+}
+
+export interface CapturesInfo {
+  entries: CaptureEntry[]
+  pendingCount: number
+  totalCount: number
+}
+
+export interface ProviderStatusSummary {
+  name: string
+  label: string
+  category: string
+  ok: boolean
+  required: boolean
+  message: string
+}
+
+export interface SkillSummaryInfo {
+  total: number
+  warningCount: number
+  criticalCount: number
+  topIssue: string | null
+}
+
+export interface EnvironmentCheckResult {
+  name: string
+  status: "ok" | "warning" | "error"
+  message: string
+  detail?: string
+}
+
+export interface VisualizerDoctorEntry {
+  ts: string
+  ok: boolean
+  errors: number
+  warnings: number
+  fixes: number
+  codes: string[]
+  issues?: Array<{ severity: string; code: string; message: string; unitId: string }>
+  fixDescriptions?: string[]
+  scope?: string
+  summary?: string
+}
+
+export interface VisualizerProgressScore {
+  level: "green" | "yellow" | "red"
+  summary: string
+  signals: Array<{ kind: "positive" | "negative" | "neutral"; label: string }>
+}
+
+export interface HealthInfo {
+  budgetCeiling: number | undefined
+  tokenProfile: string
+  truncationRate: number
+  continueHereRate: number
+  tierBreakdown: TierAggregate[]
+  tierSavingsLine: string
+  toolCalls: number
+  assistantMessages: number
+  userMessages: number
+  providers: ProviderStatusSummary[]
+  skillSummary: SkillSummaryInfo
+  environmentIssues: EnvironmentCheckResult[]
+  doctorHistory?: VisualizerDoctorEntry[]
+  progressScore?: VisualizerProgressScore | null
+}
+
 // ─── Metrics ──────────────────────────────────────────────────────────────────
 
 export interface TokenCounts {
@@ -84,15 +212,23 @@ export interface UnitMetrics {
   model: string
   startedAt: number
   finishedAt: number
+  autoSessionKey?: string
   tokens: TokenCounts
   cost: number
   toolCalls: number
   assistantMessages: number
   userMessages: number
+  apiRequests?: number
   contextWindowTokens?: number
   truncationSections?: number
   continueHereFired?: boolean
   promptCharCount?: number
+  baselineCharCount?: number
+  tier?: string
+  modelDowngraded?: boolean
+  skills?: string[]
+  cacheHitRate?: number
+  compressionSavings?: number
 }
 
 export interface PhaseAggregate {
@@ -119,6 +255,14 @@ export interface ModelAggregate {
   contextWindowTokens?: number
 }
 
+export interface TierAggregate {
+  tier: string
+  units: number
+  tokens: TokenCounts
+  cost: number
+  downgraded: number
+}
+
 export interface ProjectTotals {
   units: number
   tokens: TokenCounts
@@ -127,6 +271,7 @@ export interface ProjectTotals {
   toolCalls: number
   assistantMessages: number
   userMessages: number
+  apiRequests: number
   totalTruncationSections: number
   continueHereFiredCount: number
 }
@@ -140,11 +285,19 @@ export interface VisualizerData {
   byPhase: PhaseAggregate[]
   bySlice: SliceAggregate[]
   byModel: ModelAggregate[]
+  byTier: TierAggregate[]
+  tierSavingsLine: string
   units: UnitMetrics[]
   criticalPath: CriticalPathInfo
   remainingSliceCount: number
   agentActivity: AgentActivityInfo | null
   changelog: ChangelogInfo
+  sliceVerifications: SliceVerification[]
+  knowledge: KnowledgeInfo
+  captures: CapturesInfo
+  health: HealthInfo
+  discussion: VisualizerDiscussionState[]
+  stats: VisualizerStats
 }
 
 // ─── Formatting Utilities ─────────────────────────────────────────────────────
@@ -176,4 +329,19 @@ export function formatDuration(ms: number): string {
   const hours = Math.floor(minutes / 60)
   const remainingMinutes = minutes % 60
   return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`
+}
+
+/** Count captures by status for visualizer summary surfaces. */
+export function getCaptureStatusCounts(captures: CapturesInfo): Record<CaptureEntry["status"], number> {
+  const counts: Record<CaptureEntry["status"], number> = {
+    pending: 0,
+    triaged: 0,
+    resolved: 0,
+  }
+
+  for (const entry of captures.entries) {
+    counts[entry.status] += 1
+  }
+
+  return counts
 }

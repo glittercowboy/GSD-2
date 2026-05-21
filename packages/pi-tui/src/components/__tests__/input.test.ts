@@ -3,6 +3,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { stripVTControlCharacters } from "node:util";
 import { Input } from "../input.js";
 
 describe("Input", () => {
@@ -37,16 +38,16 @@ describe("Input", () => {
 		const input = new Input();
 		input.secure = true;
 		input.focused = true;
-		const SECRET = "secret123";
-		input.handleInput(SECRET);
+		const hiddenText = "sample-hidden-value";
+		input.handleInput(hiddenText);
 
 		const line = input.render(40)[0] ?? "";
 		// Previous assertion was `line.includes("*********")` — a literal
-		// 9-star string that silently goes stale if SECRET is renamed to
+		// 9-star string that silently goes stale if the fixture is renamed to
 		// a different length (#4796). Match any run of asterisks and
-		// assert its length covers the secret.
+		// assert its length covers the hidden text.
 		assert.ok(
-			!line.includes(SECRET),
+			!line.includes(hiddenText),
 			"rendered line must not expose raw secret text",
 		);
 		const maskMatch = line.match(/\*+/);
@@ -55,8 +56,8 @@ describe("Input", () => {
 			`rendered line must include masked characters, got: ${JSON.stringify(line)}`,
 		);
 		assert.ok(
-			maskMatch[0].length >= SECRET.length,
-			`mask must cover at least the secret length (${SECRET.length}), got ${maskMatch[0].length} asterisks`,
+			maskMatch[0].length >= hiddenText.length,
+			`mask must cover at least the hidden text length (${hiddenText.length}), got ${maskMatch[0].length} asterisks`,
 		);
 	});
 
@@ -76,5 +77,35 @@ describe("Input", () => {
 		input.handleInput("\x1b[57417u");
 
 		assert.equal(input.getValue(), "");
+	});
+
+	it("keeps yank-pop cursor at or above zero after external value shrink", () => {
+		const input = new Input();
+
+		input.handleInput("first");
+		input.handleInput("\x15"); // Ctrl+U: kill to line start
+		input.handleInput("second");
+		input.handleInput("\x15"); // Ctrl+U: kill another entry
+		input.handleInput("\x19"); // Ctrl+Y: yank "second"
+
+		input.setValue("");
+		input.handleInput("\x1by"); // Alt+Y: yank-pop to "first"
+
+		assert.equal(input.getValue(), "first");
+		const rendered = stripVTControlCharacters(input.render(20)[0] ?? "");
+		assert.doesNotMatch(rendered, /firstfirst/, "negative cursor must not duplicate rendered text");
+		assert.match(rendered, /^> first /, "cursor should land after the replacement text");
+	});
+
+	it("caps oversized bracketed paste before inserting into the input value", () => {
+		const input = new Input();
+		const pasteLimit = 100_000;
+		input.focused = true;
+
+		input.handleInput(`\x1b[200~${"a".repeat(pasteLimit + 10)}\x1b[201~`);
+
+		assert.equal(input.getValue().length, pasteLimit);
+		input.handleInput("\x1f"); // Ctrl+-: undo
+		assert.equal(input.getValue(), "", "capped paste should still undo as a single edit");
 	});
 });

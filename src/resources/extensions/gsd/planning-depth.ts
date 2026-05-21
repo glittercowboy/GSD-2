@@ -5,9 +5,9 @@
 // planning_depth, and writes the file back preserving body content and other
 // frontmatter keys.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { atomicWriteSync } from "./atomic-write.js";
 import { getProjectGSDPreferencesPath } from "./preferences.js";
 import { logWarning } from "./workflow-logger.js";
 import {
@@ -94,8 +94,7 @@ function writeProjectPreferencesParts(
     ? `---\n${yamlBlock}\n---\n\n${body.replace(/^\n+/, "")}`
     : `---\n${yamlBlock}\n---\n`;
 
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, newContent, "utf-8");
+  atomicWriteSync(path, newContent, "utf-8");
 }
 
 function applyDeepWorkflowPreferenceDefaults(frontmatter: Record<string, unknown>): void {

@@ -1,41 +1,49 @@
 /**
- * stale-slice-rows.test.ts — #3658
- *
- * Verify that state.ts contains slice-level status reconciliation that
- * updates stale DB rows (status "pending") when disk artifacts (SUMMARY)
- * prove the slice is complete. Without this, the dependency resolver builds
- * doneSliceIds from stale DB rows and downstream slices stay blocked.
+ * Verify that state derivation treats DB slice rows as authoritative over
+ * stale markdown projections.
  */
 
-import { describe, test } from "node:test";
+import { describe, test, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const sourceFile = join(__dirname, "..", "state.ts");
+import { deriveState, invalidateStateCache } from "../state.ts";
+import { closeDatabase, insertMilestone, insertSlice, openDatabase } from "../gsd-db.ts";
 
-describe("stale slice row reconciliation (#3658)", () => {
-  const source = readFileSync(sourceFile, "utf-8");
+let tempBase: string | null = null;
 
-  test("imports updateSliceStatus from gsd-db", () => {
-    assert.match(source, /import\s*\{[^}]*updateSliceStatus[^}]*\}\s*from/);
-  });
+afterEach(() => {
+  closeDatabase();
+  invalidateStateCache();
+  if (tempBase) rmSync(tempBase, { recursive: true, force: true });
+  tempBase = null;
+});
 
-  test("checks isStatusDone before reconciling slice rows", () => {
-    assert.match(source, /isStatusDone\(dbSlice\.status\)/);
-  });
+describe("stale slice row DB-authoritative boundary", () => {
+  test("a stale SUMMARY.md projection does not make a DB-pending slice complete", async () => {
+    tempBase = mkdtempSync(join(tmpdir(), "gsd-stale-slice-"));
+    const sliceDir = join(tempBase, ".gsd", "milestones", "M001", "slices", "S01");
+    mkdirSync(sliceDir, { recursive: true });
+    writeFileSync(join(sliceDir, "S01-SUMMARY.md"), "# S01 Summary\n", "utf-8");
 
-  test("resolves SUMMARY file to detect completed slices on disk", () => {
-    assert.match(source, /resolveSliceFile\(basePath,\s*mid,\s*dbSlice\.id,\s*["']SUMMARY["']\)/);
-  });
+    openDatabase(join(tempBase, ".gsd", "gsd.db"));
+    insertMilestone({ id: "M001", title: "DB authority", status: "active", depends_on: [] });
+    insertSlice({
+      id: "S01",
+      milestoneId: "M001",
+      title: "Still pending",
+      status: "pending",
+      risk: "low",
+      depends: [],
+      demo: "",
+      sequence: 1,
+    });
 
-  test("calls updateSliceStatus to reconcile stale rows", () => {
-    assert.match(source, /updateSliceStatus\(mid,\s*dbSlice\.id,\s*["']complete["']\)/);
-  });
+    const state = await deriveState(tempBase);
 
-  test("references issue #3599 in reconciliation comment", () => {
-    assert.match(source, /#3599/);
+    assert.equal(state.activeSlice?.id, "S01");
+    assert.equal(state.phase, "planning");
   });
 });

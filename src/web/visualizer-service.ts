@@ -1,3 +1,5 @@
+// GSD-2 Web — Collects workflow visualizer data for browser API routes.
+
 import { execFile } from "node:child_process"
 import { existsSync } from "node:fs"
 import { join } from "node:path"
@@ -23,6 +25,8 @@ export interface SerializedVisualizerData {
   byPhase: unknown[]
   bySlice: unknown[]
   byModel: unknown[]
+  byTier: unknown[]
+  tierSavingsLine: string
   units: unknown[]
   criticalPath: {
     milestonePath: string[]
@@ -33,6 +37,12 @@ export interface SerializedVisualizerData {
   remainingSliceCount: number
   agentActivity: unknown | null
   changelog: unknown
+  sliceVerifications: unknown[]
+  knowledge: unknown
+  captures: unknown
+  health: unknown
+  discussion: unknown[]
+  stats: unknown
 }
 
 function resolveTsLoaderPath(packageRoot: string): string {

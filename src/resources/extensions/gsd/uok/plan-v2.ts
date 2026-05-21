@@ -1,9 +1,13 @@
+// Project/App: GSD-2
+// File Purpose: UOK plan v2 graph compilation from GSD workflow state.
+
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { GSDState, Phase } from "../types.js";
 import { gsdRoot, resolveMilestoneFile, resolveSliceFile } from "../paths.js";
-import { isDbAvailable, getMilestoneSlices, getSliceTasks, type SliceRow } from "../gsd-db.js";
+import { isDbAvailable, getMilestoneSlices, getSliceTasks } from "../gsd-db.js";
+import type { SliceRow } from "../db-task-slice-rows.js";
 import type { UokGraphNode } from "./contracts.js";
 
 const PLAN_V2_CLARIFY_ROUND_LIMIT = 3;

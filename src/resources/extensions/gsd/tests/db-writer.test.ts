@@ -27,6 +27,7 @@ import {
   saveArtifactToDb,
   extractDeferredSliceRef,
 } from '../db-writer.ts';
+import { getAllDecisionsFromMemories } from '../context-store.ts';
 import type { Decision, Requirement } from '../types.ts';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -326,11 +327,14 @@ describe('db-writer', () => {
 
       assert.deepStrictEqual(result.id, 'D001', 'saveDecisionToDb returns D001 as first ID');
 
-      // Verify DB state
-      const dbDecision = getDecisionById('D001');
-      assert.ok(!!dbDecision, 'decision exists in DB after save');
-      assert.deepStrictEqual(dbDecision?.scope, 'arch', 'DB decision has correct scope');
-      assert.deepStrictEqual(dbDecision?.choice, 'Option A', 'DB decision has correct choice');
+      // ADR-013 Stage 3: decisions land in memories, not the legacy table.
+      const memoryDecisions = getAllDecisionsFromMemories();
+      assert.equal(memoryDecisions.length, 1, 'one memory row exists after save');
+      const memDecision = memoryDecisions[0];
+      assert.ok(memDecision, 'memory decision exists after save');
+      assert.equal(memDecision.id, 'D001');
+      assert.equal(memDecision.scope, 'arch', 'memory decision has correct scope');
+      assert.equal(memDecision.choice, 'Option A', 'memory decision has correct choice');
 
       // Verify markdown file was written
       const mdPath = path.join(tmpDir, '.gsd', 'DECISIONS.md');
@@ -394,10 +398,11 @@ describe('db-writer', () => {
         assert.match(id, /^D\d{3}$/, `ID ${id} should match D### pattern`);
       }
 
-      // Verify all 5 exist in DB
+      // ADR-013 Stage 3: verify all 5 exist in the memories table (decisions
+      // table receives no writes from saveDecisionToDb post-cutover).
+      const memoryIds = new Set(getAllDecisionsFromMemories().map((d) => d.id));
       for (const id of ids) {
-        const row = getDecisionById(id);
-        assert.ok(row, `Decision ${id} should exist in DB`);
+        assert.ok(memoryIds.has(id), `Decision ${id} should exist in memories`);
       }
     } finally {
       closeDatabase();
@@ -481,7 +486,7 @@ describe('db-writer', () => {
     }
   });
 
-  test('updateRequirementInDb — seeds from REQUIREMENTS.md when DB empty (#3346)', async () => {
+  test('updateRequirementInDb — ignores REQUIREMENTS.md projection when DB empty', async () => {
     const tmpDir = makeTmpDir();
     const dbPath = path.join(tmpDir, '.gsd', 'gsd.db');
     openDatabase(dbPath);
@@ -515,31 +520,28 @@ describe('db-writer', () => {
       ].join('\n');
       fs.writeFileSync(path.join(tmpDir, '.gsd', 'REQUIREMENTS.md'), reqContent);
 
-      // DB is empty — no requirements seeded. Update R005 to "validated".
-      // Before #3346 fix: this would create a skeleton with empty fields.
-      // After fix: this seeds all 3 requirements from REQUIREMENTS.md first.
+      // DB is empty. REQUIREMENTS.md is a projection and must not be imported
+      // implicitly by a runtime DB write.
       await updateRequirementInDb('R005', {
         status: 'validated',
         validation: 'S02 — auth flow verified',
       }, tmpDir);
 
-      // R005 should have the update AND the original content from markdown
+      // R005 should have the requested update only; disk projection content is ignored.
       const r005 = getRequirementById('R005');
       assert.ok(r005, 'R005 should exist');
       assert.equal(r005!.status, 'validated', 'status should be updated');
       assert.equal(r005!.validation, 'S02 — auth flow verified', 'validation should be updated');
-      assert.equal(r005!.class, 'functional', 'class should be preserved from REQUIREMENTS.md');
-      assert.ok(r005!.description?.includes('authentication') || r005!.full_content?.includes('authentication'),
-        'original content should be preserved');
+      assert.equal(r005!.class, '', 'class should not be imported from REQUIREMENTS.md');
+      assert.ok(!r005!.description?.includes('authentication'), 'description should not be imported');
+      assert.ok(!r005!.full_content?.includes('authentication'), 'full content should not be imported');
 
-      // R007 and R001 should also be seeded (not just the one being updated)
+      // Other requirements in the projection are not seeded.
       const r007 = getRequirementById('R007');
-      assert.ok(r007, 'R007 should be seeded from REQUIREMENTS.md');
-      assert.equal(r007!.status, 'active', 'R007 status should be active');
+      assert.equal(r007, null, 'R007 should not be imported from REQUIREMENTS.md');
 
       const r001 = getRequirementById('R001');
-      assert.ok(r001, 'R001 should be seeded from REQUIREMENTS.md');
-      assert.equal(r001!.status, 'validated', 'R001 status should be validated (from section heading)');
+      assert.equal(r001, null, 'R001 should not be imported from REQUIREMENTS.md');
     } finally {
       closeDatabase();
       cleanupDir(tmpDir);
@@ -663,15 +665,16 @@ describe('db-writer', () => {
         'disk file preserved — shrinkage guard prevented overwrite',
       );
 
-      // DB should contain the full disk content, not the abbreviated content
+      // DB should keep the caller-provided content. The larger disk file is a
+      // stale projection, not runtime authority.
       const adapter = _getAdapter();
       const row = adapter!
         .prepare('SELECT full_content FROM artifacts WHERE path = ?')
         .get(relPath);
       assert.deepStrictEqual(
         row!['full_content'],
-        fullContent,
-        'DB stores the richer disk content instead of abbreviated content',
+        abbreviatedContent,
+        'DB stores caller-provided content instead of importing disk projection content',
       );
     } finally {
       closeDatabase();

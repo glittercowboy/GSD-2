@@ -1,10 +1,13 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+// GSD2 - Write gate runtime persistence and policy guards.
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { minimatch } from "minimatch";
 
-import type { ToolsPolicy } from "../unit-context-manifest.js";
+import { getIsolationMode } from "../preferences.js";
+import { compileSubagentPermissionContract, type ToolsPolicy } from "../unit-context-manifest.js";
 import { logWarning } from "../workflow-logger.js";
+import { isGsdWorktreePath, resolveWorktreeProjectRoot } from "../worktree-root.js";
 
 /**
  * Regex matching milestone CONTEXT.md file names in both legacy M001
@@ -61,22 +64,45 @@ const QUEUE_SAFE_TOOLS = new Set([
  *   env / printenv      — print environment variables
  *   true / false        — shell no-ops / test exit codes
  */
-const BASH_READ_ONLY_RE = /^\s*(cat|head|tail|less|more|wc|file|stat|du|df|which|type|echo|printf|ls|find|grep|rg|awk|sed\b(?!.*-i)|sort|uniq|diff|comm|tr|cut|tee\s+-a\s+\/dev\/null|git\s+(log|show|diff|status|branch|tag|remote|rev-parse|ls-files|blame|shortlog|describe|stash\s+list|config\s+--get|cat-file)|gh\s+(issue|pr|api|repo|release)\s+(view|list|diff|status|checks)|mkdir\s+-p\s+\.gsd|rtk\s|npm\s+run\s+(test|test:\w+|lint|lint:\w+|typecheck|type-check|type-check:\w+|check|verify|audit|outdated|format:check|ci|validate)\b|npm\s+(ls|list|info|view|show|outdated|audit|explain|doctor|ping|--version|-v)\b|npx\s|tsx\s|node\s+(--print|--version|-v\b)|python[23]?\s+(-c\s+'[^']*'|--version|-V\b|-m\s+(pip\s+show|pip\s+list|site))|pip[23]?\s+(show|list|freeze|check|index\s+versions)\b|jq\s|yq\s|curl\s+(-s\b|--silent\b)(?!\s+[^|>]*\s-[oO]\b)(?!\s+[^|>]*\s--output\b)[^|>]*$|openssl\s+(version|x509|s_client)|env\b|printenv\b|true\b|false\b)/;
+const BASH_READ_ONLY_RE = /^\s*((?:cd|pushd|popd)(?:\s|$)|cat|head|tail|less|more|wc|file|stat|du|df|which|type|echo|printf|ls|find|grep|rg|awk|sed\b(?!.*-i)|sort|uniq|diff|comm|tr|cut|tee\s+-a\s+\/dev\/null|git\s+(log|show|diff|status|branch|tag|remote|rev-parse|ls-files|blame|shortlog|describe|stash\s+list|config\s+--get|cat-file)|gh\s+(issue|pr|api|repo|release)\s+(view|list|diff|status|checks)|mkdir\s+-p\s+\.gsd|rtk\s|npm\s+run\s+(test|test:\w+|lint|lint:\w+|typecheck|type-check|type-check:\w+|check|verify|audit|outdated|format:check|ci|validate)\b|npm\s+(ls|list|info|view|show|outdated|audit|explain|doctor|ping|--version|-v)\b|npx\s|tsx\s|node\s+(--print|--version|-v\b)|python[23]?\s+(-c\s+'[^']*'|--version|-V\b|-m\s+(pip\s+show|pip\s+list|site))|pip[23]?\s+(show|list|freeze|check|index\s+versions)\b|jq\s|yq\s|curl\s+(-s\b|--silent\b)(?!\s+[^|>]*\s-[oO]\b)(?!\s+[^|>]*\s--output\b)[^|>]*$|openssl\s+(version|x509|s_client)|env\b|printenv\b|true\b|false\b)/;
+const BASH_VERIFICATION_RE = /^\s*(npm\s+(run\s+(build|test|test:\w+|lint|lint:\w+|typecheck|type-check|verify|ci|validate)\b|test\b)|pnpm\s+(build|test|lint|typecheck|verify)\b|yarn\s+(build|test|lint|typecheck|verify)\b|vitest\b|jest\b|go\s+test\b)/;
 
-const verifiedDepthMilestones = new Set<string>();
-const verifiedApprovalGates = new Set<string>();
-let activeQueuePhase = false;
+interface InMemoryWriteGateState {
+  verifiedDepthMilestones: Set<string>;
+  verifiedApprovalGates: Set<string>;
+  activeQueuePhase: boolean;
+  pendingGateId: string | null;
+}
+
+function createEmptyWriteGateState(): InMemoryWriteGateState {
+  return {
+    verifiedDepthMilestones: new Set<string>(),
+    verifiedApprovalGates: new Set<string>(),
+    activeQueuePhase: false,
+    pendingGateId: null,
+  };
+}
+
+const writeGateStatesByBasePath = new Map<string, InMemoryWriteGateState>();
+
+function writeGateStateKey(basePath: string): string {
+  return resolve(basePath);
+}
+
+function getWriteGateState(basePath: string = process.cwd()): InMemoryWriteGateState {
+  const key = writeGateStateKey(basePath);
+  let state = writeGateStatesByBasePath.get(key);
+  if (!state) {
+    state = createEmptyWriteGateState();
+    writeGateStatesByBasePath.set(key, state);
+  }
+  return state;
+}
 
 /**
- * Discussion gate enforcement state.
- *
- * When ask_user_questions is called with a recognized gate question ID,
- * we track the pending gate. Until the gate is confirmed (user selects the
- * first/recommended option), all non-read-only tool calls are blocked.
- * This mechanically prevents the model from rationalizing past failed or
- * cancelled gate questions.
+ * Discussion gate enforcement state is scoped per basePath so multiple
+ * workspaces can coexist in the same process without sharing gate state.
  */
-let pendingGateId: string | null = null;
 
 /**
  * Recognized gate question ID patterns.
@@ -119,25 +145,42 @@ function shouldPersistWriteGateSnapshot(env: NodeJS.ProcessEnv = process.env): b
   return v !== "0" && v !== "false";
 }
 
-function writeGateSnapshotPath(basePath: string = process.cwd()): string {
+function writeGateSnapshotPath(basePath: string): string {
   return join(basePath, ".gsd", "runtime", "write-gate-state.json");
 }
 
-function currentWriteGateSnapshot(): WriteGateSnapshot {
+function ensureWriteGateSnapshotDirectory(basePath: string): void {
+  const gsdPath = join(basePath, ".gsd");
+  if (!existsSync(gsdPath)) {
+    try {
+      const stat = lstatSync(gsdPath);
+      if (stat.isSymbolicLink()) {
+        const target = readlinkSync(gsdPath);
+        mkdirSync(isAbsolute(target) ? target : resolve(basePath, target), { recursive: true });
+      }
+    } catch {
+      // If .gsd truly does not exist, the runtime mkdir below will create it.
+    }
+  }
+  mkdirSync(join(gsdPath, "runtime"), { recursive: true });
+}
+
+function currentWriteGateSnapshot(basePath: string = process.cwd()): WriteGateSnapshot {
+  const state = getWriteGateState(basePath);
   return {
-    verifiedDepthMilestones: [...verifiedDepthMilestones].sort(),
-    verifiedApprovalGates: [...verifiedApprovalGates].sort(),
-    activeQueuePhase,
-    pendingGateId,
+    verifiedDepthMilestones: [...state.verifiedDepthMilestones].sort(),
+    verifiedApprovalGates: [...state.verifiedApprovalGates].sort(),
+    activeQueuePhase: state.activeQueuePhase,
+    pendingGateId: state.pendingGateId,
   };
 }
 
-function persistWriteGateSnapshot(basePath: string = process.cwd()): void {
+function persistWriteGateSnapshot(basePath: string): void {
   if (!shouldPersistWriteGateSnapshot()) return;
   const path = writeGateSnapshotPath(basePath);
-  mkdirSync(join(basePath, ".gsd", "runtime"), { recursive: true });
+  ensureWriteGateSnapshotDirectory(basePath);
   const tempPath = `${path}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
-  writeFileSync(tempPath, JSON.stringify(currentWriteGateSnapshot(), null, 2), "utf-8");
+  writeFileSync(tempPath, JSON.stringify(currentWriteGateSnapshot(basePath), null, 2), "utf-8");
   try {
     renameSync(tempPath, path);
   } catch (err: unknown) {
@@ -152,7 +195,7 @@ function persistWriteGateSnapshot(basePath: string = process.cwd()): void {
   }
 }
 
-function clearPersistedWriteGateSnapshot(basePath: string = process.cwd()): void {
+function clearPersistedWriteGateSnapshot(basePath: string): void {
   if (!shouldPersistWriteGateSnapshot()) return;
   const path = writeGateSnapshotPath(basePath);
   try {
@@ -185,32 +228,35 @@ const EMPTY_SNAPSHOT: WriteGateSnapshot = {
   pendingGateId: null,
 };
 
-export function loadWriteGateSnapshot(basePath: string = process.cwd()): WriteGateSnapshot {
+export function loadWriteGateSnapshot(basePath: string): WriteGateSnapshot {
   const path = writeGateSnapshotPath(basePath);
   if (!existsSync(path)) {
     // When persist mode is active and the file has been deleted, treat it as a
     // full state reset so deleting the file clears the HARD BLOCK gate.
     // In non-persist mode the file is never written, so fall back to in-memory.
     if (shouldPersistWriteGateSnapshot()) return EMPTY_SNAPSHOT;
-    return currentWriteGateSnapshot();
+    return currentWriteGateSnapshot(basePath);
   }
   try {
     return normalizeWriteGateSnapshot(JSON.parse(readFileSync(path, "utf-8")));
   } catch {
-    return currentWriteGateSnapshot();
+    return currentWriteGateSnapshot(basePath);
   }
 }
 
-export function isDepthVerified(): boolean {
-  return verifiedDepthMilestones.size > 0;
+export function isDepthVerified(basePath: string = process.cwd()): boolean {
+  return getWriteGateState(basePath).verifiedDepthMilestones.size > 0;
 }
 
 /**
  * Check whether a specific milestone has passed depth verification.
  */
-export function isMilestoneDepthVerified(milestoneId: string | null | undefined): boolean {
+export function isMilestoneDepthVerified(
+  milestoneId: string | null | undefined,
+  basePath: string = process.cwd(),
+): boolean {
   if (!milestoneId) return false;
-  return verifiedDepthMilestones.has(milestoneId);
+  return getWriteGateState(basePath).verifiedDepthMilestones.has(milestoneId);
 }
 
 export function isMilestoneDepthVerifiedInSnapshot(
@@ -221,39 +267,37 @@ export function isMilestoneDepthVerifiedInSnapshot(
   return snapshot.verifiedDepthMilestones.includes(milestoneId);
 }
 
-export function isQueuePhaseActive(): boolean {
-  return activeQueuePhase;
+export function isQueuePhaseActive(basePath: string = process.cwd()): boolean {
+  return getWriteGateState(basePath).activeQueuePhase;
 }
 
-export function setQueuePhaseActive(active: boolean): void {
-  activeQueuePhase = active;
-  persistWriteGateSnapshot();
+export function setQueuePhaseActive(active: boolean, basePath: string): void {
+  getWriteGateState(basePath).activeQueuePhase = active;
+  persistWriteGateSnapshot(basePath);
 }
 
-export function resetWriteGateState(): void {
-  verifiedDepthMilestones.clear();
-  verifiedApprovalGates.clear();
-  pendingGateId = null;
-  persistWriteGateSnapshot();
+export function resetWriteGateState(basePath: string): void {
+  const state = getWriteGateState(basePath);
+  state.verifiedDepthMilestones.clear();
+  state.verifiedApprovalGates.clear();
+  state.pendingGateId = null;
+  persistWriteGateSnapshot(basePath);
 }
 
-export function clearDiscussionFlowState(): void {
-  verifiedDepthMilestones.clear();
-  verifiedApprovalGates.clear();
-  activeQueuePhase = false;
-  pendingGateId = null;
-  clearPersistedWriteGateSnapshot();
+export function clearDiscussionFlowState(basePath: string): void {
+  writeGateStatesByBasePath.delete(writeGateStateKey(basePath));
+  clearPersistedWriteGateSnapshot(basePath);
 }
 
 export function markDepthVerified(milestoneId?: string | null, basePath: string = process.cwd()): void {
   if (!milestoneId) return;
-  verifiedDepthMilestones.add(milestoneId);
+  getWriteGateState(basePath).verifiedDepthMilestones.add(milestoneId);
   persistWriteGateSnapshot(basePath);
 }
 
 export function markApprovalGateVerified(gateId?: string | null, basePath: string = process.cwd()): void {
   if (!gateId) return;
-  verifiedApprovalGates.add(gateId);
+  getWriteGateState(basePath).verifiedApprovalGates.add(gateId);
   persistWriteGateSnapshot(basePath);
 }
 
@@ -292,27 +336,28 @@ function extractContextMilestoneId(inputPath: string): string | null {
 /**
  * Mark a gate as pending (called when ask_user_questions is invoked with a gate ID).
  */
-export function setPendingGate(gateId: string): void {
-  pendingGateId = gateId;
-  verifiedApprovalGates.delete(gateId);
+export function setPendingGate(gateId: string, basePath: string): void {
+  const state = getWriteGateState(basePath);
+  state.pendingGateId = gateId;
+  state.verifiedApprovalGates.delete(gateId);
   const milestoneId = extractDepthVerificationMilestoneId(gateId);
-  if (milestoneId) verifiedDepthMilestones.delete(milestoneId);
-  persistWriteGateSnapshot();
+  if (milestoneId) state.verifiedDepthMilestones.delete(milestoneId);
+  persistWriteGateSnapshot(basePath);
 }
 
 /**
  * Clear the pending gate (called when the user confirms).
  */
-export function clearPendingGate(): void {
-  pendingGateId = null;
-  persistWriteGateSnapshot();
+export function clearPendingGate(basePath: string): void {
+  getWriteGateState(basePath).pendingGateId = null;
+  persistWriteGateSnapshot(basePath);
 }
 
 /**
  * Get the currently pending gate, if any.
  */
-export function getPendingGate(): string | null {
-  return pendingGateId;
+export function getPendingGate(basePath: string = process.cwd()): string | null {
+  return getWriteGateState(basePath).pendingGateId;
 }
 
 /**
@@ -326,8 +371,9 @@ export function shouldBlockPendingGate(
   toolName: string,
   milestoneId: string | null,
   queuePhaseActive?: boolean,
+  basePath: string = process.cwd(),
 ): { block: boolean; reason?: string } {
-  return shouldBlockPendingGateInSnapshot(currentWriteGateSnapshot(), toolName, milestoneId, queuePhaseActive);
+  return shouldBlockPendingGateInSnapshot(currentWriteGateSnapshot(basePath), toolName, milestoneId, queuePhaseActive);
 }
 
 export function shouldBlockPendingGateInSnapshot(
@@ -361,8 +407,9 @@ export function shouldBlockPendingGateBash(
   command: string,
   milestoneId: string | null,
   queuePhaseActive?: boolean,
+  basePath: string = process.cwd(),
 ): { block: boolean; reason?: string } {
-  return shouldBlockPendingGateBashInSnapshot(currentWriteGateSnapshot(), command, milestoneId, queuePhaseActive);
+  return shouldBlockPendingGateBashInSnapshot(currentWriteGateSnapshot(basePath), command, milestoneId, queuePhaseActive);
 }
 
 export function shouldBlockPendingGateBashInSnapshot(
@@ -419,6 +466,7 @@ export function shouldBlockContextWrite(
   inputPath: string,
   milestoneId: string | null,
   _queuePhaseActive?: boolean,
+  basePath: string = process.cwd(),
 ): { block: boolean; reason?: string } {
   if (toolName !== "write") return { block: false };
   if (!MILESTONE_CONTEXT_RE.test(inputPath)) return { block: false };
@@ -435,7 +483,7 @@ export function shouldBlockContextWrite(
     };
   }
 
-  if (isMilestoneDepthVerified(targetMilestoneId)) return { block: false };
+  if (isMilestoneDepthVerified(targetMilestoneId, basePath)) return { block: false };
 
   return {
     block: true,
@@ -458,8 +506,9 @@ export function shouldBlockContextArtifactSave(
   artifactType: string,
   milestoneId: string | null,
   sliceId?: string | null,
+  basePath: string = process.cwd(),
 ): { block: boolean; reason?: string } {
-  return shouldBlockContextArtifactSaveInSnapshot(currentWriteGateSnapshot(), artifactType, milestoneId, sliceId);
+  return shouldBlockContextArtifactSaveInSnapshot(currentWriteGateSnapshot(basePath), artifactType, milestoneId, sliceId);
 }
 
 export function shouldBlockContextArtifactSaveInSnapshot(
@@ -683,9 +732,16 @@ const PLANNING_SAFE_TOOLS = new Set([
 ]);
 
 function isPathUnderGsd(absPath: string, basePath: string): boolean {
-  const gsdRoot = resolve(basePath, ".gsd");
-  const rel = relative(gsdRoot, absPath);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  const localGsdRoot = resolve(basePath, ".gsd");
+  const localRel = relative(localGsdRoot, absPath);
+  if (localRel === "" || (!localRel.startsWith("..") && !isAbsolute(localRel))) return true;
+
+  const projectRoot = resolveWorktreeProjectRoot(basePath);
+  if (projectRoot === basePath) return false;
+
+  const canonicalGsdRoot = resolve(projectRoot, ".gsd");
+  const canonicalRel = relative(canonicalGsdRoot, absPath);
+  return canonicalRel === "" || (!canonicalRel.startsWith("..") && !isAbsolute(canonicalRel));
 }
 
 function matchesAllowedGlob(absPath: string, basePath: string, globs: readonly string[]): boolean {
@@ -699,7 +755,7 @@ function matchesAllowedGlob(absPath: string, basePath: string, globs: readonly s
 function blockReason(unitType: string, mode: string, what: string): string {
   return [
     `HARD BLOCK: unit "${unitType}" runs under tools-policy "${mode}" — ${what}.`,
-    `This is a mechanical gate enforced by manifest.tools (#4934). You MUST NOT proceed,`,
+    `This is a mechanical gate enforced by manifest.tools. You MUST NOT proceed,`,
     `retry the same call, or rationalize past this block. If you need to write user source,`,
     `the work belongs in execute-task, not in a planning unit.`,
   ].join(" ");
@@ -719,6 +775,9 @@ function blockReason(unitType: string, mode: string, what: string): string {
  *                    and listed in the policy's allowedSubagents.
  *   - "docs"       → like "planning" but also allows writes to paths
  *                    matching `allowedPathGlobs` relative to basePath.
+ *   - "verification"
+ *                  → allows Bash for project verification commands, but keeps
+ *                    writes restricted to .gsd/ and blocks subagent dispatch.
  *
  * `pathOrCommand` is the file path for write/edit-shaped tools and the
  * shell command for bash. Other tools ignore this argument.
@@ -756,14 +815,15 @@ export function shouldBlockPlanningUnit(
     return { block: true, reason: blockReason(unitType, policy.mode, `tool "${tool}" is not on the read-only allowlist`) };
   }
 
-  // planning / planning-dispatch / docs modes share the same surface for safe tools, bash, and subagent.
+  // planning / planning-dispatch / docs / verification modes share the same surface for safe tools, bash, and subagent.
   if (PLANNING_SAFE_TOOLS.has(tool)) return { block: false };
   if (tool.startsWith("gsd_")) return { block: false };
 
   if (PLANNING_SUBAGENT_TOOLS.has(tool)) {
     if (policy.mode === "planning-dispatch") {
       const requested = (agentClasses ?? []).map(a => a.trim()).filter(Boolean);
-      const allowedSubagents = Array.isArray(policy.allowedSubagents) ? policy.allowedSubagents : [];
+      const dispatchContract = compileSubagentPermissionContract(policy);
+      const allowedSubagents = dispatchContract.allowedSubagents;
       const allowed = new Set(allowedSubagents);
       // When agentClasses is undefined, the caller has not been updated to extract
       // agent identities yet. Block and warn so stale callers surface in telemetry
@@ -813,6 +873,17 @@ export function shouldBlockPlanningUnit(
   }
 
   if (tool === "bash") {
+    if (policy.mode === "verification") {
+      if (BASH_VERIFICATION_RE.test(pathOrCommand) || BASH_READ_ONLY_RE.test(pathOrCommand)) return { block: false };
+      return {
+        block: true,
+        reason: blockReason(
+          unitType,
+          policy.mode,
+          `bash is restricted to build/test verification commands (npm run build, npm test, etc.); cannot run "${pathOrCommand.slice(0, 80)}${pathOrCommand.length > 80 ? "…" : ""}"`,
+        ),
+      };
+    }
     if (BASH_READ_ONLY_RE.test(pathOrCommand)) return { block: false };
     return {
       block: true,
@@ -852,4 +923,137 @@ export function shouldBlockPlanningUnit(
   // CONTEXT.md write) catch known mutating shapes; defaulting to allow here
   // avoids breaking gsd_* MCP tools or future safe additions.
   return { block: false };
+}
+
+// ─── Worktree isolation write gate (#5199) ────────────────────────────────
+//
+// When `git.isolation: worktree` is configured, the per-unit commit pipeline
+// only runs inside the auto-mode loop (`auto-post-unit.ts`). If the LLM
+// authors code at the project root before auto-mode is started, those writes
+// land in the working tree but never reach a commit — they're silently
+// orphaned outside git history. This guard blocks those writes at the
+// tool_call seam so the agent receives a clear error instead.
+
+const WORKTREE_GATE_BOOTSTRAP_UNITS = new Set([
+  "discuss-milestone",
+  "plan-milestone",
+  "init",
+]);
+
+function realpathOrResolve(p: string): string {
+  const abs = resolve(p);
+  try {
+    return realpathSync(abs);
+  } catch {
+    // Path doesn't exist (yet) — realpath the deepest existing ancestor so
+    // platforms where /tmp -> /private/tmp don't break containment checks.
+    let dir = abs;
+    const tail: string[] = [];
+    while (dir && dir !== resolve(dir, "..")) {
+      try {
+        const real = realpathSync(dir);
+        return tail.length ? join(real, ...tail.reverse()) : real;
+      } catch {
+        const idx = dir.lastIndexOf(sep);
+        if (idx <= 0) break;
+        tail.push(dir.slice(idx + 1));
+        dir = dir.slice(0, idx) || sep;
+      }
+    }
+    return abs;
+  }
+}
+
+function isPathContained(target: string, container: string): boolean {
+  if (target === container) return true;
+  return target.startsWith(container.endsWith(sep) ? container : container + sep);
+}
+
+/**
+ * Block planning-write tool calls that would land code at the project root
+ * while `git.isolation: worktree` is in effect and auto-mode hasn't created
+ * (or flipped cwd into) the milestone worktree.
+ *
+ * Pure / unit-testable. Callers in `register-hooks.ts` supply the effective
+ * execution base path (worker cwd or project root) and current auto liveness;
+ * this function does no I/O beyond realpath resolution.
+ *
+ * Allow rules (in order):
+ *   1. Tool isn't a planning-write (write/edit/multi_edit/notebook_edit).
+ *   2. `GSD_DISABLE_WORKTREE_WRITE_GUARD=1` self-hosting bypass.
+ *   3. Isolation mode is not "worktree".
+ *   4. Active unit is a bootstrap unit (discuss-milestone/plan-milestone/init).
+ *   5. Target is inside `<projectRoot>/.gsd/worktrees/` (a real worktree).
+ *   6. Target is inside `<projectRoot>/.gsd/` and isn't masquerading as a
+ *      worktrees sibling (rejects the `.gsd/worktrees-extra/…` prefix trick).
+ *   7. Auto is live AND `effectiveBasePath` is itself a `.gsd/worktrees/…` path.
+ *
+ * Otherwise: block with a message that points the agent at `/gsd` to start
+ * auto-mode.
+ */
+export function shouldBlockWorktreeWrite(
+  toolName: string,
+  targetPath: string,
+  effectiveBasePath: string,
+  isAutoLive: boolean,
+  currentUnitType?: string | null,
+): { block: boolean; reason?: string } {
+  const tool = canonicalToolName(toolName);
+  if (!PLANNING_WRITE_TOOLS.has(tool)) return { block: false };
+  if (process.env.GSD_DISABLE_WORKTREE_WRITE_GUARD === "1") return { block: false };
+  if (getIsolationMode(effectiveBasePath) !== "worktree") return { block: false };
+  if (currentUnitType && WORKTREE_GATE_BOOTSTRAP_UNITS.has(currentUnitType)) return { block: false };
+
+  if (!targetPath) {
+    return {
+      block: true,
+      reason: [
+        `HARD BLOCK: ${tool} called with empty path while \`git.isolation: worktree\` is configured`,
+        `and auto-mode is not active. Refusing to allow writes that cannot be located.`,
+      ].join(" "),
+    };
+  }
+
+  // Resolve relative targets against the effective execution base path, then
+  // canonicalize against the project root to defeat
+  // symlink-based escapes and prefix tricks (e.g. .gsd/worktrees-extra/).
+  const projectRoot = resolveWorktreeProjectRoot(effectiveBasePath);
+  const absTarget = isAbsolute(targetPath) ? targetPath : resolve(effectiveBasePath, targetPath);
+  const realTarget = realpathOrResolve(absTarget);
+  const realRoot = realpathOrResolve(projectRoot);
+  const realGsd = realpathOrResolve(join(projectRoot, ".gsd"));
+  const realWorktreesDir = realpathOrResolve(join(projectRoot, ".gsd", "worktrees"));
+
+  // Allow writes inside the legitimate worktrees subtree.
+  if (isPathContained(realTarget, realWorktreesDir)) return { block: false };
+
+  // Allow writes to .gsd/ planning artifacts, but reject siblings whose name
+  // starts with "worktrees" (the worktrees-extra prefix trick — case 4).
+  if (isPathContained(realTarget, realGsd)) {
+    const rel = relative(realGsd, realTarget);
+    const firstSeg = rel.split(/[\/\\]/)[0] ?? "";
+    if (!firstSeg.startsWith("worktrees")) return { block: false };
+    // fall through: looks like worktrees<something> sibling — block
+  }
+
+  // Auto is live and the caller is operating inside a worktree path —
+  // host tool's write happens in worktree context; let it through.
+  if (isAutoLive && isGsdWorktreePath(effectiveBasePath)) return { block: false };
+
+  // Block. Provide enough context that the agent can self-correct.
+  const displayTarget = isPathContained(realTarget, realRoot)
+    ? relative(realRoot, realTarget) || "."
+    : realTarget;
+  return {
+    block: true,
+    reason: [
+      `HARD BLOCK: Worktree isolation is configured (\`git.isolation: worktree\`) but auto-mode is`,
+      `not running and the target "${displayTarget}" is not inside \`.gsd/worktrees/<MID>/\`.`,
+      `Code edits at the project root would be lost — only the auto-mode commit pipeline`,
+      `(auto-post-unit) commits work, and it never runs outside the loop.`,
+      `Required action: start auto-mode with \`/gsd\` so the milestone worktree is created,`,
+      `then write inside it. To disable this guard for self-hosting development, set`,
+      `GSD_DISABLE_WORKTREE_WRITE_GUARD=1.`,
+    ].join(" "),
+  };
 }

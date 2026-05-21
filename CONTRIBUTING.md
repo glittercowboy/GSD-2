@@ -239,6 +239,14 @@ PRs go through automated review first, then human review. To help us review effi
 - Respond to review comments. If you disagree, explain why — discussion is welcome.
 - If your PR has been open for a while without review, ping in Discord. We're a small team and things slip.
 
+### Stale or unreviewable PRs
+
+Keep open PRs in a reviewable, merge-ready state. For PR authors below maintainer level, PRs that remain blocked by failing CI, merge conflicts, or requested follow-up for more than 3 days may be closed without merge. Prior contributor status is not an exemption; the exemption is maintainer-level repository access.
+
+If your PR is closed for staleness, you are welcome to resubmit when you are ready to bring it back in an issue-free, reviewable state. Closing stale PRs is queue management, not a rejection of future work on the same idea.
+
+Maintainer-level PRs are not auto-closed under this policy, but they may receive a reminder comment asking the author to finish the PR or close it if it is no longer moving.
+
 ### 72-hour response policy
 
 Once a maintainer leaves review feedback, you have **72 hours** to respond — either with a code update, a question, or a comment explaining your timeline. We reserve the right to close PRs that go silent past 72 hours. Closed PRs can be reopened once you're ready to engage; we're not trying to throw away your work, we're trying to keep the review queue honest about what's actually moving.

@@ -16,11 +16,20 @@ import { execFileSync } from 'node:child_process'
  * we invoke `cmd /c <command> <args...>` explicitly. On POSIX we don't
  * need a shell at all.
  */
-function spawnClaude(command: string, args: string[], opts: { timeout: number; stdio: 'pipe' }): Buffer {
-  if (process.platform === 'win32') {
-    return execFileSync('cmd', ['/c', command, ...args], opts)
+export function buildClaudeSpawnInvocation(
+  command: string,
+  args: string[],
+  platform: NodeJS.Platform = process.platform,
+): { command: string; args: string[] } {
+  if (platform === 'win32') {
+    return { command: 'cmd', args: ['/c', command, ...args] }
   }
-  return execFileSync(command, args, opts)
+  return { command, args }
+}
+
+function spawnClaude(command: string, args: string[], opts: { timeout: number; stdio: 'pipe' }): Buffer {
+  const invocation = buildClaudeSpawnInvocation(command, args)
+  return execFileSync(invocation.command, invocation.args, opts)
 }
 
 /**
@@ -32,7 +41,11 @@ function spawnClaude(command: string, args: string[], opts: { timeout: number; s
  * authenticated. Mirrors the `NPM_COMMAND` pattern in
  * `src/resources/extensions/gsd/pre-execution-checks.ts`.
  */
-export const CLAUDE_COMMAND = process.platform === 'win32' ? 'claude.cmd' : 'claude'
+export function getClaudeCommand(platform: NodeJS.Platform = process.platform): string {
+  return platform === 'win32' ? 'claude.cmd' : 'claude'
+}
+
+export const CLAUDE_COMMAND = getClaudeCommand()
 
 /**
  * Ordered list of binary names to probe for the Claude Code CLI.
@@ -41,8 +54,12 @@ export const CLAUDE_COMMAND = process.platform === 'win32' ? 'claude.cmd' : 'cla
  * direct binary installs produce `claude.exe`, and Git Bash wrappers may
  * expose a bare `claude` shim. Try all three so no valid install is missed.
  */
-const CLAUDE_COMMAND_CANDIDATES: string[] =
-  process.platform === 'win32' ? [CLAUDE_COMMAND, 'claude.exe', 'claude'] : [CLAUDE_COMMAND]
+export function getClaudeCommandCandidates(platform: NodeJS.Platform = process.platform): string[] {
+  const command = getClaudeCommand(platform)
+  return platform === 'win32' ? [command, 'claude.exe', 'claude'] : [command]
+}
+
+const CLAUDE_COMMAND_CANDIDATES: string[] = getClaudeCommandCandidates()
 
 const VERSION_TIMEOUT_MS = 5_000
 // Auth probe needs more headroom on Windows because the spawn goes through
@@ -88,7 +105,7 @@ function findWorkingCommand(): string | null {
  * emit free-form text. Prefer the structured signal; fall back to a text
  * heuristic. The text heuristic only covers English phrasing.
  */
-function parseAuthStatus(output: string): boolean | null {
+export function parseAuthStatus(output: string): boolean | null {
   const trimmed = output.trim()
   if (!trimmed) return null
 

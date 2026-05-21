@@ -10,7 +10,7 @@
  * Templates are snapshotted shortly after module init via warmCache().
  * This keeps import/extension-registration fast while still preventing a
  * running session from being invalidated when another `gsd` launch overwrites
- * ~/.gsd/agent/ with newer templates via initResources(). Without caching, the
+ * the user-local agent tree with newer templates via initResources(). Without caching, the
  * in-memory extension code (which knows variable set A) can read a newer
  * template from disk (which expects variable set B), causing a
  * "template declares {{X}} but no value was provided" crash mid-session.
@@ -57,9 +57,9 @@ export function resolveExtensionDirFromCandidates(
  *
  * `import.meta.url` resolves to whichever copy of this module is executing.
  * On Windows (npm global install via MSYS2 / Git Bash) this can resolve to
- * the npm-global `AppData/Roaming/npm/…` path, which does NOT contain the
- * prompts/ and templates/ subtrees that initResources() copies to
- * `~/.gsd/agent/extensions/gsd/`. Detect the mismatch and fall back to
+ * the npm-global package path, which does NOT contain the prompts/ and
+ * templates/ subtrees that initResources() copies to the user-local agent
+ * extension directory. Detect the mismatch and fall back to
  * the user-local agent directory.
  */
 function resolveExtensionDir(): string {
@@ -74,7 +74,7 @@ const templatesDir = join(__extensionDir, "templates");
 
 /**
  * Return the resolved templates directory path for use in prompts.
- * Avoids hardcoding `~/.gsd/agent/extensions/gsd/templates/` in templates. (#3575)
+ * Avoids hardcoding the user-local templates directory in templates. (#3575)
  */
 export function getTemplatesDir(): string {
   return templatesDir;
@@ -123,17 +123,42 @@ function warmCache(): void {
 }
 
 let warmCacheScheduled = false;
+let warmCacheRan = false;
+let warmCacheTimer: ReturnType<typeof setTimeout> | undefined;
+
+/**
+ * Synchronously snapshot the prompt/template tree into the cache.
+ *
+ * Safe to call immediately after `initResources()` because that function uses
+ * synchronous fs APIs — there is no race window that requires deferring the
+ * cache warm via setTimeout. Idempotent: subsequent calls are no-ops.
+ *
+ * Cancels the fallback `scheduleWarmCache` timer if it is still pending.
+ */
+export function primeCache(): void {
+  if (warmCacheRan) return;
+  if (warmCacheTimer) {
+    clearTimeout(warmCacheTimer);
+    warmCacheTimer = undefined;
+  }
+  warmCacheScheduled = true;
+  warmCacheRan = true;
+  warmCache();
+}
 
 function scheduleWarmCache(): void {
   if (warmCacheScheduled) return;
   warmCacheScheduled = true;
 
   const run = () => {
+    warmCacheTimer = undefined;
+    if (warmCacheRan) return;
+    warmCacheRan = true;
     warmCache();
   };
 
-  const timer = setTimeout(run, 1000);
-  timer.unref?.();
+  warmCacheTimer = setTimeout(run, 1000);
+  warmCacheTimer.unref?.();
 }
 
 // Snapshot the full prompt/template tree after import so extension startup only
@@ -155,6 +180,10 @@ export function loadPrompt(name: string, vars: Record<string, string> = {}): str
   }
 
   const effectiveVars = {
+    templatesDir: getTemplatesDir(),
+    planTemplatePath: join(getTemplatesDir(), "plan.md"),
+    taskPlanTemplatePath: join(getTemplatesDir(), "task-plan.md"),
+    taskSummaryTemplatePath: join(getTemplatesDir(), "task-summary.md"),
     skillActivation: "If a `GSD Skill Preferences` block is present in system context, use it and the `<available_skills>` catalog in your system prompt to decide which skills to load and follow for this unit, without relaxing required verification or artifact rules.",
     ...vars,
   };
@@ -171,7 +200,7 @@ export function loadPrompt(name: string, vars: Record<string, string> = {}): str
     if (missing.length > 0) {
       throw new GSDError(
         GSD_PARSE_ERROR,
-        `loadPrompt("${name}"): template declares {{${missing.join("}}, {{")}}}} but no value was provided. ` +
+        `loadPrompt("${name}"): template declares {{${missing.join("}}, {{")}}} but no value was provided. ` +
         `This usually means the extension code in memory is older than the template on disk. ` +
         `Restart pi to reload the extension.`,
       );

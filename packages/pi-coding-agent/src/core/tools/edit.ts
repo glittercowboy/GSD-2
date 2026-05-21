@@ -13,6 +13,7 @@ import {
 } from "./edit-diff.js";
 import { notifyFileChanged } from "../lsp/client.js";
 import { resolveToCwd } from "./path-utils.js";
+import { createToolTarget, type ToolTargetMetadata } from "./tool-target.js";
 
 const editSchema = Type.Object({
 	path: Type.String({ description: "Path to the file to edit (relative or absolute)" }),
@@ -27,6 +28,7 @@ export interface EditToolDetails {
 	diff: string;
 	/** Line number of the first change in the new file (for editor navigation) */
 	firstChangedLine?: number;
+	target?: ToolTargetMetadata;
 }
 
 /**
@@ -208,7 +210,17 @@ export function createEditTool(cwd: string, options?: EditToolOptions): AgentToo
 									text: `Successfully replaced text in ${path}.`,
 								},
 							],
-							details: { diff: diffResult.diff, firstChangedLine: diffResult.firstChangedLine },
+							details: {
+								diff: diffResult.diff,
+								firstChangedLine: diffResult.firstChangedLine,
+								target: createToolTarget({
+									kind: "file",
+									action: "edit",
+									inputPath: path,
+									resolvedPath: absolutePath,
+									line: diffResult.firstChangedLine,
+								}),
+							},
 						});
 					} catch (error: any) {
 						// Clean up abort handler

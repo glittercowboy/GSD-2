@@ -1,5 +1,15 @@
-// Core TUI interfaces and classes
+// Project/App: GSD-2
+// File Purpose: Public exports for the pi-tui package.
 
+// Style primitives
+export {
+	style,
+	TerminalStyle,
+	type TerminalBorderStyle,
+	type TerminalDensity,
+	type TerminalStyleSpec,
+	type TerminalTone,
+} from "./style.js";
 // Autocomplete support
 export {
 	type AutocompleteItem,
@@ -37,7 +47,6 @@ export {
 export {
 	decodeKittyPrintable,
 	isKeyRelease,
-	isKeyRepeat,
 	isKittyProtocolActive,
 	Key,
 	type KeyEventType,
@@ -86,4 +95,4 @@ export {
 	TUI,
 } from "./tui.js";
 // Utilities
-export { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "./utils.js";
+export { alignRight, padRight, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "./utils.js";

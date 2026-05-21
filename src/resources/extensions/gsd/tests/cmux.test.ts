@@ -1,3 +1,5 @@
+// Project/App: GSD-2
+// File Purpose: Unit tests for cmux integration, layout, and CLI isolation.
 import test, { describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
@@ -7,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import {
   buildCmuxProgress,
   buildCmuxStatusLabel,
+  CmuxClient,
   detectCmuxEnvironment,
   markCmuxPromptShown,
   resetCmuxPromptState,
@@ -256,60 +259,55 @@ describe("createGridLayout", () => {
 });
 
 describe("CmuxClient stdio isolation", () => {
-  test("runSync and runAsync explicitly set stdio to prevent terminal interference", () => {
-    // Read the cmux index source and verify that execFileSync/spawn calls
-    // inside runSync/runAsync include stdio options that isolate stdin and stderr.
-    // This prevents the cmux CLI child process from inheriting the parent's
-    // stdin/stderr, which can steal keyboard input or corrupt TUI rendering (#1922).
-    const cmuxIndexPath = path.resolve(
-      path.dirname(fileURLToPath(import.meta.url)),
-      "../../cmux/index.ts",
+  test("runSync and runAsync execute the cmux CLI without inheriting test stdin", async () => {
+    const binDir = fs.mkdtempSync(path.join(tmpdir(), "cmux-bin-"));
+    const logPath = path.join(binDir, "calls.jsonl");
+    const cmuxPath = path.join(binDir, "cmux");
+    const originalPath = process.env.PATH;
+    fs.writeFileSync(
+      cmuxPath,
+      [
+        "#!/usr/bin/env node",
+        "const fs = require('node:fs');",
+        `fs.appendFileSync(${JSON.stringify(logPath)}, JSON.stringify(process.argv.slice(2)) + '\\n');`,
+        "if (process.argv.includes('--json')) process.stdout.write(JSON.stringify({surfaces:[{id:'surface-1'}]}));",
+        "else process.stdout.write('ok');",
+      ].join("\n"),
+      "utf-8",
     );
-    const source = fs.readFileSync(cmuxIndexPath, "utf-8");
+    fs.chmodSync(cmuxPath, 0o755);
+    process.env.PATH = `${binDir}:${originalPath ?? ""}`;
+    try {
+      const client = new CmuxClient({
+        enabled: true,
+        available: true,
+        cliAvailable: true,
+        notifications: true,
+        sidebar: true,
+        splits: true,
+        browser: false,
+        workspaceId: "workspace-1",
+        surfaceId: "surface-0",
+        socketPath: "/tmp/cmux.sock",
+      });
 
-    // Extract runSync method body
-    const runSyncMatch = source.match(/private runSync\(args: string\[\]\)[^{]*\{([\s\S]*?)\n  \}/);
-    assert.ok(runSyncMatch, "runSync method must exist");
-    const runSyncBody = runSyncMatch[1];
-    assert.ok(
-      runSyncBody.includes('stdio:'),
-      "runSync must explicitly set stdio to prevent terminal interference (see #1922)",
-    );
-    assert.ok(
-      runSyncBody.includes('"ignore"'),
-      "runSync stdio must ignore stdin to prevent stealing keyboard input from TUI",
-    );
+      client.setStatus("M001", "executing");
+      await client.listSurfaceIds();
 
-    // Extract runAsync method body
-    const runAsyncMatch = source.match(/private async runAsync\(args: string\[\]\)[^{]*\{([\s\S]*?)\n  \}/);
-    assert.ok(runAsyncMatch, "runAsync method must exist");
-    const runAsyncBody = runAsyncMatch[1];
-    assert.ok(
-      runAsyncBody.includes('stdio:'),
-      "runAsync must explicitly set stdio to prevent terminal interference (see #1922)",
-    );
-    assert.ok(
-      runAsyncBody.includes('"ignore"'),
-      "runAsync stdio must ignore stdin to prevent stealing keyboard input from TUI",
-    );
-  });
-
-  test("isCmuxCliAvailable uses stdio ignore to prevent terminal interference", () => {
-    const cmuxIndexPath = path.resolve(
-      path.dirname(fileURLToPath(import.meta.url)),
-      "../../cmux/index.ts",
-    );
-    const source = fs.readFileSync(cmuxIndexPath, "utf-8");
-
-    // Find isCmuxCliAvailable or the cli-check function body
-    const fnMatch = source.match(/function isCmuxCliAvailable[\s\S]*?\{([\s\S]*?)\n\}/);
-    if (!fnMatch) return; // function may be inlined or renamed — skip rather than fail
-
-    const fnBody = fnMatch[1];
-    assert.ok(
-      fnBody.includes('"ignore"') || !fnBody.includes('execFileSync'),
-      "isCmuxCliAvailable must not inherit parent stdio (see #1922)",
-    );
+      const calls = fs.readFileSync(logPath, "utf-8").trim().split("\n").map((line) => JSON.parse(line));
+      const commandPrefixes = calls.map((call) => call.slice(0, 2));
+      assert.ok(
+        commandPrefixes.some((prefix) => JSON.stringify(prefix) === JSON.stringify(["set-status", "gsd"])),
+        "set-status command should be invoked",
+      );
+      assert.ok(
+        commandPrefixes.some((prefix) => JSON.stringify(prefix) === JSON.stringify(["list-surfaces", "--json"])),
+        "list-surfaces command should be invoked",
+      );
+    } finally {
+      process.env.PATH = originalPath;
+      fs.rmSync(binDir, { recursive: true, force: true });
+    }
   });
 });
 

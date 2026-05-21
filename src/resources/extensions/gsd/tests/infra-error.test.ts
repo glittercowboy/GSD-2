@@ -9,11 +9,11 @@ import { isInfrastructureError, INFRA_ERROR_CODES } from "../auto/infra-errors.j
 test("INFRA_ERROR_CODES contains the expected codes", () => {
   for (const code of [
     "ENOSPC", "ENOMEM", "EROFS", "EDQUOT", "EMFILE", "ENFILE",
-    "EAGAIN", "ECONNREFUSED", "ENOTFOUND", "ENETUNREACH",
+    "EAGAIN", "ENOBUFS", "ECONNREFUSED", "ENOTFOUND", "ENETUNREACH",
   ]) {
     assert.ok(INFRA_ERROR_CODES.has(code), `missing ${code}`);
   }
-  assert.equal(INFRA_ERROR_CODES.size, 10, "unexpected extra codes");
+  assert.equal(INFRA_ERROR_CODES.size, 11, "unexpected extra codes");
 });
 
 // ── isInfrastructureError: code property detection ───────────────────────────

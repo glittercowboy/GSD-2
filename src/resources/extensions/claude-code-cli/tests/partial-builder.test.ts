@@ -1,7 +1,24 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { mapContentBlock, parseMcpToolName, PartialMessageBuilder } from "../partial-builder.ts";
-import type { BetaContentBlock, BetaRawMessageStreamEvent } from "../sdk-types.ts";
+import { mapContentBlock, mapUsage, parseMcpToolName, PartialMessageBuilder } from "../partial-builder.ts";
+import type { BetaContentBlock, BetaRawMessageStreamEvent, NonNullableUsage } from "../sdk-types.ts";
+
+describe("mapUsage", () => {
+	test("excludes cumulative cache reads from context-sized totalTokens (#5243)", () => {
+		const usage: NonNullableUsage = {
+			input_tokens: 150_000,
+			output_tokens: 2_000,
+			cache_read_input_tokens: 900_000,
+			cache_creation_input_tokens: 3_000,
+		};
+
+		const mapped = mapUsage(usage, 1.23);
+
+		assert.equal(mapped.cacheRead, 900_000);
+		assert.equal(mapped.totalTokens, 155_000);
+		assert.equal(mapped.cost.total, 1.23);
+	});
+});
 
 describe("PartialMessageBuilder — malformed tool arguments (#2574)", () => {
 	/**

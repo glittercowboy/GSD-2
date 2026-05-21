@@ -1,3 +1,5 @@
+// Project/App: GSD-2
+// File Purpose: Slice-cadence merge and resquash tests.
 /**
  * Tests for slice-cadence collapse — #4765.
  *
@@ -20,6 +22,7 @@ import {
 } from "../slice-cadence.ts";
 import { MergeConflictError } from "../git-service.ts";
 import { summarizeWorktreeTelemetry } from "../worktree-telemetry.ts";
+import { closeDatabase, insertMilestone, insertSlice, openDatabase } from "../gsd-db.ts";
 
 function git(args: string[], cwd: string): string {
   return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"], encoding: "utf-8" }).trim();
@@ -81,6 +84,7 @@ describe("mergeSliceToMain", () => {
 
   afterEach(() => {
     try { process.chdir(originalCwd); } catch { /* */ }
+    closeDatabase();
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -107,6 +111,61 @@ describe("mergeSliceToMain", () => {
     const summary = summarizeWorktreeTelemetry(dir);
     assert.equal(summary.slicesMerged, 1);
     assert.equal(summary.sliceMergeConflicts, 0);
+  });
+
+  test("slice-cadence commit messages include milestone and slice names", () => {
+    openDatabase(":memory:");
+    insertMilestone({ id: "M001", title: "M001: Backend foundation", status: "active" });
+    insertSlice({ id: "S01", milestoneId: "M001", title: "S01: Core API", status: "complete" });
+    enterMilestoneBranch(dir, "M001");
+    commitFile(dir, "feature.txt", "slice 1 work\n", "feat: S01 work");
+
+    process.chdir(dir);
+    mergeSliceToMain(dir, "M001", "S01");
+
+    const subject = git(["log", "-1", "--format=%s", "main"], dir);
+    const body = git(["log", "-1", "--format=%B", "main"], dir);
+    assert.equal(subject, "feat: Core API - S01 of M001 (slice-cadence)");
+    assert.ok(body.includes("Slice: S01 - Core API"));
+    assert.ok(body.includes("Milestone: M001 - Backend foundation"));
+    assert.ok(body.includes("GSD-Slice: S01"));
+    assert.ok(body.includes("GSD-Milestone: M001"));
+  });
+
+  test("merges slices to the recorded integration branch", () => {
+    git(["checkout", "-b", "develop"], dir);
+    mkdirSync(join(dir, ".gsd", "milestones", "M001"), { recursive: true });
+    writeFileSync(
+      join(dir, ".gsd", "milestones", "M001", "M001-META.json"),
+      JSON.stringify({ integrationBranch: "develop" }, null, 2) + "\n",
+    );
+
+    enterMilestoneBranch(dir, "M001");
+    commitFile(dir, "develop-only.txt", "slice 1 work\n", "feat: S01 work");
+
+    process.chdir(dir);
+    const result = mergeSliceToMain(dir, "M001", "S01");
+
+    assert.equal(result.mainBranch, "develop");
+    assert.equal(readFileSync(join(dir, "develop-only.txt"), "utf-8"), "slice 1 work\n");
+    assert.equal(git(["rev-parse", "develop"], dir), git(["rev-parse", "milestone/M001"], dir));
+    assert.notEqual(git(["rev-parse", "develop"], dir), git(["rev-parse", "main"], dir));
+  });
+
+  test("advances milestone branch when it is checked out in a worktree", () => {
+    commitFile(dir, ".gitignore", ".gsd/worktrees/\n", "chore: ignore worktrees");
+    const wtPath = join(dir, ".gsd", "worktrees", "M001");
+    mkdirSync(join(dir, ".gsd", "worktrees"), { recursive: true });
+    git(["worktree", "add", "-b", "milestone/M001", wtPath, "main"], dir);
+    commitFile(wtPath, "worktree-slice.txt", "slice work\n", "feat: S01 worktree");
+
+    process.chdir(wtPath);
+    const result = mergeSliceToMain(dir, "M001", "S01");
+
+    assert.equal(result.skipped, false);
+    assert.equal(git(["rev-parse", "main"], dir), git(["rev-parse", "milestone/M001"], dir));
+    assert.equal(git(["branch", "--show-current"], wtPath), "milestone/M001");
+    assert.equal(readFileSync(join(wtPath, "worktree-slice.txt"), "utf-8"), "slice work\n");
   });
 
   test("handles sequential slice merges cleanly", () => {

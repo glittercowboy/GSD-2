@@ -1,14 +1,37 @@
-import test from "node:test";
+import test, { mock } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { parseSlackReply, parseDiscordResponse, formatForDiscord, formatForSlack, parseSlackReactionResponse, formatForTelegram, parseTelegramResponse } from "../../remote-questions/format.ts";
 import { resolveRemoteConfig, isValidChannelId } from "../../remote-questions/config.ts";
+import { DiscordAdapter } from "../../remote-questions/discord-adapter.ts";
+import { isRemoteConfigured } from "../../remote-questions/manager.ts";
+import { handleRemote, saveRemoteQuestionsConfig } from "../../remote-questions/remote-command.ts";
+import { SlackAdapter } from "../../remote-questions/slack-adapter.ts";
 import { sanitizeError } from "../../shared/sanitize.ts";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+function jsonResponse(body: unknown): Response {
+  return {
+    ok: true,
+    status: 200,
+    async json() { return body; },
+    async text() { return JSON.stringify(body); },
+  } as Response;
+}
+
+async function withTempGsdHome<T>(fn: (home: string) => T | Promise<T>): Promise<T> {
+  const oldHome = process.env.GSD_HOME;
+  const home = mkdtempSync(join(tmpdir(), "gsd-remote-home-"));
+  try {
+    process.env.GSD_HOME = home;
+    return await fn(home);
+  } finally {
+    if (oldHome === undefined) delete process.env.GSD_HOME;
+    else process.env.GSD_HOME = oldHome;
+    rmSync(home, { recursive: true, force: true });
+  }
+}
 
 test("parseSlackReply handles single-number single-question answers", () => {
   const result = parseSlackReply("2", [{
@@ -421,47 +444,91 @@ test("parseDiscordResponse handles multiple reactions for allowMultiple question
   assert.deepEqual(result.answers.choice.answers, ["Alpha", "Gamma"]);
 });
 
-test("DiscordAdapter source-level: acknowledgeAnswer method exists", () => {
-  const adapterSrc = readFileSync(
-    join(__dirname, "..", "..", "remote-questions", "discord-adapter.ts"),
-    "utf-8",
-  );
-  assert.ok(adapterSrc.includes("async acknowledgeAnswer"), "should have acknowledgeAnswer method");
-  assert.ok(adapterSrc.includes("✅"), "should use checkmark emoji for acknowledgement");
+test("DiscordAdapter validates guild, sends prompt URL, and acknowledges with checkmark", async () => {
+  const calls: Array<{ url: string; method: string }> = [];
+  const fetchMock = mock.method(globalThis, "fetch", async (url: string | URL, init?: RequestInit) => {
+    const href = String(url);
+    calls.push({ url: href, method: String(init?.method ?? "GET") });
+    if (href.endsWith("/users/@me")) return jsonResponse({ id: "bot-1" });
+    if (href.includes("/channels/12345678901234567") && !href.includes("/messages")) return jsonResponse({ guild_id: "guild-1" });
+    if (href.endsWith("/messages")) return jsonResponse({ id: "message-1" });
+    return jsonResponse({});
+  });
+  try {
+    const adapter = new DiscordAdapter("token", "12345678901234567");
+    await adapter.validate();
+    const result = await adapter.sendPrompt({
+      id: "discord-1",
+      channel: "discord",
+      createdAt: Date.now(),
+      timeoutAt: Date.now() + 60_000,
+      pollIntervalMs: 5000,
+      questions: [{
+        id: "q1",
+        header: "Pick",
+        question: "Choose",
+        allowMultiple: false,
+        options: [{ label: "A", description: "a" }],
+      }],
+    });
+    await adapter.acknowledgeAnswer(result.ref);
+
+    assert.equal(result.ref.threadUrl, "https://discord.com/channels/guild-1/12345678901234567/message-1");
+    assert.ok(calls.some((call) => call.method === "PUT" && call.url.includes(encodeURIComponent("✅"))));
+  } finally {
+    fetchMock.mock.restore();
+  }
 });
 
-test("SlackAdapter source-level: supports reaction polling and acknowledgement", () => {
-  const adapterSrc = readFileSync(
-    join(__dirname, "..", "..", "remote-questions", "slack-adapter.ts"),
-    "utf-8",
-  );
-  assert.ok(adapterSrc.includes("reactions.get"), "should poll Slack reactions");
-  assert.ok(adapterSrc.includes("reactions.add"), "should add Slack reactions");
-  assert.ok(adapterSrc.includes("async acknowledgeAnswer"), "should acknowledge Slack answers");
-  assert.ok(adapterSrc.includes("white_check_mark"), "should use a checkmark acknowledgement reaction");
-});
+test("SlackAdapter polls reactions and acknowledges with white_check_mark", async () => {
+  const calls: Array<{ url: string; method: string; body?: string }> = [];
+  const fetchMock = mock.method(globalThis, "fetch", async (url: string | URL, init?: RequestInit) => {
+    const href = String(url);
+    calls.push({ url: href, method: String(init?.method ?? "GET"), body: String(init?.body ?? "") });
+    if (href.includes("/auth.test")) return jsonResponse({ ok: true, user_id: "bot-1" });
+    if (href.includes("/chat.postMessage")) return jsonResponse({ ok: true, ts: "123.456", channel: "C12345678" });
+    if (href.includes("/reactions.get")) {
+      return jsonResponse({
+        ok: true,
+        message: { reactions: [{ name: "two", count: 1, users: ["human-1"] }] },
+      });
+    }
+    return jsonResponse({ ok: true });
+  });
+  try {
+    const adapter = new SlackAdapter("xoxb-test", "C12345678");
+    await adapter.validate();
+    const prompt = {
+      id: "slack-1",
+      channel: "slack" as const,
+      createdAt: Date.now(),
+      timeoutAt: Date.now() + 60_000,
+      pollIntervalMs: 5000,
+      questions: [{
+        id: "q1",
+        header: "Pick",
+        question: "Choose",
+        allowMultiple: false,
+        options: [
+          { label: "A", description: "a" },
+          { label: "B", description: "b" },
+        ],
+      }],
+    };
+    const sent = await adapter.sendPrompt(prompt);
+    const answer = await adapter.pollAnswer(prompt, sent.ref);
+    await adapter.acknowledgeAnswer(sent.ref);
 
-test("Slack setup source-level: offers channel picker with manual fallback", () => {
-  const commandSrc = readFileSync(
-    join(__dirname, "..", "..", "remote-questions", "remote-command.ts"),
-    "utf-8",
-  );
-  assert.ok(commandSrc.includes("users.conversations"), "Slack setup should query Slack channels");
-  assert.ok(commandSrc.includes("Select a Slack channel"), "Slack setup should present a channel picker");
-  assert.ok(commandSrc.includes("Enter channel ID manually"), "Slack setup should preserve manual fallback");
-});
-
-test("DiscordAdapter source-level: resolves guild ID for message URLs", () => {
-  const adapterSrc = readFileSync(
-    join(__dirname, "..", "..", "remote-questions", "discord-adapter.ts"),
-    "utf-8",
-  );
-  assert.ok(adapterSrc.includes("guildId"), "should track guild ID");
-  assert.ok(adapterSrc.includes("guild_id"), "should read guild_id from channel info");
-  assert.ok(
-    adapterSrc.includes("discord.com/channels/"),
-    "should construct message URL with guild/channel/message format",
-  );
+    assert.deepEqual(answer, { answers: { q1: { answers: ["B"] } } });
+    assert.ok(calls.some((call) => call.url.includes("/reactions.get")));
+    assert.ok(calls.some((call) =>
+      call.url.includes("/reactions.add")
+      && typeof call.body === "string"
+      && call.body.includes("white_check_mark")
+    ));
+  } finally {
+    fetchMock.mock.restore();
+  }
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -630,71 +697,29 @@ test("sanitizeError strips Telegram bot token patterns", () => {
   assert.ok(!result.includes("1234567890:ABC"), "should strip Telegram bot token");
 });
 
-test("DiscordAdapter source-level: sendPrompt sets threadUrl in ref", () => {
-  const adapterSrc = readFileSync(
-    join(__dirname, "..", "..", "remote-questions", "discord-adapter.ts"),
-    "utf-8",
-  );
-  assert.ok(
-    adapterSrc.includes("threadUrl: messageUrl"),
-    "sendPrompt should set threadUrl to the constructed message URL",
-  );
-});
-
 // ═══════════════════════════════════════════════════════════════════════════
 // Auth.json Token Hydration Tests
 // ═══════════════════════════════════════════════════════════════════════════
 
-test("config source-level: hydrateRemoteTokensFromAuth is called before env check in resolveRemoteConfig", () => {
-  const configSrc = readFileSync(
-    join(__dirname, "..", "..", "remote-questions", "config.ts"),
-    "utf-8",
-  );
-  // Find the body of resolveRemoteConfig by slicing from its declaration to the next export function.
-  const resolveStart = configSrc.indexOf("export function resolveRemoteConfig()");
-  const resolveEnd = configSrc.indexOf("\nexport function", resolveStart + 1);
-  const resolveFnBody = configSrc.slice(resolveStart, resolveEnd);
-
-  const hydrationIdx = resolveFnBody.indexOf("hydrateRemoteTokensFromAuth()");
-  const envCheckIdx = resolveFnBody.indexOf("process.env[ENV_KEYS[");
-  assert.ok(hydrationIdx !== -1, "hydrateRemoteTokensFromAuth() should be called inside resolveRemoteConfig");
-  assert.ok(envCheckIdx !== -1, "process.env[ENV_KEYS[ lookup should exist inside resolveRemoteConfig");
-  assert.ok(hydrationIdx < envCheckIdx, "hydration call should appear before the process.env env-key lookup");
-});
-
-test("config source-level: hydrateRemoteTokensFromAuth is called in getRemoteConfigStatus", () => {
-  const configSrc = readFileSync(
-    join(__dirname, "..", "..", "remote-questions", "config.ts"),
-    "utf-8",
-  );
-  const statusFnIdx = configSrc.indexOf("export function getRemoteConfigStatus()");
-  const hydrationInStatus = configSrc.indexOf("hydrateRemoteTokensFromAuth()", statusFnIdx);
-  assert.ok(hydrationInStatus > statusFnIdx, "hydrateRemoteTokensFromAuth should be called inside getRemoteConfigStatus");
-});
-
-test("config source-level: AUTH_PROVIDER_ENV_MAP covers all three remote channels", () => {
-  const configSrc = readFileSync(
-    join(__dirname, "..", "..", "remote-questions", "config.ts"),
-    "utf-8",
-  );
-  assert.ok(configSrc.includes("discord_bot"), "AUTH_PROVIDER_ENV_MAP should include discord_bot");
-  assert.ok(configSrc.includes("slack_bot"),   "AUTH_PROVIDER_ENV_MAP should include slack_bot");
-  assert.ok(configSrc.includes("telegram_bot"), "AUTH_PROVIDER_ENV_MAP should include telegram_bot");
-  assert.ok(configSrc.includes("DISCORD_BOT_TOKEN"), "should map discord_bot to DISCORD_BOT_TOKEN");
-  assert.ok(configSrc.includes("SLACK_BOT_TOKEN"),   "should map slack_bot to SLACK_BOT_TOKEN");
-  assert.ok(configSrc.includes("TELEGRAM_BOT_TOKEN"), "should map telegram_bot to TELEGRAM_BOT_TOKEN");
-});
-
-test("config source-level: hydration skips env vars already set", () => {
-  const configSrc = readFileSync(
-    join(__dirname, "..", "..", "remote-questions", "config.ts"),
-    "utf-8",
-  );
-  // The guard that skips already-set vars must be present.
-  assert.ok(
-    configSrc.includes("!process.env[envVar]"),
-    "hydrateRemoteTokensFromAuth should skip env vars that are already populated",
-  );
+test("resolveRemoteConfig uses configured channel and existing environment token", async () => {
+  const saved = process.env.SLACK_BOT_TOKEN;
+  try {
+    await withTempGsdHome(() => {
+      process.env.SLACK_BOT_TOKEN = "xoxb-existing";
+      saveRemoteQuestionsConfig("slack", "C12345678");
+      assert.deepEqual(resolveRemoteConfig(), {
+        channel: "slack",
+        channelId: "C12345678",
+        timeoutMs: 5 * 60 * 1000,
+        pollIntervalMs: 5 * 1000,
+        token: "xoxb-existing",
+      });
+      assert.equal(isRemoteConfigured(), true);
+    });
+  } finally {
+    if (saved === undefined) delete process.env.SLACK_BOT_TOKEN;
+    else process.env.SLACK_BOT_TOKEN = saved;
+  }
 });
 
 test("resolveRemoteConfig returns null when preferences are absent (no env side-effects)", () => {
@@ -725,150 +750,25 @@ test("resolveRemoteConfig returns null when preferences are absent (no env side-
   }
 });
 
-test("config source-level: hydration skips api_key entries with empty keys", () => {
-  const configSrc = readFileSync(
-    join(__dirname, "..", "..", "remote-questions", "config.ts"),
-    "utf-8",
-  );
-  // The find() call in hydrateRemoteTokensFromAuth must filter for non-empty keys,
-  // not just match on type === "api_key". This prevents stale empty-key entries
-  // (left by removeProviderToken) from shadowing valid tokens.
-  assert.ok(
-    configSrc.includes('c.type === "api_key" && !!c.key'),
-    "hydrateRemoteTokensFromAuth find() should require a non-empty key",
-  );
-});
+test("remote disconnect removes active env token and disables remote config", async () => {
+  const saved = process.env.DISCORD_BOT_TOKEN;
+  try {
+    await withTempGsdHome(async () => {
+      process.env.DISCORD_BOT_TOKEN = "discord-token";
+      saveRemoteQuestionsConfig("discord", "12345678901234567");
+      assert.equal(isRemoteConfigured(), true);
 
-test("ask-user-questions source-level: tryRemoteQuestions is called before the hasUI guard", () => {
-  // Regression test for #3480 — remote questions were silently skipped in interactive
-  // mode because tryRemoteQuestions was gated behind `if (!ctx.hasUI)`.
-  // The fix moved the remote call before that guard so configured channels
-  // (Telegram/Slack/Discord) fire regardless of UI availability.
-  const src = readFileSync(
-    join(__dirname, "..", "..", "ask-user-questions.ts"),
-    "utf-8",
-  );
+      const notifications: string[] = [];
+      await handleRemote("disconnect", {
+        ui: { notify(message: string) { notifications.push(message); } },
+      } as any, {} as any);
 
-  const remoteCallIdx = src.indexOf("tryRemoteQuestions(params.questions");
-  const hasUIGuardIdx = src.indexOf("if (!ctx.hasUI)");
-
-  assert.ok(remoteCallIdx !== -1, "tryRemoteQuestions call should exist in ask-user-questions.ts");
-  assert.ok(hasUIGuardIdx !== -1, "!ctx.hasUI guard should exist in ask-user-questions.ts");
-  assert.ok(
-    remoteCallIdx < hasUIGuardIdx,
-    "tryRemoteQuestions must be called before the !ctx.hasUI guard — otherwise remote questions are skipped in interactive mode",
-  );
-});
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Race model tests (#3810) — local TUI races against remote channel
-// ═══════════════════════════════════════════════════════════════════════════
-
-test("ask-user-questions source-level: raceRemoteAndLocal function exists", () => {
-  const src = readFileSync(
-    join(__dirname, "..", "..", "ask-user-questions.ts"),
-    "utf-8",
-  );
-  assert.ok(
-    src.includes("async function raceRemoteAndLocal("),
-    "raceRemoteAndLocal helper should exist for racing local TUI against remote channel",
-  );
-});
-
-test("ask-user-questions source-level: race path uses isRemoteConfigured for routing", () => {
-  const src = readFileSync(
-    join(__dirname, "..", "..", "ask-user-questions.ts"),
-    "utf-8",
-  );
-  assert.ok(
-    src.includes("isRemoteConfigured()"),
-    "execute() should call isRemoteConfigured() for lightweight routing decision",
-  );
-});
-
-test("ask-user-questions source-level: race path checks both hasRemote and ctx.hasUI", () => {
-  // Regression: #3810 — the race should only activate when BOTH remote and local UI
-  // are available. Headless mode should still use remote-only, and no-remote should
-  // use local-only.
-  const src = readFileSync(
-    join(__dirname, "..", "..", "ask-user-questions.ts"),
-    "utf-8",
-  );
-  assert.ok(
-    src.includes("hasRemote && ctx.hasUI"),
-    "Race path should require both remote configured and local UI available",
-  );
-  assert.ok(
-    src.includes("hasRemote && !ctx.hasUI"),
-    "Headless path should handle remote-only when no local UI",
-  );
-});
-
-test("ask-user-questions source-level: race treats remote timeout as non-win", () => {
-  // Regression: the whole point of the race is that a remote timeout should NOT
-  // block the local TUI. The race helper must filter out timed_out results.
-  const src = readFileSync(
-    join(__dirname, "..", "..", "ask-user-questions.ts"),
-    "utf-8",
-  );
-  const raceFnStart = src.indexOf("async function raceRemoteAndLocal(");
-  const raceFnEnd = src.indexOf("\n}", raceFnStart);
-  const raceFnBody = src.slice(raceFnStart, raceFnEnd);
-  assert.ok(
-    raceFnBody.includes("timed_out"),
-    "raceRemoteAndLocal should check for timed_out in remote results",
-  );
-  assert.ok(
-    raceFnBody.includes("details?.error"),
-    "raceRemoteAndLocal should check for error in remote results",
-  );
-});
-
-test("ask-user-questions source-level: race uses AbortController to cancel loser", () => {
-  const src = readFileSync(
-    join(__dirname, "..", "..", "ask-user-questions.ts"),
-    "utf-8",
-  );
-  assert.ok(
-    src.includes("new AbortController()"),
-    "Race path should create an AbortController for cancellation",
-  );
-  assert.ok(
-    src.includes("controller.abort()"),
-    "raceRemoteAndLocal should abort the controller to cancel the losing side",
-  );
-});
-
-test("manager source-level: isRemoteConfigured export exists", () => {
-  const src = readFileSync(
-    join(__dirname, "..", "..", "remote-questions", "manager.ts"),
-    "utf-8",
-  );
-  assert.ok(
-    src.includes("export function isRemoteConfigured()"),
-    "manager.ts should export isRemoteConfigured for lightweight config checking",
-  );
-  // Must delegate to resolveRemoteConfig — no separate config parsing
-  const fnStart = src.indexOf("export function isRemoteConfigured()");
-  const fnEnd = src.indexOf("\n}", fnStart);
-  const fnBody = src.slice(fnStart, fnEnd);
-  assert.ok(
-    fnBody.includes("resolveRemoteConfig()"),
-    "isRemoteConfigured should delegate to resolveRemoteConfig",
-  );
-});
-
-test("config source-level: removeProviderToken uses auth.remove not auth.set with empty key", () => {
-  const commandSrc = readFileSync(
-    join(__dirname, "..", "..", "remote-questions", "remote-command.ts"),
-    "utf-8",
-  );
-  // removeProviderToken should call auth.remove(provider), not auth.set(provider, { key: "" }).
-  // Setting an empty key pollutes the credentials array and shadows valid tokens.
-  const fnStart = commandSrc.indexOf("function removeProviderToken");
-  assert.ok(fnStart !== -1, "removeProviderToken should exist");
-  const fnEnd = commandSrc.indexOf("\n}", fnStart);
-  const fnBody = commandSrc.slice(fnStart, fnEnd);
-  assert.ok(fnBody.includes("auth.remove("), "removeProviderToken should call auth.remove()");
-  assert.ok(!fnBody.includes('key: ""'), "removeProviderToken should not set an empty key");
+      assert.equal(process.env.DISCORD_BOT_TOKEN, undefined);
+      assert.equal(resolveRemoteConfig(), null);
+      assert.ok(notifications.some((message) => message.includes("disconnected")));
+    });
+  } finally {
+    if (saved === undefined) delete process.env.DISCORD_BOT_TOKEN;
+    else process.env.DISCORD_BOT_TOKEN = saved;
+  }
 });

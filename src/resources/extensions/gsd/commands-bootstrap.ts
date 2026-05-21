@@ -1,4 +1,5 @@
 import { importExtensionModule, type ExtensionAPI, type ExtensionCommandContext } from "@gsd/pi-coding-agent";
+import { VISUAL_BRIEF_MODES } from "../visual-brief/prompts.js";
 
 const TOP_LEVEL_SUBCOMMANDS = [
   { cmd: "help", desc: "Categorized command reference with descriptions" },
@@ -8,6 +9,7 @@ const TOP_LEVEL_SUBCOMMANDS = [
   { cmd: "pause", desc: "Pause auto-mode (preserves state, /gsd auto to resume)" },
   { cmd: "status", desc: "Progress dashboard" },
   { cmd: "visualize", desc: "Open workflow visualizer" },
+  { cmd: "brief", desc: "Generate a visual HTML brief" },
   { cmd: "queue", desc: "Queue and reorder future milestones" },
   { cmd: "quick", desc: "Execute a quick task without full planning overhead" },
   { cmd: "discuss", desc: "Discuss architecture and decisions" },
@@ -85,6 +87,14 @@ function getGsdArgumentCompletions(prefix: string) {
       { cmd: "--verbose", desc: "Show detailed step output" },
       { cmd: "--dry-run", desc: "Preview next step without executing" },
     ], "next");
+  }
+
+  if (parts[0] === "brief" && parts.length <= 2) {
+    return filterStartsWith(
+      partial,
+      VISUAL_BRIEF_MODES.map((mode) => ({ cmd: mode.mode, desc: mode.description })),
+      "brief",
+    );
   }
 
   if ((parts[0] === "new-project" || parts[0] === "new-milestone") && parts.length <= 2) {

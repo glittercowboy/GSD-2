@@ -11,10 +11,11 @@
  * src/mcp-server.ts in the main package).
  */
 
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
 import { z } from 'zod';
 import type { SessionManager } from './session-manager.js';
 import { isRemoteConfigured, tryRemoteQuestions } from './remote-questions.js';
@@ -25,7 +26,7 @@ import { readHistory } from './readers/metrics.js';
 import { readCaptures } from './readers/captures.js';
 import { readKnowledge } from './readers/knowledge.js';
 import { buildGraph, writeGraph, writeSnapshot, graphStatus, graphQuery, graphDiff } from './readers/graph.js';
-import { resolveGsdRoot } from './readers/paths.js';
+import { resolveGsdRoot, resolveMilestoneFile } from './readers/paths.js';
 import { runDoctorLite } from './readers/doctor-lite.js';
 import { registerWorkflowTools, validateProjectDir } from './workflow-tools.js';
 import { applySecrets, checkExistingEnvKeys, detectDestination, resolveProjectEnvFilePath } from './env-writer.js';
@@ -234,9 +235,8 @@ async function readProjectState(projectDir: string, query: string | undefined): 
       const milestones: Array<{ id: string; hasRoadmap: boolean; hasSummary: boolean }> = [];
       for (const entry of entries) {
         if (!entry.isDirectory()) continue;
-        const mDir = join(milestonesDir, entry.name);
-        const hasRoadmap = await fileExists(join(mDir, `${entry.name}-ROADMAP.md`));
-        const hasSummary = await fileExists(join(mDir, `${entry.name}-SUMMARY.md`));
+        const hasRoadmap = !!resolveMilestoneFile(gsdDir, entry.name, 'ROADMAP');
+        const hasSummary = !!resolveMilestoneFile(gsdDir, entry.name, 'SUMMARY');
         milestones.push({ id: entry.name, hasRoadmap, hasSummary });
       }
       result.milestones = milestones;
@@ -246,15 +246,6 @@ async function readProjectState(projectDir: string, query: string | undefined): 
   }
 
   return result;
-}
-
-async function fileExists(path: string): Promise<boolean> {
-  try {
-    await stat(path);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -337,6 +328,42 @@ interface AskUserQuestionsElicitRequest {
     properties: Record<string, Record<string, unknown>>;
     required?: string[];
   };
+}
+
+/**
+ * Structured payload mirrored to the MCP `structuredContent` field on
+ * `ask_user_questions` results. Mirrors the `LocalResultDetails` shape that
+ * src/resources/extensions/ask-user-questions.ts already produces, so the
+ * GSD discussion-gate hook in register-hooks.ts can treat the MCP path
+ * identically to the in-process extension path. Without this, the bridge
+ * surfaces `details = undefined` and the gate hook's
+ * `if (details?.cancelled || !details?.response)` branch HARD-BLOCKs every
+ * user answer, including successful confirmations. See #5267.
+ */
+interface AskUserQuestionsRoundResultAnswer {
+  selected: string | string[];
+  notes: string;
+}
+
+interface AskUserQuestionsRoundResult {
+  endInterview: false;
+  answers: Record<string, AskUserQuestionsRoundResultAnswer>;
+}
+
+interface AskUserQuestionsStructuredContent {
+  questions: AskUserQuestion[];
+  response: AskUserQuestionsRoundResult | null;
+  cancelled: boolean;
+}
+
+interface AskUserQuestionsWriteGateModule {
+  isGateQuestionId(questionId: string): boolean;
+  isDepthConfirmationAnswer(selected: unknown, options?: Array<{ label?: string }>): boolean;
+  setPendingGate(gateId: string, basePath: string): void;
+  markApprovalGateVerified(gateId?: string | null, basePath?: string): void;
+  markDepthVerified(milestoneId?: string | null, basePath?: string): void;
+  clearPendingGate(basePath: string): void;
+  extractDepthVerificationMilestoneId(questionId: string): string | null;
 }
 
 const OTHER_OPTION_LABEL = 'None of the above';
@@ -444,10 +471,129 @@ export function formatAskUserQuestionsElicitResult(
   return JSON.stringify({ answers });
 }
 
+/**
+ * Normalize an MCP elicitation form result into the `RoundResult` shape the
+ * GSD discussion-gate hook reads from `tool_result` `details.response`. The
+ * elicitation `content` map carries `{ [id]: label, [id]__note?: string }`;
+ * the hook expects `{ answers: { [id]: { selected, notes } } }`. Mirrored into
+ * `structuredContent` by `askUserQuestionsHandler`. See #5267.
+ */
+export function buildAskUserQuestionsRoundResult(
+  questions: AskUserQuestion[],
+  result: AskUserQuestionsElicitResult,
+): AskUserQuestionsRoundResult {
+  const answers: Record<string, AskUserQuestionsRoundResultAnswer> = {};
+  const content = result.content ?? {};
+
+  for (const question of questions) {
+    if (question.allowMultiple) {
+      const list = normalizeAskUserQuestionsAnswers(content[question.id], true);
+      answers[question.id] = { selected: list, notes: '' };
+      continue;
+    }
+
+    const list = normalizeAskUserQuestionsAnswers(content[question.id], false);
+    const selected = list[0] ?? '';
+    const notes = selected === OTHER_OPTION_LABEL
+      ? normalizeAskUserQuestionsNote(content[`${question.id}__note`])
+      : '';
+    answers[question.id] = { selected, notes };
+  }
+
+  // `endInterview: false` mirrors the local extension's `RoundResult` shape and
+  // matches the remote path's `toRoundResultResponse` so register-hooks reads
+  // identical payloads regardless of channel. See peer review #5267-Q2.
+  return { endInterview: false, answers };
+}
+
 interface AskUserQuestionsHandlerDeps {
   elicitInput(params: AskUserQuestionsElicitRequest): Promise<AskUserQuestionsElicitResult>;
   isRemoteConfigured(): boolean;
   tryRemoteQuestions(questions: AskUserQuestion[], signal?: AbortSignal): Promise<RemoteToolResult | null>;
+  writeGate?: AskUserQuestionsWriteGateModule | null;
+  writeGateBasePath?: string;
+}
+
+let askUserQuestionsWriteGateModulePromise: Promise<AskUserQuestionsWriteGateModule | null> | null = null;
+
+function isAskUserQuestionsWriteGateModule(value: unknown): value is AskUserQuestionsWriteGateModule {
+  if (!value || typeof value !== 'object') return false;
+  const module = value as Record<string, unknown>;
+  return (
+    typeof module['isGateQuestionId'] === 'function' &&
+    typeof module['isDepthConfirmationAnswer'] === 'function' &&
+    typeof module['setPendingGate'] === 'function' &&
+    typeof module['markApprovalGateVerified'] === 'function' &&
+    typeof module['markDepthVerified'] === 'function' &&
+    typeof module['clearPendingGate'] === 'function' &&
+    typeof module['extractDepthVerificationMilestoneId'] === 'function'
+  );
+}
+
+async function loadAskUserQuestionsWriteGateModule(): Promise<AskUserQuestionsWriteGateModule | null> {
+  if (!askUserQuestionsWriteGateModulePromise) {
+    askUserQuestionsWriteGateModulePromise = (async () => {
+      const modulePath = process.env.GSD_WORKFLOW_WRITE_GATE_MODULE?.trim();
+      if (!modulePath) return null;
+      try {
+        if (/^[a-z]{2,}:/i.test(modulePath) && !modulePath.startsWith('file:')) {
+          throw new Error('GSD_WORKFLOW_WRITE_GATE_MODULE only supports file: URLs or filesystem paths.');
+        }
+        const baseRoot = process.env.GSD_WORKFLOW_PROJECT_ROOT?.trim() || process.cwd();
+        const specifier = modulePath.startsWith('file:') ? modulePath : pathToFileURL(resolve(baseRoot, modulePath)).href;
+        const loaded = await import(specifier);
+        return isAskUserQuestionsWriteGateModule(loaded) ? loaded : null;
+      } catch (err) {
+        console.warn(`[gsd:mcp] ask_user_questions write-gate integration unavailable: ${formatErrorMessage(err)}`);
+        return null;
+      }
+    })();
+  }
+  return askUserQuestionsWriteGateModulePromise;
+}
+
+function askUserQuestionsWriteGateBasePath(deps: AskUserQuestionsHandlerDeps): string {
+  return deps.writeGateBasePath ?? process.env.GSD_WORKFLOW_PROJECT_ROOT?.trim() ?? process.cwd();
+}
+
+async function resolveAskUserQuestionsWriteGate(deps: AskUserQuestionsHandlerDeps): Promise<AskUserQuestionsWriteGateModule | null> {
+  if (deps.writeGate !== undefined) return deps.writeGate;
+  return loadAskUserQuestionsWriteGateModule();
+}
+
+async function recordAskUserQuestionsPendingGate(
+  questions: AskUserQuestion[],
+  deps: AskUserQuestionsHandlerDeps,
+): Promise<void> {
+  const writeGate = await resolveAskUserQuestionsWriteGate(deps);
+  if (!writeGate) return;
+
+  const basePath = askUserQuestionsWriteGateBasePath(deps);
+  for (const question of questions) {
+    if (writeGate.isGateQuestionId(question.id)) {
+      writeGate.setPendingGate(question.id, basePath);
+    }
+  }
+}
+
+async function recordAskUserQuestionsGateResult(
+  structured: AskUserQuestionsStructuredContent,
+  deps: AskUserQuestionsHandlerDeps,
+): Promise<void> {
+  if (structured.cancelled || !structured.response) return;
+  const writeGate = await resolveAskUserQuestionsWriteGate(deps);
+  if (!writeGate) return;
+
+  const basePath = askUserQuestionsWriteGateBasePath(deps);
+  for (const question of structured.questions) {
+    if (!writeGate.isGateQuestionId(question.id)) continue;
+    const selected = structured.response.answers[question.id]?.selected;
+    if (!writeGate.isDepthConfirmationAnswer(selected, question.options)) continue;
+
+    writeGate.markApprovalGateVerified(question.id, basePath);
+    writeGate.markDepthVerified(writeGate.extractDepthVerificationMilestoneId(question.id), basePath);
+    writeGate.clearPendingGate(basePath);
+  }
 }
 
 function isLocalElicitFallbackError(err: unknown): boolean {
@@ -468,6 +614,18 @@ function formatErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/**
+ * Defensive guard for the `details.response` payload from `tryRemoteQuestions`.
+ * Accepts only an object with a plain `answers` map; anything else (null,
+ * stringified JSON, missing) falls back to `null` so the gate hook routes
+ * the cancel branch instead of crashing on `details.response.answers[id]`.
+ */
+function isRoundResultLike(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const answers = (value as Record<string, unknown>)['answers'];
+  return !!answers && typeof answers === 'object' && !Array.isArray(answers);
+}
+
 export async function askUserQuestionsHandler(
   questions: AskUserQuestion[],
   extra: McpToolExtra | undefined,
@@ -476,6 +634,7 @@ export async function askUserQuestionsHandler(
   try {
     const validationError = validateAskUserQuestionsPayload(questions);
     if (validationError) return errorContent(validationError);
+    await recordAskUserQuestionsPendingGate(questions, deps);
 
     // Local-first: try the MCP host's elicitation channel (Claude Code,
     // Cursor, etc.) before any configured remote channel. A misconfigured
@@ -488,7 +647,16 @@ export async function askUserQuestionsHandler(
         'ask_user_questions',
       );
       if (elicitation.action === 'accept' && elicitation.content) {
-        return textContent(formatAskUserQuestionsElicitResult(questions, elicitation));
+        const structured: AskUserQuestionsStructuredContent = {
+          questions,
+          response: buildAskUserQuestionsRoundResult(questions, elicitation),
+          cancelled: false,
+        };
+        await recordAskUserQuestionsGateResult(structured, deps);
+        return {
+          content: [{ type: 'text' as const, text: formatAskUserQuestionsElicitResult(questions, elicitation) }],
+          structuredContent: structured as unknown as Record<string, unknown>,
+        };
       }
     } catch (err) {
       if (!isLocalElicitFallbackError(err)) throw err;
@@ -513,15 +681,58 @@ export async function askUserQuestionsHandler(
       if (remoteResult) {
         const details = remoteResult.details as Record<string, unknown> | undefined;
         if (details?.['timed_out'] || details?.['error']) {
-          return textContent(remoteResult.content[0]?.text ?? 'Remote questions timed out or failed');
+          // Mirror the timeout/error into structuredContent so the gate hook's
+          // `details?.cancelled || !details?.response` branch fires correctly
+          // (gate stays pending, model re-asks) instead of silently dropping
+          // because no `details` made it across the MCP wire. See #5267.
+          const failedStructured: AskUserQuestionsStructuredContent = {
+            questions,
+            response: null,
+            cancelled: true,
+          };
+          return {
+            content: [{ type: 'text' as const, text: remoteResult.content[0]?.text ?? 'Remote questions timed out or failed' }],
+            structuredContent: failedStructured as unknown as Record<string, unknown>,
+          };
         }
-        return textContent(remoteResult.content[0]?.text ?? '');
+        // Successful remote answer — surface the normalized RoundResult that
+        // remote-questions.ts attached to `details.response` so the gate hook
+        // sees `details.response.answers[id].selected` on this path too.
+        // A malformed `response` (failing isRoundResultLike) is reported as
+        // an explicit cancellation rather than a silent `cancelled: false`
+        // with `response: null` — the latter would lie to any consumer that
+        // reads `structuredContent.cancelled` independently of `.response`.
+        const hasValidResponse = isRoundResultLike(details?.['response']);
+        const acceptedStructured: AskUserQuestionsStructuredContent = hasValidResponse
+          ? {
+              questions,
+              response: details!['response'] as AskUserQuestionsRoundResult,
+              cancelled: false,
+            }
+            : {
+              questions,
+              response: null,
+              cancelled: true,
+            };
+        await recordAskUserQuestionsGateResult(acceptedStructured, deps);
+        return {
+          content: [{ type: 'text' as const, text: remoteResult.content[0]?.text ?? '' }],
+          structuredContent: acceptedStructured as unknown as Record<string, unknown>,
+        };
       }
     }
 
     if (localElicitError) throw localElicitError;
 
-    return textContent('ask_user_questions was cancelled before receiving a response');
+    const cancelledStructured: AskUserQuestionsStructuredContent = {
+      questions,
+      response: null,
+      cancelled: true,
+    };
+    return {
+      content: [{ type: 'text' as const, text: 'ask_user_questions was cancelled before receiving a response' }],
+      structuredContent: cancelledStructured as unknown as Record<string, unknown>,
+    };
   } catch (err) {
     return errorContent(err instanceof Error ? err.message : String(err));
   }
@@ -537,8 +748,8 @@ export type ElicitInputFn = (params: {
 }) => Promise<{ action: 'accept' | 'cancel' | 'decline'; content?: Record<string, unknown> }>;
 
 type ToolContent =
-  | { content: Array<{ type: 'text'; text: string }> }
-  | { isError: true; content: Array<{ type: 'text'; text: string }> };
+  | { content: Array<{ type: 'text'; text: string }>; structuredContent?: Record<string, unknown> }
+  | { isError: true; content: Array<{ type: 'text'; text: string }>; structuredContent?: Record<string, unknown> };
 
 export async function secureEnvCollectHandler(
   args: Record<string, unknown>,

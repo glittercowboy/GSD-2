@@ -1,3 +1,6 @@
+// Project/App: GSD-2
+// File Purpose: Creates, resolves, and reconciles GSD milestone worktrees.
+
 /**
  * GSD Worktree Manager
  *
@@ -21,6 +24,7 @@ import { join, resolve, sep } from "node:path";
 import { GSDError, GSD_PARSE_ERROR, GSD_STALE_STATE, GSD_LOCK_HELD, GSD_GIT_ERROR, GSD_MERGE_CONFLICT } from "./errors.js";
 import { logWarning } from "./workflow-logger.js";
 import {
+  nativeBranchList,
   nativeBranchDelete,
   nativeBranchExists,
   nativeBranchForceReset,
@@ -52,6 +56,7 @@ export interface WorktreeInfo {
   path: string;
   branch: string;
   exists: boolean;
+  orphan?: boolean;
 }
 
 /** Per-file line change stats from git diff --numstat. */
@@ -68,6 +73,15 @@ export interface WorktreeDiffSummary {
   modified: string[];
   /** Files only in main .gsd/ (deleted in worktree) */
   removed: string[];
+}
+
+function deleteBranchIfPresent(basePath: string, branch: string, warningPrefix: string): void {
+  try {
+    if (!nativeBranchExists(basePath, branch)) return;
+    nativeBranchDelete(basePath, branch, true);
+  } catch (e) {
+    logWarning("worktree", `${warningPrefix}: ${(e as Error).message}`);
+  }
 }
 
 // ─── Path Helpers ──────────────────────────────────────────────────────────
@@ -163,8 +177,9 @@ export function isInsideWorktreesDir(basePath: string, targetPath: string): bool
  * Readers that cross the session/worktree boundary (validators, the bootstrap
  * audit, cross-session state queries) should route through this helper so they
  * don't silently read stale project-root state while live work sits in the
- * worktree. Writers and tools whose contract is "operate on the path I was
- * given" should NOT use this helper — they preserve the legacy behavior.
+ * worktree. Workflow artifact writers may also use it when their contract is
+ * to update the live milestone projection; generic path-local tools should
+ * preserve "operate on the path I was given" behavior.
  *
  * A stale worktree directory (no `.git` file) is treated as absent. The
  * createWorktree() path already cleans these up, but readers must not trust
@@ -232,7 +247,19 @@ export function createWorktree(basePath: string, name: string, opts: { branch?: 
     const gitFilePath = join(wtPath, ".git");
     if (!existsSync(gitFilePath)) {
       logWarning("reconcile", `Removing stale worktree directory (no .git file): ${wtPath}`, { worktree: name });
-      rmSync(wtPath, { recursive: true, force: true });
+      try {
+        rmSync(wtPath, { recursive: true, force: true });
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException)?.code;
+        if (code === "EPERM" || code === "EBUSY") {
+          throw new GSDError(
+            GSD_GIT_ERROR,
+            `Cannot remove stale worktree directory at ${wtPath} (${code}: directory may be locked by another process). Close editors/antivirus/git tools using this path and retry.`,
+            { cause: error as Error },
+          );
+        }
+        throw error;
+      }
     } else {
       throw new GSDError(GSD_STALE_STATE, `Worktree "${name}" already exists at ${wtPath}`);
     }
@@ -299,7 +326,14 @@ export function createWorktree(basePath: string, name: string, opts: { branch?: 
       }
       // Reset the stale branch to the start point, then attach worktree to it
       nativeBranchForceReset(basePath, branch, startPoint);
-      nativeWorktreeAdd(basePath, wtPath, branch);
+      try {
+        nativeWorktreeAdd(basePath, wtPath, branch);
+      } catch (error) {
+        // If add fails after reset, the branch now exists without a worktree.
+        // Clean it up so we do not accumulate orphan branches.
+        deleteBranchIfPresent(basePath, branch, "nativeBranchDelete failed after worktree add failure");
+        throw error;
+      }
     }
   } else {
     nativeWorktreeAdd(basePath, wtPath, branch, true, startPoint);
@@ -339,8 +373,6 @@ export function listWorktrees(basePath: string): WorktreeInfo[] {
     });
 
   const entries = nativeWorktreeList(basePath);
-
-  if (!entries.length) return [];
 
   const worktrees: WorktreeInfo[] = [];
 
@@ -396,6 +428,26 @@ export function listWorktrees(basePath: string): WorktreeInfo[] {
     });
   }
 
+  const registeredBranches = new Set(
+    entries
+      .filter(entry => !entry.isBare && !!entry.branch)
+      .map(entry => entry.branch as string),
+  );
+  const orphanMilestoneBranches = nativeBranchList(basePath, "milestone/*")
+    .filter(branch => !registeredBranches.has(branch));
+
+  for (const branch of orphanMilestoneBranches) {
+    const name = branch.slice("milestone/".length);
+    if (!name || name.includes("/")) continue;
+    worktrees.push({
+      name,
+      path: worktreePath(basePath, name),
+      branch,
+      exists: false,
+      orphan: true,
+    });
+  }
+
   return worktrees;
 }
 
@@ -408,7 +460,7 @@ export function listWorktrees(basePath: string): WorktreeInfo[] {
 
 /** Directories to skip when scanning for nested .git dirs. */
 const NESTED_GIT_SKIP_DIRS = new Set([
-  ".git", ".gsd", "node_modules", ".next", ".nuxt", "dist", "build",
+  ".git", ".gsd", ".bg-shell", "node_modules", ".next", ".nuxt", "dist", "build",
   "__pycache__", ".tox", ".venv", "venv", "target", "vendor",
 ]);
 
@@ -454,6 +506,10 @@ export function findNestedGitDirs(rootPath: string): string[] {
       // A .git file is a worktree pointer and is legitimate.
       // A .git directory is a standalone repo created by scaffolding.
       const innerGit = join(fullPath, ".git");
+      if (!existsSync(innerGit)) {
+        walk(fullPath, depth + 1);
+        continue;
+      }
       try {
         const innerStat = lstatSync(innerGit);
         if (innerStat.isDirectory()) {
@@ -462,7 +518,7 @@ export function findNestedGitDirs(rootPath: string): string[] {
           continue;
         }
       } catch (e) {
-        logWarning("worktree", `existsSync/.git check failed for ${fullPath}: ${(e as Error).message}`);
+        logWarning("worktree", `.git check failed for ${fullPath}: ${(e as Error).message}`);
       }
 
       walk(fullPath, depth + 1);
@@ -535,7 +591,7 @@ export function removeWorktree(
   if (!existsSync(wtPath)) {
     nativeWorktreePrune(basePath);
     if (deleteBranch) {
-      try { nativeBranchDelete(basePath, branch, true); } catch (e) { logWarning("worktree", `nativeBranchDelete failed: ${(e as Error).message}`); }
+      deleteBranchIfPresent(basePath, branch, "nativeBranchDelete failed");
     }
     return;
   }
@@ -607,7 +663,7 @@ export function removeWorktree(
       try {
         rmSync(nestedGitPath, { recursive: true, force: true });
         logWarning("reconcile",
-          `Removed nested .git directory from scaffolded project to prevent data loss (#2616)`,
+          `Removed nested .git directory from scaffolded project to prevent data loss`,
           { worktree: name, nestedRepo: nestedDir },
         );
       } catch {
@@ -670,7 +726,7 @@ export function removeWorktree(
   nativeWorktreePrune(basePath);
 
   if (deleteBranch) {
-    try { nativeBranchDelete(basePath, branch, true); } catch (e) { logWarning("worktree", `final branch delete failed: ${(e as Error).message}`); }
+    deleteBranchIfPresent(basePath, branch, "final branch delete failed");
   }
 }
 
@@ -755,10 +811,10 @@ export function diffWorktreeGSD(basePath: string, name: string): WorktreeDiffSum
  * on main when the merge is applied. If both branches have identical
  * content, this correctly returns an empty diff.
  */
-export function diffWorktreeAll(basePath: string, name: string): WorktreeDiffSummary {
+export function diffWorktreeAll(basePath: string, name: string, branchOverride?: string): WorktreeDiffSummary {
   basePath = normalizeBasePathForWorktreeOps(basePath);
 
-  const branch = worktreeBranchName(name);
+  const branch = branchOverride ?? worktreeBranchName(name);
   const mainBranch = nativeDetectMainBranch(basePath);
 
   const entries = nativeDiffNameStatus(basePath, mainBranch, branch);
@@ -770,10 +826,10 @@ export function diffWorktreeAll(basePath: string, name: string): WorktreeDiffSum
  * Get per-file line addition/deletion stats for what will change on main.
  * Uses direct diff (not merge-base) so the preview matches the actual merge outcome.
  */
-export function diffWorktreeNumstat(basePath: string, name: string): FileLineStat[] {
+export function diffWorktreeNumstat(basePath: string, name: string, branchOverride?: string): FileLineStat[] {
   basePath = normalizeBasePathForWorktreeOps(basePath);
 
-  const branch = worktreeBranchName(name);
+  const branch = branchOverride ?? worktreeBranchName(name);
   const mainBranch = nativeDetectMainBranch(basePath);
 
   const rawStats = nativeDiffNumstat(basePath, mainBranch, branch);
@@ -831,10 +887,10 @@ export function getWorktreeLog(basePath: string, name: string): string {
  * Must be called from the main working tree (not the worktree itself).
  * Returns the merge commit message.
  */
-export function mergeWorktreeToMain(basePath: string, name: string, commitMessage: string): string {
+export function mergeWorktreeToMain(basePath: string, name: string, commitMessage: string, branchOverride?: string): string {
   basePath = normalizeBasePathForWorktreeOps(basePath);
 
-  const branch = worktreeBranchName(name);
+  const branch = branchOverride ?? worktreeBranchName(name);
   const mainBranch = nativeDetectMainBranch(basePath);
   const current = nativeGetCurrentBranch(basePath);
 

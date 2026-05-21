@@ -4,6 +4,7 @@ import { mkdir as fsMkdir, writeFile as fsWriteFile } from "fs/promises";
 import { dirname } from "path";
 import { notifyFileChanged } from "../lsp/client.js";
 import { resolveToCwd } from "./path-utils.js";
+import { createToolTarget, type ToolTargetMetadata } from "./tool-target.js";
 
 const writeSchema = Type.Object({
 	path: Type.String({ description: "Path to the file to write (relative or absolute)" }),
@@ -11,6 +12,10 @@ const writeSchema = Type.Object({
 });
 
 export type WriteToolInput = Static<typeof writeSchema>;
+
+export interface WriteToolDetails {
+	target?: ToolTargetMetadata;
+}
 
 /**
  * Pluggable operations for the write tool.
@@ -50,7 +55,7 @@ export function createWriteTool(cwd: string, options?: WriteToolOptions): AgentT
 			const absolutePath = resolveToCwd(path, cwd);
 			const dir = dirname(absolutePath);
 
-			return new Promise<{ content: Array<{ type: "text"; text: string }>; details: undefined }>(
+			return new Promise<{ content: Array<{ type: "text"; text: string }>; details: WriteToolDetails | undefined }>(
 				(resolve, reject) => {
 					// Check if already aborted
 					if (signal?.aborted) {
@@ -98,7 +103,14 @@ export function createWriteTool(cwd: string, options?: WriteToolOptions): AgentT
 
 							resolve({
 								content: [{ type: "text", text: `Successfully wrote ${content.length} bytes to ${path}` }],
-								details: undefined,
+								details: {
+									target: createToolTarget({
+										kind: "file",
+										action: "write",
+										inputPath: path,
+										resolvedPath: absolutePath,
+									}),
+								},
 							});
 						} catch (error: any) {
 							// Clean up abort handler

@@ -1,11 +1,15 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { GSDPreferences } from "./preferences.js";
+import { atomicWriteSync } from "./atomic-write.js";
 import { clearParseCache } from "./files.js";
 import { gsdRoot, clearPathCache } from "./paths.js";
 import { validateArtifact } from "./schemas/validate.js";
 import { getProjectResearchStatus } from "./project-research-policy.js";
+// NB: planning-depth.ts also imports from this module. The ESM cycle is safe
+// because both sides only consume each other's function exports lazily.
+import { ensureWorkflowPreferencesCaptured } from "./planning-depth.js";
 
 export type DeepProjectSetupStage =
   | "workflow-preferences"
@@ -60,7 +64,6 @@ export function writeDefaultResearchSkipDecision(
   reason = "deterministic-default",
   previousSource?: string,
 ): void {
-  mkdirSync(runtimeDir(basePath), { recursive: true });
   const payload: Record<string, unknown> = {
     decision: "skip",
     decided_at: new Date().toISOString(),
@@ -68,7 +71,7 @@ export function writeDefaultResearchSkipDecision(
     reason,
   };
   if (previousSource) payload.previous_source = previousSource;
-  writeFileSync(researchDecisionPath(basePath), `${JSON.stringify(payload, null, 2)}\n`, "utf-8");
+  atomicWriteSync(researchDecisionPath(basePath), `${JSON.stringify(payload, null, 2)}\n`, "utf-8");
   clearCaches();
 }
 
@@ -103,6 +106,25 @@ function isExplicitResearchDecision(decision: {
   return decision.decision === "research" && EXPLICIT_RESEARCH_SOURCES.has(decision.source as ResearchDecisionSource);
 }
 
+/**
+ * True if all post-PREFERENCES setup artifacts (PROJECT.md, REQUIREMENTS.md,
+ * and a valid research-decision marker) are present and validate. Used to
+ * decide whether a missing `workflow_prefs_captured: true` flag is genuine
+ * incomplete setup or post-setup drift that should be self-healed.
+ */
+function downstreamSetupArtifactsValid(root: string, basePath: string): boolean {
+  const projectPath = join(root, "PROJECT.md");
+  if (!existsSync(projectPath) || !validateArtifact(projectPath, "project").ok) return false;
+
+  const requirementsPath = join(root, "REQUIREMENTS.md");
+  if (!existsSync(requirementsPath) || !validateArtifact(requirementsPath, "requirements").ok) return false;
+
+  const marker = readDecision(basePath);
+  if (!marker.exists || !marker.valid) return false;
+
+  return true;
+}
+
 export function resolveDeepProjectSetupState(
   prefs: GSDPreferences | undefined,
   basePath: string,
@@ -117,11 +139,21 @@ export function resolveDeepProjectSetupState(
 
   const root = gsdRoot(basePath);
   if (!isWorkflowPrefsCaptured(basePath)) {
-    return {
-      status: "pending",
-      stage: "workflow-preferences",
-      reason: ".gsd/PREFERENCES.md is missing workflow_prefs_captured: true.",
-    };
+    // Self-heal: if all downstream setup artifacts already exist and validate,
+    // the missing `workflow_prefs_captured: true` flag is drift (manual edit,
+    // partial write, merge conflict). Restore it instead of forcing the user
+    // back through setup — the original Bug #2 false-pending root cause.
+    if (downstreamSetupArtifactsValid(root, basePath)) {
+      ensureWorkflowPreferencesCaptured(basePath);
+      // Fall through — checks below will pass since downstreamSetupArtifactsValid
+      // already verified them.
+    } else {
+      return {
+        status: "pending",
+        stage: "workflow-preferences",
+        reason: ".gsd/PREFERENCES.md is missing workflow_prefs_captured: true.",
+      };
+    }
   }
 
   const projectPath = join(root, "PROJECT.md");

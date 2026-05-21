@@ -7,6 +7,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@gsd/pi-coding-agent";
 
 import type { AutoSession } from "./session.js";
+import type { ErrorContext } from "./types.js";
 import type { GSDPreferences } from "../preferences.js";
 import type { GSDState } from "../types.js";
 import type { SessionLockStatus } from "../session-lock.js";
@@ -17,12 +18,30 @@ import type {
   VerificationResult,
 } from "../auto-verification.js";
 import type { DispatchAction, DispatchContext } from "../auto-dispatch.js";
-import type { WorktreeResolver } from "../worktree-resolver.js";
+import type { WorktreeLifecycle } from "../worktree-lifecycle.js";
+import type { WorktreeStateProjection } from "../worktree-state-projection.js";
 import type { CmuxLogLevel } from "../../shared/cmux-events.js";
 import type { JournalEntry } from "../journal.js";
 import type { MergeReconcileResult } from "../auto-recovery.js";
 import type { UokTurnObserver } from "../uok/contracts.js";
-import type { PreflightResult } from "../clean-root-preflight.js";
+import type { PostflightResult, PreflightResult } from "../clean-root-preflight.js";
+
+export interface StopAutoOptions {
+  preserveWorktree?: boolean;
+  completionWidget?: {
+    milestoneId?: string | null;
+    milestoneTitle?: string | null;
+    allMilestonesComplete?: boolean;
+  };
+  /** Preserve, rather than merge, a completed milestone during stop cleanup. */
+  preserveCompletedMilestoneBranch?: boolean;
+}
+
+type PauseAutoFn = (
+  ctx?: ExtensionContext,
+  pi?: ExtensionAPI,
+  errorContext?: ErrorContext,
+) => Promise<void>;
 
 /**
  * Dependencies injected by the caller (auto.ts startAuto) so autoLoop
@@ -38,8 +57,9 @@ export interface LoopDeps {
     ctx?: ExtensionContext,
     pi?: ExtensionAPI,
     reason?: string,
+    options?: StopAutoOptions,
   ) => Promise<void>;
-  pauseAuto: (ctx?: ExtensionContext, pi?: ExtensionAPI) => Promise<void>;
+  pauseAuto: PauseAutoFn;
   clearUnitTimeout: () => void;
   updateProgressWidget: (
     ctx: ExtensionContext,
@@ -67,12 +87,9 @@ export interface LoopDeps {
     basePath: string,
   ) => Promise<{ proceed: boolean; reason?: string; fixesApplied: string[] }>;
 
-  // Worktree sync
-  syncProjectRootToWorktree: (
-    originalBase: string,
-    basePath: string,
-    milestoneId: string | null,
-  ) => void;
+  // Worktree state projection (ADR-016 — single Module Interface for all
+  // direction-typed projection verbs)
+  worktreeProjection: WorktreeStateProjection;
 
   // Resource version guard
   checkResourcesStale: (version: string | null) => string | null;
@@ -102,11 +119,6 @@ export interface LoopDeps {
   pruneQueueOrder: (basePath: string, pendingIds: string[]) => void;
   isInAutoWorktree: (basePath: string) => boolean;
   shouldUseWorktreeIsolation: () => boolean;
-  mergeMilestoneToMain: (
-    basePath: string,
-    milestoneId: string,
-    roadmapContent: string,
-  ) => { pushed: boolean; codeFilesChanged: boolean };
   teardownAutoWorktree: (basePath: string, milestoneId: string) => void;
   createAutoWorktree: (basePath: string, milestoneId: string) => string;
   captureIntegrationBranch: (
@@ -132,8 +144,9 @@ export interface LoopDeps {
   postflightPopStash: (
     basePath: string,
     milestoneId: string,
+    stashMarker: string | undefined,
     notify: (message: string, level: "info" | "warning" | "error") => void,
-  ) => void;
+  ) => PostflightResult;
 
   // Budget/context/secrets
   getLedger: () => unknown;
@@ -245,7 +258,7 @@ export interface LoopDeps {
     prefs: GSDPreferences | undefined;
     buildSnapshotOpts: () => CloseoutOptions & Record<string, unknown>;
     buildRecoveryContext: () => unknown;
-    pauseAuto: (ctx?: ExtensionContext, pi?: ExtensionAPI) => Promise<void>;
+    pauseAuto: PauseAutoFn;
   }) => void;
 
   // Prompt helpers
@@ -261,8 +274,9 @@ export interface LoopDeps {
   // Git
   GitServiceImpl: new (basePath: string, gitConfig: unknown) => unknown;
 
-  // WorktreeResolver
-  resolver: WorktreeResolver;
+  // Worktree Lifecycle Module (ADR-016 — single Module Interface for the
+  // milestone create/enter/exit/merge verbs)
+  lifecycle: WorktreeLifecycle;
 
   // Post-unit processing
   postUnitPreVerification: (
@@ -271,11 +285,11 @@ export interface LoopDeps {
   ) => Promise<"dispatched" | "continue" | "retry">;
   runPostUnitVerification: (
     vctx: VerificationContext,
-    pauseAuto: (ctx?: ExtensionContext, pi?: ExtensionAPI) => Promise<void>,
+    pauseAuto: PauseAutoFn,
   ) => Promise<VerificationResult>;
   postUnitPostVerification: (
     pctx: PostUnitContext,
-  ) => Promise<"continue" | "step-wizard" | "stopped">;
+  ) => Promise<"continue" | "step-wizard" | "retry" | "stopped">;
 
   // Session manager
   getSessionFile: (ctx: ExtensionContext) => string;

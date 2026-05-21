@@ -1,3 +1,6 @@
+// Project/App: GSD-2
+// File Purpose: Regression tests for DB-backed milestone planning.
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
@@ -111,6 +114,32 @@ test('handlePlanMilestone rejects invalid payloads', async () => {
     const result = await handlePlanMilestone({ ...params, slices: [] }, base);
     assert.ok('error' in result);
     assert.match(result.error, /validation failed: slices must be a non-empty array/);
+  } finally {
+    cleanup(base);
+  }
+});
+
+test('handlePlanMilestone rejects delimiter characters in milestone and slice titles', async () => {
+  const base = makeTmpBase();
+  const dbPath = join(base, '.gsd', 'gsd.db');
+  openDatabase(dbPath);
+
+  try {
+    const milestoneResult = await handlePlanMilestone({ ...validParams(), title: 'Client/Server split' }, base);
+    assert.ok('error' in milestoneResult);
+    assert.match(milestoneResult.error, /validation failed: title is invalid: .*forward slash/);
+    assert.equal(getMilestone('M001'), null, 'invalid milestone title must not persist');
+
+    const sliceResult = await handlePlanMilestone({
+      ...validParams(),
+      slices: [
+        validParams().slices[0],
+        { ...validParams().slices[1], title: 'Client/Server migration' },
+      ],
+    }, base);
+    assert.ok('error' in sliceResult);
+    assert.match(sliceResult.error, /validation failed: slices\[1\]\.title is invalid: .*forward slash/);
+    assert.equal(getMilestoneSlices('M001').length, 0, 'invalid slice title must not persist partial roadmap state');
   } finally {
     cleanup(base);
   }
@@ -288,6 +317,32 @@ test('handlePlanMilestone promotes pre-existing queued milestone to active (#302
     const after = getMilestone('M001');
     assert.equal(after?.status, 'active', 'milestone status should be promoted from queued to active');
     assert.equal(after?.title, 'DB-backed planning', 'milestone title should be set');
+  } finally {
+    cleanup(base);
+  }
+});
+
+test('handlePlanMilestone updates depends_on when a queued milestone row already exists', async () => {
+  const base = makeTmpBase();
+  mkdirSync(join(base, '.gsd', 'milestones', 'M002'), { recursive: true });
+  const dbPath = join(base, '.gsd', 'gsd.db');
+  openDatabase(dbPath);
+
+  try {
+    insertMilestone({ id: 'M001', title: 'Dependency', status: 'complete' });
+    insertMilestone({ id: 'M002', status: 'queued' });
+
+    const result = await handlePlanMilestone({
+      ...validParams(),
+      milestoneId: 'M002',
+      title: 'Dependent planning',
+      dependsOn: ['M001'],
+    }, base);
+    assert.ok(!('error' in result), `unexpected error: ${'error' in result ? result.error : ''}`);
+
+    const after = getMilestone('M002');
+    assert.deepEqual(after?.depends_on, ['M001'], 'depends_on should be updated from planning params');
+    assert.equal(after?.status, 'active', 'queued milestone should still be promoted to active');
   } finally {
     cleanup(base);
   }

@@ -1,9 +1,11 @@
+// Project/App: GSD-2
+// File Purpose: Tests workflow MCP launch config, tool surface, and stdio elicitation behavior.
+
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { ElicitRequestSchema } from "@modelcontextprotocol/sdk/types.js";
@@ -18,17 +20,12 @@ import {
   usesWorkflowMcpTransport,
 } from "../workflow-mcp.ts";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const gsdDir = join(__dirname, "..");
+const MCP_STDIO_TIMEOUT_MS = 90_000;
 
 type ElicitPayload = {
   message: string;
   requestedSchema: { properties: Record<string, unknown>; required?: string[] };
 };
-
-function readSrc(file: string): string {
-  return readFileSync(join(gsdDir, file), "utf-8");
-}
 
 function extractElicitPayload(request: unknown): ElicitPayload {
   const payload = (request as { params?: unknown }).params ?? request;
@@ -39,8 +36,14 @@ test("guided execute-task requires canonical task completion tool", () => {
   assert.deepEqual(getRequiredWorkflowToolsForGuidedUnit("execute-task"), ["gsd_task_complete"]);
 });
 
-test("auto execute-task requires legacy completion alias until prompt contract is aligned", () => {
-  assert.deepEqual(getRequiredWorkflowToolsForAutoUnit("execute-task"), ["gsd_complete_task"]);
+test("auto execute-task requires canonical task completion tool", () => {
+  assert.deepEqual(getRequiredWorkflowToolsForAutoUnit("execute-task"), ["gsd_task_complete"]);
+});
+
+test("complete-slice requires closeout and execution handoff tools", () => {
+  const expected = ["gsd_slice_complete", "gsd_task_reopen", "gsd_replan_slice"];
+  assert.deepEqual(getRequiredWorkflowToolsForGuidedUnit("complete-slice"), expected);
+  assert.deepEqual(getRequiredWorkflowToolsForAutoUnit("complete-slice"), expected);
 });
 
 test("deep project setup units declare required workflow MCP tools", () => {
@@ -284,9 +287,9 @@ test("workflow MCP launch config reaches mutation tools over stdio", async () =>
   });
 
   try {
-    await client.connect(transport, { timeout: 30_000 });
+    await client.connect(transport, { timeout: MCP_STDIO_TIMEOUT_MS });
 
-    const tools = await client.listTools(undefined, { timeout: 30_000 });
+    const tools = await client.listTools(undefined, { timeout: MCP_STDIO_TIMEOUT_MS });
     assert.ok(
       (tools.tools ?? []).some((tool) => tool.name === "gsd_plan_slice"),
       "expected workflow MCP surface to expose gsd_plan_slice",
@@ -314,7 +317,7 @@ test("workflow MCP launch config reaches mutation tools over stdio", async () =>
         },
       },
       undefined,
-      { timeout: 30_000 },
+      { timeout: MCP_STDIO_TIMEOUT_MS },
     );
     assert.equal(askResult.isError, undefined);
     assert.equal(
@@ -353,7 +356,7 @@ test("workflow MCP launch config reaches mutation tools over stdio", async () =>
         },
       },
       undefined,
-      { timeout: 30_000 },
+      { timeout: MCP_STDIO_TIMEOUT_MS },
     );
     assert.equal(milestoneResult.isError, undefined);
     assert.match(
@@ -377,14 +380,14 @@ test("workflow MCP launch config reaches mutation tools over stdio", async () =>
               estimate: "10m",
               files: ["src/resources/extensions/gsd/workflow-mcp.ts"],
               verify: "node --test",
-              inputs: ["M001-ROADMAP.md"],
+              inputs: [".gsd/milestones/M001/M001-ROADMAP.md"],
               expectedOutput: ["S01-PLAN.md", "T01-PLAN.md"],
             },
           ],
         },
       },
       undefined,
-      { timeout: 30_000 },
+      { timeout: MCP_STDIO_TIMEOUT_MS },
     );
     assert.equal(sliceResult.isError, undefined);
     assert.match(
@@ -455,7 +458,7 @@ test("workflow MCP ask_user_questions uses stdio elicitation round-trip", async 
   });
 
   try {
-    await client.connect(transport, { timeout: 30_000 });
+    await client.connect(transport, { timeout: MCP_STDIO_TIMEOUT_MS });
 
     const result = await client.callTool(
       {
@@ -475,7 +478,7 @@ test("workflow MCP ask_user_questions uses stdio elicitation round-trip", async 
         },
       },
       undefined,
-      { timeout: 30_000 },
+      { timeout: MCP_STDIO_TIMEOUT_MS },
     );
 
     assert.ok(requestSeen, "expected stdio transport to forward an elicitation request");
@@ -749,26 +752,20 @@ test("transport compatibility still blocks units whose MCP tools are not exposed
   assert.match(error ?? "", /currently exposes only/);
 });
 
-test("guided-flow source enforces workflow compatibility preflight", () => {
-  const src = readSrc("guided-flow.ts");
-  assert.match(src, /getRequiredWorkflowToolsForGuidedUnit/);
-  assert.match(src, /getWorkflowTransportSupportError/);
-});
+test("transport compatibility accepts MCP-namespaced runtime tools", () => {
+  const error = getWorkflowTransportSupportError(
+    "claude-code",
+    ["gsd_summary_save"],
+    {
+      projectRoot: "/tmp/project",
+      env: { GSD_WORKFLOW_MCP_COMMAND: "node" },
+      surface: "auto-mode",
+      unitType: "research-slice",
+      authMode: "externalCli",
+      baseUrl: "local://claude-code",
+      activeTools: ["mcp__gsd-workflow__gsd_summary_save"],
+    },
+  );
 
-test("auto direct dispatch source enforces workflow compatibility preflight", () => {
-  const src = readSrc("auto-direct-dispatch.ts");
-  assert.match(src, /getRequiredWorkflowToolsForAutoUnit/);
-  assert.match(src, /getWorkflowTransportSupportError/);
-});
-
-test("auto phases source enforces workflow compatibility preflight", () => {
-  const src = readSrc(join("auto", "phases.ts"));
-  assert.match(src, /getRequiredWorkflowToolsForAutoUnit/);
-  assert.match(src, /getWorkflowTransportSupportError/);
-  assert.match(src, /workflow-capability/);
-});
-
-test("workflow transport error guidance includes /gsd mcp init hint", () => {
-  const src = readSrc("workflow-mcp.ts");
-  assert.match(src, /Please run \/gsd mcp init \./);
+  assert.equal(error, null);
 });

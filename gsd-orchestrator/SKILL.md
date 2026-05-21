@@ -115,7 +115,7 @@ GSD creates and manages all state in `.gsd/`:
   PROJECT.md          # What this project is
   REQUIREMENTS.md     # Capability contract
   DECISIONS.md        # Architectural decisions (append-only)
-  KNOWLEDGE.md        # Persistent project knowledge (patterns, rules, lessons)
+  KNOWLEDGE.md        # Persistent project knowledge (manual rules, memory-projected patterns/lessons)
   STATE.md            # Current phase and next action
   milestones/
     M001-xxxxx/
@@ -209,7 +209,7 @@ Available types: `agent_start`, `agent_end`, `tool_execution_start`, `tool_execu
 | `queue` | Queue/reorder milestones |
 | `history` | View execution history |
 | `doctor` | Health check + auto-fix |
-| `knowledge <rule>` | Add persistent project knowledge |
+| `knowledge <rule\|pattern\|lesson>` | Add persistent project knowledge |
 
 See `references/commands.md` for the complete reference.
 </all_commands>

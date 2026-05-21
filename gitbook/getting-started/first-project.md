@@ -98,15 +98,16 @@ Shows each session's date, message count, and preview so you can choose which to
 
 ## What's on Disk
 
-All state lives in `.gsd/` inside your project:
+GSD keeps authoritative runtime state in the project-root SQLite database and renders markdown projections into `.gsd/` inside your project:
 
 ```
 .gsd/
+  gsd.db              — authoritative runtime database (local, gitignored)
   PROJECT.md          — what the project is
   REQUIREMENTS.md     — requirement contract
-  DECISIONS.md        — architectural decisions
-  KNOWLEDGE.md        — cross-session rules and patterns
-  STATE.md            — quick-glance status
+  DECISIONS.md        — projection of architectural decisions from memory store
+  KNOWLEDGE.md        — manual Rules plus memory-backed Patterns/Lessons
+  STATE.md            — quick-glance status rendered from the database
   milestones/
     M001/
       M001-ROADMAP.md — slice plan with dependencies
@@ -120,6 +121,10 @@ All state lives in `.gsd/` inside your project:
             T01-PLAN.md
             T01-SUMMARY.md
 ```
+
+`KNOWLEDGE.md` has a split source of truth. Rules stay in the file and are visible immediately. Patterns and lessons added through `/gsd knowledge` are persisted to the `memories` table, then rendered into `KNOWLEDGE.md` the next time a GSD session starts, so they will not appear in the file immediately.
+
+Existing pattern and lesson rows are backfilled into `memories` during that startup path. The Patterns and Lessons sections in `KNOWLEDGE.md` are generated projections, so manual edits to those generated sections may be overwritten on regeneration.
 
 ## Next Steps
 

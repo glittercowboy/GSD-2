@@ -10,8 +10,11 @@ import {
   closeDatabase,
   _getAdapter,
   insertGateRow,
+  insertAssessment,
   upsertRequirement,
+  getAllMilestones,
 } from "../gsd-db.ts";
+import { deriveState, invalidateStateCache } from "../state.ts";
 import { markApprovalGateVerified, markDepthVerified, clearDiscussionFlowState, loadWriteGateSnapshot, setPendingGate } from "../bootstrap/write-gate.ts";
 import {
   executeCompleteMilestone,
@@ -24,6 +27,7 @@ import {
   executeTaskComplete,
   executeMilestoneStatus,
   executeSliceComplete,
+  executeSliceReopen,
   executeValidateMilestone,
 } from "../tools/workflow-tool-executors.ts";
 
@@ -144,6 +148,117 @@ test("executeTaskComplete coerces string verificationEvidence entries", async ()
   }
 });
 
+test("executeSliceComplete preserves omitted optional requirement arrays", async () => {
+  const base = makeTmpBase();
+  try {
+    openTestDb(base);
+    await inProjectDir(base, () => executePlanMilestone({
+      milestoneId: "M001",
+      title: "Requirement preservation",
+      vision: "Ensure omitted arrays are not coerced to empties.",
+      slices: [
+        {
+          sliceId: "S01",
+          title: "Slice",
+          risk: "medium",
+          depends: [],
+          demo: "demo",
+          goal: "goal",
+          successCriteria: "done",
+          proofLevel: "integration",
+          integrationClosure: "closed",
+          observabilityImpact: "covered",
+        },
+      ],
+    }, base));
+    await inProjectDir(base, () => executePlanSlice({
+      milestoneId: "M001",
+      sliceId: "S01",
+      goal: "goal",
+      tasks: [
+        {
+          taskId: "T01",
+          title: "Task",
+          description: "desc",
+          estimate: "5m",
+          files: ["src/a.ts"],
+          verify: "node --test",
+          inputs: ["in"],
+          expectedOutput: ["out"],
+        },
+      ],
+    }, base));
+    await inProjectDir(base, () => executeTaskComplete({
+      milestoneId: "M001",
+      sliceId: "S01",
+      taskId: "T01",
+      oneLiner: "done",
+      narrative: "done",
+      verification: "ok",
+    }, base));
+
+    const result = await inProjectDir(base, () => executeSliceComplete({
+      milestoneId: "M001",
+      sliceId: "S01",
+      sliceTitle: "Slice",
+      oneLiner: "done",
+      narrative: "done",
+      verification: "ok",
+      uatContent: "ok",
+      requirementsAdvanced: [{ id: "R010", how: "advanced" }],
+      requirementsValidated: [{ id: "R010", proof: "validated" }],
+    }, base));
+
+    assert.equal(result.details.operation, "complete_slice");
+    const summaryPath = String(result.details.summaryPath);
+    const summary = readFileSync(summaryPath, "utf-8");
+    assert.match(summary, /R010 — advanced/);
+    assert.match(summary, /R010 — validated/);
+
+    const reopenResult = await inProjectDir(base, () => executeSliceReopen({
+      milestoneId: "M001",
+      sliceId: "S01",
+      reason: "validate idempotent overwrite behavior",
+    }, base));
+    assert.equal(reopenResult.details.operation, "reopen_slice");
+    await inProjectDir(base, () => executeTaskComplete({
+      milestoneId: "M001",
+      sliceId: "S01",
+      taskId: "T01",
+      oneLiner: "done (updated)",
+      narrative: "done (updated)",
+      verification: "ok",
+    }, base));
+
+    const recallResult = await inProjectDir(base, () => executeSliceComplete({
+      milestoneId: "M001",
+      sliceId: "S01",
+      sliceTitle: "Slice",
+      oneLiner: "done (updated)",
+      narrative: "done (updated)",
+      verification: "ok",
+      uatContent: "ok",
+    }, base));
+
+    assert.equal(recallResult.details.operation, "complete_slice");
+    const recallSummaryPath = String(recallResult.details.summaryPath);
+    const recallSummary = readFileSync(recallSummaryPath, "utf-8");
+    assert.match(
+      recallSummary,
+      /R010 — advanced/,
+      "requirementsAdvanced should be preserved from first call",
+    );
+    assert.match(
+      recallSummary,
+      /R010 — validated/,
+      "requirementsValidated should be preserved from first call",
+    );
+  } finally {
+    closeDatabase();
+    cleanup(base);
+  }
+});
+
 test("executeMilestoneStatus returns milestone metadata and slice counts", async () => {
   const base = makeTmpBase();
   try {
@@ -163,6 +278,9 @@ test("executeMilestoneStatus returns milestone metadata and slice counts", async
     assert.equal(parsed.sliceCount, 1);
     assert.equal(parsed.slices[0].id, "S01");
     assert.equal(parsed.slices[0].taskCounts.pending, 1);
+    assert.equal(result.details.status, "active");
+    assert.equal(result.details.title, "Milestone One");
+    assert.deepEqual(result.details.slices, parsed.slices);
   } finally {
     closeDatabase();
     cleanup(base);
@@ -241,7 +359,7 @@ test("executePlanSlice writes task planning state and rendered plan artifacts", 
           estimate: "15m",
           files: ["src/resources/extensions/gsd/tools/workflow-tool-executors.ts"],
           verify: "node --test",
-          inputs: ["ROADMAP.md"],
+          inputs: [".gsd/milestones/M001/M001-ROADMAP.md"],
           expectedOutput: ["S01-PLAN.md", "T01-PLAN.md"],
         },
       ],
@@ -321,6 +439,43 @@ test("executeSliceComplete coerces string enrichment entries and writes summary/
   }
 });
 
+test("executeSliceComplete normalizes requirement object aliases (how -> proof/what)", async () => {
+  const base = makeTmpBase();
+  try {
+    openTestDb(base);
+    seedMilestone("M001", "Milestone One");
+    seedSlice("M001", "S01", "pending");
+    writeRoadmap(base, "M001", ["S01"]);
+    const db = _getAdapter();
+    db!.prepare(
+      "INSERT OR REPLACE INTO tasks (milestone_id, slice_id, id, title, status) VALUES (?, ?, ?, ?, ?)",
+    ).run("M001", "S01", "T01", "Task T01", "complete");
+
+    const rawParams = {
+      milestoneId: "M001",
+      sliceId: "S01",
+      sliceTitle: "Slice S01",
+      oneLiner: "Completed slice",
+      narrative: "Implemented the slice",
+      verification: "node --test",
+      uatContent: "## UAT\n\nPASS",
+      requirementsValidated: [{ id: "R010", how: "Integration test passed" }],
+      requirementsInvalidated: [{ id: "R011", how: "Scope narrowed" }],
+    } as unknown as Parameters<typeof executeSliceComplete>[0];
+
+    const result = await inProjectDir(base, () => executeSliceComplete(rawParams, base));
+    assert.equal(result.details.operation, "complete_slice");
+    const summaryPath = String(result.details.summaryPath);
+    assert.ok(existsSync(summaryPath), "slice summary should be written to disk");
+    const summary = readFileSync(summaryPath, "utf-8");
+    assert.match(summary, /R010 — Integration test passed/);
+    assert.match(summary, /R011 — Scope narrowed/);
+  } finally {
+    closeDatabase();
+    cleanup(base);
+  }
+});
+
 test("executeValidateMilestone persists validation artifact and gate records", async () => {
   const base = makeTmpBase();
   try {
@@ -355,6 +510,38 @@ test("executeValidateMilestone persists validation artifact and gate records", a
   }
 });
 
+test("executeValidateMilestone rejects verificationClasses that omit planned Operational class", async () => {
+  const base = makeTmpBase();
+  try {
+    openTestDb(base);
+    seedMilestone("M002", "Milestone Two");
+    const db = _getAdapter();
+    db!.prepare("UPDATE milestones SET verification_operational = ? WHERE id = ?").run(
+      "Camoufox subprocess lifecycle/cleanup proof",
+      "M002",
+    );
+    seedSlice("M002", "S02", "complete");
+
+    const result = await inProjectDir(base, () => executeValidateMilestone({
+      milestoneId: "M002",
+      verdict: "pass",
+      remediationRound: 0,
+      successCriteriaChecklist: "- [x] Works",
+      sliceDeliveryAudit: "| Slice | Result |\n| --- | --- |\n| S02 | pass |",
+      crossSliceIntegration: "No cross-slice issues.",
+      requirementCoverage: "All requirements covered.",
+      verificationClasses: "| Check | Result |\n| --- | --- |\n| Generic verification | PASS |",
+      verdictRationale: "Everything passed.",
+    }, base));
+
+    assert.equal(result.isError, true);
+    assert.match(String(result.details.error), /must include canonical row "Operational"/);
+  } finally {
+    closeDatabase();
+    cleanup(base);
+  }
+});
+
 test("executeCompleteMilestone sanitizes raw params and writes milestone summary", async () => {
   const base = makeTmpBase();
   try {
@@ -366,6 +553,13 @@ test("executeCompleteMilestone sanitizes raw params and writes milestone summary
     db!.prepare(
       "INSERT OR REPLACE INTO tasks (milestone_id, slice_id, id, title, status) VALUES (?, ?, ?, ?, ?)",
     ).run("M003", "S03", "T03", "Task T03", "complete");
+    insertAssessment({
+      path: join(".gsd", "milestones", "M003", "M003-VALIDATION.md"),
+      milestoneId: "M003",
+      status: "pass",
+      scope: "milestone-validation",
+      fullContent: "---\nverdict: pass\nremediation_round: 0\n---\n\n# Validation\nValidated.",
+    });
 
     const rawParams = {
       milestoneId: "M003",
@@ -383,6 +577,38 @@ test("executeCompleteMilestone sanitizes raw params and writes milestone summary
     const summaryPath = String(result.details.summaryPath);
     assert.ok(existsSync(summaryPath), "milestone summary should be written to disk");
     assert.match(readFileSync(summaryPath, "utf-8"), /shared executor path/);
+  } finally {
+    closeDatabase();
+    cleanup(base);
+  }
+});
+
+test("executeCompleteMilestone returns success for already-complete milestones without overwriting the existing summary", async () => {
+  const base = makeTmpBase();
+  try {
+    openTestDb(base);
+    seedMilestone("M003", "Milestone Three", "complete");
+    seedSlice("M003", "S03", "complete");
+    writeRoadmap(base, "M003", ["S03"]);
+    const milestoneDir = join(base, ".gsd", "milestones", "M003");
+    mkdirSync(milestoneDir, { recursive: true });
+    const summaryPath = join(milestoneDir, "M003-SUMMARY.md");
+    writeFileSync(summaryPath, "# Existing Summary\n");
+
+    const result = await inProjectDir(base, () => executeCompleteMilestone({
+      milestoneId: "M003",
+      title: "Milestone Three",
+      oneLiner: "Completed milestone",
+      narrative: "Everything shipped.",
+      verificationPassed: true,
+    }, base));
+
+    assert.equal(result.isError, undefined);
+    assert.equal(result.details.operation, "complete_milestone");
+    assert.equal(result.details.alreadyComplete, true);
+    assert.match(result.content[0].text, /already complete/);
+    assert.doesNotMatch(result.content[0].text, /Summary written to/);
+    assert.equal(readFileSync(summaryPath, "utf-8"), "# Existing Summary\n");
   } finally {
     closeDatabase();
     cleanup(base);
@@ -677,7 +903,7 @@ test("executeSummarySave removes sibling CONTEXT-DRAFT when writing milestone CO
       "CONTEXT-DRAFT.md should be removed after final CONTEXT.md is written",
     );
   } finally {
-    clearDiscussionFlowState();
+    clearDiscussionFlowState(base);
     closeDatabase();
     cleanup(base);
   }
@@ -690,7 +916,18 @@ test("executeSummarySave supports root-level deep planning artifacts", async () 
 
     const project = await inProjectDir(base, () => executeSummarySave({
       artifact_type: "PROJECT",
-      content: "# Project\n\n## What This Is\n\nA root project artifact.",
+      content: [
+        "# Project",
+        "",
+        "## What This Is",
+        "",
+        "A root project artifact.",
+        "",
+        "## Milestone Sequence",
+        "",
+        "- [ ] M001: Foundation - Establish the first runnable slice.",
+        "",
+      ].join("\n"),
     }, base));
     assert.equal(project.isError, undefined);
     assert.equal(project.details.path, "PROJECT.md");
@@ -737,13 +974,114 @@ test("executeSummarySave supports root-level deep planning artifacts", async () 
   }
 });
 
+test("executeSummarySave registers PROJECT milestone sequence for the next run", async () => {
+  const base = makeTmpBase();
+  try {
+    openTestDb(base);
+
+    const result = await inProjectDir(base, () => executeSummarySave({
+      artifact_type: "PROJECT",
+      content: [
+        "# Project",
+        "",
+        "## What This Is",
+        "",
+        "Deep project setup output.",
+        "",
+        "## Project Shape",
+        "",
+        "**Complexity:** complex",
+        "**Why:** It spans multiple delivery steps.",
+        "",
+        "## Capability Contract",
+        "",
+        "See .gsd/REQUIREMENTS.md.",
+        "",
+        "## Milestone Sequence",
+        "",
+        "- [ ] M001: Foundation - Establish the first runnable slice.",
+        "- [ ] M002: Polish - Follow-up experience work.",
+        "",
+      ].join("\n"),
+    }, base));
+
+    assert.equal(result.isError, undefined);
+    assert.deepEqual(result.details.registeredMilestones, ["M001", "M002"]);
+
+    const milestones = getAllMilestones();
+    assert.deepEqual(
+      milestones.map((m) => [m.id, m.title, m.status]),
+      [
+        ["M001", "Foundation", "queued"],
+        ["M002", "Polish", "queued"],
+      ],
+    );
+
+    invalidateStateCache();
+    const state = await deriveState(base);
+    assert.equal(state.activeMilestone?.id, "M001");
+    assert.equal(state.phase, "pre-planning");
+    assert.equal(state.registry[0]?.status, "active");
+    assert.equal(state.registry[1]?.status, "pending");
+  } finally {
+    closeDatabase();
+    cleanup(base);
+  }
+});
+
+test("executeSummarySave hard-fails when milestone registration throws so silent No-Active-Milestone is impossible", async () => {
+  const base = makeTmpBase();
+  try {
+    openTestDb(base);
+    const db = _getAdapter();
+    assert.ok(db, "DB should be open");
+    const originalPrepare = db.prepare.bind(db);
+    (db as any).prepare = (sql: string) => {
+      if (sql.includes("INSERT OR IGNORE INTO milestones")) {
+        throw new Error("simulated milestone registration failure");
+      }
+      return originalPrepare(sql);
+    };
+
+    const result = await inProjectDir(base, () => executeSummarySave({
+      artifact_type: "PROJECT",
+      content: [
+        "# Project",
+        "",
+        "## What This Is",
+        "",
+        "Deep project setup output.",
+        "",
+        "## Milestone Sequence",
+        "",
+        "- [ ] M001: Foundation - Establish the first runnable slice.",
+        "",
+      ].join("\n"),
+    }, base));
+
+    // The artifact is persisted before registration runs, but registration must
+    // surface as isError so the LLM retries (INSERT OR IGNORE makes it idempotent)
+    // instead of announcing "ready" while the DB has zero milestone rows.
+    assert.equal(result.isError, true);
+    assert.equal(result.details.path, "PROJECT.md");
+    assert.equal(result.details.error, "milestone_registration_threw");
+    assert.match(String(result.details.registration_error), /simulated milestone registration failure/);
+    assert.match(result.content[0].text, /milestone registration failed/);
+    assert.match(result.content[0].text, /idempotent/);
+    assert.ok(existsSync(join(base, ".gsd", "PROJECT.md")));
+    const artifact = originalPrepare("SELECT path FROM artifacts WHERE path = ?").get("PROJECT.md");
+    assert.equal(artifact?.path, "PROJECT.md");
+  } finally {
+    closeDatabase();
+    cleanup(base);
+  }
+});
+
 test("executeSummarySave blocks final root artifacts while approval gate is pending", async () => {
   const base = makeTmpBase();
   try {
     openTestDb(base);
-    await inProjectDir(base, async () => {
-      setPendingGate("depth_verification_requirements_confirm");
-    });
+    setPendingGate("depth_verification_requirements_confirm", base);
 
     const result = await inProjectDir(base, () => executeSummarySave({
       artifact_type: "REQUIREMENTS",
@@ -762,7 +1100,7 @@ test("executeSummarySave blocks final root artifacts while approval gate is pend
     assert.equal(draft.isError, undefined);
     assert.ok(existsSync(join(base, ".gsd", "REQUIREMENTS-DRAFT.md")));
   } finally {
-    clearDiscussionFlowState();
+    clearDiscussionFlowState(base);
     closeDatabase();
     cleanup(base);
   }
@@ -774,9 +1112,22 @@ test("executeSummarySave requires verified root approval in deep mode", async ()
     writeFileSync(join(base, ".gsd", "PREFERENCES.md"), "---\nplanning_depth: deep\n---\n");
     openTestDb(base);
 
+    const projectFixture = [
+      "# Project",
+      "",
+      "## What This Is",
+      "",
+      "A root project artifact.",
+      "",
+      "## Milestone Sequence",
+      "",
+      "- [ ] M001: Foundation - Establish the first runnable slice.",
+      "",
+    ].join("\n");
+
     const blocked = await inProjectDir(base, () => executeSummarySave({
       artifact_type: "PROJECT",
-      content: "# Project\n\n## What This Is\n\nA root project artifact.",
+      content: projectFixture,
     }, base));
 
     assert.equal(blocked.isError, true);
@@ -784,20 +1135,18 @@ test("executeSummarySave requires verified root approval in deep mode", async ()
     assert.match(blocked.content[0].text, /fail-closed/);
     assert.equal(existsSync(join(base, ".gsd", "PROJECT.md")), false);
 
-    await inProjectDir(base, async () => {
-      markApprovalGateVerified("depth_verification_project_confirm", base);
-    });
+    markApprovalGateVerified("depth_verification_project_confirm", base);
 
     const unblocked = await inProjectDir(base, () => executeSummarySave({
       artifact_type: "PROJECT",
-      content: "# Project\n\n## What This Is\n\nA root project artifact.",
+      content: projectFixture,
     }, base));
 
     assert.equal(unblocked.isError, undefined);
     assert.equal(unblocked.details.path, "PROJECT.md");
     assert.ok(existsSync(join(base, ".gsd", "PROJECT.md")));
   } finally {
-    clearDiscussionFlowState();
+    clearDiscussionFlowState(base);
     closeDatabase();
     cleanup(base);
   }
@@ -807,9 +1156,7 @@ test("executeSummarySave renders final REQUIREMENTS from the DB source of truth"
   const base = makeTmpBase();
   try {
     openTestDb(base);
-    await inProjectDir(base, async () => {
-      markApprovalGateVerified("depth_verification_requirements_confirm", base);
-    });
+    markApprovalGateVerified("depth_verification_requirements_confirm", base);
 
     upsertRequirement({
       id: "R001",
@@ -882,7 +1229,7 @@ test("executeSummarySave renders final REQUIREMENTS from the DB source of truth"
       .get("REQUIREMENTS.md") as Record<string, unknown>;
     assert.equal(artifact.full_content, content);
   } finally {
-    clearDiscussionFlowState();
+    clearDiscussionFlowState(base);
     closeDatabase();
     cleanup(base);
   }
@@ -992,7 +1339,7 @@ test("executeSummarySave CONTEXT HARD BLOCK clears after write-gate state file i
   process.env.GSD_PERSIST_WRITE_GATE_STATE = "1";
   try {
     openTestDb(base);
-    clearDiscussionFlowState();
+    clearDiscussionFlowState(base);
 
     // First call: CONTEXT artifact without depth verification → HARD BLOCK
     const blocked = await inProjectDir(base, () => executeSummarySave({
@@ -1043,7 +1390,7 @@ test("executeSummarySave CONTEXT HARD BLOCK clears after write-gate state file i
     } else {
       process.env.GSD_PERSIST_WRITE_GATE_STATE = originalEnv;
     }
-    clearDiscussionFlowState();
+    clearDiscussionFlowState(base);
     closeDatabase();
     cleanup(base);
   }

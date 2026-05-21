@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 
 import { DISPATCH_RULES, type DispatchContext } from "../auto-dispatch.ts";
 import {
+  _getAdapter,
   openDatabase,
   closeDatabase,
   insertMilestone,
@@ -241,7 +242,109 @@ test("#4781 phase 2: validate-milestone rule writes pass-through VALIDATION for 
   const { readFileSync } = await import("node:fs");
   const content = readFileSync(validationPath, "utf-8");
   assert.match(content, /verdict: pass/);
-  assert.match(content, /trivial-scope pipeline variant \(#4781\)/);
+  assert.match(content, /skip_validation: true/);
+  assert.match(content, /trivial-scope pipeline variant/);
+  assert.doesNotMatch(content, /#[0-9]{3,}/, "validation output must not include tracker-style refs");
+});
+
+test("validate-milestone skip writes to project root when active worktree lacks milestone projections", async (t) => {
+  const base = makeBase();
+  t.after(() => cleanup(base));
+
+  seedMilestone(base, "M001", TRIVIAL_INPUT);
+  const adapter = _getAdapter();
+  assert.ok(adapter, "test database should be open");
+  adapter.prepare("UPDATE slices SET status = 'complete' WHERE milestone_id = 'M001'").run();
+
+  const { writeFileSync, readFileSync } = await import("node:fs");
+  writeFileSync(
+    join(base, ".gsd", "milestones", "M001", "M001-ROADMAP.md"),
+    [
+      "# M001",
+      "## Slices",
+      "- [x] **S01: First** `risk:low` `depends:[]`",
+      "- [x] **S02: Second** `risk:low` `depends:[]`",
+    ].join("\n"),
+  );
+
+  const worktree = join(base, ".gsd", "worktrees", "M001");
+  mkdirSync(join(worktree, ".gsd", "runtime"), { recursive: true });
+
+  const ctx = {
+    ...makeCtx({ base: worktree, mid: "M001", phase: "validating-milestone" }),
+    session: {
+      basePath: worktree,
+      originalBasePath: base,
+      currentMilestoneId: "M001",
+    } as DispatchContext["session"],
+  };
+  const result = await findRule(VALIDATE_RULE).match(ctx);
+
+  assert.ok(result, "rule must return a result, not null");
+  assert.strictEqual(result!.action, "skip", "trivial variant must still skip validation");
+
+  const validationPath = join(base, ".gsd", "milestones", "M001", "M001-VALIDATION.md");
+  assert.ok(existsSync(validationPath), "pass-through VALIDATION.md must be written to the project root");
+  assert.match(readFileSync(validationPath, "utf-8"), /skip_validation: true/);
+
+  const worktreeValidationPath = join(worktree, ".gsd", "milestones", "M001", "M001-VALIDATION.md");
+  assert.equal(existsSync(worktreeValidationPath), false, "missing worktree milestone projection must not receive a phantom validation");
+});
+
+test("#4781 phase 2: validate-milestone skip path does not persist gates without a real slice", async (t) => {
+  const base = makeBase();
+  t.after(() => cleanup(base));
+
+  openDatabase(join(base, ".gsd", "gsd.db"));
+  insertMilestone({
+    id: "M001",
+    title: TRIVIAL_INPUT.title,
+    status: "active",
+    depends_on: [],
+  });
+  upsertMilestonePlanning("M001", {
+    title: TRIVIAL_INPUT.title,
+    status: "active",
+    vision: TRIVIAL_INPUT.vision,
+    successCriteria: TRIVIAL_INPUT.successCriteria,
+    keyRisks: [],
+    proofStrategy: [],
+    verificationContract: "",
+    verificationIntegration: "",
+    verificationOperational: "",
+    verificationUat: "",
+    definitionOfDone: [],
+    requirementCoverage: "",
+    boundaryMapMarkdown: "",
+  });
+
+  const { writeFileSync, readFileSync } = await import("node:fs");
+  writeFileSync(
+    join(base, ".gsd", "milestones", "M001", "M001-ROADMAP.md"),
+    [
+      "# M001",
+      "## Slices",
+      "",
+      "_No slices required for this trivial milestone._",
+    ].join("\n"),
+  );
+
+  const ctx = makeCtx({ base, mid: "M001", phase: "validating-milestone" });
+  const result = await findRule(VALIDATE_RULE).match(ctx);
+
+  assert.ok(result, "rule must return a result, not null");
+  assert.strictEqual(result!.action, "skip", "trivial variant must still skip without slices");
+
+  const validationPath = join(base, ".gsd", "milestones", "M001", "M001-VALIDATION.md");
+  const content = readFileSync(validationPath, "utf-8");
+  assert.match(content, /skip_validation: true/);
+
+  const adapter = _getAdapter();
+  assert.ok(adapter, "test database should be open");
+  const gateCount = adapter.prepare(
+    "SELECT count(*) AS n FROM quality_gates WHERE milestone_id = 'M001'",
+  ).get() as { n: number };
+  assert.equal(gateCount.n, 0, "skip path must not persist milestone gates without a real slice id");
 });
 
 test("#4781 phase 2: validate-milestone rule dispatches normally for standard variant", async (t) => {

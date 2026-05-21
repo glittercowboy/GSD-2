@@ -1,3 +1,5 @@
+// GSD-2 + src/resources/extensions/gsd/auto/run-unit.ts - Runs one GSD auto-mode unit from session creation through agent completion.
+
 /**
  * auto/run-unit.ts — Single unit execution: session create → prompt → await agent_end.
  *
@@ -9,7 +11,13 @@ import type { ExtensionAPI, ExtensionContext } from "@gsd/pi-coding-agent";
 import type { AutoSession } from "./session.js";
 import { NEW_SESSION_TIMEOUT_MS } from "./session.js";
 import type { UnitResult } from "./types.js";
-import { _clearCurrentResolve, _setCurrentResolve, _setSessionSwitchInFlight } from "./resolve.js";
+import {
+  _clearCurrentResolve,
+  _consumePendingSwitchCancellation,
+  _markSessionSwitchAbortGraceWindow,
+  _setCurrentResolve,
+  _setSessionSwitchInFlight,
+} from "./resolve.js";
 import {
   getCurrentTurnGeneration,
   runWithTurnGeneration,
@@ -17,6 +25,31 @@ import {
 import { debugLog } from "../debug-logger.js";
 import { logWarning, logError } from "../workflow-logger.js";
 import { resolveAutoSupervisorConfig } from "../preferences.js";
+import { readUnitRuntimeRecord, type AutoUnitRuntimeRecord } from "../unit-runtime.js";
+
+const UNIT_FAILSAFE_BUFFER_MS = 30_000;
+const UNIT_FAILSAFE_RECHECK_MS = 30_000;
+
+export function shouldDeferUnitFailsafeTimeout(
+  runtime: AutoUnitRuntimeRecord | null,
+  opts: {
+    nowMs: number;
+    currentUnitStartedAt?: number;
+    freshProgressMs: number;
+  },
+): boolean {
+  if (!runtime) return false;
+  if (opts.currentUnitStartedAt === undefined) return false;
+  if (runtime.startedAt !== opts.currentUnitStartedAt) return false;
+  if (runtime.lastProgressAt <= 0) return false;
+  const progressAgeMs = opts.nowMs - runtime.lastProgressAt;
+  if (progressAgeMs < 0) return false;
+  if (progressAgeMs > opts.freshProgressMs) return false;
+  if (runtime.phase === "recovered") return true;
+  if (runtime.lastProgressKind.includes("recovery")) return true;
+  if (runtime.recoveryAttempts && runtime.recoveryAttempts > 0) return true;
+  return progressAgeMs >= 0 && progressAgeMs <= opts.freshProgressMs;
+}
 
 // Tracks the latest session-switch attempt so a late timeout settlement from an
 // older runUnit() call cannot clear the guard for a newer one.
@@ -40,45 +73,24 @@ export async function runUnit(
 ): Promise<UnitResult> {
   debugLog("runUnit", { phase: "start", unitType, unitId });
 
-  // Ensure cwd matches basePath BEFORE newSession() captures it. The new
-  // session reads process.cwd() during construction to anchor its tool
-  // runtime and system prompt; if cwd has drifted (async_bash, background
-  // jobs, prior unit cleanup), the session would otherwise be rooted to
-  // the wrong directory. Must be synchronous — no awaits between chdir
-  // and newSession (#1389, #4762 follow-up).
-  try {
-    if (process.cwd() !== s.basePath) {
-      process.chdir(s.basePath);
-    }
-  } catch (e) {
-    const msg = `Failed to chdir to basePath before newSession (basePath: ${s.basePath}): ${String(e)}`;
-    logWarning("engine", msg, { basePath: s.basePath, error: String(e) });
-    return {
-      status: "cancelled",
-      errorContext: {
-        message: msg,
-        category: "session-failed",
-        isTransient: true,
-      },
-    };
-  }
-
   // ── Session creation with timeout ──
   debugLog("runUnit", { phase: "session-create", unitType, unitId });
 
   let sessionResult: { cancelled: boolean };
   let sessionTimeoutHandle: ReturnType<typeof setTimeout> | undefined;
   const mySessionSwitchGeneration = ++sessionSwitchGeneration;
-  // #3731: Cancellation controller for newSession(). When the session-creation
-  // timeout fires, we abort this controller so that the still-in-flight
-  // newSession() discards itself after await this.abort() completes, preventing
-  // it from capturing the (now-root) process.cwd() and rebuilding the tool
-  // runtime with the wrong cwd.
+  // #3731: Cancellation controller for newSession(). When session creation
+  // times out, abort before a late session switch can rebuild the tool runtime
+  // against a stale workspace root.
   const sessionAbortController = new AbortController();
   _setSessionSwitchInFlight(true);
   try {
-    const sessionPromise = s.cmdCtx!.newSession({ abortSignal: sessionAbortController.signal }).finally(() => {
+    const sessionPromise = s.cmdCtx!.newSession({
+      abortSignal: sessionAbortController.signal,
+      workspaceRoot: s.basePath,
+    }).finally(() => {
       if (sessionSwitchGeneration === mySessionSwitchGeneration) {
+        _markSessionSwitchAbortGraceWindow();
         _setSessionSwitchInFlight(false);
       }
     });
@@ -94,6 +106,7 @@ export async function runUnit(
     sessionResult = await Promise.race([sessionPromise, timeoutPromise]);
   } catch (sessionErr) {
     if (sessionTimeoutHandle) clearTimeout(sessionTimeoutHandle);
+    _consumePendingSwitchCancellation();
     const msg =
       sessionErr instanceof Error ? sessionErr.message : String(sessionErr);
     debugLog("runUnit", {
@@ -107,17 +120,20 @@ export async function runUnit(
   if (sessionTimeoutHandle) clearTimeout(sessionTimeoutHandle);
 
   if (sessionResult.cancelled) {
+    _consumePendingSwitchCancellation();
     debugLog("runUnit-session-timeout", { unitType, unitId });
     return { status: "cancelled", errorContext: { message: "Session creation timed out", category: "timeout", isTransient: true } };
   }
 
   if (!s.active) {
+    _consumePendingSwitchCancellation();
     return { status: "cancelled" };
   }
 
   if (s.currentUnitModel && typeof pi.setModel === "function") {
     const restored = await pi.setModel(s.currentUnitModel, { persist: false });
     if (!restored) {
+      _consumePendingSwitchCancellation();
       const message =
         `Failed to restore configured model ${s.currentUnitModel.provider}/${s.currentUnitModel.id} after session creation`;
       ctx.ui.notify(
@@ -138,10 +154,19 @@ export async function runUnit(
   // ── Create the agent_end promise (per-unit one-shot) ──
   // This happens after newSession completes so session-switch agent_end events
   // from the previous session cannot resolve the new unit.
+  _markSessionSwitchAbortGraceWindow();
   _setSessionSwitchInFlight(false);
   const unitPromise = new Promise<UnitResult>((resolve) => {
     _setCurrentResolve(resolve);
   });
+  const pendingSwitchCancellation = _consumePendingSwitchCancellation();
+  if (pendingSwitchCancellation) {
+    _clearCurrentResolve();
+    return {
+      status: "cancelled",
+      ...(pendingSwitchCancellation.errorContext ? { errorContext: pendingSwitchCancellation.errorContext } : {}),
+    };
+  }
 
   // ── Provider request-readiness pre-check (#4555) ──
   // Verify the provider can accept requests before dispatching. If the token
@@ -184,30 +209,77 @@ export async function runUnit(
   debugLog("runUnit", { phase: "send-message", unitType, unitId });
 
   const requestDispatchedAt = Date.now();
-  pi.sendMessage(
-    { customType: "gsd-auto", content: prompt, display: s.verbose },
-    { triggerTurn: true },
-  );
+  ctx.ui.setWorkingMessage?.(null);
 
   // ── Await agent_end with absolute timeout (H4 fix) ──
   // If supervision fails to resolve unitPromise within 30s, treat as cancelled.
   // Without this, a crashed agent that never emits agent_end hangs the loop (#3161).
-  debugLog("runUnit", { phase: "awaiting-agent-end", unitType, unitId });
   const supervisor = resolveAutoSupervisorConfig();
   const UNIT_HARD_TIMEOUT_MS = Math.max(
-    30_000,
-    ((supervisor.hard_timeout_minutes ?? 30) * 60 * 1000) + 30_000,
+    UNIT_FAILSAFE_BUFFER_MS,
+    ((supervisor.hard_timeout_minutes ?? 30) * 60 * 1000) + UNIT_FAILSAFE_BUFFER_MS,
+  );
+  const freshProgressMs = Math.max(
+    UNIT_FAILSAFE_BUFFER_MS,
+    ((supervisor.idle_timeout_minutes ?? 10) * 60 * 1000) + UNIT_FAILSAFE_BUFFER_MS,
   );
   let unitTimeoutHandle: ReturnType<typeof setTimeout> | undefined;
-  const timeoutResult = new Promise<UnitResult>((resolve) => {
-    unitTimeoutHandle = setTimeout(() => {
-      resolve({ status: "cancelled", errorContext: { message: "Unit hard timeout — supervision may have failed", category: "timeout", isTransient: true } });
-    }, UNIT_HARD_TIMEOUT_MS);
-  });
-  const result = await runWithTurnGeneration(capturedTurnGen, () =>
-    Promise.race([unitPromise, timeoutResult]),
-  );
-  if (unitTimeoutHandle) clearTimeout(unitTimeoutHandle);
+  let result: UnitResult;
+  try {
+    pi.sendMessage(
+      { customType: "gsd-auto", content: prompt, display: s.verbose },
+      { triggerTurn: true },
+    );
+
+    debugLog("runUnit", { phase: "awaiting-agent-end", unitType, unitId });
+    const timeoutResult = new Promise<UnitResult>((resolve) => {
+      const settleOrDefer = () => {
+        let runtime: AutoUnitRuntimeRecord | null;
+        try {
+          runtime = readUnitRuntimeRecord(s.basePath, unitType, unitId);
+        } catch (error) {
+          debugLog("runUnit", {
+            phase: "unit-failsafe-runtime-read-failed",
+            unitType,
+            unitId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          resolve({
+            status: "cancelled",
+            errorContext: {
+              message: "Unit hard timeout — supervision may have failed; runtime progress could not be read",
+              category: "timeout",
+              isTransient: true,
+            },
+          });
+          return;
+        }
+        if (shouldDeferUnitFailsafeTimeout(runtime, {
+          nowMs: Date.now(),
+          currentUnitStartedAt: s.currentUnit?.startedAt,
+          freshProgressMs,
+        })) {
+          debugLog("runUnit", {
+            phase: "unit-failsafe-deferred",
+            unitType,
+            unitId,
+            runtimePhase: runtime?.phase,
+            lastProgressKind: runtime?.lastProgressKind,
+          });
+          unitTimeoutHandle = setTimeout(settleOrDefer, UNIT_FAILSAFE_RECHECK_MS);
+          return;
+        }
+        resolve({ status: "cancelled", errorContext: { message: "Unit hard timeout — supervision may have failed", category: "timeout", isTransient: true } });
+      };
+      unitTimeoutHandle = setTimeout(settleOrDefer, UNIT_HARD_TIMEOUT_MS);
+    });
+    result = await runWithTurnGeneration(capturedTurnGen, () =>
+      Promise.race([unitPromise, timeoutResult]),
+    );
+  } finally {
+    if (unitTimeoutHandle) clearTimeout(unitTimeoutHandle);
+    ctx.ui.setWorkingMessage?.(undefined);
+  }
   debugLog("runUnit", {
     phase: "agent-end-received",
     unitType,

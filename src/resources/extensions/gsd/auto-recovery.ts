@@ -1,3 +1,5 @@
+// Project/App: GSD-2
+// File Purpose: Verifies auto-mode artifacts and manages recovery placeholders.
 /**
  * Auto-mode Recovery — artifact resolution, verification, blocker placeholders,
  * skip artifacts, merge state reconciliation,
@@ -7,28 +9,18 @@
  * globals or AutoContext dependency.
  */
 
-import type { ExtensionContext } from "@gsd/pi-coding-agent";
 import { parseUnitId } from "./unit-id.js";
 import { MILESTONE_ID_RE } from "./milestone-ids.js";
 import { appendEvent } from "./workflow-events.js";
 import { atomicWriteSync } from "./atomic-write.js";
 import { clearParseCache } from "./files.js";
 import { parseRoadmap as parseLegacyRoadmap, parsePlan as parseLegacyPlan } from "./parsers-legacy.js";
-import { isDbAvailable, getTask, getSlice, getSliceTasks, getPendingGates, updateTaskStatus, updateSliceStatus, insertSlice, getMilestone } from "./gsd-db.js";
+import { isDbAvailable, getTask, getSlice, getSliceTasks, getPendingGates, updateTaskStatus, updateSliceStatus, insertSlice, getMilestone, getMilestoneSlices, getLatestAssessmentByScope, updateMilestoneStatus, refreshOpenDatabaseFromDisk, getCompletedMilestoneTaskFileHints, getMilestoneCommitAttributionShas, recordMilestoneCommitAttribution } from "./gsd-db.js";
 import { isValidationTerminal } from "./state.js";
 import { getErrorMessage } from "./error-utils.js";
 import { logWarning, logError } from "./workflow-logger.js";
 import { readIntegrationBranch } from "./git-service.js";
 import { isClosedStatus } from "./status-guards.js";
-import {
-  nativeConflictFiles,
-  nativeCommit,
-  nativeCheckoutTheirs,
-  nativeAddPaths,
-  nativeMergeAbort,
-  nativeRebaseAbort,
-  nativeResetHard,
-} from "./native-git-bridge.js";
 import {
   resolveSlicePath,
   resolveSliceFile,
@@ -46,7 +38,6 @@ import {
   mkdirSync,
   readFileSync,
   writeFileSync,
-  unlinkSync,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
@@ -55,8 +46,11 @@ import {
   diagnoseExpectedArtifact,
 } from "./auto-artifact-paths.js";
 import { classifyMilestoneSummaryContent } from "./milestone-summary-classifier.js";
+import { hasVerdict } from "./verdict-parser.js";
 import { validateArtifact } from "./schemas/validate.js";
 import { getProjectResearchStatus } from "./project-research-policy.js";
+import { isGsdWorktreePath } from "./worktree-root.js";
+import { resolveCanonicalMilestoneRoot } from "./worktree-manager.js";
 
 // Re-export so existing consumers of auto-recovery.ts keep working.
 export { resolveExpectedArtifactPath, diagnoseExpectedArtifact };
@@ -66,6 +60,165 @@ export {
 } from "./milestone-summary-classifier.js";
 
 // ─── Artifact Resolution & Verification ───────────────────────────────────────
+
+export function diagnoseWorktreeIntegrityFailure(basePath: string): string | null {
+  if (!isGsdWorktreePath(basePath)) return null;
+  if (!existsSync(basePath)) {
+    return `Worktree integrity failure: ${basePath} does not exist. Repair or recreate the worktree before retrying.`;
+  }
+
+  const gitPath = join(basePath, ".git");
+  if (!existsSync(gitPath)) {
+    return `Worktree integrity failure: ${basePath} is not a valid git worktree (.git missing). Repair or recreate the worktree before retrying.`;
+  }
+
+  try {
+    execFileSync("git", ["rev-parse", "--git-dir"], {
+      cwd: basePath,
+      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf-8",
+    });
+    return null;
+  } catch (err) {
+    return `Worktree integrity failure: ${basePath} is not a valid git worktree (git rev-parse failed: ${getErrorMessage(err).split("\n")[0]}). Repair or recreate the worktree before retrying.`;
+  }
+}
+
+function resolveArtifactVerificationBase(unitId: string, base: string): string {
+  const { milestone } = parseUnitId(unitId);
+  if (!MILESTONE_ID_RE.test(milestone)) return base;
+  return resolveCanonicalMilestoneRoot(base, milestone);
+}
+
+export type ArtifactRecoveryDbRefreshResult =
+  | { ok: true }
+  | { ok: false; fatal: boolean; message: string; reason: string };
+
+export function refreshRecoveryDbForArtifact(
+  unitType: string,
+  unitId: string,
+  basePath: string,
+): ArtifactRecoveryDbRefreshResult {
+  if (unitType !== "plan-slice" && unitType !== "execute-task" && unitType !== "complete-milestone") return { ok: true };
+  if (!isDbAvailable()) return { ok: true };
+
+  if (!refreshOpenDatabaseFromDisk()) {
+    return {
+      ok: false,
+      fatal: unitType === "execute-task" || unitType === "complete-milestone",
+      reason: `${unitType}-db-refresh-failed`,
+      message: `Stuck recovery found ${unitType} ${unitId} artifacts, but the DB refresh failed.`,
+    };
+  }
+
+  if (unitType === "complete-milestone") {
+    const { milestone: mid } = parseUnitId(unitId);
+    if (!mid) {
+      return {
+        ok: false,
+        fatal: true,
+        reason: "complete-milestone-invalid-unit-id",
+        message: `Stuck recovery found complete-milestone ${unitId} artifacts, but the unit id could not be parsed for DB reconciliation.`,
+      };
+    }
+
+    const milestone = getMilestone(mid);
+    if (!milestone) {
+      return {
+        ok: false,
+        fatal: true,
+        reason: "complete-milestone-artifact-db-missing",
+        message: `Stuck recovery found complete-milestone ${unitId} artifacts, but no matching DB milestone row exists after refresh.`,
+      };
+    }
+    if (isClosedStatus(milestone.status)) return { ok: true };
+
+    const validation = getLatestAssessmentByScope(mid, "milestone-validation");
+    if (validation?.status !== "pass") {
+      return {
+        ok: false,
+        fatal: true,
+        reason: "complete-milestone-validation-not-pass",
+        message: `Stuck recovery found complete-milestone ${unitId} artifacts, but milestone-validation is "${validation?.status ?? "absent"}" in the DB.`,
+      };
+    }
+
+    const slices = getMilestoneSlices(mid);
+    if (slices.length === 0) {
+      return {
+        ok: false,
+        fatal: true,
+        reason: "complete-milestone-slices-missing",
+        message: `Stuck recovery found complete-milestone ${unitId} artifacts, but no slices exist in the DB.`,
+      };
+    }
+    const openSlice = slices.find((slice) => !isClosedStatus(slice.status));
+    if (openSlice) {
+      return {
+        ok: false,
+        fatal: true,
+        reason: "complete-milestone-slice-open",
+        message: `Stuck recovery found complete-milestone ${unitId} artifacts, but slice ${openSlice.id} is still "${openSlice.status}" in the DB.`,
+      };
+    }
+    for (const slice of slices) {
+      const openTask = getSliceTasks(mid, slice.id).find((task) => !isClosedStatus(task.status));
+      if (openTask) {
+        return {
+          ok: false,
+          fatal: true,
+          reason: "complete-milestone-task-open",
+          message: `Stuck recovery found complete-milestone ${unitId} artifacts, but task ${slice.id}/${openTask.id} is still "${openTask.status}" in the DB.`,
+        };
+      }
+    }
+
+    if (hasImplementationArtifacts(basePath, mid) !== "present") {
+      return {
+        ok: false,
+        fatal: true,
+        reason: "complete-milestone-implementation-missing",
+        message: `Stuck recovery found complete-milestone ${unitId} artifacts, but implementation evidence is not present.`,
+      };
+    }
+
+    updateMilestoneStatus(mid, "complete", new Date().toISOString());
+    return { ok: true };
+  }
+
+  if (unitType !== "execute-task") return { ok: true };
+
+  const { milestone: mid, slice: sid, task: tid } = parseUnitId(unitId);
+  if (!mid || !sid || !tid) {
+    return {
+      ok: false,
+      fatal: true,
+      reason: "execute-task-invalid-unit-id",
+      message: `Stuck recovery found execute-task ${unitId} artifacts, but the unit id could not be parsed for DB verification.`,
+    };
+  }
+
+  const task = getTask(mid, sid, tid);
+  if (!task) {
+    return {
+      ok: false,
+      fatal: true,
+      reason: "execute-task-artifact-db-missing",
+      message: `Stuck recovery found execute-task ${unitId} artifacts, but no matching DB task row exists after refresh.`,
+    };
+  }
+
+  if (!isClosedStatus(task.status)) {
+    return {
+      ok: false,
+      fatal: true,
+      reason: "execute-task-artifact-db-mismatch",
+      message: `Stuck recovery found execute-task ${unitId} artifacts, but the DB task status is still '${task.status}' after refresh.`,
+    };
+  }
+
+  return { ok: true };
+}
 
 function hasCapturedWorkflowPrefs(base: string): boolean {
   const prefsPath = resolveExpectedArtifactPath("workflow-preferences", "WORKFLOW-PREFS", base);
@@ -88,6 +241,23 @@ function hasValidResearchDecision(base: string): boolean {
 
 function hasCompleteProjectResearch(base: string): boolean {
   return getProjectResearchStatus(base).complete;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function hasCheckedTaskCompletionOnDisk(base: string, mid: string, sid: string, tid: string): boolean {
+  const tasksDir = resolveTasksDir(base, mid, sid);
+  if (!tasksDir) return false;
+  if (!existsSync(join(tasksDir, `${tid}-SUMMARY.md`))) return false;
+
+  const planAbs = resolveSliceFile(base, mid, sid, "PLAN");
+  if (!planAbs || !existsSync(planAbs)) return false;
+
+  const planContent = readFileSync(planAbs, "utf-8");
+  const cbRe = new RegExp(`^\\s*-\\s+\\[[xX]\\]\\s+\\*\\*${escapeRegExp(tid)}:`, "m");
+  return cbRe.test(planContent);
 }
 
 /**
@@ -117,9 +287,15 @@ export function hasImplementationArtifacts(basePath: string, milestoneId?: strin
     // Strategy: check `git diff --name-only` against the merge-base with the
     // main branch. This captures ALL files changed during the milestone's
     // lifetime while running on a milestone branch.
-    const integrationBranch = milestoneId
-      ? readIntegrationBranch(basePath, milestoneId) ?? detectMainBranch(basePath)
-      : detectMainBranch(basePath);
+    const recordedIntegrationBranch = milestoneId
+      ? readIntegrationBranch(basePath, milestoneId)
+      : null;
+    let integrationBranch: string;
+    if (recordedIntegrationBranch?.startsWith("milestone/")) {
+      integrationBranch = detectMainBranch(basePath);
+    } else {
+      integrationBranch = recordedIntegrationBranch ?? detectMainBranch(basePath);
+    }
     const currentBranch = getCurrentBranch(basePath);
     const branchDiff = getChangedFilesSinceBranch(basePath, integrationBranch);
     if (!branchDiff.ok) return "unknown";
@@ -130,15 +306,30 @@ export function hasImplementationArtifacts(basePath: string, milestoneId?: strin
     // milestone commits instead of treating the self-diff as proof of no work.
     if (changedFiles.length === 0) {
       if (milestoneId && currentBranch === integrationBranch) {
-        const tagged = getChangedFilesFromMilestoneTaggedCommits(basePath, milestoneId);
-        if (!tagged.ok) return "unknown";
-        if (tagged.matched) return classifyImplementationFiles(tagged.files);
+        const milestoneEvidence = getChangedFilesFromMilestoneEvidence(basePath, milestoneId);
+        if (!milestoneEvidence.ok) return "unknown";
+        if (milestoneEvidence.matched) return classifyImplementationFiles(milestoneEvidence.files);
+        return "unknown";
       }
       if (currentBranch && currentBranch !== "HEAD") return "absent";
       return "unknown";
     }
 
-    return classifyImplementationFiles(changedFiles);
+    const branchClassification = classifyImplementationFiles(changedFiles);
+    if (branchClassification === "present") return "present";
+
+    // A completing milestone branch can have a non-empty diff containing only
+    // .gsd/ closeout files after implementation commits already landed on the
+    // recorded integration branch. In that topology, the branch diff alone is
+    // insufficient; use the same milestone-tagged evidence fallback as the
+    // self-diff retry path before declaring the milestone implementation-free.
+    if (milestoneId) {
+      const milestoneEvidence = getChangedFilesFromMilestoneEvidence(basePath, milestoneId);
+      if (!milestoneEvidence.ok) return "unknown";
+      if (milestoneEvidence.matched) return classifyImplementationFiles(milestoneEvidence.files);
+    }
+
+    return "absent";
   } catch (e) {
     // Non-fatal — if git operations fail, return unknown so callers can decide
     logWarning("recovery", `implementation artifact check failed: ${(e as Error).message}`);
@@ -166,6 +357,10 @@ function classifyImplementationFiles(files: readonly string[]): "present" | "abs
 
 function isImplementationPath(file: string): boolean {
   return !file.startsWith(".gsd/") && !file.startsWith(".gsd\\");
+}
+
+function normalizeRepoPath(file: string): string {
+  return file.trim().replace(/\\/g, "/").replace(/^\.\/+/, "");
 }
 
 /**
@@ -246,7 +441,7 @@ function getChangedFilesFromMilestoneTaggedCommits(
     "log", "--format=%H%x1f%B%x1e", "HEAD", "--", `.gsd/milestones/${milestoneId}`,
   ]);
   if (!scoped.ok) return scoped;
-  if (scoped.matched) return scoped;
+  if (scoped.matched && classifyImplementationFiles(scoped.files) === "present") return scoped;
 
   // Fallback (#5033): when .gsd/ is gitignored / external / untracked, the
   // path-scoped scan matches no commits even though GSD-tagged commits
@@ -257,9 +452,137 @@ function getChangedFilesFromMilestoneTaggedCommits(
   // Intentionally unbounded — symmetric with the primary scan, and avoids
   // reintroducing the rolling-depth failure class removed in #4699 where
   // milestone evidence aged out behind unrelated activity.
-  return scanGsdTaggedCommits(basePath, milestoneId, [
+  const unscoped = scanGsdTaggedCommits(basePath, milestoneId, [
     "log", "--format=%H%x1f%B%x1e", "HEAD",
   ]);
+  if (!unscoped.ok) return scoped.matched ? scoped : unscoped;
+  if (!unscoped.matched) return scoped;
+
+  return {
+    ok: true,
+    matched: true,
+    files: [...new Set([...scoped.files, ...unscoped.files])],
+  };
+}
+
+function getChangedFilesFromMilestoneEvidence(
+  basePath: string,
+  milestoneId: string,
+): { ok: boolean; matched: boolean; files: string[] } {
+  const tagged = getChangedFilesFromMilestoneTaggedCommits(basePath, milestoneId);
+  if (!tagged.ok) return tagged;
+  if (tagged.matched && classifyImplementationFiles(tagged.files) === "present") return tagged;
+
+  const attributed = getChangedFilesFromAttributedMilestoneCommits(basePath, milestoneId);
+  if (!attributed.ok) return tagged.matched ? tagged : attributed;
+  if (attributed.matched && classifyImplementationFiles(attributed.files) === "present") return attributed;
+
+  const backfilled = backfillChangedFilesFromUntaggedMilestoneCommits(basePath, milestoneId);
+  if (!backfilled.ok) return tagged.matched ? tagged : attributed.matched ? attributed : backfilled;
+  if (!backfilled.matched) {
+    if (tagged.matched) return tagged;
+    return attributed.matched ? attributed : backfilled;
+  }
+
+  return {
+    ok: true,
+    matched: true,
+    files: [...new Set([...tagged.files, ...attributed.files, ...backfilled.files])],
+  };
+}
+
+function getChangedFilesFromAttributedMilestoneCommits(
+  basePath: string,
+  milestoneId: string,
+): { ok: boolean; matched: boolean; files: string[] } {
+  try {
+    const shas = getMilestoneCommitAttributionShas(milestoneId);
+    if (shas.length === 0) return { ok: true, matched: false, files: [] };
+
+    const files = new Set<string>();
+    let matched = false;
+    for (const sha of shas) {
+      if (!isFullCommitSha(sha)) continue;
+      const commitFiles = getChangedFilesForCommit(basePath, sha);
+      if (commitFiles.length === 0) continue;
+      matched = true;
+      for (const file of commitFiles) files.add(file);
+    }
+    return { ok: true, matched, files: [...files] };
+  } catch (e) {
+    logWarning("recovery", `milestone attribution scan failed: ${(e as Error).message}`);
+    return { ok: false, matched: false, files: [] };
+  }
+}
+
+function backfillChangedFilesFromUntaggedMilestoneCommits(
+  basePath: string,
+  milestoneId: string,
+): { ok: boolean; matched: boolean; files: string[] } {
+  try {
+    const milestone = getMilestone(milestoneId);
+    const milestoneStartedAt = milestone?.created_at ? Math.floor(Date.parse(milestone.created_at) / 1000) * 1000 : NaN;
+    if (!Number.isFinite(milestoneStartedAt)) return { ok: true, matched: false, files: [] };
+
+    const taskFileHints = getCompletedMilestoneTaskFileHints(milestoneId);
+    if (taskFileHints.length === 0) return { ok: true, matched: false, files: [] };
+
+    const hintSet = new Set(taskFileHints.map(normalizeRepoPath).filter(Boolean));
+    if (hintSet.size === 0) return { ok: true, matched: false, files: [] };
+
+    const records = getCommitRecords(basePath);
+    const files = new Set<string>();
+    let matched = false;
+    for (const record of records) {
+      if (!isFullCommitSha(record.hash)) continue;
+      if (Date.parse(record.committedAt) < milestoneStartedAt) continue;
+      if (record.parents.trim().split(/\s+/).filter(Boolean).length > 1) continue;
+      if (commitMessageHasGsdTrailer(record.message)) continue;
+
+      const commitFiles = getChangedFilesForCommit(basePath, record.hash);
+      const implementationFiles = commitFiles.map(normalizeRepoPath).filter(isImplementationPath);
+      if (implementationFiles.length === 0) continue;
+      if (!implementationFiles.some((file) => hintSet.has(file))) continue;
+
+      matched = true;
+      for (const file of implementationFiles) files.add(file);
+      recordMilestoneCommitAttribution({
+        commitSha: record.hash,
+        milestoneId,
+        source: "backfill",
+        confidence: 0.8,
+        files: implementationFiles,
+        createdAt: new Date().toISOString(),
+      });
+    }
+
+    return { ok: true, matched, files: [...files] };
+  } catch (e) {
+    logWarning("recovery", `milestone attribution backfill failed: ${(e as Error).message}`);
+    return { ok: false, matched: false, files: [] };
+  }
+}
+
+function getCommitRecords(basePath: string): Array<{ hash: string; parents: string; committedAt: string; message: string }> {
+  const logOutput = execFileSync("git", ["log", "--format=%H%x1f%P%x1f%cI%x1f%B%x1e", "HEAD"], {
+    cwd: basePath,
+    stdio: ["ignore", "pipe", "pipe"],
+    encoding: "utf-8",
+  });
+  return logOutput
+    .split("\x1e")
+    .map((record) => record.trim())
+    .filter(Boolean)
+    .flatMap((record) => {
+      const parts = record.split("\x1f");
+      if (parts.length < 4) return [];
+      const [hash, parents, committedAt, ...messageParts] = parts;
+      return [{ hash: hash.trim(), parents: parents.trim(), committedAt: committedAt.trim(), message: messageParts.join("\x1f") }];
+    });
+}
+
+function isFullCommitSha(value: string): boolean {
+  return /^[0-9a-f]{40}$/i.test(value);
 }
 
 function scanGsdTaggedCommits(
@@ -291,7 +614,7 @@ function scanGsdTaggedCommits(
       if (!commitMessageHasGsdTrailer(message)) continue;
 
       const commitFiles = getChangedFilesForCommit(basePath, hash);
-      if (!commitMatchesMilestone(message, milestoneId, commitFiles)) continue;
+      if (!commitMatchesMilestone(basePath, message, milestoneId, commitFiles)) continue;
 
       matched = true;
       for (const file of commitFiles) {
@@ -319,20 +642,62 @@ function commitMessageHasGsdTrailer(message: string): boolean {
   return /^GSD-(?:Task|Unit):\s*\S+/m.test(message);
 }
 
-function commitMatchesMilestone(message: string, milestoneId: string, files: readonly string[]): boolean {
+function commitMatchesMilestone(basePath: string, message: string, milestoneId: string, files: readonly string[]): boolean {
   if (commitTrailerStartsWithMilestone(message, milestoneId)) return true;
 
   // Meaningful execute-task commits currently store task scope as Sxx/Tyy
   // rather than Mxx/Sxx/Tyy. Bind those commits back to the milestone when
   // either the commit touched this milestone's artifacts, or — for projects
   // where .gsd/ is gitignored/external (#5033) — the message explicitly
-  // names the milestone.
+  // names the milestone, local GSD state proves the task belongs here, or the
+  // commit is implementation-bearing evidence itself (#5100).
   if (/^GSD-Task:\s*S[^/\s]+\/T\S+/m.test(message)) {
     if (files.some((file) => isMilestoneArtifactPath(file, milestoneId))) return true;
     if (commitMessageMentionsMilestone(message, milestoneId)) return true;
+    const taskTrailerOwnership = getTaskOwnershipStatus(basePath, message, milestoneId);
+    if (taskTrailerOwnership === true) return true;
+    if (taskTrailerOwnership === false) return false;
+    // taskTrailerOwnership === null: unknown ownership. Apply fallback only
+    // in this case to avoid cross-milestone attribution.
+    if (MILESTONE_ID_RE.test(milestoneId) && classifyImplementationFiles(files) === "present") return true;
   }
 
   return false;
+}
+
+/**
+ * Tri-state task ownership probe.
+ * true => DB or local files confirm this milestone owns the task.
+ * false => DB is available and this milestone is registered, but task is absent.
+ * null => ownership unknown (milestone not in DB yet, or no DB + no local files).
+ */
+function getTaskOwnershipStatus(
+  basePath: string,
+  message: string,
+  milestoneId: string,
+): true | false | null {
+  const match = message.match(/^GSD-Task:\s*(S[^/\s]+)\/(T[^\s]+)/m);
+  if (!match) return null;
+  const [, sliceId, taskId] = match;
+
+  if (isDbAvailable()) {
+    if (!getMilestone(milestoneId)) return null;
+    return getTask(milestoneId, sliceId, taskId) ? true : false;
+  }
+
+  // DB unavailable: fallback to local task-file presence.
+  const tasksDir = resolveTasksDir(basePath, milestoneId, sliceId);
+  if (
+    tasksDir
+    && (
+      existsSync(join(tasksDir, `${taskId}-PLAN.md`))
+      || existsSync(join(tasksDir, `${taskId}-SUMMARY.md`))
+    )
+  ) {
+    return true;
+  }
+
+  return null;
 }
 
 function commitMessageMentionsMilestone(message: string, milestoneId: string): boolean {
@@ -524,7 +889,8 @@ export function verifyExpectedArtifact(
     }
   }
 
-  const absPath = resolveExpectedArtifactPath(unitType, unitId, base);
+  const artifactBase = resolveArtifactVerificationBase(unitId, base);
+  const absPath = resolveExpectedArtifactPath(unitType, unitId, artifactBase);
   // For unit types with no verifiable artifact (null path), the parent directory
   // is missing on disk — treat as stale completion state so the key gets evicted (#313).
   if (!absPath) {
@@ -532,6 +898,11 @@ export function verifyExpectedArtifact(
     return false;
   }
   if (!existsSync(absPath)) {
+    const worktreeFailure = diagnoseWorktreeIntegrityFailure(artifactBase);
+    if (worktreeFailure) {
+      logError("recovery", `${worktreeFailure} Unit: ${unitType} ${unitId}.`);
+      return false;
+    }
     logWarning("recovery", `verify-fail ${unitType} ${unitId}: existsSync false for ${absPath}`);
     return false;
   }
@@ -540,6 +911,14 @@ export function verifyExpectedArtifact(
     const validationContent = readFileSync(absPath, "utf-8");
     if (!isValidationTerminal(validationContent)) {
       logWarning("recovery", `verify-fail ${unitType} ${unitId}: validation not terminal (len=${validationContent.length}) at ${absPath}`);
+      return false;
+    }
+  }
+
+  if (unitType === "run-uat") {
+    const assessmentContent = readFileSync(absPath, "utf-8");
+    if (!hasVerdict(assessmentContent)) {
+      logWarning("recovery", `verify-fail ${unitType} ${unitId}: assessment missing verdict at ${absPath}`);
       return false;
     }
   }
@@ -557,78 +936,40 @@ export function verifyExpectedArtifact(
     }
   }
 
-  // plan-slice must produce a plan with actual task entries, not just a scaffold.
-  // The plan file may exist from a prior discussion/context step with only headings
-  // but no tasks. Without this check the artifact is considered "complete" and the
-  // unit gets skipped — but deriveState still returns phase:"planning" because the
-  // plan has no tasks, creating an infinite skip loop (#699).
-  if (unitType === "plan-slice") {
-    const planContent = readFileSync(absPath, "utf-8");
-    // Accept checkbox-style (- [x] **T01: ...) or heading-style (### T01 -- / ### T01: / ### T01 —)
-    const hasCheckboxTask = /^- \[[xX ]\] \*\*T\d+:/m.test(planContent);
-    const hasHeadingTask = /^#{2,4}\s+T\d+\s*(?:--|—|:)/m.test(planContent);
-    if (!hasCheckboxTask && !hasHeadingTask) {
-      logWarning("recovery", `verify-fail ${unitType} ${unitId}: plan has no task checkbox/heading (len=${planContent.length}) at ${absPath}`);
-      return false;
-    }
-  }
-
-  // execute-task: DB status is authoritative. Fall back to checked-checkbox
-  // detection when the DB is unavailable (unmigrated projects).
-  if (unitType === "execute-task") {
-    const { milestone: mid, slice: sid, task: tid } = parseUnitId(unitId);
-    if (mid && sid && tid) {
-      const dbTask = getTask(mid, sid, tid);
-      if (dbTask) {
-        // DB available — trust it
-        if (dbTask.status !== "complete" && dbTask.status !== "done") return false;
-      } else if (!isDbAvailable()) {
-        // LEGACY: Pre-migration fallback for projects without DB.
-        // Require a CHECKED checkbox — a bare heading or unchecked checkbox
-        // does not prove gsd_complete_task ran. Summary file on disk alone
-        // is not sufficient evidence (could be a rogue write) (#3607).
-        const planAbs = resolveSliceFile(base, mid, sid, "PLAN");
-        if (planAbs && existsSync(planAbs)) {
-          const planContent = readFileSync(planAbs, "utf-8");
-          const escapedTid = tid.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-          const cbRe = new RegExp(`^- \\[[xX]\\] \\*\\*${escapedTid}:`, "m");
-          if (!cbRe.test(planContent)) return false;
-        } else {
-          return false; // no plan file → cannot verify
-        }
-      } else {
-        // DB available but task row not found — completion tool never ran (#3607)
-        return false;
-      }
-    }
-  }
-
-  // plan-slice must also produce individual task plan files for every task listed
-  // in the slice plan. Without this check, a plan-slice that wrote S{sid}-PLAN.md
-  // but omitted T{tid}-PLAN.md files would be marked complete, causing execute-task
-  // to dispatch with a missing task plan (see issue #739).
+  // plan-slice verification is DB-primary. The slice plan is a projection, so
+  // DB task rows prove the slice was planned even if the rendered markdown no
+  // longer uses legacy checkbox/heading syntax.
   if (unitType === "plan-slice") {
     const { milestone: mid, slice: sid } = parseUnitId(unitId);
     if (mid && sid) {
       try {
-        // DB primary path — get task IDs to verify task plan files exist
         let taskIds: string[] | null = null;
         if (isDbAvailable()) {
-          const tasks = getSliceTasks(mid, sid);
-          if (tasks.length > 0) taskIds = tasks.map(t => t.id);
+          const refreshed = refreshOpenDatabaseFromDisk();
+          if (refreshed) {
+            const tasks = getSliceTasks(mid, sid);
+            if (tasks.length > 0) taskIds = tasks.map(t => t.id);
+          }
         }
 
         if (!taskIds) {
-          // LEGACY: DB unavailable or no tasks in DB — parse plan file for task IDs
+          // LEGACY: DB unavailable or no tasks in DB. Require actual task
+          // entries so an empty scaffold cannot advance the pipeline (#699).
           const planContent = readFileSync(absPath, "utf-8");
+          const hasCheckboxTask = /^\s*- \[[xX ]\] \*\*T\d+:/m.test(planContent);
+          const hasHeadingTask = /^\s*#{2,4}\s+T\d+\s*(?:--|—|:)/m.test(planContent);
+          if (!hasCheckboxTask && !hasHeadingTask) {
+            logWarning("recovery", `verify-fail ${unitType} ${unitId}: plan has no task checkbox/heading (len=${planContent.length}) at ${absPath}`);
+            return false;
+          }
           const plan = parseLegacyPlan(planContent);
           if (plan.tasks.length > 0) taskIds = plan.tasks.map((t: { id: string }) => t.id);
         }
 
         if (taskIds && taskIds.length > 0) {
-          const tasksDir = resolveTasksDir(base, mid, sid);
-          if (!tasksDir) {
-            logWarning("recovery", `verify-fail ${unitType} ${unitId}: resolveTasksDir returned null for ${mid}/${sid}`);
+          const tasksDir = join(dirname(absPath), "tasks");
+          if (!existsSync(tasksDir)) {
+            logWarning("recovery", `verify-fail ${unitType} ${unitId}: tasks dir missing at ${tasksDir}`);
             return false;
           }
           for (const tid of taskIds) {
@@ -642,6 +983,31 @@ export function verifyExpectedArtifact(
       } catch (err) {
         // Parse failure — don't block; slice plan may have non-standard format
         logWarning("recovery", `plan-slice task plan verification failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }
+
+  // execute-task: DB status is authoritative. Fall back to checked-checkbox
+  // detection when the DB is unavailable (unmigrated projects), or when the
+  // disk artifacts already reflect completion but the DB replay is one beat
+  // behind the completion write.
+  if (unitType === "execute-task") {
+    const { milestone: mid, slice: sid, task: tid } = parseUnitId(unitId);
+    if (mid && sid && tid) {
+      const dbTask = getTask(mid, sid, tid);
+      if (dbTask) {
+        if (dbTask.status !== "complete" && dbTask.status !== "done" && !hasCheckedTaskCompletionOnDisk(base, mid, sid, tid)) {
+          return false;
+        }
+      } else if (!isDbAvailable()) {
+        // LEGACY: Pre-migration fallback for projects without DB.
+        // Require a CHECKED checkbox — a bare heading or unchecked checkbox
+        // does not prove gsd_complete_task ran. Summary file on disk alone
+        // is not sufficient evidence (could be a rogue write) (#3607).
+        if (!hasCheckedTaskCompletionOnDisk(base, mid, sid, tid)) return false;
+      } else {
+        // DB available but task row not found — completion tool never ran (#3607)
+        return false;
       }
     }
   }
@@ -710,7 +1076,8 @@ export function writeBlockerPlaceholder(
   base: string,
   reason: string,
 ): string | null {
-  const absPath = resolveExpectedArtifactPath(unitType, unitId, base);
+  const artifactBase = resolveArtifactVerificationBase(unitId, base);
+  const absPath = resolveExpectedArtifactPath(unitType, unitId, artifactBase);
   if (!absPath) return null;
   const dir = dirname(absPath);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
@@ -746,7 +1113,7 @@ export function writeBlockerPlaceholder(
     if (unitType === "execute-task" && mid && sid && tid) {
       try {
         updateTaskStatus(mid, sid, tid, "complete", ts);
-        const planPath = resolveSliceFile(base, mid, sid, "PLAN");
+        const planPath = resolveExpectedArtifactPath("plan-slice", `${mid}/${sid}`, artifactBase);
         if (planPath && existsSync(planPath)) {
           const planContent = readFileSync(planPath, "utf-8");
           const updatedPlan = planContent.replace(
@@ -783,205 +1150,14 @@ export function writeBlockerPlaceholder(
 }
 
 // ─── Merge State Reconciliation ───────────────────────────────────────────────
+// Body relocated to state-reconciliation/drift/merge-state.ts (ADR-017 #5701).
+// Re-exported here for backward compatibility with existing call sites:
+// auto.ts, auto/loop-deps.ts, tests/integration/auto-recovery.test.ts.
 
-/**
- * Best-effort abort of a pending merge/squash and hard-reset to HEAD.
- * Handles both real merges (MERGE_HEAD) and squash merges (SQUASH_MSG).
- */
-function abortAndResetMerge(
-  basePath: string,
-  hasMergeHead: boolean,
-  squashMsgPath: string,
-): void {
-  if (hasMergeHead) {
-    try {
-      nativeMergeAbort(basePath);
-    } catch (err) {
-      /* best-effort */
-      logWarning("recovery", `git merge-abort failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  } else if (squashMsgPath) {
-    try {
-      unlinkSync(squashMsgPath);
-    } catch (err) {
-      /* best-effort */
-      logWarning("recovery", `file unlink failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-  try {
-    nativeResetHard(basePath);
-  } catch (err) {
-    /* best-effort */
-    logError("recovery", `git reset failed: ${err instanceof Error ? err.message : String(err)}`);
-  }
-}
-
-export type MergeReconcileResult = "clean" | "reconciled" | "blocked";
-
-/**
- * Detect and abort other in-progress git operations left behind by a SIGKILL'd
- * worker (rebase, cherry-pick, revert). Without this, a killed worker mid-rebase
- * leaves `.git/rebase-merge/` or `.git/CHERRY_PICK_HEAD` and the worktree is
- * wedged until the user manually runs the matching `--abort`.
- *
- * Called before merge-state reconciliation because these states block any
- * subsequent merge/commit operation. (Issue #4980 HIGH-7)
- */
-function reconcileOtherInProgressGitOps(
-  basePath: string,
-  ctx: ExtensionContext,
-): "clean" | "reconciled" | "blocked" {
-  const gitDir = join(basePath, ".git");
-  const states: Array<{
-    label: string;
-    indicators: string[];
-    abort: () => void;
-  }> = [
-    {
-      label: "rebase",
-      indicators: [join(gitDir, "rebase-merge"), join(gitDir, "rebase-apply")],
-      abort: () => nativeRebaseAbort(basePath),
-    },
-    {
-      label: "cherry-pick",
-      indicators: [join(gitDir, "CHERRY_PICK_HEAD")],
-      abort: () => {
-        // No native helper; fall back to git CLI.
-        try {
-          execFileSync("git", ["cherry-pick", "--abort"], {
-            cwd: basePath, stdio: ["ignore", "pipe", "pipe"], encoding: "utf-8",
-          });
-        } catch (err) { logWarning("recovery", `cherry-pick --abort failed: ${getErrorMessage(err)}`); }
-      },
-    },
-    {
-      label: "revert",
-      indicators: [join(gitDir, "REVERT_HEAD")],
-      abort: () => {
-        try {
-          execFileSync("git", ["revert", "--abort"], {
-            cwd: basePath, stdio: ["ignore", "pipe", "pipe"], encoding: "utf-8",
-          });
-        } catch (err) { logWarning("recovery", `revert --abort failed: ${getErrorMessage(err)}`); }
-      },
-    },
-  ];
-
-  let reconciled = false;
-  for (const s of states) {
-    const present = s.indicators.some((p) => existsSync(p));
-    if (!present) continue;
-    try {
-      s.abort();
-      ctx.ui.notify(
-        `Detected leftover ${s.label} state from prior session — aborted.`,
-        "warning",
-      );
-      reconciled = true;
-    } catch (err) {
-      logError("recovery", `${s.label} abort failed: ${getErrorMessage(err)}`);
-      ctx.ui.notify(
-        `Detected leftover ${s.label} state but auto-abort failed. ` +
-        `Run \`git ${s.label} --abort\` manually before retrying.`,
-        "error",
-      );
-      return "blocked";
-    }
-  }
-  return reconciled ? "reconciled" : "clean";
-}
-
-/**
- * Detect leftover merge state from a prior session and reconcile it.
- * If MERGE_HEAD or SQUASH_MSG exists, check whether conflicts are resolved.
- * If resolved: finalize the commit. If only .gsd conflicts remain: auto-resolve.
- * If code conflicts remain: fail safe without modifying the worktree.
- */
-export function reconcileMergeState(
-  basePath: string,
-  ctx: ExtensionContext,
-): MergeReconcileResult {
-  // First, abort any rebase/cherry-pick/revert left over from a SIGKILL'd
-  // worker. Doing this before the merge-state check unblocks any merge that
-  // would otherwise refuse with "you have unfinished operation". (HIGH-7)
-  const otherOpsResult = reconcileOtherInProgressGitOps(basePath, ctx);
-  if (otherOpsResult === "blocked") return "blocked";
-
-  const mergeHeadPath = join(basePath, ".git", "MERGE_HEAD");
-  const squashMsgPath = join(basePath, ".git", "SQUASH_MSG");
-  const hasMergeHead = existsSync(mergeHeadPath);
-  const hasSquashMsg = existsSync(squashMsgPath);
-  if (!hasMergeHead && !hasSquashMsg) {
-    // If we cleaned up another op type, return "reconciled" so the caller
-    // re-derives state from a known-good baseline.
-    return otherOpsResult === "reconciled" ? "reconciled" : "clean";
-  }
-
-  const conflictedFiles = nativeConflictFiles(basePath);
-  if (conflictedFiles.length === 0) {
-    // All conflicts resolved — finalize the merge/squash commit
-    try {
-      const commitSha = nativeCommit(basePath, "chore(gsd): reconcile merge state");
-      if (commitSha) {
-        const mode = hasMergeHead ? "merge" : "squash commit";
-        ctx.ui.notify(`Finalized leftover ${mode} from prior session.`, "info");
-      } else {
-        ctx.ui.notify("No new commit needed for leftover merge/squash state — already committed.", "info");
-      }
-    } catch (err) {
-      const errorMessage = getErrorMessage(err);
-      ctx.ui.notify(`Failed to finalize leftover merge/squash commit: ${errorMessage}`, "error");
-      return "blocked";
-    }
-  } else {
-    // Still conflicted — try auto-resolving .gsd/ state file conflicts (#530)
-    const gsdConflicts = conflictedFiles.filter((f) => f.startsWith(".gsd/"));
-    const codeConflicts = conflictedFiles.filter((f) => !f.startsWith(".gsd/"));
-
-    if (gsdConflicts.length > 0 && codeConflicts.length === 0) {
-      // All conflicts are in .gsd/ state files — auto-resolve by accepting theirs
-      let resolved = true;
-      try {
-        nativeCheckoutTheirs(basePath, gsdConflicts);
-        nativeAddPaths(basePath, gsdConflicts);
-      } catch (e) {
-        logError("recovery", `auto-resolve .gsd/ conflicts failed: ${(e as Error).message}`);
-        resolved = false;
-      }
-      if (resolved) {
-        try {
-          nativeCommit(
-            basePath,
-            "chore: auto-resolve .gsd/ state file conflicts",
-          );
-          ctx.ui.notify(
-            `Auto-resolved ${gsdConflicts.length} .gsd/ state file conflict(s) from prior merge.`,
-            "info",
-          );
-        } catch (e) {
-          logError("recovery", `auto-commit .gsd/ conflict resolution failed: ${(e as Error).message}`);
-          resolved = false;
-        }
-      }
-      if (!resolved) {
-        abortAndResetMerge(basePath, hasMergeHead, squashMsgPath);
-        ctx.ui.notify(
-          "Detected leftover merge state — auto-resolve failed, cleaned up. Re-deriving state.",
-          "warning",
-        );
-      }
-    } else {
-      // Code conflicts present — fail safe and preserve any manual resolution
-      // work instead of discarding it with merge --abort/reset --hard.
-      ctx.ui.notify(
-        "Detected leftover merge state with unresolved code conflicts. Auto-mode will pause without modifying the worktree so manual conflict resolution is preserved.",
-        "error",
-      );
-      return "blocked";
-    }
-  }
-  return "reconciled";
-}
+export {
+  reconcileMergeState,
+  type MergeReconcileResult,
+} from "./state-reconciliation/drift/merge-state.js";
 
 // ─── Loop Remediation ─────────────────────────────────────────────────────────
 
@@ -999,7 +1175,7 @@ export function buildLoopRemediationSteps(
     case "execute-task": {
       if (!mid || !sid || !tid) break;
       return [
-        `   1. Run \`gsd undo-task ${tid}\` to reset the task state`,
+        `   1. Run \`gsd undo-task ${mid}/${sid}/${tid}\` to reset the task state`,
         `   2. Resume auto-mode — it will re-execute the task`,
         `   3. If the task keeps failing, run \`gsd recover\` to rebuild DB state from disk`,
       ].join("\n");
@@ -1020,7 +1196,7 @@ export function buildLoopRemediationSteps(
     case "complete-slice": {
       if (!mid || !sid) break;
       return [
-        `   1. Run \`gsd reset-slice ${sid}\` to reset the slice and all its tasks`,
+        `   1. Run \`gsd reset-slice ${mid}/${sid}\` to reset the slice and all its tasks`,
         `   2. Resume auto-mode — it will re-execute incomplete tasks and re-complete the slice`,
         `   3. If the slice keeps failing, run \`gsd recover\` to rebuild DB state from disk`,
       ].join("\n");

@@ -14,6 +14,7 @@ import {
   DISPATCH_RULES,
   getDeepStageGate,
   hasPendingDeepStage,
+  resolveDispatch,
   setResearchProjectPromptBuilderForTest,
   type DispatchContext,
 } from "../auto-dispatch.ts";
@@ -246,6 +247,11 @@ function writeCapturedDeepPrefs(base: string): void {
     join(base, ".gsd", "PREFERENCES.md"),
     "---\nplanning_depth: deep\nworkflow_prefs_captured: true\n---\n",
   );
+}
+
+function writeSkippedProjectResearchDecision(base: string): void {
+  mkdirSync(join(base, ".gsd", "runtime"), { recursive: true });
+  writeFileSync(join(base, ".gsd", "runtime", "research-decision.json"), JSON.stringify({ decision: "skip" }));
 }
 
 function makeCtx(
@@ -783,6 +789,42 @@ test("Deep mode: research-project DOES dispatch when only 3 of 4 research files 
   const prefs = { planning_depth: "deep" } as GSDPreferences;
   const result = await rule(RESEARCH_PROJECT_RULE_NAME).match(makeCtx(base, prefs));
   assert.ok(result && result.action === "dispatch", "any missing dimension must trigger re-run");
+});
+
+test("Deep mode: queued milestone without CONTEXT.md routes to milestone research after project setup", async (t) => {
+  const base = makeIsolatedBaseWithCleanup(t);
+
+  writeCapturedDeepPrefs(base);
+  writeValidProject(base);
+  writeValidRequirements(base);
+  writeSkippedProjectResearchDecision(base);
+
+  const prefs = { planning_depth: "deep" } as GSDPreferences;
+  const result = await resolveDispatch(makeCtx(base, prefs));
+
+  assert.equal(result.action, "dispatch");
+  if (result.action === "dispatch") {
+    assert.equal(result.unitType, "research-milestone");
+    assert.equal(result.unitId, "M001");
+  }
+});
+
+test("Deep mode: queued milestone without CONTEXT.md can route directly to milestone planning", async (t) => {
+  const base = makeIsolatedBaseWithCleanup(t);
+
+  writeCapturedDeepPrefs(base);
+  writeValidProject(base);
+  writeValidRequirements(base);
+  writeSkippedProjectResearchDecision(base);
+
+  const prefs = { planning_depth: "deep", phases: { skip_research: true } } as GSDPreferences;
+  const result = await resolveDispatch(makeCtx(base, prefs));
+
+  assert.equal(result.action, "dispatch");
+  if (result.action === "dispatch") {
+    assert.equal(result.unitType, "plan-milestone");
+    assert.equal(result.unitId, "M001");
+  }
 });
 
 // ─── centralized deep-stage gate ─────────────────────────────────────────

@@ -24,8 +24,17 @@ import {
 } from "./doctor.js";
 import { isAutoActive, checkRemoteAutoSession } from "./auto.js";
 import { getAutoWorktreePath } from "./auto-worktree.js";
-import { projectRoot } from "./commands/context.js";
+import { currentDirectoryRoot, projectRoot } from "./commands/context.js";
 import { loadPrompt } from "./prompt-loader.js";
+import {
+  buildDoctorHealIssuePayload,
+  buildDoctorHealSummary,
+  buildWorkflowDispatchContent,
+} from "./workflow-protocol.js";
+import {
+  restoreGsdWorkflowTools,
+  scopeGsdWorkflowToolsForDispatch,
+} from "./bootstrap/register-hooks.js";
 
 const UPDATE_REGISTRY_URL = "https://registry.npmjs.org/gsd-pi/latest";
 const UPDATE_FETCH_TIMEOUT_MS = 5000;
@@ -72,18 +81,23 @@ export function dispatchDoctorHeal(pi: ExtensionAPI, scope: string | undefined, 
   const workflowPath = process.env.GSD_WORKFLOW_PATH ?? join(gsdHome(), "agent", "GSD-WORKFLOW.md");
   const workflow = readFileSync(workflowPath, "utf-8");
   const prompt = loadPrompt("doctor-heal", {
-    doctorSummary: reportText,
-    structuredIssues,
+    doctorSummary: buildDoctorHealSummary(reportText),
+    structuredIssues: buildDoctorHealIssuePayload(structuredIssues),
     scopeLabel: scope ?? "active milestone / blocking scope",
     doctorCommandSuffix: scope ? ` ${scope}` : "",
   });
 
-  const content = `Read the following GSD workflow protocol and execute exactly.\n\n${workflow}\n\n## Your Task\n\n${prompt}`;
+  const content = buildWorkflowDispatchContent({ workflow, workflowPath, task: prompt });
+  const savedTools = scopeGsdWorkflowToolsForDispatch(pi);
 
-  pi.sendMessage(
-    { customType: "gsd-doctor-heal", content, display: false },
-    { triggerTurn: true },
-  );
+  try {
+    pi.sendMessage(
+      { customType: "gsd-doctor-heal", content, display: false },
+      { triggerTurn: true },
+    );
+  } finally {
+    restoreGsdWorkflowTools(pi, savedTools);
+  }
 }
 
 /** Parse doctor command args into structured flags and positionals (pure, no I/O). */
@@ -109,6 +123,8 @@ export async function handleDoctor(args: string, ctx: ExtensionCommandContext, p
   const { jsonMode, dryRun, fixFlag, includeBuild, includeTests, mode, requestedScope } = parseDoctorArgs(args);
   const scope = await selectDoctorScope(projectRoot(), requestedScope);
   const effectiveScope = mode === "audit" ? requestedScope : scope;
+  const { ensureDbOpen } = await import("./bootstrap/dynamic-tools.js");
+  await ensureDbOpen(projectRoot());
   const report = await runGSDDoctor(projectRoot(), {
     fix: mode === "fix" || mode === "heal" || dryRun || fixFlag,
     dryRun,
@@ -203,7 +219,7 @@ export async function handleCapture(args: string, ctx: ExtensionCommandContext):
     return;
   }
 
-  const basePath = process.cwd();
+  const basePath = currentDirectoryRoot();
 
   // Ensure .gsd/ exists — capture should work even without a milestone
   const gsdDir = gsdRoot(basePath);
@@ -258,19 +274,24 @@ export async function handleTriage(ctx: ExtensionCommandContext, pi: ExtensionAP
 
   const workflowPath = process.env.GSD_WORKFLOW_PATH ?? join(gsdHome(), "agent", "GSD-WORKFLOW.md");
   const workflow = readFileSync(workflowPath, "utf-8");
+  const savedTools = scopeGsdWorkflowToolsForDispatch(pi);
 
-  pi.sendMessage(
-    {
-      customType: "gsd-triage",
-      content: `Read the following GSD workflow protocol and execute exactly.\n\n${workflow}\n\n## Your Task\n\n${prompt}`,
-      display: false,
-    },
-    { triggerTurn: true },
-  );
+  try {
+    pi.sendMessage(
+      {
+        customType: "gsd-triage",
+        content: buildWorkflowDispatchContent({ workflow, workflowPath, task: prompt }),
+        display: false,
+      },
+      { triggerTurn: true },
+    );
+  } finally {
+    restoreGsdWorkflowTools(pi, savedTools);
+  }
 }
 
 export async function handleSteer(change: string, ctx: ExtensionCommandContext, pi: ExtensionAPI): Promise<void> {
-  const basePath = process.cwd();
+  const basePath = currentDirectoryRoot();
   const state = await deriveState(basePath);
   const mid = state.activeMilestone?.id ?? "none";
   const sid = state.activeSlice?.id ?? "none";
@@ -343,14 +364,31 @@ export async function handleKnowledge(args: string, ctx: ExtensionCommandContext
   }
 
   const type = typeArg as "rule" | "pattern" | "lesson";
-  const basePath = process.cwd();
+  const basePath = currentDirectoryRoot();
   const state = await deriveState(basePath);
   const scope = state.activeMilestone?.id
     ? `${state.activeMilestone.id}${state.activeSlice ? `/${state.activeSlice.id}` : ""}`
     : "global";
 
-  await appendKnowledge(basePath, type, entryText, scope);
-  ctx.ui.notify(`Added ${type} to KNOWLEDGE.md: "${entryText}"`, "success");
+  // ADR-013 Stage 2c: Patterns and Lessons land in the memories table; the
+  // next session-start projection render emits them back into KNOWLEDGE.md.
+  // Rules stay file-canonical per ADR-013 line 39 — Rules are not migrated.
+  if (type === "rule") {
+    await appendKnowledge(basePath, type, entryText, scope);
+    ctx.ui.notify(`Added rule to KNOWLEDGE.md: "${entryText}"`, "success");
+    return;
+  }
+
+  const { captureKnowledgeEntry } = await import("./knowledge-capture.js");
+  const { id, written } = captureKnowledgeEntry(basePath, type, entryText, scope);
+  if (!written) {
+    ctx.ui.notify(`Could not persist ${type} — see logs for details.`, "error");
+    return;
+  }
+  ctx.ui.notify(
+    `Captured ${type} ${id} to memories; KNOWLEDGE.md will render it on next session start.`,
+    "success",
+  );
 }
 
 export async function handleRunHook(args: string, ctx: ExtensionCommandContext, pi: ExtensionAPI): Promise<void> {
@@ -372,7 +410,7 @@ Examples:
   }
 
   const [hookName, unitType, unitId] = parts;
-  const basePath = projectRoot();
+  const basePath = currentDirectoryRoot();
 
   // Import the hook trigger function
   const { triggerHookManually, formatHookStatus, getHookStatus } = await import("./post-unit-hooks.js");

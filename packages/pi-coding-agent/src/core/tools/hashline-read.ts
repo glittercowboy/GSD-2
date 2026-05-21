@@ -17,6 +17,7 @@ import { formatDimensionNote, resizeImage } from "../../utils/image-resize.js";
 import { detectSupportedImageMimeTypeFromFile } from "../../utils/mime.js";
 import { formatHashLines } from "./hashline.js";
 import { resolveReadPath } from "./path-utils.js";
+import { createReadFileTarget, type ToolTargetMetadata } from "./tool-target.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult, truncateHead } from "./truncate.js";
 
 const readSchema = Type.Object({
@@ -28,6 +29,7 @@ const readSchema = Type.Object({
 export type HashlineReadToolInput = Static<typeof readSchema>;
 
 export interface HashlineReadToolDetails {
+	target?: ToolTargetMetadata;
 	truncation?: TruncationResult;
 }
 
@@ -66,6 +68,7 @@ export function createHashlineReadTool(cwd: string, options?: HashlineReadToolOp
 			signal?: AbortSignal,
 		) => {
 			const absolutePath = resolveReadPath(path, cwd);
+			const target = createReadFileTarget(path, absolutePath, offset, limit);
 
 			return new Promise<{ content: (TextContent | ImageContent)[]; details: HashlineReadToolDetails | undefined }>(
 				(resolve, reject) => {
@@ -186,7 +189,7 @@ export function createHashlineReadTool(cwd: string, options?: HashlineReadToolOp
 							if (aborted) return;
 
 							if (signal) signal.removeEventListener("abort", onAbort);
-							resolve({ content, details });
+							resolve({ content, details: { ...details, target } });
 						} catch (error: any) {
 							if (signal) signal.removeEventListener("abort", onAbort);
 							if (!aborted) {

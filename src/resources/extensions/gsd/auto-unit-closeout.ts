@@ -1,3 +1,6 @@
+// Project/App: GSD-2
+// File Purpose: Auto-mode unit closeout metrics, activity capture, and ghost-run detection.
+
 /**
  * Unit closeout helper — consolidates the repeated pattern of
  * snapshotting metrics + saving activity log + extracting memories
@@ -22,6 +25,54 @@ export interface CloseoutOptions {
   gitPush?: boolean;
   gitStatus?: "ok" | "failed";
   gitError?: string;
+}
+
+export interface UnitActivitySnapshot {
+  elapsedMs: number;
+  toolCalls: number;
+  assistantMessages: number;
+}
+
+export const GHOST_COMPLETION_MAX_ELAPSED_MS = 500;
+
+export function snapshotUnitActivity(
+  ctx: ExtensionContext,
+  startedAt: number,
+  now = Date.now(),
+): UnitActivitySnapshot {
+  let toolCalls = 0;
+  let assistantMessages = 0;
+  const entries = ctx.sessionManager.getEntries() ?? [];
+
+  for (const entry of entries) {
+    if (entry.type !== "message") continue;
+    const msg = (entry as any).message;
+    if (!msg || msg.role !== "assistant") continue;
+    assistantMessages++;
+    if (!Array.isArray(msg.content)) continue;
+    for (const block of msg.content) {
+      if (block?.type === "toolCall") toolCalls++;
+    }
+  }
+
+  return {
+    elapsedMs: Math.max(0, now - startedAt),
+    toolCalls,
+    assistantMessages,
+  };
+}
+
+export function isSuspiciousGhostCompletion(
+  ctx: ExtensionContext,
+  startedAt: number,
+  maxElapsedMs = GHOST_COMPLETION_MAX_ELAPSED_MS,
+): boolean {
+  const activity = snapshotUnitActivity(ctx, startedAt);
+  return (
+    activity.elapsedMs < maxElapsedMs &&
+    activity.toolCalls === 0 &&
+    activity.assistantMessages === 0
+  );
 }
 
 /**

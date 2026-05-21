@@ -54,6 +54,10 @@ export interface McpToolDef {
 // `any` and skips static checking.
 const MCP_PKG = '@modelcontextprotocol/sdk'
 
+export function mcpSdkSpecifier(subpath: 'server/index' | 'server/stdio' | 'types'): string {
+  return `${MCP_PKG}/${subpath}.js`
+}
+
 /**
  * Starts a native MCP (Model Context Protocol) server over stdin/stdout.
  *
@@ -74,9 +78,9 @@ export async function startMcpServer(options: {
 }): Promise<void> {
   const { tools, version = '0.0.0' } = options
 
-  const serverMod = await import(`${MCP_PKG}/server/index.js`)
-  const stdioMod = await import(`${MCP_PKG}/server/stdio.js`)
-  const typesMod = await import(`${MCP_PKG}/types.js`)
+  const serverMod = await import(mcpSdkSpecifier('server/index'))
+  const stdioMod = await import(mcpSdkSpecifier('server/stdio'))
+  const typesMod = await import(mcpSdkSpecifier('types'))
 
   const Server = serverMod.Server
   const StdioServerTransport = stdioMod.StdioServerTransport

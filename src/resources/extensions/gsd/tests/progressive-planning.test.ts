@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { performance } from "node:perf_hooks";
 
 import {
   openDatabase,
@@ -13,10 +14,10 @@ import {
   insertMilestone,
   insertSlice,
   setSliceSketchFlag,
-  autoHealSketchFlags,
   getSlice,
 } from "../gsd-db.ts";
-import { deriveStateFromDb } from "../state.ts";
+import { autoHealSketchFlags } from "../state-reconciliation/drift/sketch-flag.ts";
+import { deriveState, deriveStateFromDb } from "../state.ts";
 import { resolveDispatch } from "../auto-dispatch.ts";
 import type { DispatchContext } from "../auto-dispatch.ts";
 
@@ -99,21 +100,21 @@ test("ADR-011: sketch slice + progressive_planning ON → phase='refining'", asy
   assert.equal(state.phase, "refining", "sketch slice with flag ON must yield refining phase");
 });
 
-test("ADR-011: sketch slice + progressive_planning OFF → phase='planning' (backwards compat)", async (t) => {
+test("ADR-011: sketch slice + progressive_planning OFF → DB sketch metadata still yields refining", async (t) => {
   const originalCwd = process.cwd();
   const base = makeFixtureBase();
   t.after(() => cleanup(base, originalCwd));
 
   seedMilestoneWithSketchedS02(base);
   writeS01Artifacts(base);
-  // Write a PREFERENCES.md without the flag so loadEffectiveGSDPreferences finds
-  // a valid file but progressive_planning resolves to undefined.
+  // Write a PREFERENCES.md without the flag. DB slice metadata remains
+  // authoritative for whether this slice needs refinement.
   writePreferences(base, "phases:\n  skip_research: false");
   process.chdir(base);
 
   const state = await deriveStateFromDb(base);
   assert.equal(state.activeSlice?.id, "S02");
-  assert.equal(state.phase, "planning", "flag absent → must fall through to planning");
+  assert.equal(state.phase, "refining", "flag absent must not override DB sketch metadata");
 });
 
 test("ADR-011: dispatch rule maps refining → refine-slice unit", async (t) => {
@@ -173,6 +174,37 @@ test("ADR-011: refining + flag flipped OFF mid-milestone → falls through to pl
   }
 });
 
+test("ADR-011: existing PLAN heals stale sketch flag via deriveStateFromDb (progressive_planning ON)", async (t) => {
+  const originalCwd = process.cwd();
+  const base = makeFixtureBase();
+  t.after(() => cleanup(base, originalCwd));
+
+  seedMilestoneWithSketchedS02(base);
+  writeS01Artifacts(base);
+  writePreferences(base, "phases:\n  progressive_planning: true");
+  writeFileSync(
+    join(base, ".gsd", "milestones", "M001", "slices", "S02", "S02-PLAN.md"),
+    "# S02 Plan\n",
+  );
+  process.chdir(base);
+
+  // deriveStateFromDb auto-heals the stale sketch flag when PLAN.md exists,
+  // regardless of the progressive_planning preference.
+  const state = await deriveStateFromDb(base);
+  assert.equal(getSlice("M001", "S02")?.is_sketch, 0, "derive: flag cleared when PLAN exists");
+  assert.equal(state.phase, "planning", "derive: phase advances past refining once flag is healed");
+
+  const ctx: DispatchContext = {
+    basePath: base,
+    mid: "M001",
+    midTitle: "Test",
+    state,
+    prefs: { phases: { progressive_planning: true, reassess_after_slice: false } } as any,
+  };
+  const result = await resolveDispatch(ctx);
+  assert.equal(result.action, "dispatch", "planning phase dispatches plan-slice, not dead-ends");
+});
+
 test("ADR-011: autoHealSketchFlags flips is_sketch=0 when PLAN file exists", async (t) => {
   const originalCwd = process.cwd();
   const base = makeFixtureBase();
@@ -195,6 +227,47 @@ test("ADR-011: autoHealSketchFlags flips is_sketch=0 when PLAN file exists", asy
   });
 
   assert.equal(getSlice("M001", "S02")?.is_sketch, 0, "post-heal: flag cleared");
+});
+
+test("ADR-011: deriveStateFromDb auto-heals stale sketch flag when PLAN exists", async (t) => {
+  const originalCwd = process.cwd();
+  const base = makeFixtureBase();
+  t.after(() => cleanup(base, originalCwd));
+
+  seedMilestoneWithSketchedS02(base);
+  writeS01Artifacts(base);
+  writePreferences(base, "phases:\n  skip_research: false");
+  // Simulate plan-slice completion where PLAN exists but is_sketch was not flipped.
+  writeFileSync(
+    join(base, ".gsd", "milestones", "M001", "slices", "S02", "S02-PLAN.md"),
+    "# S02 Plan\n",
+  );
+  process.chdir(base);
+
+  const state = await deriveStateFromDb(base);
+  assert.equal(getSlice("M001", "S02")?.is_sketch, 0, "derive should clear stale is_sketch");
+  assert.equal(state.phase, "planning", "state should advance past refining once stale flag is healed");
+});
+
+test("ADR-011: deriveState uses canonical artifact root for sketch-flag healing", async (t) => {
+  const originalCwd = process.cwd();
+  const base = makeFixtureBase();
+  t.after(() => cleanup(base, originalCwd));
+
+  seedMilestoneWithSketchedS02(base);
+  writeS01Artifacts(base);
+  writePreferences(base, "phases:\n  skip_research: false");
+  writeFileSync(
+    join(base, ".gsd", "milestones", "M001", "slices", "S02", "S02-PLAN.md"),
+    "# S02 Plan\n",
+  );
+  const worktreePath = join(base, "worker");
+  mkdirSync(worktreePath, { recursive: true });
+  process.chdir(worktreePath);
+
+  const state = await deriveState(worktreePath, { projectRootForReads: base });
+  assert.equal(getSlice("M001", "S02")?.is_sketch, 0, "deriveState should heal from canonical artifact root");
+  assert.equal(state.phase, "planning", "state should advance past refining when PLAN exists at canonical root");
 });
 
 test("ADR-011: schema v16 is idempotent — re-opening DB preserves is_sketch and sketch_scope columns", async (t) => {
@@ -516,24 +589,32 @@ test("ADR-011 P3 #26: refine-slice dispatch latency is bounded vs plan-slice bas
   await buildPlanSlicePrompt("M001", "Test", "S02", "Feature", base);
   await buildRefineSlicePrompt("M001", "Test", "S02", "Feature", base);
 
-  const planStart = Date.now();
-  await buildPlanSlicePrompt("M001", "Test", "S02", "Feature", base);
-  const planElapsed = Date.now() - planStart;
+  const measure = async (fn: () => Promise<string>): Promise<number> => {
+    const start = performance.now();
+    await fn();
+    return performance.now() - start;
+  };
 
-  const refineStart = Date.now();
-  await buildRefineSlicePrompt("M001", "Test", "S02", "Feature", base);
-  const refineElapsed = Date.now() - refineStart;
+  const planSamples: number[] = [];
+  const refineSamples: number[] = [];
+  for (let i = 0; i < 5; i++) {
+    planSamples.push(await measure(() => buildPlanSlicePrompt("M001", "Test", "S02", "Feature", base)));
+    refineSamples.push(await measure(() => buildRefineSlicePrompt("M001", "Test", "S02", "Feature", base)));
+  }
+  const bestPlan = Math.min(...planSamples);
+  const bestRefine = Math.min(...refineSamples);
 
   assert.ok(
-    refineElapsed < 500,
-    `refine-slice prompt build must complete under 500ms (took ${refineElapsed}ms)`,
+    bestRefine < 500,
+    `refine-slice prompt build must complete under 500ms (best=${bestRefine.toFixed(1)}ms, samples=${refineSamples.map(n => n.toFixed(1)).join(",")})`,
   );
   // Guard the ratio only when the baseline is large enough to be meaningful —
-  // if plan-slice measures 0-2ms the ratio is dominated by timer noise.
-  if (planElapsed >= 5) {
+  // if plan-slice measures in single-digit milliseconds, the ratio is dominated
+  // by scheduler and filesystem noise under the concurrent test runner.
+  if (bestPlan >= 20) {
     assert.ok(
-      refineElapsed < planElapsed * 3,
-      `refine-slice must not exceed 3x plan-slice baseline (refine=${refineElapsed}ms, plan=${planElapsed}ms)`,
+      bestRefine < bestPlan * 3,
+      `refine-slice must not exceed 3x plan-slice baseline (refine=${bestRefine.toFixed(1)}ms, plan=${bestPlan.toFixed(1)}ms)`,
     );
   }
 });

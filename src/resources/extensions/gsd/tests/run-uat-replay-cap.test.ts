@@ -1,51 +1,94 @@
 /**
- * Regression test for #3624 — cap run-uat dispatch attempts
- *
- * When verification commands fail before writing a verdict, the run-uat
- * dispatch rule fires repeatedly in an infinite loop. The fix adds a
- * MAX_UAT_ATTEMPTS constant and calls incrementUatCount before dispatch
- * to cap the number of attempts.
- *
- * Structural verification test — reads source to confirm MAX_UAT_ATTEMPTS
- * and incrementUatCount exist.
+ * Regression test for #3624 — cap run-uat dispatch attempts.
  */
 
-import { describe, test } from 'node:test';
-import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import test from "node:test";
+import assert from "node:assert/strict";
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+import { DISPATCH_RULES, getUatCount, incrementUatCount } from "../auto-dispatch.ts";
 
-const source = readFileSync(join(__dirname, '..', 'auto-dispatch.ts'), 'utf-8');
+function makeUatProject(): string {
+  const base = mkdtempSync(join(tmpdir(), "gsd-uat-cap-"));
+  const milestone = join(base, ".gsd", "milestones", "M001");
+  mkdirSync(join(milestone, "slices", "S01"), { recursive: true });
+  mkdirSync(join(milestone, "slices", "S02"), { recursive: true });
+  writeFileSync(
+    join(milestone, "M001-ROADMAP.md"),
+    [
+      "# M001: UAT Cap",
+      "",
+      "## Slices",
+      "- [x] **S01: Completed slice** `risk:low`",
+      "  Demo: done.",
+      "- [ ] **S02: Remaining slice** `risk:low`",
+      "  Demo: pending.",
+    ].join("\n"),
+    "utf-8",
+  );
+  writeFileSync(
+    join(milestone, "slices", "S01", "S01-UAT.md"),
+    "# UAT\n\nRun the checks. No verdict has been written yet.\n",
+    "utf-8",
+  );
+  return base;
+}
 
-describe('run-uat replay cap (#3624)', () => {
-  test('MAX_UAT_ATTEMPTS constant is defined', () => {
-    assert.match(source, /const MAX_UAT_ATTEMPTS\s*=\s*\d+/,
-      'MAX_UAT_ATTEMPTS constant should be defined');
-  });
+test("run-uat dispatch stops after three attempts without a verdict", async () => {
+  const basePath = makeUatProject();
+  const rule = DISPATCH_RULES.find((r) => r.name === "run-uat (post-completion)");
+  assert.ok(rule, "run-uat dispatch rule is registered");
 
-  test('incrementUatCount function is exported', () => {
-    assert.match(source, /export function incrementUatCount\(/,
-      'incrementUatCount should be an exported function');
-  });
+  const ctx = {
+    state: { phase: "planning", activeSlice: null },
+    mid: "M001",
+    midTitle: "UAT Cap",
+    basePath,
+    prefs: { uat_dispatch: true },
+  };
 
-  test('getUatCount function is exported', () => {
-    assert.match(source, /export function getUatCount\(/,
-      'getUatCount should be an exported function');
-  });
+  try {
+    for (let i = 1; i <= 3; i++) {
+      const action = await rule.match(ctx as any);
+      assert.equal(action?.action, "dispatch");
+      assert.equal(action?.unitType, "run-uat");
+      assert.equal(getUatCount(basePath, "M001", "S01"), i);
+    }
 
-  test('incrementUatCount is called before dispatch in rule', () => {
-    // incrementUatCount should be called before the dispatch return
-    const ruleSection = source.slice(source.indexOf('checkNeedsRunUat'));
-    assert.match(ruleSection, /incrementUatCount\(/,
-      'incrementUatCount should be called in the dispatch rule');
-  });
+    const capped = await rule.match(ctx as any);
+    assert.equal(capped?.action, "stop");
+    assert.match(capped?.reason ?? "", /retry limit reached/);
+    assert.equal(getUatCount(basePath, "M001", "S01"), 3);
 
-  test('attempts are compared against MAX_UAT_ATTEMPTS', () => {
-    assert.match(source, /attempts\s*>\s*MAX_UAT_ATTEMPTS/,
-      'dispatch should check attempts > MAX_UAT_ATTEMPTS');
-  });
+    const stillCapped = await rule.match(ctx as any);
+    assert.equal(stillCapped?.action, "stop");
+    assert.equal(getUatCount(basePath, "M001", "S01"), 3);
+  } finally {
+    rmSync(basePath, { recursive: true, force: true });
+  }
+});
+
+test("run-uat counter persists across recycled worktree base paths", () => {
+  const projectRoot = makeUatProject();
+  const worktreeA = join(projectRoot, ".gsd", "worktrees", "M001-a");
+  const worktreeB = join(projectRoot, ".gsd", "worktrees", "M001-b");
+  const canonicalCounter = join(projectRoot, ".gsd", "runtime", "uat-count-M001-S01.json");
+
+  mkdirSync(worktreeA, { recursive: true });
+  mkdirSync(worktreeB, { recursive: true });
+
+  try {
+    assert.equal(incrementUatCount(worktreeA, "M001", "S01"), 1);
+    assert.equal(incrementUatCount(worktreeB, "M001", "S01"), 2);
+    assert.equal(getUatCount(worktreeB, "M001", "S01"), 2);
+    assert.ok(existsSync(canonicalCounter), "counter should be stored under project-root .gsd/runtime");
+    assert.ok(
+      !existsSync(join(worktreeA, ".gsd", "runtime", "uat-count-M001-S01.json")),
+      "counter should not be stored under worktree-local .gsd/runtime",
+    );
+  } finally {
+    rmSync(projectRoot, { recursive: true, force: true });
+  }
 });

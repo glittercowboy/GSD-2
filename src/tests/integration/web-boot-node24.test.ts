@@ -1,7 +1,42 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 
 import { resolveTypeStrippingFlag } from "../../web/ts-subprocess-flags.ts"
+
+const bridge = await import("../../web/bridge-service.ts")
+const bootRoute = await import("../../../web/app/api/boot/route.ts")
+
+function readyOnboardingState() {
+  return {
+    status: "ready",
+    locked: false,
+    lockReason: null,
+    required: {
+      blocking: true,
+      skippable: false,
+      satisfied: true,
+      satisfiedBy: { providerId: "test", source: "runtime" },
+      providers: [],
+    },
+    optional: {
+      blocking: false,
+      skippable: true,
+      sections: [],
+    },
+    lastValidation: null,
+    activeFlow: null,
+    bridgeAuthRefresh: {
+      phase: "idle",
+      strategy: null,
+      startedAt: null,
+      completedAt: null,
+      error: null,
+    },
+  } as any
+}
 
 // ---------------------------------------------------------------------------
 // Bug 1 — resolveTypeStrippingFlag selects the correct flag
@@ -127,50 +162,71 @@ test("waitForBootReady pattern: mixed 4xx and 5xx only counts 5xx", () => {
 // Bug 3 — /api/boot route error handling
 // ---------------------------------------------------------------------------
 
-test("boot route returns { error } JSON on handler failure", async () => {
-  // Read the route source to verify try/catch wrapping is present
-  const { readFileSync } = await import("node:fs")
-  const { join } = await import("node:path")
+test("boot route returns { error } JSON on handler failure", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "gsd-web-boot-error-"))
+  const sessionsDir = join(root, "sessions")
+  mkdirSync(sessionsDir, { recursive: true })
 
-  const routeSource = readFileSync(
-    join(process.cwd(), "web", "app", "api", "boot", "route.ts"),
-    "utf-8",
-  )
+  t.after(async () => {
+    await bridge.resetBridgeServiceForTests()
+    rmSync(root, { recursive: true, force: true })
+  })
 
-  // The route must catch errors and return { error: message }
-  assert.match(routeSource, /try\s*\{/, "boot route must have try block")
-  assert.match(routeSource, /catch\s*\(/, "boot route must have catch block")
-  assert.match(
-    routeSource,
-    /\{\s*error:\s*message\s*\}/,
-    "boot route must return { error: message } on failure",
-  )
-  assert.match(
-    routeSource,
-    /status:\s*500/,
-    "boot route must return status 500 on error",
-  )
+  bridge.configureBridgeServiceForTests({
+    env: {
+      ...process.env,
+      GSD_WEB_PROJECT_CWD: root,
+      GSD_WEB_PROJECT_SESSIONS_DIR: sessionsDir,
+      GSD_WEB_PACKAGE_ROOT: process.cwd(),
+    },
+    getOnboardingState: async () => {
+      throw new Error("boot exploded")
+    },
+  })
+
+  const response = await bootRoute.GET(new Request("http://localhost/api/boot"))
+  const payload = await response.json() as any
+
+  assert.equal(response.status, 500)
+  assert.equal(payload.error, "boot exploded")
 })
 
 // ---------------------------------------------------------------------------
 // Bug 4 — bridge-service must import readdirSync for session listing (#1936)
 // ---------------------------------------------------------------------------
 
-test("bridge-service imports readdirSync from node:fs (#1936)", async () => {
-  // The boot payload calls listProjectSessions which uses readdirSync.
-  // A missing import causes ReferenceError → HTTP 500 on /api/boot.
-  const { readFileSync } = await import("node:fs")
-  const { join } = await import("node:path")
-
-  const bridgeSource = readFileSync(
-    join(process.cwd(), "src", "web", "bridge-service.ts"),
-    "utf-8",
+test("bridge-service lists project sessions without ReferenceError (#1936)", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "gsd-web-session-list-"))
+  const projectCwd = join(root, "project")
+  const sessionsDir = join(root, "sessions")
+  mkdirSync(projectCwd, { recursive: true })
+  mkdirSync(sessionsDir, { recursive: true })
+  writeFileSync(
+    join(sessionsDir, "2026-05-07T00-00-00-000Z_session.jsonl"),
+    JSON.stringify({
+      type: "session",
+      version: 3,
+      id: "session",
+      timestamp: "2026-05-07T00:00:00.000Z",
+      cwd: projectCwd,
+    }) + "\n",
   )
 
-  assert.match(
-    bridgeSource,
-    /import\s*\{[^}]*readdirSync[^}]*\}\s*from\s*["']node:fs["']/,
-    "bridge-service.ts must import readdirSync from node:fs — " +
-      "removing it breaks /api/boot with ReferenceError (see #1936)",
-  )
+  t.after(async () => {
+    await bridge.resetBridgeServiceForTests()
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  bridge.configureBridgeServiceForTests({
+    env: {
+      ...process.env,
+      GSD_WEB_PROJECT_CWD: projectCwd,
+      GSD_WEB_PROJECT_SESSIONS_DIR: sessionsDir,
+      GSD_WEB_PACKAGE_ROOT: process.cwd(),
+    },
+  })
+
+  const payload = await bridge.collectSelectiveLiveStatePayload(["resumable_sessions"], projectCwd)
+  assert.equal(payload.resumableSessions?.length, 1)
+  assert.equal(payload.resumableSessions?.[0]?.id, "session")
 })

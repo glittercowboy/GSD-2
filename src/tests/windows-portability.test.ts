@@ -1,10 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { resolveLocalBinaryPath } from "../../packages/pi-coding-agent/src/core/lsp/config.ts";
 import { encodeCwd } from "../resources/extensions/subagent/isolation.ts";
+import { buildGsdClientSpawnPlan } from "../../vscode-extension/src/gsd-client-spawn.ts";
 
 function makeTempDir(prefix: string): string {
 	const dir = path.join(
@@ -53,33 +54,11 @@ test("encodeCwd produces a filesystem-safe token for Windows paths", () => {
 	assert.ok(!encoded.includes("/"));
 });
 
-test("Windows launch points use shell-safe shims", () => {
-	const gsdClient = readFileSync(
-		path.join(process.cwd(), "vscode-extension", "src", "gsd-client.ts"),
-		"utf8",
-	);
-	const updateService = readFileSync(
-		path.join(process.cwd(), "src", "web", "update-service.ts"),
-		"utf8",
-	);
-	const preExecution = readFileSync(
-		path.join(process.cwd(), "src", "resources", "extensions", "gsd", "pre-execution-checks.ts"),
-		"utf8",
-	);
-	const validatePack = readFileSync(
-		path.join(process.cwd(), "scripts", "validate-pack.js"),
-		"utf8",
-	);
-	const mcpServer = readFileSync(
-		path.join(process.cwd(), "packages", "mcp-server", "src", "server.ts"),
-		"utf8",
-	);
-
-	assert.match(gsdClient, /shell:\s*process\.platform === "win32"/);
-	assert.match(updateService, /npm\.cmd/);
-	assert.match(preExecution, /npm\.cmd/);
-	assert.match(validatePack, /shell:\s*process\.platform === 'win32'/);
-	assert.match(mcpServer, /shell:\s*process\.platform === 'win32'/);
-	assert.match(mcpServer, /vercel\.cmd/);
-	assert.match(mcpServer, /npx\.cmd/);
+test("VS Code RPC launch plan uses shell mode for Windows command shims", () => {
+	const plan = buildGsdClientSpawnPlan("gsd.cmd", "C:\\repo", { PATH: "C:\\Windows\\System32" }, "win32");
+	assert.equal(plan.command, "gsd.cmd");
+	assert.deepEqual(plan.args, ["--mode", "rpc"]);
+	assert.equal(plan.options.cwd, "C:\\repo");
+	assert.equal(plan.options.shell, true);
+	assert.equal(plan.options.env.PATH, "C:\\Windows\\System32");
 });

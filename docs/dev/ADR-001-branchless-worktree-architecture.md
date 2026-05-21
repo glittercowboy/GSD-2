@@ -1,9 +1,12 @@
 # ADR-001: Branchless Worktree Architecture
 
-**Status:** Proposed
+**Status:** Superseded
 **Date:** 2026-03-15
+**Superseded:** 2026-05-08 by the ADR-016 trio (worktree lifecycle split, fail-closed safety, phase-2 design) and ADR-017 (drift-driven state reconciliation)
 **Deciders:** Lex Christopherson
 **Advisors:** Claude Opus 4.6, Gemini 2.5 Pro, GPT-5.4 (Codex)
+
+> **Superseded — read this first.** The DB-authoritative runtime model took the place of this ADR's primary motivation (`.gsd/` merge conflicts, planning-artifact visibility): the project-root database is canonical, markdown files are projections, and cross-branch state clobbering is no longer the failure mode this ADR was trying to fix. The remaining worktree concerns (lifecycle ownership, fail-closed source-writing, drift repair) were consolidated by **ADR-014** (deep Auto Orchestration), **ADR-015** (runtime invariant modules), the **ADR-016 trio** (worktree lifecycle/projection split, fail-closed safety), and **ADR-017** (drift-driven reconciliation). Slice branches inside milestone worktrees were retained. The historical analysis below is preserved for context; the decisions in §Decision were not adopted.
 
 ## Context
 
@@ -111,8 +114,8 @@ main ─────────────────────────
 .gsd/auto.lock           — crash detection sentinel
 .gsd/metrics.json        — token/cost accumulator
 .gsd/completed-units.json — dispatch idempotency tracker
-.gsd/STATE.md            — derived state cache (rebuilt by deriveState())
-.gsd/gsd.db              — SQLite cache (rebuilt from tracked markdown by importers)
+.gsd/STATE.md            — rendered state projection
+.gsd/gsd.db              — authoritative runtime database (local, gitignored)
 .gsd/DISCUSSION-MANIFEST.json — discussion phase tracking
 .gsd/milestones/**/*-CONTINUE.md — interrupted-work markers
 .gsd/milestones/**/continue.md   — legacy continue markers
@@ -209,7 +212,7 @@ Squash merge collapses all commits into one on `main`. Mitigations:
 
 **3. SQLite DB desync after `git reset`**
 
-If tracked markdown rolls back via `git reset --hard`, the gitignored `gsd.db` doesn't. Mitigation: the importer layer (M001/S02) rebuilds the DB from markdown on startup. The DB is a cache, markdown is truth.
+If tracked markdown rolls back via `git reset --hard`, the gitignored `gsd.db` does not. Current GSD treats the database as authoritative during runtime and does not silently import markdown projections. Operators should use explicit recovery/import commands when markdown is the intended source after database loss or corruption.
 
 **4. Disk space with multiple worktrees**
 

@@ -110,6 +110,40 @@ test("dispatch uat targets last completed slice, not activeSlice (#1693)", async
   );
 });
 
+test("dispatch validate-milestone targets milestone validation, not run-uat", async (t) => {
+  const base = createFixture();
+  invalidateStateCache();
+
+  const notifications: { message: string; level: string }[] = [];
+  let sentPrompt: string | undefined;
+
+  const ctx = {
+    ui: {
+      notify: (message: string, level: string) => {
+        notifications.push({ message, level });
+      },
+    },
+    newSession: async () => ({ cancelled: false }),
+  } as any;
+
+  const pi = {
+    sendMessage: (msg: { content: string }, _opts: unknown) => {
+      sentPrompt = msg.content;
+    },
+  } as any;
+
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+
+  await dispatchDirectPhase(ctx, pi, "validate-milestone", base);
+
+  assert.ok(sentPrompt, "sendMessage should have been called with a validation prompt");
+  const dispatchNotification = notifications.find(n => n.message.startsWith("Dispatching"));
+  assert.ok(dispatchNotification, "dispatch notification should be present");
+  assert.match(dispatchNotification.message, /validate-milestone/, "dispatch should run milestone validation");
+  assert.match(dispatchNotification.message, /M001/, "dispatch should target the milestone");
+  assert.doesNotMatch(dispatchNotification.message, /M001\/S01/, "validation dispatch should not target slice UAT");
+});
+
 test("dispatch uat warns when no completed slices exist", async (t) => {
   const base = mkdtempSync(join(tmpdir(), "gsd-dispatch-uat-none-"));
   invalidateStateCache();

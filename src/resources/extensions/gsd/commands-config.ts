@@ -23,7 +23,7 @@ export const TOOL_KEYS = [
   { id: "groq",     env: "GROQ_API_KEY",      label: "Groq Voice",        hint: "console.groq.com" },
 ] as const;
 
-function getStoredToolKey(auth: AuthStorage, providerId: string): string | undefined {
+export function getStoredToolKey(auth: AuthStorage, providerId: string): string | undefined {
   const creds = auth.getCredentialsForProvider(providerId);
   const cred = creds.find((c) => c.type === "api_key" && c.key);
   return cred?.type === "api_key" ? cred.key : undefined;

@@ -1,20 +1,25 @@
-/**
- * Structural tests for slice-level parallel orchestrator.
- * Verifies the orchestrator module exists and has the correct shape,
- * env var usage, and preference gating.
- */
+// GSD-2 — Slice parallel orchestrator behavior tests.
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { fileURLToPath } from "node:url";
-import { restoreSliceState, SLICE_WORKER_AUTO_ARGS } from "../slice-parallel-orchestrator.ts";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const gsdDir = join(__dirname, "..");
+import { deriveState } from "../state.js";
+import { validatePreferences } from "../preferences-validation.ts";
+import {
+  _buildSliceWorkerEnvForTest,
+  _resolveSliceParallelMaxWorkersForTest,
+  getSliceOrchestratorState,
+  isSliceParallelActive,
+  restoreSliceState,
+  resetSliceOrchestrator,
+  SLICE_WORKER_AUTO_ARGS,
+  startSliceParallel,
+  stopSliceParallel,
+} from "../slice-parallel-orchestrator.ts";
 
 function readLinuxProcessStartFingerprint(pid: number): string | null {
   try {
@@ -50,6 +55,23 @@ function makeTempProject(): string {
   return basePath;
 }
 
+function runGit(basePath: string, args: string[]): string {
+  return execFileSync("git", args, {
+    cwd: basePath,
+    stdio: ["ignore", "pipe", "pipe"],
+    encoding: "utf-8",
+  }).trim();
+}
+
+function initGitProject(basePath: string): void {
+  runGit(basePath, ["init", "--initial-branch=main"]);
+  runGit(basePath, ["config", "user.email", "test@example.com"]);
+  runGit(basePath, ["config", "user.name", "Test User"]);
+  writeFileSync(join(basePath, "README.md"), "initial\n", "utf-8");
+  runGit(basePath, ["add", "README.md"]);
+  runGit(basePath, ["commit", "-m", "initial"]);
+}
+
 function writeSliceOrchestratorState(
   basePath: string,
   worker: {
@@ -83,81 +105,105 @@ function writeSliceOrchestratorState(
   );
 }
 
-describe("slice-parallel-orchestrator structural tests", () => {
-  it("orchestrator uses GSD_SLICE_LOCK env var", () => {
-    const source = readFileSync(join(gsdDir, "slice-parallel-orchestrator.ts"), "utf-8");
-    assert.ok(
-      source.includes("GSD_SLICE_LOCK"),
-      "Orchestrator must use GSD_SLICE_LOCK env var to isolate slice workers",
-    );
+describe("slice worker launch contract", () => {
+  it("uses headless auto instead of print-mode slash commands", () => {
+    assert.deepEqual([...SLICE_WORKER_AUTO_ARGS], ["headless", "--json", "auto"]);
+    assert.equal(SLICE_WORKER_AUTO_ARGS.includes("--print" as never), false);
   });
 
-  it("orchestrator sets GSD_PARALLEL_WORKER=1 to prevent nesting", () => {
-    const source = readFileSync(join(gsdDir, "slice-parallel-orchestrator.ts"), "utf-8");
-    assert.ok(
-      source.includes("GSD_PARALLEL_WORKER"),
-      "Orchestrator must set GSD_PARALLEL_WORKER to prevent nested parallel",
+  it("builds isolated worker environment", () => {
+    const env = _buildSliceWorkerEnvForTest(
+      "/repo",
+      "M001",
+      "S02",
+      "worker-token",
+      { PATH: "/bin" } as NodeJS.ProcessEnv,
     );
+
+    assert.equal(env.GSD_SLICE_LOCK, "S02");
+    assert.equal(env.GSD_MILESTONE_LOCK, "M001");
+    assert.equal(env.GSD_PROJECT_ROOT, "/repo");
+    assert.equal(env.GSD_PARALLEL_WORKER, "1");
+    assert.equal(env.GSD_SLICE_WORKER_TOKEN, "worker-token");
   });
 
-  it("slice workers use headless auto instead of print-mode slash commands", () => {
-    const args: readonly string[] = SLICE_WORKER_AUTO_ARGS;
-    assert.deepEqual([...args], ["headless", "--json", "auto"]);
-    assert.equal(args.includes("--print"), false);
+  it("defaults to two workers unless explicitly configured", () => {
+    assert.equal(_resolveSliceParallelMaxWorkersForTest(), 2);
+    assert.equal(_resolveSliceParallelMaxWorkersForTest(4), 4);
+  });
+});
+
+describe("slice-parallel stale worktree handling", () => {
+  it("replaces a stale slice worktree before spawning the worker", async () => {
+    const basePath = makeTempProject();
+    const oldGsdBinPath = process.env.GSD_BIN_PATH;
+    try {
+      initGitProject(basePath);
+      const workerBin = join(basePath, "fake-worker.js");
+      writeFileSync(
+        workerBin,
+        [
+          "process.on('SIGTERM', () => process.exit(0));",
+          "setInterval(() => {}, 1000);",
+        ].join("\n"),
+        "utf-8",
+      );
+      process.env.GSD_BIN_PATH = workerBin;
+
+      const staleWorktree = join(basePath, ".gsd", "worktrees", "M900-S01");
+      mkdirSync(staleWorktree, { recursive: true });
+      writeFileSync(join(staleWorktree, ".git"), "gitdir: /tmp/not-this-repo\n", "utf-8");
+      writeFileSync(join(staleWorktree, "stale-marker"), "stale\n", "utf-8");
+
+      const result = await startSliceParallel(basePath, "M900", [{ id: "S01" }], { maxWorkers: 1 });
+
+      assert.deepEqual(result, { started: ["S01"], errors: [] });
+      assert.equal(existsSync(join(staleWorktree, "stale-marker")), false);
+      assert.equal(lstatSync(join(staleWorktree, ".git")).isFile(), true);
+      assert.match(readFileSync(join(staleWorktree, ".git"), "utf-8"), /^gitdir: /);
+      assert.equal(getSliceOrchestratorState()?.active, true);
+    } finally {
+      const child = getSliceOrchestratorState()?.workers.get("S01")?.process;
+      if (child && child.exitCode === null) {
+        await new Promise<void>((resolve) => {
+          const timeout = setTimeout(resolve, 500);
+          child.once("exit", () => {
+            clearTimeout(timeout);
+            resolve();
+          });
+          child.kill("SIGTERM");
+        });
+      }
+      stopSliceParallel();
+      resetSliceOrchestrator();
+      if (oldGsdBinPath === undefined) delete process.env.GSD_BIN_PATH;
+      else process.env.GSD_BIN_PATH = oldGsdBinPath;
+      rmSync(basePath, { recursive: true, force: true });
+    }
   });
 
-  it("maxWorkers default is 2", () => {
-    const source = readFileSync(join(gsdDir, "slice-parallel-orchestrator.ts"), "utf-8");
-    // Check that default max workers is 2 (in opts.maxWorkers ?? 2 or similar)
-    assert.ok(
-      source.includes("maxWorkers") && source.includes("2"),
-      "Default maxWorkers should be 2",
-    );
-  });
+  it("returns no started workers when process exits during startup gate", async () => {
+    const basePath = makeTempProject();
+    const oldGsdBinPath = process.env.GSD_BIN_PATH;
+    try {
+      initGitProject(basePath);
+      const workerBin = join(basePath, "exit-fast-worker.js");
+      writeFileSync(workerBin, "process.exit(1);\n", "utf-8");
+      process.env.GSD_BIN_PATH = workerBin;
 
-  it("orchestrator imports GSD_MILESTONE_LOCK for milestone isolation", () => {
-    const source = readFileSync(join(gsdDir, "slice-parallel-orchestrator.ts"), "utf-8");
-    assert.ok(
-      source.includes("GSD_MILESTONE_LOCK"),
-      "Orchestrator must also pass GSD_MILESTONE_LOCK for milestone context",
-    );
-  });
-
-  it("recovery preserves terminal workers for coordinator-side collection", () => {
-    const source = readFileSync(join(gsdDir, "slice-parallel-orchestrator.ts"), "utf-8");
-    assert.ok(
-      source.includes('} else if (w.state === "running")') &&
-        source.includes("survivors.push(w);"),
-      "Recovery must only prune dead running workers, not stopped/error workers",
-    );
-  });
-
-  it("recovered PID-only workers are validated before signaling", () => {
-    const source = readFileSync(join(gsdDir, "slice-parallel-orchestrator.ts"), "utf-8");
-    assert.ok(
-      source.includes("isRecoveredSliceWorkerAlive(worker)") &&
-        source.includes('process.kill(worker.pid, "SIGTERM")'),
-      "stopSliceParallel must validate recovered worker identity before signaling a PID",
-    );
-  });
-
-  it("persists worker identity for crash recovery", () => {
-    const source = readFileSync(join(gsdDir, "slice-parallel-orchestrator.ts"), "utf-8");
-    assert.ok(
-      source.includes("workerToken") &&
-        source.includes("processStartFingerprint") &&
-        source.includes("GSD_SLICE_WORKER_TOKEN"),
-      "Orchestrator must persist stable worker identity metadata for recovered workers",
-    );
-  });
-
-  it("spawn failures remove stale worker state and worktree", () => {
-    const source = readFileSync(join(gsdDir, "slice-parallel-orchestrator.ts"), "utf-8");
-    assert.ok(
-      source.includes("sliceState.workers.delete(slice.id)") &&
-        source.includes("removeWorktree(basePath, wtName, { deleteBranch: true, force: true })"),
-      "Failed slice worker spawns must remove stale worker state and clean up the worktree",
-    );
+      const result = await startSliceParallel(basePath, "M902", [{ id: "S01" }], { maxWorkers: 1 });
+      assert.deepEqual(result.started, []);
+      assert.equal(result.errors.length, 1);
+      assert.equal(result.errors[0]?.sid, "S01");
+      assert.equal(result.errors[0]?.error, "Worker failed startup gate");
+      assert.equal(getSliceOrchestratorState()?.active, false);
+    } finally {
+      stopSliceParallel();
+      resetSliceOrchestrator();
+      if (oldGsdBinPath === undefined) delete process.env.GSD_BIN_PATH;
+      else process.env.GSD_BIN_PATH = oldGsdBinPath;
+      rmSync(basePath, { recursive: true, force: true });
+    }
   });
 });
 
@@ -215,38 +261,88 @@ describe("slice-parallel-orchestrator recovery identity", () => {
       rmSync(basePath, { recursive: true, force: true });
     }
   });
+
+  it("treats persisted non-running workers as inactive and clears stale state file", () => {
+    const basePath = makeTempProject();
+    try {
+      writeFileSync(
+        join(basePath, ".gsd", "slice-orchestrator.json"),
+        JSON.stringify({
+          active: true,
+          workers: [{
+            milestoneId: "M900",
+            sliceId: "S01",
+            pid: 0,
+            workerToken: "done-worker",
+            processStartFingerprint: null,
+            worktreePath: join(basePath, ".gsd", "worktrees", "M900-S01"),
+            startedAt: Date.now(),
+            state: "stopped",
+            completedUnits: 1,
+            cost: 0,
+          }],
+          totalCost: 0,
+          maxWorkers: 1,
+          startedAt: Date.now(),
+          basePath,
+        }),
+        "utf-8",
+      );
+
+      assert.equal(isSliceParallelActive(basePath), false);
+      assert.equal(
+        existsSync(join(basePath, ".gsd", "slice-orchestrator.json")),
+        false,
+        "stale non-running persisted state should be removed",
+      );
+    } finally {
+      resetSliceOrchestrator();
+      rmSync(basePath, { recursive: true, force: true });
+    }
+  });
 });
 
-describe("slice_parallel preference gating", () => {
-  it("preferences-types.ts includes slice_parallel in interface", () => {
-    const source = readFileSync(join(gsdDir, "preferences-types.ts"), "utf-8");
-    assert.ok(
-      source.includes("slice_parallel"),
-      "GSDPreferences should have slice_parallel field",
-    );
+describe("slice_parallel preference and state gating", () => {
+  it("validates slice_parallel preferences", () => {
+    const result = validatePreferences({
+      slice_parallel: { enabled: true, max_workers: 3 },
+    });
+
+    assert.equal(result.errors.length, 0);
+    assert.deepEqual(result.preferences.slice_parallel, {
+      enabled: true,
+      max_workers: 3,
+    });
   });
 
-  it("slice_parallel is in KNOWN_PREFERENCE_KEYS", () => {
-    const source = readFileSync(join(gsdDir, "preferences-types.ts"), "utf-8");
-    assert.ok(
-      source.includes('"slice_parallel"'),
-      'KNOWN_PREFERENCE_KEYS should include "slice_parallel"',
-    );
-  });
+  it("derives the locked slice for parallel workers", async () => {
+    const basePath = makeTempProject();
+    const oldWorker = process.env.GSD_PARALLEL_WORKER;
+    const oldSlice = process.env.GSD_SLICE_LOCK;
+    try {
+      const msDir = join(basePath, ".gsd", "milestones", "M001");
+      mkdirSync(msDir, { recursive: true });
+      writeFileSync(
+        join(msDir, "M001-ROADMAP.md"),
+        [
+          "# M001",
+          "",
+          "## Slices",
+          "- [ ] **S01: First** `risk:low` `depends:[]`",
+          "- [ ] **S02: Second** `risk:low` `depends:[]`",
+        ].join("\n"),
+      );
+      process.env.GSD_PARALLEL_WORKER = "1";
+      process.env.GSD_SLICE_LOCK = "S02";
 
-  it("state.ts checks GSD_SLICE_LOCK for slice isolation", () => {
-    const source = readFileSync(join(gsdDir, "state.ts"), "utf-8");
-    assert.ok(
-      source.includes("GSD_SLICE_LOCK"),
-      "State derivation should check GSD_SLICE_LOCK for slice-level parallel isolation",
-    );
-  });
-
-  it("auto.ts imports slice parallel orchestrator when enabled", () => {
-    const source = readFileSync(join(gsdDir, "auto.ts"), "utf-8");
-    assert.ok(
-      source.includes("slice_parallel") || source.includes("slice-parallel"),
-      "auto.ts should reference slice_parallel for dispatch gating",
-    );
+      const state = await deriveState(basePath);
+      assert.equal(state.activeSlice?.id, "S02");
+    } finally {
+      if (oldWorker === undefined) delete process.env.GSD_PARALLEL_WORKER;
+      else process.env.GSD_PARALLEL_WORKER = oldWorker;
+      if (oldSlice === undefined) delete process.env.GSD_SLICE_LOCK;
+      else process.env.GSD_SLICE_LOCK = oldSlice;
+      rmSync(basePath, { recursive: true, force: true });
+    }
   });
 });

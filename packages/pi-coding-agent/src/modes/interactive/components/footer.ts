@@ -1,8 +1,12 @@
+// Project/App: GSD-2
+// File Purpose: Interactive terminal footer renderer for workspace, model, usage, context, and extension status.
+
 import { type Component, truncateToWidth, visibleWidth } from "@gsd/pi-tui";
 import type { AgentSession } from "../../../core/agent-session.js";
 import type { ReadonlyFooterDataProvider } from "../../../core/footer-data-provider.js";
 import { theme } from "../theme/theme.js";
 import { providerAuthBadge, providerDisplayName } from "./model-selector.js";
+import { renderFooterStrip } from "./transcript-design.js";
 
 /**
  * Sanitize text for display in a single-line status.
@@ -14,6 +18,17 @@ function sanitizeStatusText(text: string): string {
 		.replace(/[\r\n\t]/g, " ")
 		.replace(/ +/g, " ")
 		.trim();
+}
+
+function truncateFooterPath(text: string, width: number): string {
+	if (visibleWidth(text) <= width) return text;
+	const tailMatch = text.match(/( \([^)]+\)(?: • .*)?)$/);
+	if (!tailMatch) return truncateToWidth(text, width, "...");
+	const tail = tailMatch[1];
+	const tailWidth = visibleWidth(tail);
+	if (tailWidth >= width - 4) return truncateToWidth(text, width, "...");
+	const head = text.slice(0, -tail.length);
+	return `${truncateToWidth(head, width - tailWidth, "...")}${tail}`;
 }
 
 /**
@@ -155,8 +170,8 @@ export class FooterComponent implements Component {
 			? Math.max(0, Math.min(BAR_WIDTH, Math.round((contextPercentValue / 100) * BAR_WIDTH)))
 			: 0;
 		const bar =
-			theme.fg(barColor, "━".repeat(filled)) +
-			theme.fg("dim", "─".repeat(Math.max(0, BAR_WIDTH - filled)));
+			theme.fg(barColor, "█".repeat(filled)) +
+			theme.fg("dim", "░".repeat(Math.max(0, BAR_WIDTH - filled)));
 		const pctText = contextPercent === "?" ? "?" : `${contextPercent}%`;
 		const suffix = `/${formatTokens(contextWindow)}${autoIndicator}`;
 		const colorizedPct =
@@ -218,35 +233,6 @@ export class FooterComponent implements Component {
 			}
 		}
 
-		const rightSideWidth = visibleWidth(rightSide);
-		const totalNeeded = statsLeftWidth + minPadding + rightSideWidth;
-
-		let statsLine: string;
-		if (totalNeeded <= width) {
-			// Both fit - add padding to right-align model
-			const padding = " ".repeat(width - statsLeftWidth - rightSideWidth);
-			statsLine = statsLeft + padding + rightSide;
-		} else {
-			// Need to truncate right side
-			const availableForRight = width - statsLeftWidth - minPadding;
-			if (availableForRight > 0) {
-				const truncatedRight = truncateToWidth(rightSide, availableForRight, "");
-				const truncatedRightWidth = visibleWidth(truncatedRight);
-				const padding = " ".repeat(Math.max(0, width - statsLeftWidth - truncatedRightWidth));
-				statsLine = statsLeft + padding + truncatedRight;
-			} else {
-				// Not enough space for right side at all
-				statsLine = statsLeft;
-			}
-		}
-
-		// Apply dim to each part separately. statsLeft may contain color codes (for context %)
-		// that end with a reset, which would clear an outer dim wrapper. So we dim the parts
-		// before and after the colored section independently.
-		const dimStatsLeft = theme.fg("dim", statsLeft);
-		const remainder = statsLine.slice(statsLeft.length); // padding + rightSide
-		const dimRemainder = theme.fg("dim", remainder);
-
 		// Extension statuses right-aligned on the pwd line (sorted by key).
 		// Keeps the footer compact by avoiding a dedicated row when the content
 		// fits alongside pwd. Falls back to pwd-only if the combined line would
@@ -260,18 +246,21 @@ export class FooterComponent implements Component {
 						.join(" ")
 				: "";
 
-		const pwdWidth = visibleWidth(pwd);
-		const extWidth = visibleWidth(extStatusText);
-		let pwdLine: string;
-		if (extStatusText && pwdWidth + 2 + extWidth <= width) {
-			const padding = " ".repeat(width - pwdWidth - extWidth);
-			pwdLine = theme.fg("dim", pwd + padding + extStatusText);
-		} else {
-			pwdLine = truncateToWidth(theme.fg("dim", pwd), width, theme.fg("dim", "..."));
-		}
+		const footerRight = [rightSide, extStatusText].filter(Boolean).join(" ");
+		const gsdSegment = theme.fg("accent", "● GSD");
+		const dimStatsLeft = theme.fg("dim", statsLeft);
+		const innerWidth = Math.max(1, width - 2);
+		const rightWidth = visibleWidth(footerRight);
+		const leftBudget = footerRight ? Math.max(1, innerWidth - rightWidth - 3) : innerWidth;
+		const sepWidth = visibleWidth("  │  ");
+		const pwdBudget = Math.max(1, leftBudget - visibleWidth(gsdSegment) - visibleWidth(dimStatsLeft) - sepWidth * 2);
+		const pwdSegment = theme.fg("dim", truncateFooterPath(pwd, pwdBudget));
 
-		const lines = [pwdLine, dimStatsLeft + dimRemainder];
-
-		return lines;
+		const leftSegments = [
+			gsdSegment,
+			pwdSegment,
+			dimStatsLeft,
+		];
+		return renderFooterStrip(leftSegments, footerRight, width);
 	}
 }

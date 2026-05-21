@@ -17,7 +17,7 @@ import { execSync } from 'node:child_process';
 import { basename, resolve } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { RpcClient } from '@gsd-build/rpc-client';
-import type { SdkAgentEvent, RpcInitResult, RpcCostUpdateEvent, RpcExtensionUIRequest } from '@gsd-build/rpc-client';
+import type { RpcCostUpdateEvent, RpcExtensionUIRequest, RpcInitResult, SdkAgentEvent } from '@gsd-build/contracts';
 import type {
   ManagedSession,
   StartSessionOptions,
@@ -34,7 +34,13 @@ const FIRE_AND_FORGET_METHODS = new Set([
   'notify', 'setStatus', 'setWidget', 'setTitle', 'set_editor_text',
 ]);
 
-const TERMINAL_PREFIXES = ['auto-mode stopped', 'step-mode stopped'];
+const TERMINAL_PREFIXES = [
+  'auto-mode stopped',
+  'step-mode stopped',
+  'auto-mode complete',
+  'no active milestone',
+  'auto-mode idle',
+];
 
 function isTerminalNotification(event: Record<string, unknown>): boolean {
   if (event.type !== 'extension_ui_request' || event.method !== 'notify') return false;
@@ -387,7 +393,7 @@ function extractBlocker(event: SdkAgentEvent): PendingBlocker {
   const uiEvent = event as unknown as RpcExtensionUIRequest;
   return {
     id: String(uiEvent.id ?? ''),
-    method: String(uiEvent.method ?? ''),
+    method: uiEvent.method,
     message: String((uiEvent as Record<string, unknown>).title ?? (uiEvent as Record<string, unknown>).message ?? ''),
     event: uiEvent,
   };

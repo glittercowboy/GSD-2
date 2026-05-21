@@ -19,7 +19,8 @@ export interface InteractiveModeStateHost {
 	onInputCallback?: (text: string) => void;
 	isInitialized: boolean;
 	loadingAnimation?: any;
-	pendingWorkingMessage?: string;
+	pendingWorkingMessage?: string | null;
+	clearBlockingError(): void;
 	defaultWorkingMessage: string;
 	streamingComponent?: any;
 	streamingMessage?: any;
@@ -37,4 +38,3 @@ export interface InteractiveModeStateHost {
 }
 
 export type InteractiveModeEvent = AgentSessionEvent;
-

@@ -8,30 +8,25 @@
 
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const sourceFile = join(__dirname, "..", "bootstrap", "agent-end-recovery.ts");
+import { resolveAgentEndErrorDisplay } from "../bootstrap/agent-end-recovery.ts";
 
 describe("error-success mask detection (#3664)", () => {
-  const source = readFileSync(sourceFile, "utf-8");
-
-  test("detects useless errorMessage values with regex", () => {
-    assert.match(source, /success\|ok\|true\|error\|unknown/i);
+  test("falls back to assistant text when errorMessage is uninformative", () => {
+    assert.equal(
+      resolveAgentEndErrorDisplay("success", [
+        { type: "tool_use", name: "noop" },
+        { type: "text", text: "provider failed with a useful message" },
+      ]),
+      "provider failed with a useful message",
+    );
   });
 
-  test("extracts display message from content text block", () => {
-    assert.match(source, /textBlock/);
-    assert.match(source, /\.text\.slice\(0,\s*300\)/);
-  });
-
-  test("classifies using rawErrorMsg, not displayMsg", () => {
-    assert.match(source, /classifyError\(rawErrorMsg/);
-  });
-
-  test("references issue #3588 in comments", () => {
-    assert.match(source, /#3588/);
+  test("keeps informative raw error messages", () => {
+    assert.equal(
+      resolveAgentEndErrorDisplay("rate limit exceeded", [
+        { type: "text", text: "prose should not replace useful raw error" },
+      ]),
+      "rate limit exceeded",
+    );
   });
 });

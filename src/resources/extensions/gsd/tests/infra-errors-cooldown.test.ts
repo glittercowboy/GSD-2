@@ -5,6 +5,8 @@ import test, { describe } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  INFRA_ERROR_CODES,
+  isInfrastructureError,
   isTransientCooldownError,
   getCooldownRetryAfterMs,
   MAX_COOLDOWN_RETRIES,
@@ -12,6 +14,13 @@ import {
 } from "../auto/infra-errors.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
+
+describe("infra error classification", () => {
+  test("ENOBUFS is treated as infrastructure exhaustion", () => {
+    assert.equal(INFRA_ERROR_CODES.has("ENOBUFS"), true);
+    assert.equal(isInfrastructureError(Object.assign(new Error("spawnSync git ENOBUFS"), { code: "ENOBUFS" })), "ENOBUFS");
+  });
+});
 
 describe("infra-errors cooldown constants", () => {
   test("COOLDOWN_FALLBACK_WAIT_MS is a positive number greater than the 30s rate-limit backoff", () => {

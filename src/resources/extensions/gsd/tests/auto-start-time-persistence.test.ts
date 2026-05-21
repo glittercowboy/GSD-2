@@ -1,50 +1,32 @@
-// GSD2 — Verify autoStartTime is persisted in paused-session.json and restored on resume
-// Copyright (c) 2026 Jeremy McSpadden <jeremy@fluxlabs.net>
-
-/**
- * auto-start-time-persistence.test.ts — Ensures autoStartTime survives
- * cross-session resume via paused-session.json (#3585).
- *
- * Source-code regression guards: verify auto.ts saves and restores
- * autoStartTime so the elapsed timer doesn't vanish after /exit + resume.
- */
+// GSD2 — Verify autoStartTime is carried through dashboard state
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const AUTO_TS_PATH = join(__dirname, "..", "auto.ts");
+import { getAutoDashboardData } from "../auto.ts";
+import { autoSession } from "../auto-runtime-state.ts";
 
-const source = readFileSync(AUTO_TS_PATH, "utf-8");
-
-test("pauseAuto persists autoStartTime in paused-session.json (#3585)", () => {
-  assert.ok(
-    source.includes("autoStartTime: s.autoStartTime"),
-    "pausedMeta must include autoStartTime so the timer survives /exit",
-  );
+test.afterEach(() => {
+  autoSession.reset();
 });
 
-test("cross-session resume restores autoStartTime from paused-session.json (#3585)", () => {
-  const matches = source.match(/s\.autoStartTime\s*=\s*meta\.autoStartTime/g);
-  assert.ok(
-    matches && matches.length >= 2,
-    "both resume paths (custom workflow + milestone) must restore autoStartTime from meta",
-  );
+test("getAutoDashboardData exposes the active autoStartTime (#3585)", () => {
+  const start = Date.now() - 5_000;
+  autoSession.active = true;
+  autoSession.autoStartTime = start;
+
+  const data = getAutoDashboardData();
+
+  assert.equal(data.startTime, start);
+  assert.ok(data.elapsed >= 0);
 });
 
-test("resume path falls back to Date.now() when autoStartTime is missing (#3585)", () => {
-  assert.ok(
-    source.includes("meta.autoStartTime || Date.now()"),
-    "restore should fall back to Date.now() for old paused-session files without autoStartTime",
-  );
-});
+test("getAutoDashboardData suppresses elapsed time when autoStartTime is zero (#3585)", () => {
+  autoSession.active = true;
+  autoSession.autoStartTime = 0;
 
-test("resume path guards against zero autoStartTime (#3585)", () => {
-  assert.ok(
-    source.includes("if (!s.autoStartTime || s.autoStartTime <= 0) s.autoStartTime = Date.now()"),
-    "resume path must set autoStartTime to Date.now() if still zero after restore",
-  );
+  const data = getAutoDashboardData();
+
+  assert.equal(data.startTime, 0);
+  assert.equal(data.elapsed, 0);
 });

@@ -142,3 +142,52 @@ test("deep setup policy: explicit research can dispatch, block, or complete", ()
   }
 });
 
+
+test("resolveDeepProjectSetupState: self-heals missing workflow_prefs_captured when downstream artifacts are valid", () => {
+  const base = makeBase();
+  try {
+    // PREFERENCES.md missing the captured flag — simulating drift after manual
+    // edit / merge conflict / partial write.
+    writeFileSync(
+      join(base, ".gsd", "PREFERENCES.md"),
+      "---\nplanning_depth: deep\n---\n",
+    );
+    writeFileSync(join(base, ".gsd", "PROJECT.md"), validProject);
+    writeFileSync(join(base, ".gsd", "REQUIREMENTS.md"), validRequirements);
+    writeDecision(base, {
+      decision: "skip",
+      decided_at: new Date().toISOString(),
+      source: "workflow-preferences",
+      reason: "deterministic-default",
+    });
+
+    const state = resolveDeepProjectSetupState(deepPrefs, base);
+
+    assert.equal(state.status, "complete", "should self-heal to complete, not return pending");
+    const restored = readFileSync(join(base, ".gsd", "PREFERENCES.md"), "utf-8");
+    assert.match(restored, /workflow_prefs_captured:\s*true/, "captured flag should be restored on disk");
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("resolveDeepProjectSetupState: still pending when downstream artifacts are NOT valid", () => {
+  const base = makeBase();
+  try {
+    // PREFERENCES.md missing flag AND PROJECT.md missing — genuine setup-incomplete.
+    writeFileSync(
+      join(base, ".gsd", "PREFERENCES.md"),
+      "---\nplanning_depth: deep\n---\n",
+    );
+    // No PROJECT.md, no REQUIREMENTS.md, no research-decision.json.
+
+    const state = resolveDeepProjectSetupState(deepPrefs, base);
+
+    assert.equal(state.status, "pending", "genuine incomplete setup must still pend");
+    assert.equal(state.stage, "workflow-preferences", "stage points at the missing flag");
+    const original = readFileSync(join(base, ".gsd", "PREFERENCES.md"), "utf-8");
+    assert.doesNotMatch(original, /workflow_prefs_captured:\s*true/, "flag not added when self-heal does not apply");
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});

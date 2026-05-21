@@ -71,14 +71,14 @@ export async function recoverTimedOutUnit(
       recovery: status,
     });
 
-    const durableComplete = status.summaryExists && status.taskChecked && status.nextActionAdvanced;
+    const durableComplete = status.dbComplete || (status.summaryExists && status.taskChecked && status.nextActionAdvanced);
     if (durableComplete) {
       writeUnitRuntimeRecord(basePath, unitType, unitId, currentUnitStartedAt, {
         phase: "finalized",
         recovery: status,
       });
       ctx.ui.notify(
-        `${reason === "idle" ? "Idle" : "Timeout"} recovery: ${unitType} ${unitId} already completed on disk. Continuing auto-mode. (attempt ${attemptNumber})`,
+        `${reason === "idle" ? "Idle" : "Timeout"} recovery: ${unitType} ${unitId} already completed. Continuing auto-mode. (attempt ${attemptNumber})`,
         "info",
       );
       unitRecoveryCount.delete(recoveryKey);

@@ -1,3 +1,5 @@
+// Project/App: GSD-2
+// File Purpose: Mutable auto-mode session state container.
 /**
  * AutoSession — encapsulates all mutable auto-mode state into a single instance.
  *
@@ -21,7 +23,11 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@gsd/pi-coding-agent
 import type { GitServiceImpl } from "../git-service.js";
 import type { CaptureEntry } from "../captures.js";
 import type { BudgetAlertLevel } from "../auto-budget.js";
+import type { AutoOrchestrationModule } from "./contracts.js";
 import { resolveWorktreeProjectRoot } from "../worktree-root.js";
+import { normalizeRealPath } from "../paths.js";
+import type { MilestoneScope } from "../workspace.js";
+import type { RootDirtySnapshot } from "../root-write-leak-guard.js";
 
 // ─── Exported Types ──────────────────────────────────────────────────────────
 
@@ -29,6 +35,7 @@ export interface CurrentUnit {
   type: string;
   id: string;
   startedAt: number;
+  workspaceRoot?: string;
 }
 
 export interface UnitRouting {
@@ -47,6 +54,16 @@ export interface PendingVerificationRetry {
   unitId: string;
   failureContext: string;
   attempt: number;
+}
+
+export interface PendingOrchestrationDispatch {
+  unitType: string;
+  unitId: string;
+  prompt: string;
+  pauseAfterUatDispatch: boolean;
+  state: import("../types.js").GSDState;
+  mid: string | undefined;
+  midTitle: string | undefined;
 }
 
 /**
@@ -85,6 +102,8 @@ export class AutoSession {
   // ── Lifecycle ────────────────────────────────────────────────────────────
   active = false;
   paused = false;
+  completionStopInProgress = false;
+  preserveStepSurfaceAfterLoopExit = false;
   stepMode = false;
   verbose = false;
   activeEngineId: string | null = null;
@@ -94,6 +113,23 @@ export class AutoSession {
   // ── Paths ────────────────────────────────────────────────────────────────
   basePath = "";
   originalBasePath = "";
+  // TODO(C8): remove basePath/originalBasePath once all readers use s.scope
+  scope: MilestoneScope | null = null;
+
+  // ── Coordination identity (Phase B — DB-backed coordination) ────────────
+  /**
+   * Worker registry ID set by registerAutoWorker() at session start. Used by
+   * heartbeatAutoWorker() each loop iteration and by recordDispatchClaim()
+   * to fence dispatch ledger writes against stale workers.
+   */
+  workerId: string | null = null;
+  /**
+   * Active milestone lease fencing token, set by claimMilestoneLease() inside
+   * WorktreeLifecycle.enterMilestone(). Threaded into recordDispatchClaim()
+   * as milestone_lease_token so out-of-band dispatches by a stale worker
+   * are detectable.
+   */
+  milestoneLeaseToken: number | null = null;
   previousProjectRootEnv: string | null = null;
   hadProjectRootEnv = false;
   projectRootEnvCaptured = false;
@@ -138,6 +174,8 @@ export class AutoSession {
   pendingCrashRecovery: string | null = null;
   pendingVerificationRetry: PendingVerificationRetry | null = null;
   readonly verificationRetryCount = new Map<string, number>();
+  readonly verificationRetryFailureHashes = new Map<string, string>();
+  readonly exhaustedVerificationUnits = new Set<string>();
   pausedSessionFile: string | null = null;
   pausedUnitType: string | null = null;
   pausedUnitId: string | null = null;
@@ -158,6 +196,13 @@ export class AutoSession {
    * stale context bleeding into unrelated slices.
    */
   lastPreExecFailure: PreExecFailure | null = null;
+  /**
+   * Tracks how many consecutive times each slice unit has failed pre-execution
+   * checks. Keyed by unitId (e.g. "M001/S01"). Used to break the infinite
+   * plan-slice → pre-exec fail → re-dispatch loop when the planner cannot fix
+   * the issues after MAX_PRE_EXEC_RETRIES re-attempts.
+   */
+  readonly preExecRetryCount: Map<string, number> = new Map();
 
   // ── Tool invocation errors (#2883) ──────────────────────────────────
   /** Set when a GSD tool execution ends with isError due to malformed/truncated
@@ -173,6 +218,8 @@ export class AutoSession {
   // ── Isolation degradation ────────────────────────────────────────────
   /** Set to true when worktree creation fails; prevents merge of nonexistent branch. */
   isolationDegraded = false;
+  /** Project-root dirty snapshot captured before an isolated worktree unit runs. */
+  rootWriteBaseline: RootDirtySnapshot | null = null;
 
   // ── Merge guard ──────────────────────────────────────────────────────
   /** Set to true after phases.ts successfully calls mergeAndExit, so that
@@ -210,6 +257,11 @@ export class AutoSession {
   /** Cleanup function returned by startCommandPolling(); null when not running. */
   commandPollingCleanup: (() => void) | null = null;
 
+  // ── Orchestration seam ───────────────────────────────────────────────────
+  orchestration: AutoOrchestrationModule | null = null;
+  pendingOrchestrationDispatch: PendingOrchestrationDispatch | null = null;
+  pendingVerificationRetryDispatch: PendingOrchestrationDispatch | null = null;
+
   // ── Loop promise state ──────────────────────────────────────────────────
   // Per-unit resolve function and session-switch guard live at module level
   // in auto-loop.ts (_currentResolve, _sessionSwitchInFlight).
@@ -232,12 +284,32 @@ export class AutoSession {
     return resolveWorktreeProjectRoot(this.basePath, this.originalBasePath);
   }
 
+  /**
+   * Canonical project root for state-derivation reads AND writer paths.
+   *
+   * Prefers the realpath-normalized projectRoot from the MilestoneScope
+   * (introduced by PR #5236), falling back to resolveWorktreeProjectRoot
+   * during early lifecycle / engine-bypass paths where scope may be null.
+   *
+   * Always realpath-normalized so cache keys (e.g. deriveState's _stateCache)
+   * cannot drift across worktree↔project-root path-string variants for the
+   * same filesystem location.
+   */
+  get canonicalProjectRoot(): string {
+    const root =
+      this.scope?.workspace.projectRoot
+        ?? resolveWorktreeProjectRoot(this.basePath, this.originalBasePath);
+    return normalizeRealPath(root);
+  }
+
   reset(): void {
     this.clearTimers();
 
     // Lifecycle
     this.active = false;
     this.paused = false;
+    this.completionStopInProgress = false;
+    this.preserveStepSurfaceAfterLoopExit = false;
     this.stepMode = false;
     this.verbose = false;
     this.activeEngineId = null;
@@ -247,6 +319,9 @@ export class AutoSession {
     // Paths
     this.basePath = "";
     this.originalBasePath = "";
+    this.scope = null;
+    this.workerId = null;
+    this.milestoneLeaseToken = null;
     this.previousProjectRootEnv = null;
     this.hadProjectRootEnv = false;
     this.projectRootEnvCaptured = false;
@@ -283,6 +358,8 @@ export class AutoSession {
     this.pendingCrashRecovery = null;
     this.pendingVerificationRetry = null;
     this.verificationRetryCount.clear();
+    this.verificationRetryFailureHashes.clear();
+    this.exhaustedVerificationUnits.clear();
     this.pausedSessionFile = null;
     this.pausedUnitType = null;
     this.pausedUnitId = null;
@@ -299,11 +376,13 @@ export class AutoSession {
     this.rewriteAttemptCount = 0;
     this.consecutiveCompleteBootstraps = 0;
     this.lastPreExecFailure = null;
+    this.preExecRetryCount.clear();
     this.lastToolInvocationError = null;
     this.lastUnitAgentEndMessages = null;
     this.lastGitActionFailure = null;
     this.lastGitActionStatus = null;
     this.isolationDegraded = false;
+    this.rootWriteBaseline = null;
     this.milestoneMergedInPhases = false;
     this.milestoneStartShas = new Map();
     this.checkpointSha = null;
@@ -314,10 +393,22 @@ export class AutoSession {
     // Remote command polling — cleanup must be called before reset (auto.ts stopAuto)
     this.commandPollingCleanup = null;
 
+    // Orchestration seam
+    this.orchestration = null;
+    this.pendingOrchestrationDispatch = null;
+    this.pendingVerificationRetryDispatch = null;
+
     // Loop promise state lives in auto-loop.ts module scope
   }
 
+  resetAfterStop(options: { preserveCompletionSurface?: boolean } = {}): void {
+    const completionStopInProgress = options.preserveCompletionSurface ? this.completionStopInProgress : false;
+    this.reset();
+    this.completionStopInProgress = completionStopInProgress;
+  }
+
   toJSON(): Record<string, unknown> {
+    const orchestrationStatus = this.orchestration?.getStatus();
     return {
       active: this.active,
       paused: this.paused,
@@ -327,6 +418,9 @@ export class AutoSession {
       activeRunDir: this.activeRunDir,
       currentMilestoneId: this.currentMilestoneId,
       currentUnit: this.currentUnit,
+      orchestrationPhase: orchestrationStatus?.phase,
+      orchestrationTransitionCount: orchestrationStatus?.transitionCount,
+      orchestrationLastTransitionAt: orchestrationStatus?.lastTransitionAt,
       unitDispatchCount: Object.fromEntries(this.unitDispatchCount),
     };
   }

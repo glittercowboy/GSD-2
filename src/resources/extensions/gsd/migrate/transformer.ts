@@ -43,6 +43,17 @@ function firstSentence(text: string): string {
   return match ? match[0].trim() : trimmed;
 }
 
+function comparePlanNumbers(a: string, b: string): number {
+  const left = a.match(/^(\d+)([a-z]*)$/i);
+  const right = b.match(/^(\d+)([a-z]*)$/i);
+  if (left && right) {
+    const numeric = Number(left[1]) - Number(right[1]);
+    if (numeric !== 0) return numeric;
+    return left[2].localeCompare(right[2], undefined, { sensitivity: 'base' });
+  }
+  return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+}
+
 /** Preferred research ordering for consolidation. */
 const RESEARCH_ORDER = ['SUMMARY.md', 'ARCHITECTURE.md', 'STACK.md', 'FEATURES.md', 'PITFALLS.md'];
 
@@ -137,7 +148,7 @@ function buildSliceSummary(phase: PlanningPhase): GSDSliceSummaryData | null {
 
 function deriveDemo(phase: PlanningPhase, slug: string): string {
   // First plan's objective, first sentence
-  const planNumbers = Object.keys(phase.plans).sort((a, b) => Number(a) - Number(b));
+  const planNumbers = Object.keys(phase.plans).sort(comparePlanNumbers);
   if (planNumbers.length > 0) {
     const firstPlan = phase.plans[planNumbers[0]];
     if (firstPlan?.objective) {
@@ -159,7 +170,7 @@ function mapSlice(
 
   let tasks: GSDTask[] = [];
   if (phase) {
-    const planNumbers = Object.keys(phase.plans).sort((a, b) => Number(a) - Number(b));
+    const planNumbers = Object.keys(phase.plans).sort(comparePlanNumbers);
     tasks = planNumbers.map((pn, i) => mapTask(phase.plans[pn], i, phase.summaries));
   }
 
@@ -238,16 +249,53 @@ function normalizeStatus(status: string): 'active' | 'validated' | 'deferred' {
   return 'active';
 }
 
+function normalizeRequirementId(id: string): string | null {
+  const match = id.trim().match(/^R(\d+)$/i);
+  if (!match) return null;
+  return `R${match[1].padStart(3, '0')}`;
+}
+
 function mapRequirements(reqs: PlanningRequirement[]): GSDRequirement[] {
   let autoId = 0;
+  const reservedIds = new Set(
+    reqs
+      .map((req) => normalizeRequirementId(req.id))
+      .filter((id): id is string => id !== null),
+  );
+  const usedIds = new Set<string>();
+
+  function nextRequirementId(): string {
+    let id = '';
+    do {
+      autoId++;
+      id = padId('R', autoId, 3);
+    } while (usedIds.has(id) || reservedIds.has(id));
+    usedIds.add(id);
+    return id;
+  }
+
   return reqs.map((req) => {
-    autoId++;
+    const originalId = req.id.trim();
+    const canonicalId = normalizeRequirementId(originalId);
+    let id: string;
+    let description = req.description;
+
+    if (canonicalId && !usedIds.has(canonicalId)) {
+      id = canonicalId;
+      usedIds.add(id);
+    } else {
+      id = nextRequirementId();
+      if (originalId) {
+        description = `Legacy ID: ${originalId}\n\n${description}`;
+      }
+    }
+
     return {
-      id: req.id && req.id.trim() !== '' ? req.id : padId('R', autoId, 3),
+      id,
       title: req.title,
       class: 'core-capability',
       status: normalizeStatus(req.status),
-      description: req.description,
+      description,
       source: 'inferred',
       primarySlice: 'none yet',
     };
@@ -286,7 +334,24 @@ function deriveDecisions(parsed: PlanningProject): string {
     }
   }
   if (decisions.length === 0) return '';
-  return decisions.map((d) => `- ${d}`).join('\n');
+  const lines = [
+    '# Decisions Register',
+    '',
+    '<!-- Append-only. Never edit or remove existing rows.',
+    '     To reverse a decision, add a new row that supersedes it.',
+    '     Read this file at the start of any planning or research phase. -->',
+    '',
+    '| # | When | Scope | Decision | Choice | Rationale | Revisable? | Made By |',
+    '|---|------|-------|----------|--------|-----------|------------|---------|',
+  ];
+
+  decisions.forEach((decision, index) => {
+    const id = padId('D', index + 1, 3);
+    const escaped = decision.replace(/\|/g, '\\|');
+    lines.push(`| ${id} | migration | legacy-import | ${escaped} | ${escaped} | Migrated from legacy summary key-decisions | Yes | human |`);
+  });
+
+  return lines.join('\n') + '\n';
 }
 
 // ─── Main Entry Point ──────────────────────────────────────────────────────

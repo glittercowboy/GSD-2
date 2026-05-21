@@ -1,5 +1,7 @@
+// GSD-2 + packages/pi-tui/src/components/box.ts - Box container component with padding and background rendering.
+
 import type { Component } from "../tui.js";
-import { applyBackgroundToLine, visibleWidth } from "../utils.js";
+import { applyBackgroundToLine, truncateToWidth, visibleWidth } from "../utils.js";
 
 type RenderCache = {
 	childLines: string[];
@@ -94,7 +96,8 @@ export class Box implements Component {
 		for (const child of this.children) {
 			const lines = child.render(contentWidth);
 			for (const line of lines) {
-				childLines.push(leftPad + line);
+				const clippedLine = visibleWidth(line) > contentWidth ? truncateToWidth(line, contentWidth) : line;
+				childLines.push(leftPad + clippedLine);
 			}
 		}
 

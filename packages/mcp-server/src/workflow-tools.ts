@@ -1,11 +1,16 @@
+// Project/App: GSD-2
+// File Purpose: Registers packaged workflow tools exposed by the GSD MCP server.
+
 /**
  * Workflow MCP tools — exposes the core GSD mutation/read handlers over MCP.
  */
 
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
+import { WORKFLOW_TOOL_NAMES as CONTRACT_WORKFLOW_TOOL_NAMES } from "@gsd-build/contracts";
 
 import { logAliasUsage } from "./alias-telemetry.js";
 
@@ -226,10 +231,40 @@ type WorkflowToolExecutors = {
     },
     basePath?: string,
   ) => Promise<unknown>;
+  executeTaskReopen: (
+    params: {
+      taskId: string;
+      sliceId: string;
+      milestoneId: string;
+      reason?: string;
+      actorName?: string;
+      triggerReason?: string;
+    },
+    basePath?: string,
+  ) => Promise<unknown>;
+  executeSliceReopen: (
+    params: {
+      sliceId: string;
+      milestoneId: string;
+      reason?: string;
+      actorName?: string;
+      triggerReason?: string;
+    },
+    basePath?: string,
+  ) => Promise<unknown>;
+  executeMilestoneReopen: (
+    params: {
+      milestoneId: string;
+      reason?: string;
+      actorName?: string;
+      triggerReason?: string;
+    },
+    basePath?: string,
+  ) => Promise<unknown>;
 };
 
 type WorkflowWriteGateModule = {
-  loadWriteGateSnapshot: (basePath?: string) => {
+  loadWriteGateSnapshot: (basePath: string) => {
     verifiedDepthMilestones: string[];
     activeQueuePhase: boolean;
     pendingGateId: string | null;
@@ -378,6 +413,50 @@ function resolveActiveWorktreeBasePath(
   return wtPath;
 }
 
+/**
+ * Fallback when the tool call has no milestoneId: if exactly one auto-worktree
+ * exists under `<projectRoot>/.gsd/worktrees/`, treat it as the active one.
+ * Multiple worktrees → ambiguous, return null and let writes go to project root.
+ */
+function resolveSoleActiveWorktree(projectRoot: string): string | null {
+  const worktreesDir = join(projectRoot, ".gsd", "worktrees");
+  if (!existsSync(worktreesDir)) return null;
+  let entries: string[];
+  try {
+    entries = readdirSync(worktreesDir);
+  } catch {
+    return null;
+  }
+  const live = entries
+    .map((name) => join(worktreesDir, name))
+    .filter((p) => existsSync(join(p, ".git")));
+  if (live.length !== 1) return null;
+  return live[0];
+}
+
+function isHomeDirectory(candidate: string): boolean {
+  let resolvedHome: string;
+  try {
+    resolvedHome = realpathSync(resolve(homedir()));
+  } catch {
+    resolvedHome = resolve(homedir());
+  }
+  let resolvedCandidate: string;
+  try {
+    resolvedCandidate = realpathSync(resolve(candidate));
+  } catch {
+    resolvedCandidate = resolve(candidate);
+  }
+  return resolvedCandidate === resolvedHome;
+}
+
+export function _parseWorkflowArgsForTest<T extends { projectDir?: string }>(
+  schema: z.ZodType<T>,
+  args: Record<string, unknown>,
+): T & { projectDir: string } {
+  return parseWorkflowArgs(schema, args);
+}
+
 function parseWorkflowArgs<T extends { projectDir?: string }>(
   schema: z.ZodType<T>,
   args: Record<string, unknown>,
@@ -387,14 +466,28 @@ function parseWorkflowArgs<T extends { projectDir?: string }>(
   // projectDir — default to process.cwd() which the MCP server inherited from
   // Claude Code (launched at the project root).
   const projectRootCandidate = parsed.projectDir ?? process.cwd();
+
+  // Defense-in-depth: refuse when the resolved candidate is the user's home
+  // directory. The MCP server's process.cwd() can be $HOME if launched from
+  // an unusual context; honoring it would write project artifacts into ~/.gsd.
+  if (isHomeDirectory(projectRootCandidate)) {
+    throw new Error(
+      `projectDir resolves to the user's home directory (${projectRootCandidate}). ` +
+      `Run the workflow tool from inside a project directory, or pass an explicit projectDir.`,
+    );
+  }
+
   const projectRoot = validateProjectDir(projectRootCandidate);
 
   // Step 2: if this tool call is scoped to a milestone that has an active
   // auto-worktree, re-route writes to the worktree's .gsd rather than the
   // project's shared .gsd. auto-mode's verifyExpectedArtifact runs against
   // the worktree, and a mismatch here causes every unit to retry once.
+  // When the agent omits milestoneId, fall back to the sole live worktree
+  // if exactly one exists — that's the active auto-mode session.
   const milestoneId = extractMilestoneId(parsed as Record<string, unknown>);
-  const worktreeBasePath = resolveActiveWorktreeBasePath(projectRoot, milestoneId);
+  const worktreeBasePath = resolveActiveWorktreeBasePath(projectRoot, milestoneId)
+    ?? (milestoneId ? null : resolveSoleActiveWorktree(projectRoot));
   const effectiveBasePath = worktreeBasePath ?? projectRoot;
 
   return {
@@ -418,6 +511,9 @@ function isWorkflowToolExecutors(value: unknown): value is WorkflowToolExecutors
     "executeSaveGateResult",
     "executeSummarySave",
     "executeTaskComplete",
+    "executeTaskReopen",
+    "executeSliceReopen",
+    "executeMilestoneReopen",
   ];
 
   return Array.isArray(record.SUPPORTED_SUMMARY_ARTIFACT_TYPES) &&
@@ -451,6 +547,29 @@ function buildImportCandidates(relativePath: string): string[] {
   return [...new Set(candidates)];
 }
 
+function buildBridgeImportCandidates(relativePath: string): string[] {
+  const candidates: string[] = [];
+  const pushCompiledThenSource = (path: string | null) => {
+    if (!path) return;
+    candidates.push(path);
+    if (path.endsWith(".js")) candidates.push(path.replace(/\.js$/, ".ts"));
+  };
+
+  const sourcePath = relativePath.includes("/dist/")
+    ? relativePath.replace("/dist/", "/src/")
+    : relativePath;
+  const distPath = relativePath.includes("/src/")
+    ? relativePath.replace("/src/", "/dist/")
+    : relativePath.includes("/dist/")
+      ? relativePath
+      : null;
+
+  pushCompiledThenSource(distPath);
+  pushCompiledThenSource(sourcePath);
+
+  return [...new Set(candidates)];
+}
+
 function getWriteGateModuleCandidates(): string[] {
   const candidates: string[] = [];
   const explicitModule = process.env.GSD_WORKFLOW_WRITE_GATE_MODULE?.trim();
@@ -463,7 +582,7 @@ function getWriteGateModuleCandidates(): string[] {
   }
 
   candidates.push(
-    ...buildImportCandidates("../../../src/resources/extensions/gsd/bootstrap/write-gate.js")
+    ...buildBridgeImportCandidates("../../../src/resources/extensions/gsd/bootstrap/write-gate.js")
       .map((p) => new URL(p, import.meta.url).href),
   );
 
@@ -500,6 +619,11 @@ export function _buildImportCandidates(relativePath: string): string[] {
   return buildImportCandidates(relativePath);
 }
 
+/** @internal — exported for testing only */
+export function _buildBridgeImportCandidates(relativePath: string): string[] {
+  return buildBridgeImportCandidates(relativePath);
+}
+
 async function importLocalModule<T>(relativePath: string): Promise<T> {
   const rawCandidates = _buildImportCandidates(relativePath);
   const candidates = (import.meta.url.includes("/dist-test/") || import.meta.url.includes("\\dist-test\\")
@@ -518,6 +642,17 @@ async function importLocalModule<T>(relativePath: string): Promise<T> {
   throw lastErr;
 }
 
+async function loadProjectPreferences(projectDir: string): Promise<unknown | null> {
+  const { loadEffectiveGSDPreferences } = await importLocalModule<any>(
+    "../../../src/resources/extensions/gsd/preferences.js",
+  );
+  try {
+    return loadEffectiveGSDPreferences(projectDir).preferences;
+  } catch {
+    return null;
+  }
+}
+
 function getWorkflowExecutorModuleCandidates(env: NodeJS.ProcessEnv = process.env): string[] {
   const candidates: string[] = [];
   const explicitModule = env.GSD_WORKFLOW_EXECUTORS_MODULE?.trim();
@@ -530,7 +665,7 @@ function getWorkflowExecutorModuleCandidates(env: NodeJS.ProcessEnv = process.en
   }
 
   candidates.push(
-    ...buildImportCandidates("../../../src/resources/extensions/gsd/tools/workflow-tool-executors.js")
+    ...buildBridgeImportCandidates("../../../src/resources/extensions/gsd/tools/workflow-tool-executors.js")
       .map((p) => new URL(p, import.meta.url).href),
   );
 
@@ -603,43 +738,7 @@ interface McpToolServer {
   ): unknown;
 }
 
-export const WORKFLOW_TOOL_NAMES = [
-  "gsd_decision_save",
-  "gsd_save_decision",
-  "gsd_requirement_update",
-  "gsd_update_requirement",
-  "gsd_requirement_save",
-  "gsd_save_requirement",
-  "gsd_milestone_generate_id",
-  "gsd_generate_milestone_id",
-  "gsd_plan_milestone",
-  "gsd_plan_slice",
-  "gsd_plan_task",
-  "gsd_task_plan",
-  "gsd_replan_slice",
-  "gsd_slice_replan",
-  "gsd_slice_complete",
-  "gsd_complete_slice",
-  "gsd_skip_slice",
-  "gsd_complete_milestone",
-  "gsd_milestone_complete",
-  "gsd_validate_milestone",
-  "gsd_milestone_validate",
-  "gsd_reassess_roadmap",
-  "gsd_roadmap_reassess",
-  "gsd_save_gate_result",
-  "gsd_summary_save",
-  "gsd_task_complete",
-  "gsd_complete_task",
-  "gsd_milestone_status",
-  "gsd_journal_query",
-  // ADR-013 step 3: memory-store tools exposed to external MCP clients.
-  // gsd_memory_graph is namespaced to avoid collision with the existing
-  // gsd_graph tool (project knowledge graph from .gsd/ artifacts).
-  "gsd_capture_thought",
-  "gsd_memory_query",
-  "gsd_memory_graph",
-] as const;
+export const WORKFLOW_TOOL_NAMES = CONTRACT_WORKFLOW_TOOL_NAMES;
 
 const DEFAULT_WORKFLOW_OP_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -797,6 +896,39 @@ async function handleTaskComplete(
   // handleReplanSlice) eliminates the recurrence risk by construction.
   return adaptExecutorResult(
     await runSerializedWorkflowOperation(() => executeTaskComplete(args, projectDir)),
+  );
+}
+
+async function handleTaskReopen(
+  projectDir: string,
+  args: Omit<z.infer<typeof taskReopenSchema>, "projectDir">,
+): Promise<unknown> {
+  await enforceWorkflowWriteGate("gsd_task_reopen", projectDir, args.milestoneId);
+  const { executeTaskReopen } = await getWorkflowToolExecutors();
+  return adaptExecutorResult(
+    await runSerializedWorkflowOperation(() => executeTaskReopen(args, projectDir)),
+  );
+}
+
+async function handleSliceReopen(
+  projectDir: string,
+  args: Omit<z.infer<typeof sliceReopenSchema>, "projectDir">,
+): Promise<unknown> {
+  await enforceWorkflowWriteGate("gsd_slice_reopen", projectDir, args.milestoneId);
+  const { executeSliceReopen } = await getWorkflowToolExecutors();
+  return adaptExecutorResult(
+    await runSerializedWorkflowOperation(() => executeSliceReopen(args, projectDir)),
+  );
+}
+
+async function handleMilestoneReopen(
+  projectDir: string,
+  args: Omit<z.infer<typeof milestoneReopenSchema>, "projectDir">,
+): Promise<unknown> {
+  await enforceWorkflowWriteGate("gsd_milestone_reopen", projectDir, args.milestoneId);
+  const { executeMilestoneReopen } = await getWorkflowToolExecutors();
+  return adaptExecutorResult(
+    await runSerializedWorkflowOperation(() => executeMilestoneReopen(args, projectDir)),
   );
 }
 
@@ -1349,6 +1481,36 @@ const taskCompleteParams = {
 };
 const taskCompleteSchema = z.object(taskCompleteParams);
 
+const taskReopenParams = {
+  projectDir: projectDirParam,
+  taskId: nonEmptyString("taskId").describe("Task ID (e.g. T01)"),
+  sliceId: nonEmptyString("sliceId").describe("Slice ID (e.g. S01)"),
+  milestoneId: nonEmptyString("milestoneId").describe("Milestone ID (e.g. M001)"),
+  reason: z.string().optional().describe("Why the task is being reopened"),
+  actorName: z.string().optional().describe("Caller-provided actor identity for audit trail"),
+  triggerReason: z.string().optional().describe("Caller-provided reason this action was triggered"),
+};
+const taskReopenSchema = z.object(taskReopenParams);
+
+const sliceReopenParams = {
+  projectDir: projectDirParam,
+  sliceId: nonEmptyString("sliceId").describe("Slice ID (e.g. S01)"),
+  milestoneId: nonEmptyString("milestoneId").describe("Milestone ID (e.g. M001)"),
+  reason: z.string().optional().describe("Why the slice is being reopened"),
+  actorName: z.string().optional().describe("Caller-provided actor identity for audit trail"),
+  triggerReason: z.string().optional().describe("Caller-provided reason this action was triggered"),
+};
+const sliceReopenSchema = z.object(sliceReopenParams);
+
+const milestoneReopenParams = {
+  projectDir: projectDirParam,
+  milestoneId: nonEmptyString("milestoneId").describe("Milestone ID (e.g. M001)"),
+  reason: z.string().optional().describe("Why the milestone is being reopened"),
+  actorName: z.string().optional().describe("Caller-provided actor identity for audit trail"),
+  triggerReason: z.string().optional().describe("Caller-provided reason this action was triggered"),
+};
+const milestoneReopenSchema = z.object(milestoneReopenParams);
+
 const milestoneStatusParams = {
   projectDir: projectDirParam,
   milestoneId: z.string().describe("Milestone ID to query (e.g. M001)"),
@@ -1366,6 +1528,30 @@ const journalQueryParams = {
   limit: z.number().optional().describe("Maximum entries to return"),
 };
 const journalQuerySchema = z.object(journalQueryParams);
+
+const execRuntimeSchema = z.enum(["bash", "node", "python"]);
+const execParams = {
+  projectDir: projectDirParam,
+  runtime: execRuntimeSchema.describe("Interpreter: bash (-c), node (-e), or python3 (-c)."),
+  script: nonEmptyString("script").describe("Script body. Keep output small; capped stdout/stderr are persisted under .gsd/exec."),
+  purpose: z.string().optional().describe("Short label recorded in meta.json for later review."),
+  timeout_ms: z.number().int().min(1_000).max(600_000).optional().describe("Per-invocation timeout in milliseconds."),
+};
+const execSchema = z.object(execParams);
+
+const execSearchParams = {
+  projectDir: projectDirParam,
+  query: z.string().optional().describe("Substring matched against id and purpose, case-insensitive."),
+  runtime: execRuntimeSchema.optional().describe("Restrict to one runtime."),
+  failing_only: z.boolean().optional().describe("Only non-zero exit codes and timeouts."),
+  limit: z.number().int().min(1).max(200).optional().describe("Max results (default 20, cap 200)."),
+};
+const execSearchSchema = z.object(execSearchParams);
+
+const resumeParams = {
+  projectDir: projectDirParam,
+};
+const resumeSchema = z.object(resumeParams);
 
 /**
  * Wrap a real McpToolServer so every handler we register catches thrown
@@ -1651,21 +1837,16 @@ export function registerWorkflowTools(realServer: McpToolServer): void {
       const { projectDir, milestoneId, sliceId, reason } = parseWorkflowArgs(skipSliceSchema, args);
       await enforceWorkflowWriteGate("gsd_skip_slice", projectDir, milestoneId);
       await runSerializedWorkflowDbOperation(projectDir, async () => {
-        const { getSlice, updateSliceStatus } = await importLocalModule<any>("../../../src/resources/extensions/gsd/gsd-db.js");
+        const { handleSkipSlice } = await importLocalModule<any>("../../../src/resources/extensions/gsd/tools/skip-slice.js");
         const { invalidateStateCache } = await importLocalModule<any>("../../../src/resources/extensions/gsd/state.js");
         const { rebuildState } = await importLocalModule<any>("../../../src/resources/extensions/gsd/doctor.js");
-        const slice = getSlice(milestoneId, sliceId);
-        if (!slice) {
-          throw new Error(`Slice ${sliceId} not found in milestone ${milestoneId}`);
+        const result = handleSkipSlice({ milestoneId, sliceId, reason });
+        if (result.error) {
+          throw new Error(result.error);
         }
-        if (slice.status === "complete" || slice.status === "done") {
-          throw new Error(`Slice ${sliceId} is already complete and cannot be skipped`);
-        }
-        if (slice.status !== "skipped") {
-          updateSliceStatus(milestoneId, sliceId, "skipped");
-          invalidateStateCache();
-          await rebuildState(projectDir);
-        }
+
+        invalidateStateCache();
+        await rebuildState(projectDir);
       });
       return {
         content: [{ type: "text" as const, text: `Skipped slice ${sliceId} (${milestoneId}). Reason: ${reason ?? "User-directed skip"}.` }],
@@ -1793,6 +1974,75 @@ export function registerWorkflowTools(realServer: McpToolServer): void {
   );
 
   server.tool(
+    "gsd_task_reopen",
+    "Reset a completed task back to pending so it can be re-done.",
+    taskReopenParams,
+    async (args: Record<string, unknown>) => {
+      const parsed = parseWorkflowArgs(taskReopenSchema, args);
+      const { projectDir, ...taskArgs } = parsed;
+      return handleTaskReopen(projectDir, taskArgs);
+    },
+  );
+
+  server.tool(
+    "gsd_reopen_task",
+    "Alias for gsd_task_reopen. Reset a completed task back to pending so it can be re-done.",
+    taskReopenParams,
+    async (args: Record<string, unknown>) => {
+      logAliasUsage("gsd_reopen_task", "gsd_task_reopen");
+      const parsed = parseWorkflowArgs(taskReopenSchema, args);
+      const { projectDir, ...taskArgs } = parsed;
+      return handleTaskReopen(projectDir, taskArgs);
+    },
+  );
+
+  server.tool(
+    "gsd_slice_reopen",
+    "Reset a completed slice back to in_progress and reset its tasks to pending.",
+    sliceReopenParams,
+    async (args: Record<string, unknown>) => {
+      const parsed = parseWorkflowArgs(sliceReopenSchema, args);
+      const { projectDir, ...sliceArgs } = parsed;
+      return handleSliceReopen(projectDir, sliceArgs);
+    },
+  );
+
+  server.tool(
+    "gsd_reopen_slice",
+    "Alias for gsd_slice_reopen. Reset a completed slice back to in_progress and reset its tasks to pending.",
+    sliceReopenParams,
+    async (args: Record<string, unknown>) => {
+      logAliasUsage("gsd_reopen_slice", "gsd_slice_reopen");
+      const parsed = parseWorkflowArgs(sliceReopenSchema, args);
+      const { projectDir, ...sliceArgs } = parsed;
+      return handleSliceReopen(projectDir, sliceArgs);
+    },
+  );
+
+  server.tool(
+    "gsd_milestone_reopen",
+    "Reset a closed milestone back to active and reset its slices/tasks for rework.",
+    milestoneReopenParams,
+    async (args: Record<string, unknown>) => {
+      const parsed = parseWorkflowArgs(milestoneReopenSchema, args);
+      const { projectDir, ...milestoneArgs } = parsed;
+      return handleMilestoneReopen(projectDir, milestoneArgs);
+    },
+  );
+
+  server.tool(
+    "gsd_reopen_milestone",
+    "Alias for gsd_milestone_reopen. Reset a closed milestone back to active and reset its slices/tasks for rework.",
+    milestoneReopenParams,
+    async (args: Record<string, unknown>) => {
+      logAliasUsage("gsd_reopen_milestone", "gsd_milestone_reopen");
+      const parsed = parseWorkflowArgs(milestoneReopenSchema, args);
+      const { projectDir, ...milestoneArgs } = parsed;
+      return handleMilestoneReopen(projectDir, milestoneArgs);
+    },
+  );
+
+  server.tool(
     "gsd_milestone_status",
     "Read the current status of a milestone and all its slices from the GSD database.",
     milestoneStatusParams,
@@ -1820,6 +2070,63 @@ export function registerWorkflowTools(realServer: McpToolServer): void {
         return { content: [{ type: "text" as const, text: "No matching journal entries found." }] };
       }
       return { content: [{ type: "text" as const, text: JSON.stringify(entries, null, 2) }] };
+    },
+  );
+
+  server.tool(
+    "gsd_exec",
+    "Run a short bash/node/python script in the project directory. Capped stdout/stderr and metadata persist under .gsd/exec; only a digest returns to MCP.",
+    execParams,
+    async (args: Record<string, unknown>) => {
+      const { projectDir, ...params } = parseWorkflowArgs(execSchema, args);
+      await enforceWorkflowWriteGate("gsd_exec", projectDir);
+      const { executeGsdExec } = await importLocalModule<any>(
+        "../../../src/resources/extensions/gsd/tools/exec-tool.js",
+      );
+      return adaptExecutorResult(
+        await runSerializedWorkflowOperation(async () =>
+          executeGsdExec(params, {
+            baseDir: projectDir,
+            preferences: await loadProjectPreferences(projectDir),
+          }),
+        ),
+      );
+    },
+  );
+
+  server.tool(
+    "gsd_exec_search",
+    "Search prior gsd_exec runs from .gsd/exec/*.meta.json without re-running them.",
+    execSearchParams,
+    async (args: Record<string, unknown>) => {
+      const { projectDir, ...params } = parseWorkflowArgs(execSearchSchema, args);
+      const { executeExecSearch } = await importLocalModule<any>(
+        "../../../src/resources/extensions/gsd/tools/exec-search-tool.js",
+      );
+      return adaptExecutorResult(
+        executeExecSearch(params, {
+          baseDir: projectDir,
+          preferences: await loadProjectPreferences(projectDir),
+        }),
+      );
+    },
+  );
+
+  server.tool(
+    "gsd_resume",
+    "Read .gsd/last-snapshot.md so agents can re-orient after compaction or session resume.",
+    resumeParams,
+    async (args: Record<string, unknown>) => {
+      const { projectDir, ...params } = parseWorkflowArgs(resumeSchema, args);
+      const { executeResume } = await importLocalModule<any>(
+        "../../../src/resources/extensions/gsd/tools/resume-tool.js",
+      );
+      return adaptExecutorResult(
+        executeResume(params, {
+          baseDir: projectDir,
+          preferences: await loadProjectPreferences(projectDir),
+        }),
+      );
     },
   );
 

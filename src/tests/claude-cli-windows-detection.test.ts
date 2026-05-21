@@ -1,98 +1,34 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+	buildClaudeSpawnInvocation as buildCliSpawnInvocation,
+	getClaudeCommand as getCliCommand,
+} from "../claude-cli-check.ts";
+import {
+	buildClaudeSpawnInvocation as buildReadinessSpawnInvocation,
+	getClaudeCommand as getReadinessCommand,
+} from "../resources/extensions/claude-code-cli/readiness.ts";
 
-/**
- * Source-level regression test for Issue #4424: the Claude Code CLI
- * binary check must use the `.cmd` shim on Windows. Node's
- * `execFileSync('claude', ...)` does not resolve `.cmd`/`.bat` endings
- * automatically on win32, so npm-global installs fail to be detected and
- * the "Use Claude Code CLI" onboarding option silently disappears.
- *
- * Both the lightweight onboarding check (`src/claude-cli-check.ts`) and
- * the cached readiness check
- * (`src/resources/extensions/claude-code-cli/readiness.ts`) must carry
- * the `process.platform === 'win32' ? 'claude.cmd' : 'claude'` guard —
- * analogous to the existing `NPM_COMMAND` pattern in
- * `src/resources/extensions/gsd/pre-execution-checks.ts`.
- */
+test("claude-cli-check selects claude.cmd and uses cmd /c on win32", () => {
+	assert.equal(getCliCommand("win32"), "claude.cmd");
+	assert.deepEqual(buildCliSpawnInvocation("claude.cmd", ["--version"], "win32"), {
+		command: "cmd",
+		args: ["/c", "claude.cmd", "--version"],
+	});
+});
 
-/**
- * Proximity regex matching the full ternary expression. Validates the
- * real command-selection logic rather than individual tokens — keyword-
- * only assertions (e.g. `/win32/`, `/claude\.cmd/`) can be satisfied by
- * documentation or comments alone and would fail to catch a regression
- * that removes the code path while leaving the JSDoc in place.
- */
-const WINDOWS_CLAUDE_SELECTOR =
-	/process\.platform\s*===\s*['"]win32['"]\s*\?\s*['"]claude\.cmd['"]\s*:\s*['"]claude['"]/;
+test("readiness selects claude.cmd and uses cmd /c on win32", () => {
+	assert.equal(getReadinessCommand("win32"), "claude.cmd");
+	assert.deepEqual(buildReadinessSpawnInvocation("claude.cmd", ["--version"], "win32"), {
+		command: "cmd",
+		args: ["/c", "claude.cmd", "--version"],
+	});
+});
 
-/**
- * After Issue #5017 the binary is invoked via `cmd /c <command> <args...>`
- * on Windows instead of `execFileSync(command, args, { shell: true })` —
- * the latter triggers Node 22+'s DEP0190 deprecation warning. The
- * assertion guards the explicit cmd.exe invocation so a future refactor
- * can't silently re-introduce the deprecated pattern.
- */
-const WINDOWS_CMD_SHELL_GUARD =
-	/execFileSync\(\s*["']cmd["']\s*,\s*\[\s*["']\/c["']/;
-
-/**
- * Verifies the onboarding-level readiness check (`claude-cli-check.ts`)
- * carries the `process.platform === 'win32' ? 'claude.cmd' : 'claude'`
- * selector used by `execFileSync`. Guards the wizard path from Issue
- * #4424 where Windows users never saw the "Use Claude Code CLI" option.
- */
-function verifyCliCheckSelector(): void {
-	const source = readFileSync(
-		join(import.meta.dirname, "..", "claude-cli-check.ts"),
-		"utf-8",
-	);
-
-	assert.match(
-		source,
-		WINDOWS_CLAUDE_SELECTOR,
-		"claude-cli-check.ts must implement process.platform === 'win32' ? 'claude.cmd' : 'claude'",
-	);
-
-	assert.match(
-		source,
-		WINDOWS_CMD_SHELL_GUARD,
-		"claude-cli-check.ts must invoke claude via 'cmd /c' on Windows (Issue #5017 — avoids DEP0190)",
-	);
-}
-
-/**
- * Verifies the cached extension-level readiness check (`readiness.ts`)
- * carries the same Windows shim selector, so provider gating succeeds
- * on Windows installs where `claude` is an npm-shipped `.cmd` shim.
- */
-function verifyReadinessSelector(): void {
-	const source = readFileSync(
-		join(
-			import.meta.dirname,
-			"..",
-			"resources",
-			"extensions",
-			"claude-code-cli",
-			"readiness.ts",
-		),
-		"utf-8",
-	);
-
-	assert.match(
-		source,
-		WINDOWS_CLAUDE_SELECTOR,
-		"readiness.ts must implement process.platform === 'win32' ? 'claude.cmd' : 'claude'",
-	);
-
-	assert.match(
-		source,
-		WINDOWS_CMD_SHELL_GUARD,
-		"readiness.ts must invoke claude via 'cmd /c' on Windows (Issue #5017 — avoids DEP0190)",
-	);
-}
-
-test("claude-cli-check.ts selects claude.cmd on win32", verifyCliCheckSelector);
-test("readiness.ts selects claude.cmd on win32", verifyReadinessSelector);
+test("non-Windows probes invoke claude directly", () => {
+	assert.equal(getCliCommand("darwin"), "claude");
+	assert.deepEqual(buildReadinessSpawnInvocation("claude", ["auth", "status"], "darwin"), {
+		command: "claude",
+		args: ["auth", "status"],
+	});
+});

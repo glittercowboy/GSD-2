@@ -46,6 +46,7 @@ import {
   updateTaskStatus,
   updateSliceStatus,
   updateMilestoneStatus,
+  insertAssessment,
   insertReplanHistory,
   getReplanHistory,
   insertGateRow,
@@ -363,13 +364,13 @@ describe("state derivation failures", () => {
     const state2 = await deriveState(base);
     assert.equal(state2.phase, "executing", "cached result should still show executing");
 
-    // After explicit invalidation, should reflect the DB mutation and reconcile
-    // missing plan tasks instead of prematurely summarizing a partial DB row set.
+    // After explicit invalidation, DB rows remain authoritative; PLAN.md is a
+    // projection and must not import missing task rows.
     invalidateStateCache();
     const state3 = await deriveState(base);
-    assert.equal(state3.phase, "executing", "after cache invalidation should continue with the missing plan task");
-    assert.equal(state3.activeTask?.id, "T02", "missing plan task T02 should be imported and selected");
-    assert.deepEqual(state3.progress?.tasks, { done: 1, total: 2 });
+    assert.equal(state3.phase, "summarizing", "after cache invalidation should follow DB tasks only");
+    assert.equal(state3.activeTask, null, "disk-only plan task T02 should not be imported");
+    assert.deepEqual(state3.progress?.tasks, { done: 1, total: 1 });
   });
 
   test("corrupt ROADMAP: binary content does not crash deriveState", async () => {
@@ -486,12 +487,14 @@ describe("transition boundary failures", () => {
     writeFileSync(join(mDir, "M001-CONTEXT-DRAFT.md"), "# Draft\nSome draft.\n");
 
     openDatabase(join(base, ".gsd", "gsd.db"));
+    insertMilestone({ id: "M001", title: "Draft", status: "needs-discussion" });
     invalidateAllCaches();
     const state1 = await deriveState(base);
     assert.equal(state1.phase, "needs-discussion");
 
     // Now write the full CONTEXT (simulates discussion completion)
     writeFileSync(join(mDir, "M001-CONTEXT.md"), "# M001: Resolved\n\n## Purpose\nDone.\n");
+    updateMilestoneStatus("M001", "active");
 
     invalidateAllCaches();
     const state2 = await deriveState(base);
@@ -880,7 +883,7 @@ describe("dispatch failure modes", () => {
     assert.ok(runUatIdx < uatGateIdx, "run-uat should precede uat-verdict-gate");
   });
 
-  test("UAT verdict gate: ASSESSMENT FAIL blocks closed slice progression", async () => {
+  test("UAT verdict gate: ASSESSMENT FAIL does not hard-stop progression", async () => {
     base = createFullFixture();
     openDatabase(join(base, ".gsd", "gsd.db"));
     insertMilestone({ id: "M001", title: "Active", status: "active" });
@@ -905,11 +908,40 @@ describe("dispatch failure modes", () => {
     ctx.prefs = { uat_dispatch: true } as any;
 
     const result = await getUatVerdictGate().match(ctx);
-    assert.equal(result?.action, "stop", "ASSESSMENT FAIL should block progression");
-    assert.ok(
-      (result as any).reason?.includes('UAT verdict for S01 is "fail"'),
-      "stop reason should report normalized ASSESSMENT verdict",
+    assert.equal(result, null, "ASSESSMENT FAIL should not hard-stop progression");
+  });
+
+  test("UAT verdict gate: roadmap-scoped ASSESSMENT verdict is ignored", async () => {
+    base = createFullFixture();
+    openDatabase(join(base, ".gsd", "gsd.db"));
+    insertMilestone({ id: "M001", title: "Active", status: "active" });
+    insertSlice({ id: "S01", milestoneId: "M001", title: "First", status: "complete" });
+    insertSlice({ id: "S02", milestoneId: "M001", title: "Second", status: "pending" });
+
+    const s01Dir = join(base, ".gsd", "milestones", "M001", "slices", "S01");
+    const assessmentRelPath = join(".gsd", "milestones", "M001", "slices", "S01", "S01-ASSESSMENT.md");
+    writeFileSync(
+      join(s01Dir, "S01-ASSESSMENT.md"),
+      "---\nverdict: roadmap-adjusted\n---\n# Reassessment\n",
     );
+    insertAssessment({
+      path: assessmentRelPath,
+      milestoneId: "M001",
+      sliceId: "S01",
+      status: "roadmap-adjusted",
+      scope: "roadmap",
+      fullContent: "---\nverdict: roadmap-adjusted\n---\n# Reassessment\n",
+    });
+
+    const ctx = buildDispatchCtx(base, "M001", {
+      phase: "planning",
+      activeSlice: { id: "S02", title: "Second" },
+      activeTask: null,
+    });
+    ctx.prefs = { uat_dispatch: true } as any;
+
+    const result = await getUatVerdictGate().match(ctx);
+    assert.equal(result, null, "roadmap scoped assessment verdict should not be treated as UAT");
   });
 
   test("UAT verdict gate: ROADMAP fallback gates done slices when DB is unavailable", async () => {
@@ -961,15 +993,11 @@ describe("dispatch failure modes", () => {
     ctx.prefs = { uat_dispatch: true } as any;
 
     const result = await getUatVerdictGate().match(ctx);
-    assert.equal(result?.action, "stop", "ROADMAP done slices should be gated without DB");
-    assert.ok(
-      (result as any).reason?.includes('UAT verdict for S01 is "needs-remediation"'),
-      "stop reason should report normalized ASSESSMENT verdict from disk fallback",
-    );
+    assert.equal(result, null, "ROADMAP done slices should not hard-stop progression without DB");
   });
 
   for (const status of ["done", "skipped"]) {
-    test(`UAT verdict gate: legacy closed status "${status}" is gated`, async () => {
+    test(`UAT verdict gate: legacy closed status "${status}" does not hard-stop progression`, async () => {
       base = createFullFixture();
       openDatabase(join(base, ".gsd", "gsd.db"));
       insertMilestone({ id: "M001", title: "Active", status: "active" });
@@ -994,15 +1022,7 @@ describe("dispatch failure modes", () => {
       ctx.prefs = { uat_dispatch: true } as any;
 
       const result = await getUatVerdictGate().match(ctx);
-      assert.equal(
-        result?.action,
-        "stop",
-        `${status} slices should be treated as closed for UAT verdict gating`,
-      );
-      assert.ok(
-        (result as any).reason?.includes('UAT verdict for S01 is "needs-remediation"'),
-        "stop reason should report normalized ASSESSMENT verdict",
-      );
+      assert.equal(result, null, `${status} slices should not hard-stop progression`);
     });
   }
 });
@@ -1148,6 +1168,13 @@ describe("completion and verification failures", () => {
     insertTask({ id: "T01", sliceId: "S01", milestoneId: "M001", status: "complete" });
     insertTask({ id: "T02", sliceId: "S01", milestoneId: "M001", status: "complete" });
     insertTask({ id: "T01", sliceId: "S02", milestoneId: "M001", status: "complete" });
+    insertAssessment({
+      path: "milestones/M001/M001-VALIDATION.md",
+      milestoneId: "M001",
+      status: "pass",
+      scope: "milestone-validation",
+      fullContent: "verdict: pass",
+    });
 
     invalidateAllCaches();
     const state = await deriveStateFromDb(base);

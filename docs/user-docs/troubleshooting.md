@@ -13,7 +13,7 @@ It checks:
 - Roadmap ↔ slice ↔ task referential integrity
 - Completion state consistency
 - Git worktree health (worktree and branch modes only — skipped in none mode)
-- Stale lock files and orphaned runtime records
+- Stale DB-backed runtime records and orphaned runtime files
 - Disk-only orphan milestone stub directories
 
 ## Common Issues
@@ -34,6 +34,18 @@ It checks:
 
 **Fix:** Check the task plan for clarity. If the plan is ambiguous, refine it manually, then `/gsd auto` to resume.
 
+### Auto mode pauses after a timeout or finalize failure
+
+**Symptoms:** Auto mode reports a unit hard timeout, a finalize timeout, or a post-unit closeout failure.
+
+**What to inspect:**
+- `.gsd/runtime/<unit-type>/<unit-id>.json` shows the latest runtime phase, timeout timestamp, recovery attempts, and progress marker. Timeout recovery uses progress kinds such as `idle-recovery-retry`, `hard-recovery-retry`, `finalize-pre-timeout`, `finalize-post-timeout`, and `finalize-success`.
+- `.gsd/journal/` shows the ordered loop events. Look for `unit-end`, then `post-unit-finalize-start`, `post-unit-finalize-end`, and `iteration-end`.
+- `post-unit-finalize-end.status` tells you whether closeout completed, retried, stopped, or failed. `iteration-end.status` and `iteration-end.reason` show the final loop outcome that caused auto mode to continue, retry, pause, or stop.
+- `.gsd/git-action-failures.log` appends each failed post-unit git action with timestamp and action mode (`commit` or `merge`) so you can inspect the exact git error that paused auto mode.
+
+**Fix:** If the runtime record shows fresh recovery progress, resume with `/gsd auto`; the failsafe defers cancellation while recovery is actively producing durable output. If the journal shows a stopped finalize reason such as a git closeout failure or repeated finalize timeout, inspect `.gsd/git-action-failures.log`, resolve the underlying git issue, then resume.
+
 ### Wrong files in worktree
 
 **Symptoms:** Planning artifacts or code appear in the wrong directory.
@@ -41,6 +53,29 @@ It checks:
 **Cause:** The LLM wrote to the main repo instead of the worktree.
 
 **Fix:** This was fixed in v2.14+. If you're on an older version, update. The dispatch prompt now includes explicit working directory instructions.
+
+### Milestone entry blocked by degraded worktree isolation
+
+**Symptoms:** Auto mode fails milestone entry with an isolation-degraded warning, often after a previous worktree cleanup/create problem on Windows.
+
+**Current behavior:** When isolation is configured as `worktree`, GSD now attempts a safe fallback to milestone `branch` mode instead of hard-failing immediately. Bootstrap also surfaces a specific isolation-degraded notification so the cause is visible.
+
+**Fix:**
+- Close editors, terminals, or antivirus tools that may be locking `.gsd/worktrees/*` paths.
+- Retry `/gsd auto`; if fallback succeeds, continue in branch mode for that milestone.
+- Run `/gsd doctor` after recovery to verify overall worktree health.
+
+### Windows `EPERM` / `EBUSY` while removing stale worktree directories
+
+**Symptoms:** Startup or milestone entry fails during stale worktree cleanup with `EPERM` or `EBUSY` from directory removal.
+
+**Cause:** A process still holds a handle under an old worktree path, preventing cleanup.
+
+**Current behavior:** GSD now fails with a targeted error explaining that file locks blocked cleanup and advising you to close locking tools before retrying.
+
+**Fix:**
+- Close apps that might hold file locks (editors, shells in old worktree paths, antivirus/indexers).
+- Retry the command after a short delay.
 
 ### `command not found: gsd` after install
 
@@ -106,15 +141,16 @@ For common provider setup issues (role errors, streaming errors, model ID mismat
 
 **Fix:** Increase `budget_ceiling` in preferences, or switch to `budget` token profile to reduce per-unit cost, then resume with `/gsd auto`.
 
-### Stale lock file
+### Auto mode says another session is running
 
 **Symptoms:** Auto mode won't start, says another session is running.
 
-**Fix:** GSD automatically detects stale locks — if the owning PID is dead, the lock is cleaned up and re-acquired on the next `/gsd auto`. This includes stranded `.gsd.lock/` directories left by `proper-lockfile` after crashes. If automatic recovery fails, delete `.gsd/auto.lock` and the `.gsd.lock/` directory manually:
+**Fix:** GSD now derives active-session ownership from DB-backed worker and dispatch state, not from `auto.lock` or `runtime/paused-session.json`. In most cases `/gsd doctor fix` clears stale runtime rows and the next `/gsd auto` re-acquires ownership automatically.
+
+If recovery still fails, repair runtime state instead of manually deleting individual lock files:
 
 ```bash
-rm -f .gsd/auto.lock
-rm -rf "$(dirname .gsd)/.gsd.lock"
+/gsd doctor fix
 ```
 
 ### Git merge conflicts
@@ -122,6 +158,21 @@ rm -rf "$(dirname .gsd)/.gsd.lock"
 **Symptoms:** Worktree merge fails on `.gsd/` files.
 
 **Fix:** GSD auto-resolves conflicts on `.gsd/` runtime files. For content conflicts in code files, the LLM is given an opportunity to resolve them via a fix-merge session. If that fails, manual resolution is needed.
+
+### Auto mode stops before merge with preflight conflict/overlap errors
+
+**Symptoms:** Auto mode stops with a pre-merge reason like unresolved Git conflicts or dirty working tree overlap.
+
+**What it means:** Milestone merge preflight now fail-closes before merge when either:
+- the repo already has unresolved conflict stages (`git diff --name-only --diff-filter=U` is non-empty), or
+- local dirty files overlap files modified by the milestone branch.
+
+In these states GSD does not auto-stash and does not auto-fix; it stops so you can resolve safely.
+
+**Fix:**
+- Resolve conflict markers and stage the resolved files.
+- Commit, stash, or discard overlapping local edits outside GSD.
+- Re-run `/gsd auto` after `git status` is clean (or at least free of overlapping/conflicted paths).
 
 ### Pre-dispatch says the milestone integration branch no longer exists
 
@@ -148,6 +199,14 @@ rm -rf "$(dirname .gsd)/.gsd.lock"
 **What it means:** `.gsd/milestones/<MID>/` exists on disk, but GSD cannot find a DB milestone row, a matching `.gsd/worktrees/<MID>/` worktree, or any milestone content files. These disk-only stub directories can be left behind by interrupted or stale forward references and can skew the next milestone ID that GSD generates.
 
 **Fix:** Run `/gsd doctor fix` to remove the orphan milestone stub directory automatically. The auto-fix only targets disk-only stubs with no DB row, no worktree, and no content files; populated milestone directories and in-flight worktree-only milestones are not removed.
+
+### Startup warns that memory consolidation is incomplete
+
+**Symptoms:** On startup, GSD shows a warning like `Memory consolidation: ... not yet in memories table. Run /doctor for details.`
+
+**What it means:** The ADR-013 memory-store consolidation preflight scanner found legacy knowledge that is not yet represented in the canonical `memories` table. It checks active `decisions` rows for matching `structured_fields.sourceDecisionId` markers and `.gsd/KNOWLEDGE.md` table rows for matching `sourceKnowledgeId` markers. The scanner is read-only and is intended to block destructive cutover until migration coverage is visible.
+
+**Fix:** Run `/gsd doctor` to inspect the counts and sample rows. Before cutover, complete the decisions or KNOWLEDGE.md backfill so the affected rows exist in `memories`; do not delete legacy `DECISIONS.md`, `KNOWLEDGE.md`, or database rows just to silence the warning.
 
 ### Transient `EBUSY` / `EPERM` / `EACCES` while writing `.gsd/` files
 
@@ -292,11 +351,10 @@ rm -rf "$(dirname .gsd)/.gsd.lock"
 ### Reset auto mode state
 
 ```bash
-rm .gsd/auto.lock
 rm .gsd/completed-units.json
 ```
 
-Then `/gsd auto` to restart from current disk state.
+Then run `/gsd doctor` to refresh projections and `/gsd auto` to restart from current DB-backed state.
 
 ### Reset routing history
 
@@ -306,13 +364,25 @@ If adaptive model routing is producing bad results, clear the routing history:
 rm .gsd/routing-history.json
 ```
 
-### Full state rebuild
+### Refresh rendered state
 
 ```
 /gsd doctor
 ```
 
-Doctor rebuilds `STATE.md` from plan and roadmap files on disk and fixes detected inconsistencies.
+Doctor checks the authoritative database, refreshes `STATE.md` from derived database state, and fixes detected projection or runtime-file inconsistencies.
+
+### Recover database hierarchy from markdown
+
+Use this only when the database is missing, damaged, or known to be stale but the rendered milestone, slice, and task markdown on disk is the best available source:
+
+```
+/gsd recover
+```
+
+`/gsd recover` clears the database hierarchy tables plus persisted validation/gate state from prior runs, including quality-gate rows and skipped-validation assessments, then reconstructs the hierarchy from markdown and derives state again to verify the result. Normal runtime does not silently import markdown projections, and worktree markdown is not synced back as authoritative state.
+
+For non-TTY environments (CI, cron, scripted automation), v2.79 adds `gsd headless recover` — same semantics, no interactive prompt. Exits non-zero on failure.
 
 ## Getting Help
 
@@ -355,9 +425,9 @@ Doctor rebuilds `STATE.md` from plan and roadmap files on disk and fixes detecte
 
 **Symptoms:** `gsd_decision_save` (or its alias `gsd_save_decision`), `gsd_requirement_update` (or `gsd_update_requirement`), or `gsd_summary_save` (or `gsd_save_summary`) fail with this error.
 
-**Cause:** The SQLite database wasn't initialized. This happens in manual `/gsd` sessions (non-auto mode) on versions before v2.29.
+**Cause:** The SQLite database was not initialized or could not be opened. Runtime state derivation will not silently fall back to markdown projections.
 
-**Fix:** Updated in v2.29+ to auto-initialize the database on first tool call. Upgrade to the latest version.
+**Fix:** Upgrade to the latest version, then run a GSD command from the project root to initialize or open the database. Use `/gsd inspect` for database diagnostics. If the database was lost or corrupted and markdown artifacts are the only usable state, run `/gsd recover` after GSD has opened the database.
 
 ## Verification Issues
 
@@ -368,6 +438,14 @@ Doctor rebuilds `STATE.md` from plan and roadmap files on disk and fixes detecte
 **Cause:** A description-like string (e.g., `All 10 checks pass (build, lint)`) was treated as a shell command. This can happen when task plans have `verify:` fields with prose instead of actual commands.
 
 **Fix:** Updated in v2.29+ to filter preference commands through `isLikelyCommand()`. Ensure `verification_commands` in preferences contains only valid shell commands, not descriptions.
+
+### Verification command is rejected as unsafe or non-runnable
+
+**Symptoms:** Pre-execution checks fail with `Unsafe or non-runnable Verify command`, often for a command that works in an interactive shell.
+
+**Cause:** GSD only accepts mechanically executable verification commands. Shell control syntax such as pipes (`|`), redirects (`>` or `<`), semicolons, backticks, and command substitution (`$(...)`) is rejected so verification cannot hide failures by trimming or reshaping output.
+
+**Fix:** Put the direct check in the verify field or `verification_commands`. For example, use `python3 -m pytest tests -q --tb=short` instead of `python3 -m pytest tests -q --tb=short 2>&1 | tail -5`.
 
 ## LSP (Language Server Protocol)
 

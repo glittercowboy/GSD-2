@@ -9,12 +9,13 @@
 
 import { describe, test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execSync } from "node:child_process";
 
-import { PROJECT_FILES } from "../detection.js";
+import { PROJECT_FILES, classifyProject } from "../detection.js";
+import { _shouldProceedWithInvalidRepoClassificationForTest } from "../auto/phases.ts";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -27,6 +28,14 @@ function createGitRepo(): string {
   execSync("git config user.name Test", { cwd: dir, stdio: "ignore" });
   writeFileSync(join(dir, "README.md"), "# test\n");
   execSync("git add . && git commit -m init", { cwd: dir, stdio: "ignore" });
+  return dir;
+}
+
+function createEmptyGitRepo(): string {
+  const dir = mkdtempSync(join(tmpdir(), "wt-dispatch-test-empty-"));
+  execSync("git init", { cwd: dir, stdio: "ignore" });
+  execSync("git config user.email test@test.com", { cwd: dir, stdio: "ignore" });
+  execSync("git config user.name Test", { cwd: dir, stdio: "ignore" });
   return dir;
 }
 
@@ -64,8 +73,6 @@ function hasXcodeBundle(basePath: string): boolean {
   } catch { return false; }
 }
 
-import { existsSync } from "node:fs";
-
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 test("PROJECT_FILES is exported and contains expected multi-ecosystem entries", () => {
@@ -78,6 +85,21 @@ test("PROJECT_FILES is exported and contains expected multi-ecosystem entries", 
   assert.ok(PROJECT_FILES.includes("package.json"), "includes JS marker");
   assert.ok(PROJECT_FILES.includes("pom.xml"), "includes Java marker");
   assert.ok(PROJECT_FILES.includes("Package.swift"), "includes Swift marker");
+});
+
+test("invalid-repo classification only proceeds when the git marker was already confirmed", () => {
+  assert.equal(
+    _shouldProceedWithInvalidRepoClassificationForTest("missing .git", true),
+    true,
+  );
+  assert.equal(
+    _shouldProceedWithInvalidRepoClassificationForTest("missing .git", false),
+    false,
+  );
+  assert.equal(
+    _shouldProceedWithInvalidRepoClassificationForTest("permission denied", true),
+    false,
+  );
 });
 
 describe("health check with git repo", () => {
@@ -132,8 +154,18 @@ describe("health check with git repo", () => {
   });
 
   test("health check passes for empty git repo (greenfield project)", () => {
-    assert.ok(wouldPassHealthCheck(dir, existsSync), "empty git repo should pass health check (greenfield)");
-    assert.ok(!hasRecognizedProjectFiles(dir, existsSync), "empty git repo has no recognized project files");
+    const empty = createEmptyGitRepo();
+    try {
+      assert.ok(wouldPassHealthCheck(empty, existsSync), "empty git repo should pass health check (greenfield)");
+      assert.equal(classifyProject(empty).kind, "greenfield");
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
+
+  test("health check classifies README-only repo as untyped existing, not greenfield", () => {
+    assert.ok(wouldPassHealthCheck(dir, existsSync), "README-only repo should pass health check");
+    assert.equal(classifyProject(dir).kind, "untyped-existing");
   });
 });
 

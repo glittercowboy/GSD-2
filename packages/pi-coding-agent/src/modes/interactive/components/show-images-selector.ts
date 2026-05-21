@@ -1,6 +1,7 @@
-import { Container, type SelectItem, SelectList } from "@gsd/pi-tui";
+import { Container, type SelectItem, SelectList, Text } from "@gsd/pi-tui";
 import { getSelectListTheme } from "../theme/theme.js";
 import { DynamicBorder } from "./dynamic-border.js";
+import { selectorFooter } from "./keybinding-hints.js";
 
 /**
  * Component that renders a show images selector with borders
@@ -34,6 +35,7 @@ export class ShowImagesSelectorComponent extends Container {
 		};
 
 		this.addChild(this.selectList);
+		this.addChild(new Text(selectorFooter(), 1, 0));
 
 		// Add bottom border
 		this.addChild(new DynamicBorder());

@@ -1,3 +1,4 @@
+// GSD2 complete-milestone tests
 import { describe, test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
@@ -6,7 +7,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { invalidateAllCaches } from '../cache.ts';
 import { parseUnitId } from "../unit-id.ts";
-import { openDatabase, closeDatabase, insertMilestone, insertSlice, insertTask } from "../gsd-db.ts";
+import { openDatabase, closeDatabase, insertMilestone, insertSlice, insertTask, insertAssessment } from "../gsd-db.ts";
 import { clearPathCache } from "../paths.ts";
 import { clearParseCache } from "../files.ts";
 
@@ -432,10 +433,9 @@ describe("complete-milestone", () => {
     }
   });
 
-  test("handleCompleteMilestone does not overwrite existing SUMMARY.md on re-dispatch (#4598)", async () => {
+  test("handleCompleteMilestone treats already-complete milestone as idempotent re-dispatch (#4598)", async () => {
     // This test verifies that when SUMMARY.md already exists (from a prior completion),
     // re-calling handleCompleteMilestone does not overwrite it.
-    // Before the fix this test FAILS because the handler unconditionally writes SUMMARY.md.
     const { handleCompleteMilestone } = await import("../tools/complete-milestone.ts");
     const base = createFixtureBase();
     const mid = "M001";
@@ -443,7 +443,7 @@ describe("complete-milestone", () => {
     try {
       // Set up DB with milestone and a complete slice + task
       openDatabase(dbPath);
-      insertMilestone({ id: mid, title: "Test Milestone", status: "active" });
+      insertMilestone({ id: mid, title: "Test Milestone", status: "complete" });
       insertSlice({ id: "S01", milestoneId: mid, title: "Slice One", status: "complete" });
       insertTask({ id: "T01", sliceId: "S01", milestoneId: mid, title: "Task One", status: "complete" });
 
@@ -472,19 +472,76 @@ describe("complete-milestone", () => {
       };
 
       const result = await handleCompleteMilestone(params, base);
+      assert.ok(!("error" in result), `already-complete re-dispatch should succeed: ${JSON.stringify(result)}`);
+      assert.equal(result.alreadyComplete, true);
 
-      // The call may return an error (milestone already complete) or success
-      // but in either case the SUMMARY.md must NOT be overwritten.
       const actualContent = readFileSync(summaryPath, "utf-8");
       assert.strictEqual(
         actualContent,
         originalContent,
         "existing SUMMARY.md must not be overwritten on re-dispatch (#4598)",
       );
+
+      // Repeated re-dispatch should also be idempotent.
+      const repeatResult = await handleCompleteMilestone(params, base);
+      assert.ok(!("error" in repeatResult), "repeated re-dispatch should also succeed");
+      assert.strictEqual(repeatResult.alreadyComplete, true, "repeated re-dispatch is identified as already-complete");
+      assert.ok(
+        repeatResult.summaryPath.endsWith(join(".gsd", "milestones", mid, `${mid}-SUMMARY.md`)),
+        "repeated re-dispatch returns the existing summary path",
+      );
+      assert.strictEqual(
+        readFileSync(summaryPath, "utf-8"),
+        originalContent,
+        "repeated re-dispatch must not overwrite SUMMARY.md",
+      );
     } finally {
       try { closeDatabase(); } catch { /* */ }
       clearPathCache();
       clearParseCache();
+      cleanup(base);
+    }
+  });
+
+  test("handleCompleteMilestone refuses closeout when latest validation verdict is needs-attention (#5661)", async () => {
+    const { handleCompleteMilestone } = await import("../tools/complete-milestone.ts");
+    const base = createFixtureBase();
+    const mid = "M001";
+    const dbPath = join(base, ".gsd", "gsd.db");
+    try {
+      openDatabase(dbPath);
+      insertMilestone({ id: mid, title: "Test Milestone", status: "active" });
+      insertSlice({ id: "S01", milestoneId: mid, title: "Slice One", status: "complete" });
+      insertTask({ id: "T01", sliceId: "S01", milestoneId: mid, title: "Task One", status: "complete" });
+      insertAssessment({
+        path: join(".gsd", "milestones", mid, `${mid}-VALIDATION.md`),
+        milestoneId: mid,
+        status: "needs-attention",
+        scope: "milestone-validation",
+        fullContent: "---\nverdict: needs-attention\nremediation_round: 1\n---\n\n# Validation\nNeeds attention.",
+      });
+
+      const result = await handleCompleteMilestone({
+        milestoneId: mid,
+        title: "Test Milestone",
+        oneLiner: "Test",
+        narrative: "Test narrative",
+        successCriteriaResults: "Results",
+        definitionOfDoneResults: "Done",
+        requirementOutcomes: "Outcomes",
+        keyDecisions: [],
+        keyFiles: [],
+        lessonsLearned: [],
+        followUps: "",
+        deviations: "",
+        verificationPassed: true,
+      }, base);
+
+      assert.ok("error" in result, "non-pass validation verdict should block completion");
+      assert.match((result as { error: string }).error, /needs-attention/i);
+      assert.match((result as { error: string }).error, /Only verdict=pass permits closeout/i);
+    } finally {
+      try { closeDatabase(); } catch { /* */ }
       cleanup(base);
     }
   });
@@ -530,6 +587,156 @@ describe("complete-milestone", () => {
       assert.strictEqual(stateAfter.phase, "complete", "deriveState returns complete after summary exists");
       assert.strictEqual(stateAfter.registry[0]?.status, "complete", "registry shows complete status");
     } finally {
+      cleanup(base);
+    }
+  });
+
+  test("verification-gate step numbers match the actual numbered verification steps", () => {
+    // Regression for step-number drift: step 1 (duplicate guard) was inserted
+    // in ea5a2cc0 and the rest renumbered, but the gate text was not updated.
+    // Re-derive the verification-step indices from the rendered prompt and
+    // assert the gate / "Important" footer reference the correct numbers.
+    const prompt = loadPromptFromWorktree("complete-milestone", {
+      workingDirectory: "/tmp/test-project",
+      milestoneId: "M001",
+      milestoneTitle: "Step Number Drift",
+      roadmapPath: ".gsd/milestones/M001/M001-ROADMAP.md",
+      inlinedContext: "context",
+      milestoneSummaryPath: ".gsd/milestones/M001/M001-SUMMARY.md",
+      skillActivation: "{{skillActivation block}}",
+      extractLearningsSteps: "{{extract learnings block}}",
+    });
+
+    function findStep(needle: RegExp): number {
+      const lines = prompt.split("\n");
+      for (const line of lines) {
+        const m = /^(\d+)\.\s/.exec(line);
+        if (m && needle.test(line)) return Number(m[1]);
+      }
+      throw new Error(`no numbered step matches ${needle}`);
+    }
+
+    const codeChange = findStep(/Verify code changes/);
+    const successCriteria = findStep(/Verify every \*\*success criterion\*\*/);
+    const defOfDone = findStep(/Verify \*\*definition of done\*\*/);
+    const completeMilestone = findStep(/Persist completion through `gsd_complete_milestone`/);
+    const requirementUpdate = findStep(/gsd_requirement_update/);
+
+    // Gate clause references the verification steps.
+    const gateLine = prompt.split("\n").find(l => l.includes("Verification failure was recorded") || l.includes("verification failure was recorded"));
+    assert.ok(gateLine, "verification gate sentence is present");
+    assert.ok(
+      gateLine!.includes(`steps ${codeChange}, ${successCriteria}, or ${defOfDone}`),
+      `gate must cite verification steps ${codeChange}, ${successCriteria}, ${defOfDone}; got: ${gateLine}`,
+    );
+    // "Do NOT proceed with steps X-Y" — Y must be at least the gsd_complete_milestone step.
+    const proceedMatch = /Do NOT proceed with steps (\d+)[–-](\d+)/.exec(gateLine!);
+    assert.ok(proceedMatch, "gate must include a 'Do NOT proceed with steps X–Y' clause");
+    assert.ok(
+      Number(proceedMatch![1]) > requirementUpdate - 1 && Number(proceedMatch![2]) >= completeMilestone,
+      `'Do NOT proceed' range ${proceedMatch![1]}–${proceedMatch![2]} must cover steps from after the gate through gsd_complete_milestone (${completeMilestone})`,
+    );
+
+    // "Important" footer references the same verification steps.
+    const importantLine = prompt.split("\n").find(l => l.includes("Do NOT skip code-change"));
+    assert.ok(importantLine, "Important footer is present");
+    assert.ok(
+      importantLine!.includes(`steps ${codeChange}-${defOfDone}`) ||
+        importantLine!.includes(`steps ${codeChange}–${defOfDone}`),
+      `Important footer must cite verification range ${codeChange}-${defOfDone}; got: ${importantLine}`,
+    );
+
+    // On-demand Read ordering line cites the gsd_complete_milestone step.
+    const readOrderLine = prompt.split("\n").find(l => l.includes("On-demand Read ordering"));
+    assert.ok(readOrderLine, "On-demand Read ordering line is present");
+    assert.ok(
+      readOrderLine!.includes(`(step ${completeMilestone})`),
+      `On-demand Read ordering must cite step ${completeMilestone}; got: ${readOrderLine}`,
+    );
+  });
+
+  test("sanitizeCompleteMilestoneParams preserves actorName and triggerReason", async () => {
+    const { sanitizeCompleteMilestoneParams } = await import("../bootstrap/sanitize-complete-milestone.ts");
+
+    const sanitized = sanitizeCompleteMilestoneParams({
+      milestoneId: "M001",
+      title: "T",
+      oneLiner: "x",
+      narrative: "n",
+      verificationPassed: true,
+      actorName: "  executor-01  ",
+      triggerReason: " milestone validation passed ",
+    } as any);
+
+    assert.strictEqual(sanitized.actorName, "executor-01");
+    assert.strictEqual(sanitized.triggerReason, "milestone validation passed");
+  });
+
+  test("sanitizeCompleteMilestoneParams omits blank actorName/triggerReason rather than emitting empty strings", async () => {
+    const { sanitizeCompleteMilestoneParams } = await import("../bootstrap/sanitize-complete-milestone.ts");
+
+    const sanitized = sanitizeCompleteMilestoneParams({
+      milestoneId: "M001",
+      title: "T",
+      oneLiner: "x",
+      narrative: "n",
+      verificationPassed: true,
+      // actorName/triggerReason omitted
+    } as any);
+
+    assert.strictEqual(sanitized.actorName, undefined);
+    assert.strictEqual(sanitized.triggerReason, undefined);
+  });
+
+  test("rendered SUMMARY.md uses empty frontmatter lists for empty key fields", async () => {
+    const { handleCompleteMilestone } = await import("../tools/complete-milestone.ts");
+    const base = createFixtureBase();
+    const mid = "M001";
+    const dbPath = join(base, ".gsd", "gsd.db");
+    try {
+      openDatabase(dbPath);
+      insertMilestone({ id: mid, title: "Empty Enrichment", status: "active" });
+      insertSlice({ id: "S01", milestoneId: mid, title: "Slice", status: "complete" });
+      insertTask({ id: "T01", sliceId: "S01", milestoneId: mid, title: "Task", status: "complete" });
+      insertAssessment({
+        path: join(".gsd", "milestones", mid, `${mid}-VALIDATION.md`),
+        milestoneId: mid,
+        status: "pass",
+        scope: "milestone-validation",
+        fullContent: "---\nverdict: pass\nremediation_round: 0\n---\n\n# Validation\nValidated.",
+      });
+
+      const result = await handleCompleteMilestone({
+        milestoneId: mid,
+        title: "Empty Enrichment",
+        oneLiner: "no enrichment",
+        narrative: "did the thing",
+        // enrichment fields intentionally empty (post-sanitizer state)
+        successCriteriaResults: "",
+        definitionOfDoneResults: "",
+        requirementOutcomes: "",
+        keyDecisions: [],
+        keyFiles: [],
+        lessonsLearned: [],
+        followUps: "",
+        deviations: "",
+        verificationPassed: true,
+      }, base);
+
+      assert.ok(!("error" in result), `handler should succeed: ${JSON.stringify(result)}`);
+      const summary = readFileSync((result as { summaryPath: string }).summaryPath, "utf-8");
+      assert.match(summary, /## Success Criteria Results\n\nNot provided\./);
+      assert.match(summary, /## Definition of Done Results\n\nNot provided\./);
+      assert.match(summary, /## Requirement Outcomes\n\nNot provided\./);
+      assert.match(summary, /key_decisions:\s*\[\]/);
+      assert.match(summary, /key_files:\s*\[\]/);
+      assert.doesNotMatch(summary, /key_(?:decisions|files):\n  - \(none\)/);
+      assert.match(summary, /## Deviations\n\nNone\./);
+      assert.match(summary, /## Follow-ups\n\nNone\./);
+    } finally {
+      try { closeDatabase(); } catch { /* */ }
+      clearPathCache();
+      clearParseCache();
       cleanup(base);
     }
   });

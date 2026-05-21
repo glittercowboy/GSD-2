@@ -25,14 +25,14 @@ import type { DynamicRoutingConfig, ModelCapabilities } from "./model-router.js"
 export interface ContextManagementConfig {
   observation_masking?: boolean;          // default: true
   observation_mask_turns?: number;        // default: 8, range: 1-50
-  compaction_threshold_percent?: number;  // default: 0.70, range: 0.5-0.95
+  compaction_threshold_percent?: number;  // default: 0.60, range: 0.5-0.95
   tool_result_max_chars?: number;         // default: 800, range: 200-10000
 }
 
 /**
  * Opt-in tool-output sandboxing for sub-sessions. When enabled, the gsd_exec
  * MCP tool runs scripts in an isolated subprocess and returns only a short
- * digest to the calling agent's context window; full stdout/stderr persist
+ * digest to the calling agent's context window; capped stdout/stderr persist
  * in the project memory store and can be retrieved by id later.
  *
  * Inspired by mksglu/context-mode (Elastic License 2.0). This is an
@@ -124,6 +124,7 @@ export const KNOWN_PREFERENCE_KEYS = new Set<string>([
   "verification_commands",
   "verification_auto_fix",
   "verification_max_retries",
+  "per_unit_cost_cap_usd",
   "search_provider",
   "context_selection",
   "widget_mode",
@@ -152,10 +153,30 @@ export const KNOWN_PREFERENCE_KEYS = new Set<string>([
   "context_window_override",
   "context_mode",
   "planning_depth",
+  "claude_code_mcp",
+  "workspace",
 ]);
 
-/** Canonical list of all dispatch unit types. */
-export const KNOWN_UNIT_TYPES = [
+/**
+ * Broad union of every recognized unit-type *label* used across the codebase.
+ *
+ * This intentionally covers more than the manifest-tracked dispatch units in
+ * `unit-context-manifest.ts:KNOWN_UNIT_TYPES`. Examples that live here but not
+ * in the manifest:
+ * - `discuss-slice` — dispatched by `guided-flow.ts` rather than auto-mode;
+ *   composer falls through to default behavior via `resolveManifest()` null path.
+ * - `worktree-merge` — used as a model-routing case, prompt-template name, and
+ *   commit-message label, not as an LLM-dispatched unit.
+ *
+ * Used by `preferences-validation.ts` to validate user-provided unit-type
+ * references in preferences (model overrides, skill rules, etc.) — preferences
+ * may legitimately reference any label, including non-dispatched ones.
+ *
+ * The manifest-strict subset lives in `unit-context-manifest.ts:KNOWN_UNIT_TYPES`
+ * and is enforced 1:1 against `UNIT_MANIFESTS` by the parity test in
+ * `tests/unit-context-manifest.test.ts`.
+ */
+export const KNOWN_UNIT_LABELS = [
   "research-milestone", "plan-milestone", "research-slice", "plan-slice", "refine-slice",
   "execute-task", "reactive-execute", "gate-evaluate", "complete-slice", "replan-slice", "reassess-roadmap",
   "run-uat", "complete-milestone", "validate-milestone", "rewrite-docs",
@@ -164,7 +185,7 @@ export const KNOWN_UNIT_TYPES = [
   "workflow-preferences", "discuss-project", "discuss-requirements",
   "research-decision", "research-project",
 ] as const;
-export type UnitType = (typeof KNOWN_UNIT_TYPES)[number];
+export type UnitLabel = (typeof KNOWN_UNIT_LABELS)[number];
 
 
 export const SKILL_ACTIONS = new Set(["use", "prefer", "avoid"]);
@@ -302,6 +323,35 @@ export interface CodebaseMapPreferences {
   collapse_threshold?: number;
 }
 
+/** Per-model MCP server allow/block lists for a single model prefix. */
+export interface ClaudeCodeMcpPerModelEntry {
+  allowed_servers?: string[];
+  blocked_servers?: string[];
+}
+
+/** Top-level claude_code_mcp preference: maps model-ID prefixes to server filter lists. */
+export interface ClaudeCodeMcpConfig {
+  per_model?: Record<string, ClaudeCodeMcpPerModelEntry>;
+}
+
+
+export interface WorkspaceRepositoryPreference {
+  /** Child repository path; relative paths resolve from the project root. */
+  path: string;
+  /** Optional human-oriented role label (for prompts/reporting). */
+  role?: string;
+  /** Optional default verification commands for this repository. */
+  verification?: string[];
+  /** Optional per-repository commit execution policy for auto-mode turn commits. */
+  commit_policy?: "auto" | "skip";
+}
+
+export interface WorkspacePreferences {
+  /** Parent-workspace uses one parent .gsd coordinating child repos. */
+  mode?: "project" | "parent";
+  repositories?: Record<string, WorkspaceRepositoryPreference>;
+}
+
 export interface GSDPreferences {
   version?: number;
   mode?: WorkflowMode;
@@ -343,7 +393,8 @@ export interface GSDPreferences {
   /**
    * Tool-output sandboxing via gsd_exec. Keeps sub-session context windows
    * clean by running scripts in a subprocess and only surfacing a short
-   * digest. See `ContextModeConfig`. Default: disabled.
+   * digest. See `ContextModeConfig`. Default: enabled unless explicitly
+   * disabled with `context_mode.enabled: false`.
    */
   context_mode?: ContextModeConfig;
   token_profile?: TokenProfile;
@@ -362,6 +413,7 @@ export interface GSDPreferences {
   verification_commands?: string[];
   verification_auto_fix?: boolean;
   verification_max_retries?: number;
+  per_unit_cost_cap_usd?: number;
   /** Search provider preference. "brave"/"tavily"/"ollama" force that backend and disable native Anthropic search. "native" forces native only. "auto" = current default behavior. */
   search_provider?: "brave" | "tavily" | "ollama" | "native" | "auto";
   /** Context selection mode for file inlining. "full" inlines entire files, "smart" uses semantic chunking. Default derived from token profile. */
@@ -396,6 +448,8 @@ export interface GSDPreferences {
   experimental?: ExperimentalPreferences;
   /** Configuration for the codebase map generator (/gsd codebase). */
   codebase?: CodebaseMapPreferences;
+  /** Multi-repository parent workspace configuration. */
+  workspace?: WorkspacePreferences;
   /** Slice-level parallelism within a milestone. Disabled by default. */
   slice_parallel?: { enabled?: boolean; max_workers?: number };
   /** LLM safety harness configuration. Monitors, validates, and constrains LLM behavior during auto-mode. Enabled by default with warn-and-continue policy. */
@@ -480,6 +534,8 @@ export interface GSDPreferences {
    * (e.g. "Chinese", "zh", "German", "de", "日本語"). Persists across /clear.
    */
   language?: string;
+  /** Per-model MCP server filtering configuration. Uses longest-prefix-wins matching. */
+  claude_code_mcp?: ClaudeCodeMcpConfig;
 }
 
 export interface LoadedGSDPreferences {

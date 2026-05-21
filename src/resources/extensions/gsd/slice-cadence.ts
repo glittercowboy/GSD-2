@@ -1,3 +1,5 @@
+// Project/App: GSD-2
+// File Purpose: Slice-cadence merge and milestone resquash git operations.
 /**
  * Slice-cadence collapse — #4765.
  *
@@ -24,9 +26,10 @@ import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 
 import { GSDError, GSD_GIT_ERROR } from "./errors.js";
-import { MergeConflictError } from "./git-service.js";
+import { MergeConflictError, readIntegrationBranch } from "./git-service.js";
 import {
   nativeBranchForceReset,
+  nativeBranchExists,
   nativeCheckoutBranch,
   nativeCommit,
   nativeCommitCountBetween,
@@ -37,6 +40,9 @@ import {
 import { resolveGitDir } from "./worktree-manager.js";
 import { logWarning } from "./workflow-logger.js";
 import { emitSliceMerged, emitMilestoneResquash } from "./worktree-telemetry.js";
+import { loadEffectiveGSDPreferences } from "./preferences.js";
+import { GIT_NO_PROMPT_ENV } from "./git-constants.js";
+import { getMilestone, getSlice, isDbAvailable } from "./gsd-db.js";
 
 /**
  * Auto-worktree milestone branch name. Must match autoWorktreeBranch() in
@@ -44,6 +50,17 @@ import { emitSliceMerged, emitMilestoneResquash } from "./worktree-telemetry.js"
  */
 function milestoneBranchName(milestoneId: string): string {
   return `milestone/${milestoneId}`;
+}
+
+function resolveIntegrationBranch(projectRoot: string, milestoneId: string): string {
+  const recorded = readIntegrationBranch(projectRoot, milestoneId);
+  if (recorded && nativeBranchExists(projectRoot, recorded)) return recorded;
+
+  const prefs = loadEffectiveGSDPreferences(projectRoot)?.preferences?.git ?? {};
+  const configured = prefs.main_branch;
+  if (configured && nativeBranchExists(projectRoot, configured)) return configured;
+
+  return nativeDetectMainBranch(projectRoot);
 }
 
 function cleanupMergeArtifacts(projectRoot: string): void {
@@ -56,6 +73,93 @@ function cleanupMergeArtifacts(projectRoot: string): void {
   } catch (err) {
     logWarning("worktree", `merge artifact cleanup failed: ${err instanceof Error ? err.message : String(err)}`);
   }
+}
+
+function stripKnownIdPrefix(value: string | undefined | null, id: string): string | undefined {
+  const raw = String(value ?? "").trim();
+  if (!raw) return undefined;
+  const lower = raw.toLowerCase();
+  const idLower = id.toLowerCase();
+  if (lower.startsWith(`${idLower}:`)) return raw.slice(id.length + 1).trim() || undefined;
+  return raw;
+}
+
+function getSliceMergeNames(milestoneId: string, sliceId: string): {
+  milestoneTitle?: string;
+  sliceTitle?: string;
+} {
+  if (!isDbAvailable()) return {};
+  return {
+    milestoneTitle: stripKnownIdPrefix(getMilestone(milestoneId)?.title, milestoneId),
+    sliceTitle: stripKnownIdPrefix(getSlice(milestoneId, sliceId)?.title, sliceId),
+  };
+}
+
+function buildSliceMergeCommitMessage(milestoneId: string, sliceId: string, milestoneBranch: string): string {
+  const names = getSliceMergeNames(milestoneId, sliceId);
+  const sliceLabel = names.sliceTitle ?? sliceId;
+  const subject = `feat: ${sliceLabel} - ${sliceId} of ${milestoneId} (slice-cadence)`;
+  const body = [
+    `Slice: ${sliceId}${names.sliceTitle ? ` - ${names.sliceTitle}` : ""}`,
+    `Milestone: ${milestoneId}${names.milestoneTitle ? ` - ${names.milestoneTitle}` : ""}`,
+    `GSD-Slice: ${sliceId}`,
+    `GSD-Milestone: ${milestoneId}`,
+    `Branch: ${milestoneBranch}`,
+  ];
+  return `${subject}\n\n${body.join("\n")}`;
+}
+
+function buildMilestoneResquashCommitMessage(milestoneId: string, sliceCount: number): string {
+  const milestoneTitle = isDbAvailable()
+    ? stripKnownIdPrefix(getMilestone(milestoneId)?.title, milestoneId)
+    : undefined;
+  const subject = milestoneTitle
+    ? `feat: ${milestoneTitle} (${milestoneId}, ${sliceCount} slices re-squashed)`
+    : `feat: ${milestoneId} (${sliceCount} slices re-squashed)`;
+  return `${subject}\n\nMilestone: ${milestoneId}${milestoneTitle ? ` - ${milestoneTitle}` : ""}\nGSD-Milestone: ${milestoneId}`;
+}
+
+function advanceMilestoneBranch(
+  projectRoot: string,
+  worktreeCwd: string,
+  milestoneBranch: string,
+  mainBranch: string,
+): void {
+  let worktreeBranch: string | null = null;
+  try {
+    worktreeBranch = execFileSync("git", ["branch", "--show-current"], {
+      cwd: worktreeCwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf-8",
+      env: GIT_NO_PROMPT_ENV,
+    }).trim();
+  } catch {
+    worktreeBranch = null;
+  }
+
+  if (worktreeCwd !== projectRoot && worktreeBranch === milestoneBranch) {
+    const status = execFileSync("git", ["status", "--porcelain"], {
+      cwd: worktreeCwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf-8",
+      env: GIT_NO_PROMPT_ENV,
+    }).trim();
+    if (status) {
+      throw new GSDError(
+        GSD_GIT_ERROR,
+        `slice-cadence cannot advance ${milestoneBranch}: worktree has uncommitted changes. Status:\n${status}`,
+      );
+    }
+    execFileSync("git", ["reset", "--hard", mainBranch], {
+      cwd: worktreeCwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf-8",
+      env: GIT_NO_PROMPT_ENV,
+    });
+    return;
+  }
+
+  nativeBranchForceReset(projectRoot, milestoneBranch, mainBranch);
 }
 
 export interface SliceMergeResult {
@@ -91,7 +195,14 @@ export function mergeSliceToMain(
   const started = Date.now();
   const worktreeCwd = process.cwd();
   const milestoneBranch = milestoneBranchName(milestoneId);
-  const mainBranch = nativeDetectMainBranch(projectRoot);
+  const mainBranch = resolveIntegrationBranch(projectRoot, milestoneId);
+
+  if (mainBranch === milestoneBranch) {
+    throw new GSDError(
+      GSD_GIT_ERROR,
+      `slice-cadence resolved integration branch "${mainBranch}" to the milestone branch; refusing to self-merge.`,
+    );
+  }
 
   // Fast path: if the milestone branch has no commits ahead of main, there
   // is nothing to merge. Return a skip result instead of no-op'ing silently
@@ -163,13 +274,14 @@ export function mergeSliceToMain(
     // Commit the squash with a slice-scoped message
     const commitSha = nativeCommit(
       projectRoot,
-      `gsd: merge ${sliceId} of ${milestoneId} (slice-cadence)`,
+      buildSliceMergeCommitMessage(milestoneId, sliceId, milestoneBranch),
     );
 
     // Advance the milestone branch to main so the next slice's commits start
-    // from a clean base. Force-reset is safe because we just merged this
-    // branch's entire delta.
-    nativeBranchForceReset(projectRoot, milestoneBranch, mainBranch);
+    // from a clean base. When the milestone branch is checked out in an auto
+    // worktree, Git refuses a project-root branch -f; reset from inside the
+    // checked-out worktree instead.
+    advanceMilestoneBranch(projectRoot, worktreeCwd, milestoneBranch, mainBranch);
 
     const durationMs = Date.now() - started;
     try {
@@ -211,7 +323,7 @@ export function resquashMilestoneOnMain(
   milestoneId: string,
   startSha: string,
 ): { resquashed: boolean; newSha: string | null } {
-  const mainBranch = nativeDetectMainBranch(projectRoot);
+  const mainBranch = resolveIntegrationBranch(projectRoot, milestoneId);
   const worktreeCwd = process.cwd();
 
   process.chdir(projectRoot);
@@ -262,7 +374,7 @@ export function resquashMilestoneOnMain(
 
     const newSha = nativeCommit(
       projectRoot,
-      `gsd: complete milestone ${milestoneId} (${sliceCount} slices re-squashed)`,
+      buildMilestoneResquashCommitMessage(milestoneId, sliceCount),
       { allowEmpty: true },
     );
 

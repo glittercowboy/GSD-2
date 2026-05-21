@@ -1,9 +1,10 @@
+// Project/App: GSD-2
+// File Purpose: Markdown projection renderer for GSD workflow database rows.
 // GSD Markdown Renderer — DB → Markdown file generation
 //
 // Transforms DB state into correct markdown files on disk.
-// Each render function reads from DB (with disk fallback),
-// patches content to match DB status, writes atomically to disk,
-// stores updated content in the artifacts table, and invalidates caches.
+// Each render function reads from DB, writes a markdown projection to disk,
+// stores generated content in the artifacts table, and invalidates caches.
 //
 // Critical invariant: rendered markdown must round-trip through
 // parseRoadmap(), parsePlan(), parseSummary() in files.ts.
@@ -24,13 +25,14 @@ import {
   insertArtifact,
   getGateResults,
 } from "./gsd-db.js";
-import type { MilestoneRow, SliceRow, TaskRow, ArtifactRow } from "./gsd-db.js";
+import type { MilestoneRow, ArtifactRow } from "./db-milestone-artifact-rows.js";
+import type { SliceRow, TaskRow } from "./db-task-slice-rows.js";
 import type { GateRow } from "./types.js";
 import {
   resolveMilestoneFile,
   resolveSliceFile,
   resolveSlicePath,
-  resolveTasksDir,
+  gsdProjectionRoot,
   gsdRoot,
   buildTaskFileName,
   buildSliceFileName,
@@ -46,7 +48,11 @@ import { clearPathCache } from "./paths.js";
  * E.g. "/project/.gsd/milestones/M001/M001-ROADMAP.md" → "milestones/M001/M001-ROADMAP.md"
  */
 function toArtifactPath(absPath: string, basePath: string): string {
-  const root = gsdRoot(basePath);
+  const projectionRoot = gsdProjectionRoot(basePath);
+  const projectionRel = relative(projectionRoot, absPath);
+  const root = projectionRel && !projectionRel.startsWith("..") && !projectionRel.startsWith("/")
+    ? projectionRoot
+    : gsdRoot(basePath);
   const rel = relative(root, absPath);
   // Normalize to forward slashes for consistent DB keys
   return rel.replace(/\\/g, "/");
@@ -61,59 +67,43 @@ function invalidateCaches(): void {
   clearParseCache();
 }
 
+function meaningfulSection(value: string | null | undefined): string {
+  const trimmed = (value ?? "").trim();
+  if (!trimmed) return "";
+  if (/^(not provided\.?|none\.?|n\/a)$/i.test(trimmed)) return "";
+  if (/^\{\{[^}]+\}\}$/.test(trimmed)) return "";
+  return trimmed;
+}
+
+function pushIndented(lines: string[], value: string, indent = "  "): void {
+  for (const line of value.split("\n")) {
+    lines.push(`${indent}${line}`);
+  }
+}
+
+function taskSummaryForSlicePlan(description: string): string {
+  const meaningful = meaningfulSection(description);
+  if (!meaningful) return "";
+
+  const beforeHeading = meaningful.split(/\n#{1,6}\s+/)[0]?.trim() ?? "";
+  const firstBlock = beforeHeading.split(/\n\s*\n/)[0]?.trim() ?? "";
+  return firstBlock || beforeHeading;
+}
+
 /**
- * Load artifact content from DB first, falling back to reading from disk.
- * On disk fallback, stores the content in the artifacts table for future use.
- * Returns null if content is unavailable from both sources.
+ * Load artifact content from the DB. Markdown projections are not authoritative
+ * during runtime; when the artifact row is missing, callers regenerate from DB
+ * rows instead of patching disk fallback content and storing it back.
  */
 function loadArtifactContent(
   artifactPath: string,
-  absPath: string | null,
-  opts: {
-    artifact_type: string;
-    milestone_id: string;
-    slice_id?: string;
-    task_id?: string;
-  },
 ): string | null {
-  // Try DB first
   const artifact = getArtifact(artifactPath);
   if (artifact && artifact.full_content) {
     return artifact.full_content;
   }
 
-  // Fall back to disk
-  if (!absPath) {
-    process.stderr.write(
-      `markdown-renderer: artifact not found in DB or on disk: ${artifactPath}\n`,
-    );
-    return null;
-  }
-
-  let content: string;
-  try {
-    content = readFileSync(absPath, "utf-8");
-  } catch {
-    logWarning("renderer", `cannot read file from disk: ${absPath}`);
-    return null;
-  }
-
-  // Store in DB for future use (graceful degradation path)
-  try {
-    insertArtifact({
-      path: artifactPath,
-      artifact_type: opts.artifact_type,
-      milestone_id: opts.milestone_id,
-      slice_id: opts.slice_id ?? null,
-      task_id: opts.task_id ?? null,
-      full_content: content,
-    });
-  } catch {
-    // Non-fatal: we have the content, DB storage is best-effort
-    logWarning("renderer", `failed to store disk fallback in DB: ${artifactPath}`);
-  }
-
-  return content;
+  return null;
 }
 
 /**
@@ -171,7 +161,12 @@ function renderRoadmapMarkdown(milestone: MilestoneRow, slices: SliceRow[]): str
   for (const slice of slices) {
     const done = isClosedStatus(slice.status) ? "x" : " ";
     const depends = `[${(slice.depends ?? []).join(",")}]`;
-    lines.push(`- [${done}] **${slice.id}: ${slice.title}** \`risk:${slice.risk}\` \`depends:${depends}\``);
+    // ADR-011: sketch slices get a `[sketch]` badge so the roadmap shows at a
+    // glance which slices are still pending refine-slice expansion. The badge
+    // sits in front of `risk:` so it's visible in narrow terminals that may
+    // truncate the line.
+    const sketchBadge = slice.is_sketch === 1 ? "`[sketch]` " : "";
+    lines.push(`- [${done}] **${slice.id}: ${slice.title}** ${sketchBadge}\`risk:${slice.risk}\` \`depends:${depends}\``);
     lines.push(`  > After this: ${slice.demo}`);
     lines.push("");
   }
@@ -187,7 +182,9 @@ function renderRoadmapMarkdown(milestone: MilestoneRow, slices: SliceRow[]): str
 }
 
 function renderTaskPlanMarkdown(task: TaskRow, taskGates: GateRow[] = []): string {
-  const estimatedSteps = Math.max(1, task.description.trim().split(/\n+/).filter(Boolean).length || 1);
+  const description = meaningfulSection(task.description);
+  const observabilityImpact = meaningfulSection(task.observability_impact);
+  const estimatedSteps = Math.max(1, description.split(/\n+/).filter(Boolean).length || 1);
   const estimatedFiles = task.files.length > 0
     ? task.files.length
     : task.expected_output.length > 0
@@ -206,8 +203,8 @@ function renderTaskPlanMarkdown(task: TaskRow, taskGates: GateRow[] = []): strin
   lines.push(`# ${task.id}: ${task.title || task.id}`);
   lines.push("");
 
-  if (task.description.trim()) {
-    lines.push(task.description.trim());
+  if (description) {
+    lines.push(description);
     lines.push("");
   }
 
@@ -242,10 +239,10 @@ function renderTaskPlanMarkdown(task: TaskRow, taskGates: GateRow[] = []): strin
   lines.push(task.verify.trim() || "- Verify the task outcome with the slice-level checks.");
   lines.push("");
 
-  if (task.observability_impact.trim()) {
+  if (observabilityImpact) {
     lines.push("## Observability Impact");
     lines.push("");
-    lines.push(task.observability_impact.trim());
+    lines.push(observabilityImpact);
     lines.push("");
   }
 
@@ -275,8 +272,9 @@ function renderSlicePlanMarkdown(slice: SliceRow, tasks: TaskRow[], gates: GateR
 
   lines.push("## Must-Haves");
   lines.push("");
-  if (slice.success_criteria.trim()) {
-    for (const line of slice.success_criteria.split(/\n+/).map((entry) => entry.trim()).filter(Boolean)) {
+  const successCriteria = meaningfulSection(slice.success_criteria);
+  if (successCriteria) {
+    for (const line of successCriteria.split(/\n+/).map((entry) => entry.trim()).filter(Boolean)) {
       lines.push(line.startsWith("-") ? line : `- ${line}`);
     }
   } else {
@@ -301,24 +299,27 @@ function renderSlicePlanMarkdown(slice: SliceRow, tasks: TaskRow[], gates: GateR
     lines.push("");
   }
 
-  if (slice.proof_level.trim()) {
+  const proofLevel = meaningfulSection(slice.proof_level);
+  if (proofLevel) {
     lines.push("## Proof Level");
     lines.push("");
-    lines.push(`- This slice proves: ${slice.proof_level.trim()}`);
+    lines.push(`- This slice proves: ${proofLevel}`);
     lines.push("");
   }
 
-  if (slice.integration_closure.trim()) {
+  const integrationClosure = meaningfulSection(slice.integration_closure);
+  if (integrationClosure) {
     lines.push("## Integration Closure");
     lines.push("");
-    lines.push(slice.integration_closure.trim());
+    lines.push(integrationClosure);
     lines.push("");
   }
 
   lines.push("## Verification");
   lines.push("");
-  if (slice.observability_impact.trim()) {
-    const verificationLines = slice.observability_impact
+  const verification = meaningfulSection(slice.observability_impact);
+  if (verification) {
+    const verificationLines = verification
       .split(/\n+/)
       .map((entry) => entry.trim())
       .filter(Boolean);
@@ -336,8 +337,9 @@ function renderSlicePlanMarkdown(slice: SliceRow, tasks: TaskRow[], gates: GateR
     const done = isClosedStatus(task.status) ? "x" : " ";
     const estimate = task.estimate.trim() ? ` \`est:${task.estimate.trim()}\`` : "";
     lines.push(`- [${done}] **${task.id}: ${task.title || task.id}**${estimate}`);
-    if (task.description.trim()) {
-      lines.push(`  ${task.description.trim()}`);
+    const summary = taskSummaryForSlicePlan(task.description);
+    if (summary) {
+      pushIndented(lines, summary);
     }
     if (task.files.length > 0) {
       lines.push(`  - Files: ${task.files.map((file) => `\`${file}\``).join(", ")}`);
@@ -376,10 +378,9 @@ export async function renderPlanFromDb(
     throw new Error(`no tasks found for ${milestoneId}/${sliceId}`);
   }
 
-  const slicePath = resolveSlicePath(basePath, milestoneId, sliceId)
-    ?? join(gsdRoot(basePath), "milestones", milestoneId, "slices", sliceId);
-  const absPath = resolveSliceFile(basePath, milestoneId, sliceId, "PLAN")
-    ?? join(slicePath, `${sliceId}-PLAN.md`);
+  const slicePath = join(gsdProjectionRoot(basePath), "milestones", milestoneId, "slices", sliceId);
+  mkdirSync(slicePath, { recursive: true });
+  const absPath = join(slicePath, `${sliceId}-PLAN.md`);
   const artifactPath = toArtifactPath(absPath, basePath);
   const sliceGates = getGateResults(milestoneId, sliceId, "slice");
   const content = renderSlicePlanMarkdown(slice, tasks, sliceGates);
@@ -410,8 +411,7 @@ export async function renderTaskPlanFromDb(
     throw new Error(`task ${milestoneId}/${sliceId}/${taskId} not found`);
   }
 
-  const tasksDir = resolveTasksDir(basePath, milestoneId, sliceId)
-    ?? join(gsdRoot(basePath), "milestones", milestoneId, "slices", sliceId, "tasks");
+  const tasksDir = join(gsdProjectionRoot(basePath), "milestones", milestoneId, "slices", sliceId, "tasks");
   mkdirSync(tasksDir, { recursive: true });
   const absPath = join(tasksDir, buildTaskFileName(taskId, "PLAN"));
   const artifactPath = toArtifactPath(absPath, basePath);
@@ -454,11 +454,9 @@ export async function renderRoadmapFromDb(
 // ─── Roadmap Checkbox Rendering ───────────────────────────────────────────
 
 /**
- * Render roadmap checkbox states from DB.
- *
- * For each slice in the milestone, sets [x] if status === 'complete',
- * [ ] otherwise. Handles bidirectional updates (can uncheck previously
- * checked slices if DB says pending).
+ * Compatibility wrapper for legacy callers that used to patch roadmap
+ * checkboxes in-place. Roadmaps are now regenerated from DB rows so stale
+ * artifact content cannot preserve old titles/dependencies.
  *
  * @returns true if the roadmap was written, false on skip/error
  */
@@ -474,53 +472,7 @@ export async function renderRoadmapCheckboxes(
     return false;
   }
 
-  const absPath = resolveMilestoneFile(basePath, milestoneId, "ROADMAP");
-  const artifactPath = absPath ? toArtifactPath(absPath, basePath) : null;
-
-  // Load content from DB (with disk fallback)
-  let content: string | null = null;
-  if (artifactPath) {
-    content = loadArtifactContent(artifactPath, absPath, {
-      artifact_type: "ROADMAP",
-      milestone_id: milestoneId,
-    });
-  }
-
-  if (!content) {
-    process.stderr.write(
-      `markdown-renderer: no roadmap content available for ${milestoneId}\n`,
-    );
-    return false;
-  }
-
-  // Apply checkbox patches for each slice
-  let updated = content;
-  for (const slice of slices) {
-    const isDone = isClosedStatus(slice.status);
-    const sid = slice.id;
-
-    if (isDone) {
-      // Set [x]: replace "- [ ] **S01:" with "- [x] **S01:"
-      updated = updated.replace(
-        new RegExp(`^(\\s*-\\s+)\\[ \\]\\s+\\*\\*${sid}:`, "m"),
-        `$1[x] **${sid}:`,
-      );
-    } else {
-      // Set [ ]: replace "- [x] **S01:" with "- [ ] **S01:"
-      updated = updated.replace(
-        new RegExp(`^(\\s*-\\s+)\\[x\\]\\s+\\*\\*${sid}:`, "mi"),
-        `$1[ ] **${sid}:`,
-      );
-    }
-  }
-
-  if (!absPath) return false;
-
-  await writeAndStore(absPath, artifactPath!, updated, {
-    artifact_type: "ROADMAP",
-    milestone_id: milestoneId,
-  });
-
+  await renderRoadmapFromDb(basePath, milestoneId);
   return true;
 }
 
@@ -552,18 +504,12 @@ export async function renderPlanCheckboxes(
 
   let content: string | null = null;
   if (artifactPath) {
-    content = loadArtifactContent(artifactPath, absPath, {
-      artifact_type: "PLAN",
-      milestone_id: milestoneId,
-      slice_id: sliceId,
-    });
+    content = loadArtifactContent(artifactPath);
   }
 
   if (!content) {
-    process.stderr.write(
-      `markdown-renderer: no plan content available for ${milestoneId}/${sliceId}\n`,
-    );
-    return false;
+    await renderPlanFromDb(basePath, milestoneId, sliceId);
+    return true;
   }
 
   // Apply checkbox patches for each task
@@ -799,11 +745,12 @@ export function detectStaleRenders(basePath: string): StaleEntry[] {
   const _require = createRequire(import.meta.url);
   let parseRoadmap: Function, parsePlan: Function;
   try {
-    const m = _require("./parsers-legacy.ts");
+    // Prefer compiled JS for packaged/runtime installs; TS exists only in source/dev contexts.
+    const m = _require("./parsers-legacy.js");
     parseRoadmap = m.parseRoadmap; parsePlan = m.parsePlan;
   } catch (e) {
-    logWarning("renderer", `parsers-legacy.ts require failed, falling back to .js: ${(e as Error).message}`);
-    const m = _require("./parsers-legacy.js");
+    logWarning("renderer", `parsers-legacy.js require failed, falling back to .ts: ${(e as Error).message}`);
+    const m = _require("./parsers-legacy.ts");
     parseRoadmap = m.parseRoadmap; parsePlan = m.parsePlan;
   }
 
@@ -938,101 +885,10 @@ export function detectStaleRenders(basePath: string): StaleEntry[] {
 }
 
 // ─── Stale Repair ─────────────────────────────────────────────────────────
-
-/**
- * Repair all stale renders detected by `detectStaleRenders()`.
- *
- * For each stale entry, calls the appropriate render function:
- * - Roadmap checkbox mismatches → renderRoadmapCheckboxes()
- * - Plan checkbox mismatches → renderPlanCheckboxes()
- * - Missing task summaries → renderTaskSummary()
- * - Missing slice summaries/UATs → renderSliceSummary()
- *
- * Idempotent: calling twice with no DB changes produces zero repairs on the second call.
- *
- * @returns the number of files repaired
- */
-export async function repairStaleRenders(basePath: string): Promise<number> {
-  const staleEntries = detectStaleRenders(basePath);
-  if (staleEntries.length === 0) return 0;
-
-  // Deduplicate: a single roadmap/plan file might appear multiple times
-  // (once per mismatched checkbox). We only need to re-render it once.
-  const repairedPaths = new Set<string>();
-  let repairCount = 0;
-
-  for (const entry of staleEntries) {
-    if (repairedPaths.has(entry.path)) continue;
-    // Normalize path separators for cross-platform regex matching
-    const normPath = entry.path.replace(/\\/g, "/");
-
-    try {
-      // Determine repair action from the reason
-      if (entry.reason.includes("in roadmap")) {
-        // Roadmap checkbox mismatch — extract milestone ID from path
-        const milestoneMatch = normPath.match(/milestones\/([^/]+)\//);
-        if (milestoneMatch) {
-          const ok = await renderRoadmapCheckboxes(basePath, milestoneMatch[1]);
-          if (ok) {
-            repairedPaths.add(entry.path);
-            repairCount++;
-          }
-        }
-      } else if (entry.reason.includes("in plan")) {
-        // Plan checkbox mismatch — extract milestone + slice IDs from path
-        const pathMatch = normPath.match(/milestones\/([^/]+)\/slices\/([^/]+)\//);
-        if (pathMatch) {
-          const ok = await renderPlanCheckboxes(basePath, pathMatch[1], pathMatch[2]);
-          if (ok) {
-            repairedPaths.add(entry.path);
-            repairCount++;
-          }
-        }
-      } else if (entry.reason.includes("SUMMARY.md missing") && entry.reason.match(/^T\d+/)) {
-        // Missing task summary — extract IDs from path
-        const pathMatch = normPath.match(/milestones\/([^/]+)\/slices\/([^/]+)\/tasks\//);
-        const taskMatch = entry.reason.match(/^(T\d+)/);
-        if (pathMatch && taskMatch) {
-          const ok = await renderTaskSummary(basePath, pathMatch[1], pathMatch[2], taskMatch[1]);
-          if (ok) {
-            repairedPaths.add(entry.path);
-            repairCount++;
-          }
-        }
-      } else if (entry.reason.includes("SUMMARY.md missing") && entry.reason.match(/^S\d+/)) {
-        // Missing slice summary — extract IDs from path
-        const pathMatch = normPath.match(/milestones\/([^/]+)\/slices\/([^/]+)\//);
-        if (pathMatch) {
-          const ok = await renderSliceSummary(basePath, pathMatch[1], pathMatch[2]);
-          if (ok) {
-            repairedPaths.add(entry.path);
-            repairCount++;
-          }
-        }
-      } else if (entry.reason.includes("UAT.md missing")) {
-        // Missing slice UAT — renderSliceSummary handles both SUMMARY + UAT
-        const pathMatch = normPath.match(/milestones\/([^/]+)\/slices\/([^/]+)\//);
-        if (pathMatch) {
-          const ok = await renderSliceSummary(basePath, pathMatch[1], pathMatch[2]);
-          if (ok) {
-            repairedPaths.add(entry.path);
-            repairCount++;
-          }
-        }
-      }
-    } catch (err) {
-      logWarning("renderer", `repair failed for ${entry.path}: ${(err as Error).message}`);
-    }
-  }
-
-  if (repairCount > 0) {
-    process.stderr.write(
-      `markdown-renderer: repaired ${repairCount} stale render(s)\n`,
-    );
-  }
-
-  return repairCount;
-}
+// Body relocated to state-reconciliation/drift/stale-render.ts (ADR-017 #5702).
+// detectStaleRenders above stays as a useful diagnostic primitive; the
+// drift handler composes it with the per-reason renderer dispatch and the
+// reconcileBeforeDispatch lifecycle.
 
 // ─── Replan & Assessment Renderers ────────────────────────────────────────
 

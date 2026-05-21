@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
+import { atomicWriteSync } from "./atomic-write.js";
 import {
   classifyMilestoneScope,
   type ScopeClassificationResult,
@@ -174,8 +175,7 @@ export function writeProjectResearchAutoSkipDecision(
   basePath: string,
   classification: ProjectResearchClassification,
 ): void {
-  mkdirSync(runtimeDir(basePath), { recursive: true });
-  writeFileSync(
+  atomicWriteSync(
     researchDecisionPath(basePath),
     JSON.stringify({
       decision: "skip",

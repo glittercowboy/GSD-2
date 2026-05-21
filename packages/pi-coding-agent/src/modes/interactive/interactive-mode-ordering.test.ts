@@ -1,7 +1,13 @@
+// Project/App: GSD-2
+// File Purpose: Regression tests for interactive assistant replay ordering.
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import stripAnsi from "strip-ansi";
 
-import { buildAssistantReplaySegments } from "./interactive-mode.js";
+import { buildAssistantReplaySegments, getToolExpansionStartupHint } from "./interactive-mode.js";
+import { initTheme } from "./theme/theme.js";
+
+initTheme("dark", false);
 
 test("buildAssistantReplaySegments preserves tool-first ordering", () => {
 	const segments = buildAssistantReplaySegments([
@@ -41,4 +47,27 @@ test("buildAssistantReplaySegments ignores non-rendered non-tool blocks", () => 
 		{ kind: "assistant", startIndex: 0, endIndex: 0 },
 		{ kind: "assistant", startIndex: 2, endIndex: 2 },
 	]);
+});
+
+test("buildAssistantReplaySegments skips empty GPT reasoning blocks before tools", () => {
+	const segments = buildAssistantReplaySegments([
+		{ type: "thinking", thinking: "", thinkingSignature: "encrypted" },
+		{ type: "text", text: "   " },
+		{ type: "toolCall", id: "t1", name: "read", arguments: { filePath: "todo.js" } },
+	]);
+
+	assert.deepEqual(segments, [
+		{ kind: "tool", contentIndex: 2 },
+	]);
+});
+
+test("tool expansion startup hint reflects the default expansion state", () => {
+	const keybindings = {
+		getKeys(action: string) {
+			return action === "expandTools" ? ["ctrl+o"] : [];
+		},
+	} as any;
+
+	assert.match(stripAnsi(getToolExpansionStartupHint(true, keybindings)), /ctrl\+o.*collapse tools/);
+	assert.match(stripAnsi(getToolExpansionStartupHint(false, keybindings)), /ctrl\+o.*expand tools/);
 });

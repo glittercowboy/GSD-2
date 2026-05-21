@@ -1,0 +1,8 @@
+{
+  "id": "visual-brief",
+  "name": "Visual Brief",
+  "version": "1.0.0",
+  "description": "Prompt contracts backing /gsd brief visual HTML briefs",
+  "tier": "bundled",
+  "requires": { "platform": ">=2.29.0" }
+}

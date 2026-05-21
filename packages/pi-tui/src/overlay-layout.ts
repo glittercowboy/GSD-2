@@ -1,3 +1,5 @@
+// GSD-2 + packages/pi-tui/src/overlay-layout.ts - Overlay layout resolution, compositing, and rendering utilities.
+
 /**
  * Overlay layout resolution, compositing, and rendering utilities.
  *
@@ -185,14 +187,29 @@ export function resolveOverlayLayout(
 
 // ─── Line compositing ───────────────────────────────────────────────────────
 
-const SEGMENT_RESET = "\x1b[0m\x1b]8;;\x07";
+const SEGMENT_RESET = "\x1b[0m";
+const HYPERLINK_CLOSE = "\x1b]8;;\x07";
+const OSC8_SEQUENCE_REGEX = /\x1b]8;[^;]*;([^\x1b\x07]*)(?:\x07|\x1b\\)/g;
+
+function hasUnclosedHyperlink(text: string): boolean {
+	let openCount = 0;
+	for (const match of text.matchAll(OSC8_SEQUENCE_REGEX)) {
+		const uri = match[1];
+		if (uri.length === 0) {
+			openCount = Math.max(0, openCount - 1);
+		} else {
+			openCount++;
+		}
+	}
+	return openCount > 0;
+}
 
 /** Append reset sequences to each non-image line. */
 export function applyLineResets(lines: string[]): string[] {
 	for (let i = 0; i < lines.length; i++) {
 		const line = lines[i];
 		if (!isImageLine(line)) {
-			lines[i] = line + SEGMENT_RESET;
+			lines[i] = line + SEGMENT_RESET + (hasUnclosedHyperlink(line) ? HYPERLINK_CLOSE : "");
 		}
 	}
 	return lines;
@@ -224,14 +241,15 @@ export function compositeLineAt(
 	const afterPad = Math.max(0, afterTarget - base.afterWidth);
 
 	// Compose result
-	const r = SEGMENT_RESET;
+	const beforeReset = SEGMENT_RESET + (hasUnclosedHyperlink(base.before) ? HYPERLINK_CLOSE : "");
+	const overlayReset = SEGMENT_RESET + (hasUnclosedHyperlink(overlay.text) ? HYPERLINK_CLOSE : "");
 	const result =
 		base.before +
 		" ".repeat(beforePad) +
-		r +
+		beforeReset +
 		overlay.text +
 		" ".repeat(overlayPad) +
-		r +
+		overlayReset +
 		base.after +
 		" ".repeat(afterPad);
 
@@ -245,6 +263,9 @@ export function compositeLineAt(
 	if (resultWidth <= totalWidth) {
 		return result;
 	}
+	console.warn(
+		`[pi-tui] compositeLineAt truncated overflow from ${resultWidth} to ${totalWidth} columns (startCol=${startCol}, overlayWidth=${overlayWidth})`,
+	);
 	// Truncate with strict=true to ensure we don't exceed totalWidth
 	return sliceByColumn(result, 0, totalWidth, true);
 }
@@ -313,13 +334,16 @@ export function compositeOverlays(
 		minLinesNeeded = Math.max(minLinesNeeded, row + overlayLines.length);
 	}
 
-	// Ensure result covers the terminal working area to keep overlay positioning stable across resizes.
-	// maxLinesRendered can exceed current content length after a shrink; pad to keep viewportStart consistent.
-	const workingHeight = Math.max(maxLinesRendered, minLinesNeeded);
+	// Ensure overlays are positioned against the visible terminal grid, not a
+	// short bottom-anchored render buffer. Without the terminal-height floor, a
+	// sparse app screen pushes "top" overlays down with the rest of the content.
+	const workingHeight = Math.max(termHeight, maxLinesRendered, minLinesNeeded);
 
-	// Extend result with empty lines if content is too short for overlay placement or working area
-	while (result.length < workingHeight) {
-		result.push("");
+	// Extend upward when content is shorter than the working area. This keeps
+	// the app's normal content bottom-anchored while giving overlays a full
+	// viewport-sized coordinate system.
+	if (result.length < workingHeight) {
+		result.unshift(...Array.from({ length: workingHeight - result.length }, () => ""));
 	}
 
 	const viewportStart = Math.max(0, workingHeight - termHeight);

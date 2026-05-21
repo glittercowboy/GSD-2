@@ -4,16 +4,15 @@ import type { Api, Model, SimpleStreamOptions, StreamOptions, ThinkingBudgets, T
  * Compute the default maxTokens for a model when no explicit value is provided.
  *
  * The 32 k cap is retained only for native Anthropic models (api === "anthropic-messages")
- * where the Anthropic API historically rejected higher values. Custom and
- * Anthropic-compatible models (e.g. OpenAI-completions, Vertex, etc.) use their
- * declared model.maxTokens directly so that providers with larger output windows
- * (131 072 tokens, etc.) are not silently capped.
+ * where the Anthropic API historically rejected higher values. Defaults also
+ * leave at least half the context window available for prompts.
  */
 export function defaultMaxTokens(model: Model<Api>): number {
+	const contextCappedMaxTokens = Math.max(1, Math.floor(model.contextWindow / 2));
 	if (model.api === "anthropic-messages") {
-		return Math.min(model.maxTokens, 32000);
+		return Math.min(model.maxTokens, 32000, contextCappedMaxTokens);
 	}
-	return model.maxTokens;
+	return Math.min(model.maxTokens, contextCappedMaxTokens);
 }
 
 export function buildBaseOptions(model: Model<Api>, options?: SimpleStreamOptions, apiKey?: string): StreamOptions {
