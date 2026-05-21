@@ -226,6 +226,34 @@ export function isTerminalDeletedWorktreeProviderError(
   return /[/\\]\.gsd[/\\](?:projects[/\\][^/\\]+[/\\])?worktrees[/\\][^/\\\s"']+/i.test(message);
 }
 
+type MessageEndLike = {
+  message: unknown;
+};
+
+export function suppressTerminalDeletedWorktreeMessageEnd(event: MessageEndLike): boolean {
+  const message = event.message as {
+    role?: unknown;
+    stopReason?: unknown;
+    errorMessage?: unknown;
+    content?: unknown;
+  };
+  if (!isAutoCompletionStopInProgress()) return false;
+  if (message?.role !== "assistant" || message.stopReason !== "error") return false;
+
+  const rawErrorMsg = message.errorMessage ? String(message.errorMessage) : "";
+  const displayMsg = resolveAgentEndErrorDisplay(rawErrorMsg, message.content);
+  if (!isTerminalDeletedWorktreeProviderError(`${rawErrorMsg}\n${displayMsg}`)) return false;
+
+  message.stopReason = "completed";
+  message.errorMessage = undefined;
+  message.content = [];
+  logWarning(
+    "bootstrap",
+    `Suppressing stale deleted-worktree provider error during terminal completion reroot: ${displayMsg || rawErrorMsg}`,
+  );
+  return true;
+}
+
 async function pauseTransientWithBackoff(
   cls: ErrorClass,
   pi: ExtensionAPI,
@@ -518,6 +546,19 @@ export async function handleAgentEnd(
     // Keep that behavior for non-rate-limit classes to avoid pause/retry races,
     // but let rate-limit continue into model fallback logic below (#4373).
     if (shouldDeferTransientErrorToCoreRetry(cls, rawErrorMsg)) {
+      return;
+    }
+
+    if (cls.kind === "tool-schema") {
+      await pauseAutoForProviderError(ctx.ui, errorDetail, () => pauseAuto(ctx, pi, {
+        message: `Tool schema error${errorDetail}`,
+        category: "tool-schema",
+        isTransient: false,
+      }), {
+        isRateLimit: false,
+        isTransient: false,
+        retryAfterMs: 0,
+      });
       return;
     }
 

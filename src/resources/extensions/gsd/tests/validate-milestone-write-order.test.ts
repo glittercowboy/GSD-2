@@ -1,3 +1,6 @@
+// Project/App: GSD-2
+// File Purpose: Regression tests for milestone validation persistence and evidence gates.
+
 import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -6,7 +9,7 @@ import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 
 import { handleValidateMilestone } from "../tools/validate-milestone.js";
-import { openDatabase, closeDatabase, _getAdapter, insertMilestone, insertSlice } from "../gsd-db.js";
+import { openDatabase, closeDatabase, _getAdapter, insertMilestone, insertSlice, insertArtifact } from "../gsd-db.js";
 import { clearPathCache } from "../paths.js";
 import { clearParseCache } from "../files.js";
 
@@ -217,5 +220,152 @@ describe("handleValidateMilestone write ordering (#2725)", () => {
       base,
     );
     assert.ok(!("error" in result), `unexpected error: ${"error" in result ? result.error : ""}`);
+  });
+
+  it("downgrades pass to needs-attention when browser criteria lack browser evidence", async () => {
+    base = makeTmpBase();
+    const dbPath = join(base, ".gsd", "gsd.db");
+    openDatabase(dbPath);
+    insertMilestone({
+      id: "M001",
+      planning: {
+        successCriteria: [
+          "Clicking Mark All Complete sets all todos completed",
+          "Reload keeps completed state",
+        ],
+        verificationUat: "Open index.html in a browser and click the Mark All Complete button.",
+      },
+    });
+    insertSlice({
+      id: "S01",
+      milestoneId: "M001",
+      demo: "Open index.html, add todos, click Mark All Complete, reload the page.",
+    });
+
+    const result = await handleValidateMilestone(
+      {
+        ...VALID_PARAMS,
+        verificationClasses:
+          `${VALID_PARAMS.verificationClasses}\n- UAT: Browser flow still needs evidence`,
+      },
+      base,
+    );
+
+    assert.ok(!("error" in result), `unexpected error: ${"error" in result ? result.error : ""}`);
+    assert.equal(result.verdict, "needs-attention");
+
+    const adapter = _getAdapter()!;
+    const row = adapter.prepare(
+      `SELECT status FROM assessments WHERE milestone_id = 'M001' AND scope = 'milestone-validation'`,
+    ).get() as { status: string } | undefined;
+    assert.equal(row?.status, "needs-attention");
+
+    const filePath = join(base, ".gsd", "milestones", "M001", "M001-VALIDATION.md");
+    const validationMd = readFileSync(filePath, "utf-8");
+    assert.match(validationMd, /verdict: needs-attention/);
+    assert.match(validationMd, /Browser evidence gate/);
+  });
+
+  it("keeps pass when browser criteria have persisted browser evidence", async () => {
+    base = makeTmpBase();
+    const dbPath = join(base, ".gsd", "gsd.db");
+    openDatabase(dbPath);
+    insertMilestone({
+      id: "M001",
+      planning: {
+        successCriteria: [
+          "Clicking Mark All Complete sets all todos completed",
+          "Reload keeps completed state",
+        ],
+        verificationUat: "Open index.html in a browser and click the Mark All Complete button.",
+      },
+    });
+    insertSlice({
+      id: "S01",
+      milestoneId: "M001",
+      demo: "Open index.html, add todos, click Mark All Complete, reload the page.",
+    });
+    const sliceDir = join(base, ".gsd", "milestones", "M001", "slices", "S01");
+    mkdirSync(sliceDir, { recursive: true });
+    writeFileSync(
+      join(sliceDir, "S01-ASSESSMENT.md"),
+      [
+        "---",
+        "verdict: PASS",
+        "---",
+        "# UAT Result",
+        "",
+        "Browser session opened file://index.html, clicked Mark All Complete, asserted the item count text was 0 item(s) left, reloaded, and captured a screenshot.",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const result = await handleValidateMilestone(
+      {
+        ...VALID_PARAMS,
+        verificationClasses:
+          `${VALID_PARAMS.verificationClasses}\n- UAT: Browser flow verified by S01 assessment`,
+      },
+      base,
+    );
+
+    assert.ok(!("error" in result), `unexpected error: ${"error" in result ? result.error : ""}`);
+    assert.equal(result.verdict, "pass");
+
+    const adapter = _getAdapter()!;
+    const row = adapter.prepare(
+      `SELECT status FROM assessments WHERE milestone_id = 'M001' AND scope = 'milestone-validation'`,
+    ).get() as { status: string } | undefined;
+    assert.equal(row?.status, "pass");
+  });
+
+  it("keeps pass when browser evidence is persisted in the DB artifact", async () => {
+    base = makeTmpBase();
+    const dbPath = join(base, ".gsd", "gsd.db");
+    openDatabase(dbPath);
+    insertMilestone({
+      id: "M001",
+      planning: {
+        successCriteria: [
+          "Clicking Mark All Complete sets all todos completed",
+          "Reload keeps completed state",
+        ],
+        verificationUat: "Open index.html in a browser and click the Mark All Complete button.",
+      },
+    });
+    insertSlice({
+      id: "S01",
+      milestoneId: "M001",
+      demo: "Open index.html, add todos, click Mark All Complete, reload the page.",
+    });
+    insertArtifact({
+      path: "milestones/M001/slices/S01/S01-ASSESSMENT.md",
+      artifact_type: "ASSESSMENT",
+      milestone_id: "M001",
+      slice_id: "S01",
+      task_id: null,
+      full_content: [
+        "---",
+        "verdict: PASS",
+        "---",
+        "# UAT Result",
+        "",
+        "Browser session opened file://index.html, clicked Mark All Complete, verified the remaining-count text was visible, and captured a screenshot.",
+        "",
+      ].join("\n"),
+    });
+
+    const result = await handleValidateMilestone(
+      {
+        ...VALID_PARAMS,
+        verificationClasses:
+          `${VALID_PARAMS.verificationClasses}\n- UAT: Browser flow verified by S01 assessment`,
+      },
+      base,
+    );
+
+    assert.ok(!("error" in result), `unexpected error: ${"error" in result ? result.error : ""}`);
+    assert.equal(result.verdict, "pass");
   });
 });

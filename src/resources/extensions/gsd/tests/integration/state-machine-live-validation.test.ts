@@ -524,7 +524,7 @@ describe("state-machine-live-validation", () => {
       assert.match((result as any).error, /incomplete tasks/);
     });
 
-    test("double slice completion returns error", async () => {
+    test("double slice completion repairs missing artifacts", async () => {
       base = createFullFixture();
       openDatabase(join(base, ".gsd", "gsd.db"));
       insertMilestone({ id: "M001", title: "Active", status: "active" });
@@ -532,8 +532,10 @@ describe("state-machine-live-validation", () => {
       insertTask({ id: "T01", sliceId: "S01", milestoneId: "M001", status: "complete" });
 
       const result = await handleCompleteSlice(makeSliceParams("S01", "M001") as any, base);
-      assert.ok("error" in result);
-      assert.match((result as any).error, /already complete/);
+      assert.ok(!("error" in result));
+      assert.equal(result.duplicate, true);
+      assert.equal(existsSync(result.summaryPath), true);
+      assert.equal(existsSync(result.uatPath), true);
     });
 
     test("cannot complete milestone with zero slices", async () => {

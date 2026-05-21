@@ -75,7 +75,7 @@ function createTask(overrides: Partial<TaskRow> = {}): TaskRow {
 
 describe("extractPackageReferences", () => {
   test("extracts npm install patterns", () => {
-    const desc = "Run npm install lodash then npm i axios";
+    const desc = "npm install lodash\nnpm i axios";
     const packages = extractPackageReferences(desc);
     assert.deepEqual(packages.sort(), ["axios", "lodash"]);
   });
@@ -150,6 +150,12 @@ import type { Request } from 'express';
     const packages = extractPackageReferences(desc);
     assert.ok(packages.includes("typescript"));
     assert.ok(!packages.includes("-D"));
+  });
+
+  test("does not parse prose mention of npm install as packages (#5170)", () => {
+    const desc = "- npm install hits worktree symlink breakage → flag blocker; do not `rm node_modules` under the sandbox.";
+    const packages = extractPackageReferences(desc);
+    assert.deepEqual(packages, []);
   });
 
   // Regression tests for #4388: prose containing `from "..."` must not produce false-positive packages
@@ -948,6 +954,34 @@ describe("runPreExecutionChecks", () => {
     }
   });
 
+  test("resolves .gsd metadata inputs from canonical project root in worktree mode (#5492)", async () => {
+    const projectRoot = join(tmpdir(), `pre-exec-project-root-${Date.now()}`);
+    const worktreeRoot = join(tmpdir(), `pre-exec-worktree-root-${Date.now()}`);
+    mkdirSync(join(projectRoot, ".gsd"), { recursive: true });
+    mkdirSync(worktreeRoot, { recursive: true });
+    writeFileSync(join(projectRoot, ".gsd", "DECISIONS.md"), "# decisions");
+
+    try {
+      const tasks = [
+        createTask({
+          id: "T01",
+          files: [],
+          inputs: [".gsd/DECISIONS.md"],
+          expected_output: [],
+        }),
+      ];
+
+      const result = await runPreExecutionChecks(tasks, worktreeRoot, {
+        canonicalProjectRoot: projectRoot,
+      });
+      assert.equal(result.status, "pass");
+      assert.equal(result.checks.length, 0);
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true });
+      rmSync(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
   test("returns fail status for unsafe Verify command before execution", async () => {
     tempDir = join(tmpdir(), `pre-exec-test-${Date.now()}`);
     mkdirSync(tempDir, { recursive: true });
@@ -1603,6 +1637,28 @@ describe("normalizeFilePath tilde expansion (#4446)", () => {
 });
 
 describe("checkFilePathConsistency directory inputs (#4446)", () => {
+  test("monorepo root accepts unique immediate-subdirectory match for relative src path (#5894)", (t) => {
+    const workspaceDir = join(tmpdir(), `pre-exec-monorepo-${Date.now()}`);
+    mkdirSync(join(workspaceDir, "frontend", "src", "engine"), { recursive: true });
+    writeFileSync(join(workspaceDir, "frontend", "src", "engine", "bus.ts"), "// existing");
+    t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
+
+    const tasks = [
+      createTask({
+        id: "T01",
+        inputs: ["src/engine/bus.ts"],
+        expected_output: [],
+      }),
+    ];
+
+    const results = checkFilePathConsistency(tasks, workspaceDir);
+    assert.deepEqual(
+      results,
+      [],
+      "When only one immediate sub-project contains src/engine/bus.ts, pre-exec should treat it as existing",
+    );
+  });
+
   test("directory input is satisfied by prior task's output under it", (t) => {
     const tempDir = join(tmpdir(), `pre-exec-dir-prior-${Date.now()}`);
     mkdirSync(tempDir, { recursive: true });

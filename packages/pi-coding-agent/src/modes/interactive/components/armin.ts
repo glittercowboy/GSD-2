@@ -1,9 +1,11 @@
+// GSD-2 + packages/pi-coding-agent/src/modes/interactive/components/armin.ts - Animated Armin easter egg component.
 /**
  * Armin says hi! A fun easter egg with animated XBM art.
  */
 
-import { type Component, type TUI, visibleWidth } from "@gsd/pi-tui";
+import { type TUI, visibleWidth } from "@gsd/pi-tui";
 import { theme } from "../theme/theme.js";
+import { AnimatedComponent } from "./animated-component.js";
 
 // XBM image: 31x36 pixels, LSB first, 1=background, 0=foreground
 const WIDTH = 31;
@@ -57,36 +59,28 @@ function buildFinalGrid(): string[][] {
 	return grid;
 }
 
-export class ArminComponent implements Component {
+export class ArminComponent extends AnimatedComponent {
 	private ui: TUI;
-	private interval: ReturnType<typeof setInterval> | null = null;
 	private effect: Effect;
 	private finalGrid: string[][];
 	private currentGrid: string[][];
 	private effectState: Record<string, unknown> = {};
-	private cachedLines: string[] = [];
-	private cachedWidth = 0;
 	private gridVersion = 0;
-	private cachedVersion = -1;
 
 	constructor(ui: TUI) {
+		super();
 		this.ui = ui;
 		this.effect = EFFECTS[Math.floor(Math.random() * EFFECTS.length)];
 		this.finalGrid = buildFinalGrid();
 		this.currentGrid = this.createEmptyGrid();
 
 		this.initEffect();
-		this.startAnimation();
-	}
-
-	invalidate(): void {
-		this.cachedWidth = 0;
+		this.startEffectAnimation();
 	}
 
 	render(width: number): string[] {
-		if (width === this.cachedWidth && this.cachedVersion === this.gridVersion) {
-			return this.cachedLines;
-		}
+		const cached = this.getCachedRender(width, this.gridVersion);
+		if (cached) return cached;
 
 		const center = (s: string) => {
 			const visible = visibleWidth(s);
@@ -94,19 +88,16 @@ export class ArminComponent implements Component {
 			return " ".repeat(left) + s;
 		};
 
-		this.cachedLines = this.currentGrid.map((row) => {
+		const lines = this.currentGrid.map((row) => {
 			const clipped = row.slice(0, width).join("");
 			return center(theme.fg("accent", clipped));
 		});
 
 		// Add "ARMIN SAYS HI" at the end
 		const message = "ARMIN SAYS HI";
-		this.cachedLines.push(center(theme.fg("accent", message)));
+		lines.push(center(theme.fg("accent", message)));
 
-		this.cachedWidth = width;
-		this.cachedVersion = this.gridVersion;
-
-		return this.cachedLines;
+		return this.setCachedRender(width, this.gridVersion, lines);
 	}
 
 	private createEmptyGrid(): string[][] {
@@ -177,25 +168,13 @@ export class ArminComponent implements Component {
 		}
 	}
 
-	private startAnimation(): void {
+	private startEffectAnimation(): void {
 		const fps = this.effect === "glitch" ? 60 : 30;
-		this.interval = setInterval(() => {
+		this.startAnimation(1000 / fps, () => {
 			const done = this.tickEffect();
 			this.updateDisplay();
-			this.ui.requestRender();
-			if (done) {
-				this.stopAnimation();
-			}
-		}, 1000 / fps);
-		// Cosmetic animation — must never keep the Node event loop alive.
-		this.interval.unref?.();
-	}
-
-	private stopAnimation(): void {
-		if (this.interval) {
-			clearInterval(this.interval);
-			this.interval = null;
-		}
+			return done;
+		}, () => this.ui.requestRender());
 	}
 
 	private tickEffect(): boolean {
@@ -378,7 +357,4 @@ export class ArminComponent implements Component {
 		this.gridVersion++;
 	}
 
-	dispose(): void {
-		this.stopAnimation();
-	}
 }

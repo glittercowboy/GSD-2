@@ -936,6 +936,16 @@ export function clearArtifacts(): void {
   try { currentDb.exec("DELETE FROM artifacts"); } catch (e) { logWarning("db", `clearArtifacts failed: ${(e as Error).message}`); }
 }
 
+export function clearDecisions(): void {
+  if (!currentDb) return;
+  try { currentDb.exec("DELETE FROM decisions"); } catch (e) { logWarning("db", `clearDecisions failed: ${(e as Error).message}`); }
+}
+
+export function clearRequirements(): void {
+  if (!currentDb) return;
+  try { currentDb.exec("DELETE FROM requirements"); } catch (e) { logWarning("db", `clearRequirements failed: ${(e as Error).message}`); }
+}
+
 export function insertArtifact(a: {
   path: string;
   artifact_type: string;
@@ -1831,12 +1841,12 @@ export function reconcileWorktreeDb(
       const hasSketchScope = wtSliceInfo.some((col) => col["name"] === "sketch_scope");
       const hasSliceTargetRepositories = wtSliceInfo.some((col) => col["name"] === "target_repositories");
       const wtTaskInfo = adapter.prepare("PRAGMA wt.table_info('tasks')").all();
+      const hasTaskTargetRepositories = wtTaskInfo.some((col) => col["name"] === "target_repositories");
       const hasBlockerSource = wtTaskInfo.some((col) => col["name"] === "blocker_source");
       const hasEscalationPending = wtTaskInfo.some((col) => col["name"] === "escalation_pending");
       const hasEscalationAwaiting = wtTaskInfo.some((col) => col["name"] === "escalation_awaiting_review");
       const hasEscalationArtifact = wtTaskInfo.some((col) => col["name"] === "escalation_artifact_path");
       const hasEscalationOverride = wtTaskInfo.some((col) => col["name"] === "escalation_override_applied_at");
-      const hasTaskTargetRepositories = wtTaskInfo.some((col) => col["name"] === "target_repositories");
       const wtArtifactInfo = adapter.prepare("PRAGMA wt.table_info('artifacts')").all();
       const hasArtifactContentHash = wtArtifactInfo.some((col) => col["name"] === "content_hash");
       const wtMemoryInfo = adapter.prepare("PRAGMA wt.table_info('memories')").all();
@@ -1960,7 +1970,7 @@ export function reconcileWorktreeDb(
                  END,
                  w.full_summary_md, w.full_uat_md, w.goal, w.success_criteria, w.proof_level,
                  w.integration_closure, w.observability_impact,
-                 ${hasSliceTargetRepositories ? "w.target_repositories" : "COALESCE(m.target_repositories, '[]')"},
+                 ${hasSliceTargetRepositories ? "COALESCE(w.target_repositories, m.target_repositories, '[]')" : "COALESCE(m.target_repositories, '[]')"},
                  w.sequence, w.replan_triggered_at,
                  ${hasIsSketch ? "w.is_sketch" : "COALESCE(m.is_sketch, 0)"},
                  ${hasSketchScope ? "w.sketch_scope" : "COALESCE(m.sketch_scope, '')"}
@@ -1996,7 +2006,7 @@ export function reconcileWorktreeDb(
                  w.deviations, w.known_issues, w.key_files, w.key_decisions, w.full_summary_md,
                  w.description, w.estimate, w.files, w.verify, w.inputs, w.expected_output,
                  w.observability_impact, w.full_plan_md,
-                 ${hasTaskTargetRepositories ? "w.target_repositories" : "COALESCE(m.target_repositories, '[]')"},
+                 ${hasTaskTargetRepositories ? "COALESCE(w.target_repositories, m.target_repositories, '[]')" : "COALESCE(m.target_repositories, '[]')"},
                  w.sequence,
                  ${hasBlockerSource ? "w.blocker_source" : "COALESCE(m.blocker_source, '')"},
                  ${hasEscalationPending ? "w.escalation_pending" : "COALESCE(m.escalation_pending, 0)"},

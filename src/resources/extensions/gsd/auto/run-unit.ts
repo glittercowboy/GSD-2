@@ -25,7 +25,6 @@ import {
 import { debugLog } from "../debug-logger.js";
 import { logWarning, logError } from "../workflow-logger.js";
 import { resolveAutoSupervisorConfig } from "../preferences.js";
-import { formatAutoUnitWorkingMessage } from "../working-output-messages.js";
 import { readUnitRuntimeRecord, type AutoUnitRuntimeRecord } from "../unit-runtime.js";
 
 const UNIT_FAILSAFE_BUFFER_MS = 30_000;
@@ -210,7 +209,7 @@ export async function runUnit(
   debugLog("runUnit", { phase: "send-message", unitType, unitId });
 
   const requestDispatchedAt = Date.now();
-  ctx.ui.setWorkingMessage?.(formatAutoUnitWorkingMessage(unitType, unitId));
+  ctx.ui.setWorkingMessage?.(null);
 
   // ── Await agent_end with absolute timeout (H4 fix) ──
   // If supervision fails to resolve unitPromise within 30s, treat as cancelled.

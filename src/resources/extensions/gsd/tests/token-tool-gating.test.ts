@@ -114,6 +114,32 @@ test("buildMinimalAutoGsdToolSet keeps only the auto base non-GSD tools", () => 
   assert.ok(!result.includes("subagent"));
 });
 
+test("buildMinimalAutoGsdToolSet preserves browser tools for run-uat", () => {
+  const result = buildMinimalAutoGsdToolSet([
+    "bash",
+    "read",
+    "browser_navigate",
+    "browser_click",
+    "browser_type",
+    "browser_assert",
+    "browser_screenshot",
+    "browser_wait_for",
+    "gsd_summary_save",
+    "gsd_task_complete",
+    "memory_query",
+    "capture_thought",
+  ], "run-uat");
+
+  assert.ok(result.includes("browser_navigate"));
+  assert.ok(result.includes("browser_click"));
+  assert.ok(result.includes("browser_type"));
+  assert.ok(result.includes("browser_assert"));
+  assert.ok(result.includes("browser_screenshot"));
+  assert.ok(result.includes("browser_wait_for"));
+  assert.ok(result.includes("gsd_summary_save"));
+  assert.ok(!result.includes("gsd_task_complete"));
+});
+
 test("buildMinimalAutoGsdToolSet includes closeout tool for complete-slice", () => {
   const result = buildMinimalAutoGsdToolSet([
     "bash",

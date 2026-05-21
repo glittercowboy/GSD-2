@@ -205,23 +205,26 @@ test("deriveState returns blocked when needs-remediation has no incomplete slice
   }
 });
 
-test("deriveState parks milestone when validation verdict is needs-attention and no summary (#6136)", async () => {
+test("deriveState blocks milestone when validation verdict is needs-attention and no summary", async () => {
   const base = makeTmpBase();
   try {
     writeRoadmap(base, "M001", ALL_DONE_ROADMAP);
     writeValidation(base, "M001", "---\nverdict: needs-attention\nremediation_round: 0\n---\n\n# Validation\nNeeds attention.");
 
     const state = await deriveState(base);
-    assert.equal(state.phase, "pre-planning");
-    assert.equal(state.activeMilestone, null);
-    assert.equal(state.registry.find(entry => entry.id === "M001")?.status, "parked");
-    assert.ok(state.nextAction.includes("parked"));
+    assert.equal(state.phase, "blocked");
+    assert.equal(state.activeMilestone?.id, "M001");
+    assert.equal(state.registry.find(entry => entry.id === "M001")?.status, "active");
+    assert.ok(
+      state.blockers.some(b => b.includes("needs-attention") && b.includes("/gsd park M001")),
+      "blocker message should explain explicit resolution paths",
+    );
   } finally {
     cleanup(base);
   }
 });
 
-test("deriveState parks DB-backed milestone when validation verdict is needs-attention (#6136)", async () => {
+test("deriveState blocks DB-backed milestone when validation verdict is needs-attention", async () => {
   const base = makeTmpBase();
   try {
     openTestDb(base);
@@ -237,10 +240,13 @@ test("deriveState parks DB-backed milestone when validation verdict is needs-att
     });
 
     const state = await deriveState(base);
-    assert.equal(state.phase, "pre-planning");
-    assert.equal(state.activeMilestone, null);
-    assert.equal(state.registry.find(entry => entry.id === "M001")?.status, "parked");
-    assert.ok(state.nextAction.includes("parked"));
+    assert.equal(state.phase, "blocked");
+    assert.equal(state.activeMilestone?.id, "M001");
+    assert.equal(state.registry.find(entry => entry.id === "M001")?.status, "active");
+    assert.ok(
+      state.blockers.some(b => b.includes("needs-attention") && b.includes("/gsd park M001")),
+      "blocker message should explain explicit resolution paths",
+    );
   } finally {
     cleanup(base);
   }
@@ -394,6 +400,47 @@ test("dispatch rule matches validating-milestone phase", async () => {
       assert.equal(result.unitType, "validate-milestone");
       assert.equal(result.unitId, "M001");
     }
+  } finally {
+    cleanup(base);
+  }
+});
+
+test("dispatch rule backfills missing slice ASSESSMENT from existing SUMMARY before validation dispatch (#6225)", async () => {
+  const state: GSDState = {
+    activeMilestone: { id: "M001", title: "Test" },
+    activeSlice: null,
+    activeTask: null,
+    phase: "validating-milestone",
+    recentDecisions: [],
+    blockers: [],
+    nextAction: "Validate milestone M001.",
+    registry: [{ id: "M001", title: "Test", status: "active" }],
+    progress: { milestones: { done: 0, total: 1 } },
+  };
+
+  const base = makeTmpBase();
+  try {
+    openTestDb(base);
+    insertMilestone({ id: "M001", title: "Test Milestone", status: "active" });
+    insertSlice({ id: "S01", milestoneId: "M001", title: "First slice", status: "complete", depends: [] });
+
+    writeContext(base, "M001");
+    writeRoadmap(base, "M001", ALL_DONE_ROADMAP);
+    writeSliceSummary(base, "M001", "S01", "# S01 Summary\nDone.");
+
+    const assessmentPath = join(base, ".gsd", "milestones", "M001", "slices", "S01", "S01-ASSESSMENT.md");
+    assert.equal(existsSync(assessmentPath), false, "precondition: ASSESSMENT does not exist");
+
+    const ctx: DispatchContext = {
+      basePath: base,
+      mid: "M001",
+      midTitle: "Test",
+      state,
+      prefs: undefined,
+    };
+    const result = await resolveDispatch(ctx);
+    assert.equal(result.action, "dispatch");
+    assert.ok(existsSync(assessmentPath), "ASSESSMENT should be backfilled before validation dispatch");
   } finally {
     cleanup(base);
   }

@@ -1,3 +1,5 @@
+// Project/App: GSD-2
+// File Purpose: Parity tests for GSD workflow task completion over native and MCP transports.
 // ADR-008 validation criterion #3 — behavior-parity lock-in for gsd_task_complete.
 //
 // ADR-008 §1 ("One handler layer, multiple transports") is shipped: both
@@ -19,6 +21,7 @@ import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "node
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 
 import {
   closeDatabase,
@@ -166,6 +169,16 @@ const COMPLETION_ARGS = {
   keyFiles: ["src/demo.ts"],
   keyDecisions: ["Used Option A from the plan."],
 };
+
+const workflowBridgeExtension = import.meta.url.includes("/dist-test/") ? "js" : "ts";
+process.env.GSD_WORKFLOW_EXECUTORS_MODULE ??= fileURLToPath(new URL(
+  `../../../src/resources/extensions/gsd/tools/workflow-tool-executors.${workflowBridgeExtension}`,
+  import.meta.url,
+));
+process.env.GSD_WORKFLOW_WRITE_GATE_MODULE ??= fileURLToPath(new URL(
+  `../../../src/resources/extensions/gsd/bootstrap/write-gate.${workflowBridgeExtension}`,
+  import.meta.url,
+));
 
 describe("ADR-008 parity: gsd_task_complete native vs MCP", () => {
   it("native and MCP produce equivalent DB row, summary, and journal event", async () => {

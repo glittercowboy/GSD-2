@@ -47,19 +47,19 @@ test("command entrypoints use startAutoDetached instead of awaiting startAuto (#
   );
 });
 
-test("bare /gsd stays in the foreground smart-entry flow (#5125 regression)", () => {
+test("bare /gsd stays in the foreground home flow (#5125 regression)", () => {
   const autoHandlerSrc = readGsdFile("commands/handlers/auto.ts");
   const bareCommandBranch = autoHandlerSrc.slice(
     autoHandlerSrc.indexOf('if (trimmed === "")'),
   );
 
   assert.ok(
-    bareCommandBranch.includes('await import("../../guided-flow.js")'),
-    "bare /gsd should load the guided smart-entry flow",
+    bareCommandBranch.includes('await import("../../gsd-command-home.js")'),
+    "bare /gsd should load the state-aware home flow",
   );
   assert.ok(
-    bareCommandBranch.includes("await showSmartEntry(ctx, pi, projectRoot(), { step: true })"),
-    "bare /gsd should await the foreground wizard instead of detaching auto-mode",
+    bareCommandBranch.includes("await showGsdHome(ctx, pi, projectRoot())"),
+    "bare /gsd should await the foreground home menu instead of detaching auto-mode",
   );
   assert.ok(
     !bareCommandBranch.includes("startAutoDetached("),

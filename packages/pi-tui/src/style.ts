@@ -75,6 +75,11 @@ function color(fn: ((text: string) => string) | undefined, text: string): string
 	return fn ? fn(text) : text;
 }
 
+function fitVisible(line: string, width: number): string {
+	const clipped = visibleWidth(line) > width ? truncateToWidth(line, width, "") : line;
+	return padVisible(clipped, width);
+}
+
 function normalizeWidth(spec: TerminalStyleSpec, width?: number): number {
 	return Math.max(1, Math.floor(width ?? spec.width ?? 80));
 }
@@ -242,26 +247,32 @@ export class TerminalStyle {
 		const right = this.spec.titleRight ?? "";
 		if (!left && !right) return borderColor("─".repeat(w));
 
-		const styledLeft = color(this.spec.titleColor, left);
-		const styledRight = color(this.spec.titleRightColor, right);
-
 		if (left && right) {
-			const fixed = 4 + visibleWidth(left) + 2 + visibleWidth(right) + 4;
+			const titleBudget = Math.max(0, w - 11);
+			const rightReserve = titleBudget > 1 && visibleWidth(right) > 0 ? 1 : 0;
+			const leftBudget = Math.min(visibleWidth(left), Math.max(0, titleBudget - rightReserve));
+			const rightBudget = Math.max(0, titleBudget - leftBudget);
+			const clippedLeft = truncateToWidth(left, leftBudget, "");
+			const clippedRight = truncateToWidth(right, rightBudget, "");
+			const fixed = 4 + visibleWidth(clippedLeft) + 2 + visibleWidth(clippedRight) + 4;
 			const fill = Math.max(1, w - fixed);
-			return (
+			return fitVisible(
 				borderColor("─── ") +
-				styledLeft +
+				color(this.spec.titleColor, clippedLeft) +
 				borderColor(` ${"─".repeat(fill)} `) +
-				styledRight +
-				borderColor(" ───")
+				color(this.spec.titleRightColor, clippedRight) +
+				borderColor(" ───"),
+				w,
 			);
 		}
 		if (left) {
-			const fill = Math.max(1, w - 5 - visibleWidth(left));
-			return borderColor("─── ") + styledLeft + borderColor(` ${"─".repeat(fill)}`);
+			const clippedLeft = truncateToWidth(left, Math.max(0, w - 6), "");
+			const fill = Math.max(1, w - 5 - visibleWidth(clippedLeft));
+			return fitVisible(borderColor("─── ") + color(this.spec.titleColor, clippedLeft) + borderColor(` ${"─".repeat(fill)}`), w);
 		}
-		const fill = Math.max(1, w - 5 - visibleWidth(right));
-		return borderColor(`${"─".repeat(fill)} `) + styledRight + borderColor(" ───");
+		const clippedRight = truncateToWidth(right, Math.max(0, w - 6), "");
+		const fill = Math.max(1, w - 5 - visibleWidth(clippedRight));
+		return fitVisible(borderColor(`${"─".repeat(fill)} `) + color(this.spec.titleRightColor, clippedRight) + borderColor(" ───"), w);
 	}
 
 	private renderTitleRows(width: number): string[] {

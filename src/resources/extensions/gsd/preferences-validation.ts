@@ -366,13 +366,16 @@ export function validatePreferences(preferences: GSDPreferences): {
 
   // ─── Context Pause Threshold ────────────────────────────────────────
   if (preferences.context_pause_threshold !== undefined) {
-    const raw = preferences.context_pause_threshold;
-    if (typeof raw === "number" && Number.isFinite(raw)) {
-      validated.context_pause_threshold = raw;
-    } else if (typeof raw === "string" && Number.isFinite(Number(raw))) {
-      validated.context_pause_threshold = Number(raw);
+    const raw = (preferences as Record<string, unknown>).context_pause_threshold;
+    const value = typeof raw === "string" && raw.trim() !== "" ? Number(raw) : raw;
+    if (
+      typeof value === "number" &&
+      Number.isFinite(value) &&
+      (value === 0 || (value >= 1 && value <= 100))
+    ) {
+      validated.context_pause_threshold = value;
     } else {
-      errors.push("context_pause_threshold must be a finite number");
+      errors.push("context_pause_threshold must be 0 to disable or a percentage between 1 and 100");
     }
   }
 
@@ -1260,6 +1263,7 @@ export function validatePreferences(preferences: GSDPreferences): {
     }
   }
 
+
   // ─── Workspace Repository Registry ─────────────────────────────────
   if (preferences.workspace !== undefined) {
     if (typeof preferences.workspace === "object" && preferences.workspace !== null && !Array.isArray(preferences.workspace)) {
@@ -1282,7 +1286,7 @@ export function validatePreferences(preferences: GSDPreferences): {
         ) {
           const repos = workspace.repositories as Record<string, unknown>;
           const validRepos: NonNullable<NonNullable<GSDPreferences["workspace"]>["repositories"]> = {};
-          const normalizedPaths = new Set<string>();
+          const normalizedPaths = new Map<string, string>();
 
           for (const [repoId, repoValue] of Object.entries(repos)) {
             if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(repoId)) {
@@ -1303,12 +1307,15 @@ export function validatePreferences(preferences: GSDPreferences): {
                 errors.push(`workspace.repositories.${repoId}.path must be a relative path`);
                 continue;
               }
-              const normalizedPathKey = validRepo.path.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
-              if (normalizedPaths.has(normalizedPathKey)) {
-                errors.push(`workspace.repositories contains duplicate path: ${validRepo.path}`);
+              const normalizedPathKey = validRepo.path.replace(/\\/g, "/").replace(/^(\.\/)+/, "").replace(/\/+$/, "").toLowerCase();
+              const existingRepoId = normalizedPaths.get(normalizedPathKey);
+              if (existingRepoId !== undefined) {
+                errors.push(
+                  `workspace.repositories.${repoId}.path duplicates workspace.repositories.${existingRepoId}.path: ${validRepo.path}`,
+                );
                 continue;
               }
-              normalizedPaths.add(normalizedPathKey);
+              normalizedPaths.set(normalizedPathKey, repoId);
             } else {
               errors.push(`workspace.repositories.${repoId}.path must be a non-empty string`);
               continue;
@@ -1370,6 +1377,7 @@ export function validatePreferences(preferences: GSDPreferences): {
       errors.push("workspace must be an object");
     }
   }
+
   // ─── Enhanced Verification ──────────────────────────────────────────────────
   if (preferences.enhanced_verification !== undefined) {
     if (typeof preferences.enhanced_verification === "boolean") {

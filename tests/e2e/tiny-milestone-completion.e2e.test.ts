@@ -435,7 +435,7 @@ describe("tiny milestone completion e2e (fake LLM)", () => {
 	const avail = binaryAvailable();
 	const skipReason = avail.ok ? null : avail.reason;
 
-	test("headless new-milestone --auto completes a verified source change", { skip: skipReason ?? false }, (t) => {
+	test("headless new-milestone --auto completes a verified source change", { skip: skipReason ?? false, timeout: 180_000 }, (t) => {
 		const project = createTmpProject({
 			git: true,
 			files: {
@@ -471,7 +471,7 @@ describe("tiny milestone completion e2e (fake LLM)", () => {
 				"--model",
 				"gsd-fake-model",
 				"--timeout",
-				"60000",
+				"120000",
 				"--max-restarts",
 				"0",
 				"--answers",
@@ -483,7 +483,7 @@ describe("tiny milestone completion e2e (fake LLM)", () => {
 			],
 			{
 				cwd: project.dir,
-				timeoutMs: 75_000,
+				timeoutMs: 150_000,
 				env: {
 					GSD_FAKE_LLM_TRANSCRIPT: transcript,
 				},

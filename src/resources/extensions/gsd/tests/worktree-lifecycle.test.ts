@@ -428,6 +428,29 @@ test("enterMilestone returns ok:false reason:invalid-milestone-id on path traver
 // drive Lifecycle through Resolver delegation until step E retires the
 // Resolver class entirely). When that retirement lands, those tests move
 // here verbatim.
+test("exitMilestone forwards preserveWorktree to teardown on non-merge exit", () => {
+  let capturedOpts: { preserveBranch?: boolean; preserveWorktree?: boolean } | undefined;
+  const s = makeSession({
+    basePath: "/project/.gsd/worktrees/M001",
+    originalBasePath: "/project",
+  });
+  const deps = makeDeps({
+    isInAutoWorktree: () => true,
+    teardownAutoWorktree: (_basePath, _mid, opts) => {
+      capturedOpts = opts;
+    },
+  });
+  const lifecycle = new WorktreeLifecycle(s, deps);
+
+  const result = lifecycle.exitMilestone(
+    "M001",
+    { merge: false, preserveBranch: true, preserveWorktree: true },
+    makeCtx(),
+  );
+
+  assert.deepEqual(result, { ok: true, merged: false, codeFilesChanged: false });
+  assert.deepEqual(capturedOpts, { preserveBranch: true, preserveWorktree: true });
+});
 
 // ─── Queries (issue #5587) ────────────────────────────────────────────────────
 
@@ -668,11 +691,9 @@ test("mergeMilestoneStandalone fails loud when both base paths are empty", () =>
 
 // ─── resumeFromPausedSession (ADR-016 phase 2 / B3, issue #5621) ──────────────
 
-test("resumeFromPausedSession adopts the persisted worktree path when it exists", (t) => {
-  // Use a real temp directory so the existsSync check inside the verb
-  // succeeds. Earlier `process.cwd()` ran into ENOENT after sibling tests
-  // deleted their basePaths and left cwd dangling.
+test("resumeFromPausedSession adopts the persisted worktree path when it is a git worktree", (t) => {
   const wtDir = realpathSync(mkdtempSync(join(tmpdir(), "gsd-resume-test-")));
+  writeFileSync(join(wtDir, ".git"), "gitdir: /tmp/gsd-resume-test/.git/worktrees/M001\n");
   t.after(() => { try { rmSync(wtDir, { recursive: true, force: true }); } catch { /* */ } });
 
   const s = makeSession();
@@ -681,10 +702,7 @@ test("resumeFromPausedSession adopts the persisted worktree path when it exists"
 
   // Verify the pure helper's contract first (folded in from the legacy
   // _resolvePausedResumeBasePathForTest)
-  assert.equal(
-    resolvePausedResumeBasePath("/project", "/persisted/worktree/M001", () => true),
-    "/persisted/worktree/M001",
-  );
+  assert.equal(resolvePausedResumeBasePath("/project", wtDir), wtDir);
 
   // Exercise the verb with a real path that exists.
   lifecycle.resumeFromPausedSession("/project", wtDir);
@@ -709,6 +727,21 @@ test("resumeFromPausedSession falls back to base when persisted worktree does no
     "/project",
     "/this/path/does/not/exist/abc/xyz",
   );
+  assert.equal(s.basePath, "/project");
+});
+
+test("resumeFromPausedSession falls back to base when persisted directory is not a git worktree", (t) => {
+  const wtDir = realpathSync(mkdtempSync(join(tmpdir(), "gsd-resume-stub-")));
+  mkdirSync(join(wtDir, ".bg-shell"), { recursive: true });
+  t.after(() => { try { rmSync(wtDir, { recursive: true, force: true }); } catch { /* */ } });
+
+  const s = makeSession();
+  s.basePath = "/old";
+  const lifecycle = new WorktreeLifecycle(s, makeDeps());
+
+  assert.equal(resolvePausedResumeBasePath("/project", wtDir), "/project");
+
+  lifecycle.resumeFromPausedSession("/project", wtDir);
   assert.equal(s.basePath, "/project");
 });
 

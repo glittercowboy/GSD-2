@@ -235,9 +235,14 @@ async function runBareGsdCommand(base: string): Promise<unknown[]> {
     process.chdir(base);
 
     const messages: unknown[] = [];
+    const notifications: unknown[] = [];
+    const ctx = makeCtx(`bare-${randomUUID()}`) as any;
+    ctx.ui.notify = (content: unknown, notifyType?: unknown) => {
+      notifications.push({ content, notifyType });
+    };
     const { handleAutoCommand } = await import("../commands/handlers/auto.ts");
-    await handleAutoCommand("", makeCtx(`bare-${randomUUID()}`) as any, makePi(messages) as any);
-    return messages;
+    await handleAutoCommand("", ctx, makePi(messages) as any);
+    return [...messages, ...notifications];
   } finally {
     process.chdir(previousCwd);
     if (previousGsdHome === undefined) delete process.env.GSD_HOME;
@@ -696,7 +701,12 @@ test("deep project setup: bare /gsd ignores global planning_depth without projec
         "bare /gsd must not persist planning_depth from global preferences",
       );
     }
-    assert.equal(messages.length, 1, "bare /gsd should dispatch the normal first milestone discussion");
+    assert.equal(messages.length, 1, "bare /gsd should render the state-aware home in non-UI mode");
+    assert.match(
+      String((messages[0] as any).content),
+      /GSD — What now\?/,
+      "bare /gsd should render the command home instead of dispatching a milestone discussion",
+    );
     assert.doesNotMatch(
       String((messages[0] as any).content),
       /Foreground Deep Setup Question Policy/,

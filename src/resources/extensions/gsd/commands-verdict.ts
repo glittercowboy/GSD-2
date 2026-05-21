@@ -1,9 +1,14 @@
+// Project/App: GSD-2
+// File Purpose: Handles manual milestone validation verdict overrides.
+
 import type { ExtensionCommandContext } from "@gsd/pi-coding-agent";
 
 import { loadFile } from "./files.js";
 import { resolveMilestoneFile } from "./paths.js";
 import { deriveState } from "./state.js";
 import { executeValidateMilestone } from "./tools/workflow-tool-executors.js";
+import { ensureDbOpen } from "./bootstrap/dynamic-tools.js";
+import { getLatestAssessmentByScope } from "./gsd-db.js";
 import {
   VALIDATION_VERDICTS,
   extractVerdict,
@@ -30,6 +35,11 @@ interface ParsedValidation {
   verificationClasses?: string;
   verdictRationale: string;
   remediationPlan?: string;
+}
+
+interface ExistingValidation {
+  content: string;
+  source: string;
 }
 
 function tokenize(raw: string): string[] {
@@ -101,6 +111,31 @@ export function parseValidationFile(content: string): ParsedValidation {
   };
 }
 
+async function loadExistingValidation(
+  basePath: string,
+  milestoneId: string,
+): Promise<ExistingValidation | null> {
+  const validationPath = resolveMilestoneFile(basePath, milestoneId, "VALIDATION");
+  if (validationPath) {
+    const content = await loadFile(validationPath);
+    if (content) return { content, source: validationPath };
+  }
+
+  await ensureDbOpen(basePath);
+  const assessment = getLatestAssessmentByScope(milestoneId, "milestone-validation");
+  const content = typeof assessment?.full_content === "string"
+    ? assessment.full_content
+    : typeof assessment?.fullContent === "string"
+      ? assessment.fullContent
+      : "";
+  if (!content.trim()) return null;
+
+  const source = typeof assessment?.path === "string"
+    ? assessment.path
+    : `DB assessment: ${milestoneId}/milestone-validation`;
+  return { content, source };
+}
+
 export async function handleVerdict(
   rawArgs: string,
   ctx: ExtensionCommandContext,
@@ -134,24 +169,16 @@ export async function handleVerdict(
     milestoneId = state.activeMilestone.id;
   }
 
-  const validationPath = resolveMilestoneFile(basePath, milestoneId, "VALIDATION");
-  if (!validationPath) {
+  const existingValidation = await loadExistingValidation(basePath, milestoneId);
+  if (!existingValidation) {
     ctx.ui.notify(
-      `No VALIDATION file found for ${milestoneId}. Run gsd_validate_milestone first to produce one.`,
-      "warning",
-    );
-    return;
-  }
-  const existing = await loadFile(validationPath);
-  if (!existing) {
-    ctx.ui.notify(
-      `Could not read VALIDATION file for ${milestoneId} (${validationPath}).`,
+      `No milestone validation found for ${milestoneId}. Run /gsd auto to validate first, then retry /gsd verdict.`,
       "warning",
     );
     return;
   }
 
-  const current = parseValidationFile(existing);
+  const current = parseValidationFile(existingValidation.content);
 
   if (parsed.verdict !== "pass" && !parsed.rationale) {
     ctx.ui.notify(
@@ -189,7 +216,7 @@ export async function handleVerdict(
 
   const prevVerdict = current.verdict ?? "unknown";
   ctx.ui.notify(
-    `Milestone ${milestoneId} verdict: ${prevVerdict} -> ${parsed.verdict}`,
+    `Milestone ${milestoneId} verdict: ${prevVerdict} -> ${parsed.verdict} (${existingValidation.source})`,
     "success",
   );
 

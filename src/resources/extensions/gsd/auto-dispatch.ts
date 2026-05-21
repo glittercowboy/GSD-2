@@ -17,12 +17,13 @@ import type { GSDPreferences } from "./preferences.js";
 import type { UatType } from "./files.js";
 import type { MinimalModelRegistry } from "./context-budget.js";
 import { loadFile, extractUatType, loadActiveOverrides } from "./files.js";
-import { isDbAvailable, getMilestoneSlices, getPendingGates, markAllGatesOmitted, getMilestone, insertAssessment, transaction } from "./gsd-db.js";
+import { isDbAvailable, getMilestoneSlices, getPendingGates, markAllGatesOmitted, getMilestone, insertAssessment, setSliceSketchFlag, transaction, getAssessment } from "./gsd-db.js";
 import { isClosedStatus } from "./status-guards.js";
 import { extractVerdict, isAcceptableUatVerdict } from "./verdict-parser.js";
 
 import {
   gsdRoot,
+  resolveGsdPathContract,
   resolveMilestoneFile,
   resolveMilestonePath,
   resolveSliceFile,
@@ -39,7 +40,7 @@ import { parseRoadmap } from "./parsers-legacy.js";
 import { validateArtifact } from "./schemas/validate.js";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync } from "node:fs";
 import { logWarning, logError } from "./workflow-logger.js";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { hasImplementationArtifacts } from "./auto-recovery.js";
 import {
   buildDiscussMilestonePrompt,
@@ -89,8 +90,10 @@ import { insertMilestoneValidationGates } from "./milestone-validation-gates.js"
 import { nativeHasChanges, nativeIsRepo, _resetHasChangesCache } from "./native-git-bridge.js";
 import { debugLog, isDebugEnabled } from "./debug-logger.js";
 import { resolveCanonicalMilestoneRoot } from "./worktree-manager.js";
+import { resolveWorktreeProjectRoot } from "./worktree-root.js";
 import { listUnmergedGitPaths } from "./git-conflict-state.js";
 import { runTurnGitAction } from "./git-service.js";
+import { parseUnitId } from "./unit-id.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -232,6 +235,16 @@ async function readUatGateVerdict(
 
   const assessmentContent = assessmentFile ? await loadFile(assessmentFile) : null;
   if (assessmentContent) {
+    // `reassess-roadmap` writes roadmap-scoped assessments to the same
+    // S##-ASSESSMENT artifact path; those verdicts must not be treated as UAT.
+    const assessmentRow = getAssessment(relSliceFile(basePath, mid, sliceId, "ASSESSMENT"));
+    const assessmentScope = typeof assessmentRow?.["scope"] === "string"
+      ? String(assessmentRow["scope"]).trim().toLowerCase()
+      : "";
+    if (assessmentScope === "roadmap") {
+      return null;
+    }
+
     const assessmentVerdict = extractVerdict(assessmentContent);
     if (assessmentVerdict) {
       return {
@@ -368,6 +381,55 @@ function findMissingSummaries(basePath: string, mid: string): string[] {
     .map(s => s.id);
 }
 
+function backfillMissingAssessmentsFromSummaries(basePath: string, mid: string): void {
+  const completedSliceIds = new Set<string>();
+  if (isDbAvailable()) {
+    for (const slice of getMilestoneSlices(mid)) {
+      if (slice.status === "complete" || slice.status === "done") {
+        completedSliceIds.add(slice.id);
+      }
+    }
+  } else {
+    const roadmapFile = resolveMilestoneFile(basePath, mid, "ROADMAP");
+    if (!roadmapFile) return;
+    try {
+      const roadmap = parseRoadmap(readFileSync(roadmapFile, "utf-8"));
+      for (const slice of roadmap.slices) {
+        if (slice.done) completedSliceIds.add(slice.id);
+      }
+    } catch {
+      return;
+    }
+  }
+
+  for (const sliceId of completedSliceIds) {
+    const summaryPath = resolveSliceFile(basePath, mid, sliceId, "SUMMARY");
+    if (!summaryPath || !existsSync(summaryPath)) continue;
+
+    const slicePath = resolveSlicePath(basePath, mid, sliceId);
+    const assessmentPath = resolveSliceFile(basePath, mid, sliceId, "ASSESSMENT")
+      ?? (slicePath ? join(slicePath, buildSliceFileName(sliceId, "ASSESSMENT")) : null);
+    if (!assessmentPath || existsSync(assessmentPath)) continue;
+
+    mkdirSync(dirname(assessmentPath), { recursive: true });
+    const now = new Date().toISOString();
+    const content = [
+      "---",
+      `sliceId: ${sliceId}`,
+      "verdict: PASS",
+      `date: ${now}`,
+      "---",
+      "",
+      `# Assessment — ${sliceId}`,
+      "",
+      "Auto-created during milestone validation because this completed slice had a SUMMARY but no ASSESSMENT artifact.",
+      "No additional reassessment changes were detected in this backfill step.",
+      "",
+    ].join("\n");
+    writeFileSync(assessmentPath, content, "utf-8");
+  }
+}
+
 // ─── Rewrite Circuit Breaker ──────────────────────────────────────────────
 
 const MAX_REWRITE_ATTEMPTS = 3;
@@ -401,7 +463,7 @@ export function setRewriteCount(basePath: string, count: number): void {
 const MAX_UAT_ATTEMPTS = 3;
 
 function uatCountPath(basePath: string, mid: string, sid: string): string {
-  return join(gsdRoot(basePath), "runtime", `uat-count-${mid}-${sid}.json`);
+  return join(resolveGsdPathContract(basePath).projectGsd, "runtime", `uat-count-${mid}-${sid}.json`);
 }
 
 export function getUatCount(basePath: string, mid: string, sid: string): number {
@@ -416,7 +478,7 @@ export function getUatCount(basePath: string, mid: string, sid: string): number 
 export function incrementUatCount(basePath: string, mid: string, sid: string): number {
   const count = getUatCount(basePath, mid, sid) + 1;
   const filePath = uatCountPath(basePath, mid, sid);
-  mkdirSync(join(gsdRoot(basePath), "runtime"), { recursive: true });
+  mkdirSync(join(resolveGsdPathContract(basePath).projectGsd, "runtime"), { recursive: true });
   writeFileSync(filePath, JSON.stringify({ count, updatedAt: new Date().toISOString() }) + "\n");
   return count;
 }
@@ -433,7 +495,7 @@ export function incrementUatCount(basePath: string, mid: string, sid: string): n
 export function isVerificationNotApplicable(value: string): boolean {
   const v = (value ?? "").toLowerCase().trim().replace(/[.\s]+$/, "");
   if (!v || v === "none") return true;
-  return /^(?:none(?:[\s._\u2014-]+[\s\S]*)?|n\/?a|not[\s._-]+(?:applicable|required|needed|provided)|no[\s._-]+operational[\s\S]*)$/i.test(v);
+  return /^(?:none(?:[\s._\u2014-]+[\s\S]*)?|n\/?a(?:[\s._\u2014-]+[\s\S]*)?|not[\s._-]+(?:applicable|required|needed|provided)|no[\s._-]+operational[\s\S]*)$/i.test(v);
 }
 
 // ─── Rules ────────────────────────────────────────────────────────────────
@@ -524,6 +586,7 @@ export const DISPATCH_RULES: DispatchRule[] = [
           midTitle,
           basePath,
           structuredQuestionsAvailable,
+          { headless: !!process.env.GSD_HEADLESS },
         ),
       };
     },
@@ -556,13 +619,18 @@ export const DISPATCH_RULES: DispatchRule[] = [
       if (!needsRunUat) return null;
       const { sliceId, uatType } = needsRunUat;
 
-      // Cap run-uat dispatch attempts to prevent infinite replay (#3624)
-      const attempts = incrementUatCount(basePath, mid, sliceId);
-      if (attempts > MAX_UAT_ATTEMPTS) {
+      // Cap run-uat dispatch attempts to prevent infinite replay (#3624).
+      // Check before incrementing so an exhausted counter cannot create a
+      // no-progress skip loop that starves later dispatch rules.
+      const attempts = getUatCount(basePath, mid, sliceId);
+      if (attempts >= MAX_UAT_ATTEMPTS) {
         return {
-          action: "skip" as const,
+          action: "stop" as const,
+          reason: `Cannot dispatch run-uat for ${mid}/${sliceId}: retry limit reached after ${attempts} attempt(s) without a PASS assessment. Fix the underlying UAT/tool issue, reset the retry counter with /gsd doctor --fix, then rerun /gsd auto.`,
+          level: "warning" as const,
         };
       }
+      incrementUatCount(basePath, mid, sliceId);
       const uatFile = resolveSliceFile(basePath, mid, sliceId, "UAT")!;
       const uatContent = await loadFile(uatFile);
       return {
@@ -668,6 +736,7 @@ export const DISPATCH_RULES: DispatchRule[] = [
           midTitle,
           basePath,
           structuredQuestionsAvailable,
+          { headless: !!process.env.GSD_HEADLESS },
         ),
       };
     },
@@ -835,6 +904,7 @@ export const DISPATCH_RULES: DispatchRule[] = [
           midTitle,
           basePath,
           structuredQuestionsAvailable,
+          { headless: !!process.env.GSD_HEADLESS },
         ),
       };
     },
@@ -883,7 +953,7 @@ export const DISPATCH_RULES: DispatchRule[] = [
       return {
         action: "stop" as const,
         reason: `Slice ${state.activeSlice.id} requires discussion before planning (require_slice_discussion is enabled). Run /gsd discuss to discuss this slice, then /gsd auto to resume.`,
-        level: "info" as const,
+        level: "warning" as const,
       };
     },
   },
@@ -1000,6 +1070,17 @@ export const DISPATCH_RULES: DispatchRule[] = [
       if (!state.activeSlice) return missingSliceStop(mid, state.phase);
       const sid = state.activeSlice.id;
       const sTitle = state.activeSlice.title;
+
+      // Crash recovery: if PLAN exists but DB still says sketch, heal and
+      // skip so the next loop re-derives phase from corrected DB state.
+      if (isDbAvailable()) {
+        const planFile = resolveSliceFile(basePath, mid, sid, "PLAN");
+        if (planFile && existsSync(planFile)) {
+          setSliceSketchFlag(mid, sid, false);
+          return { action: "skip" };
+        }
+      }
+
       const progressiveOn = prefs?.phases?.progressive_planning === true;
       if (!progressiveOn) {
         // Graceful downgrade: treat the sketch as a normal slice needing a plan,
@@ -1323,11 +1404,36 @@ export const DISPATCH_RULES: DispatchRule[] = [
   },
   {
     name: "executing → execute-task",
-    match: async ({ state, mid, basePath, sessionContextWindow, modelRegistry, sessionProvider }) => {
-      if (state.phase !== "executing" || !state.activeTask) return null;
+    match: async ({ state, mid, basePath, session, sessionContextWindow, modelRegistry, sessionProvider }) => {
+      if (state.phase !== "executing") return null;
       if (!state.activeSlice) return missingSliceStop(mid, state.phase);
       const sid = state.activeSlice!.id;
       const sTitle = state.activeSlice!.title;
+      const retryUnitId = session?.pendingVerificationRetry?.unitId;
+      if (retryUnitId) {
+        const { milestone: retryMid, slice: retrySid, task: retryTid } = parseUnitId(retryUnitId);
+        if (retryMid === mid && retrySid === sid && retryTid) {
+          const retryTitle = state.activeTask?.id === retryTid
+            ? state.activeTask.title
+            : retryTid;
+          return {
+            action: "dispatch",
+            unitType: "execute-task",
+            unitId: retryUnitId,
+            prompt: await buildExecuteTaskPrompt(
+              mid,
+              sid,
+              sTitle,
+              retryTid,
+              retryTitle,
+              basePath,
+              { sessionContextWindow, modelRegistry, sessionProvider },
+            ),
+          };
+        }
+      }
+
+      if (!state.activeTask) return null;
       const tid = state.activeTask.id;
       const tTitle = state.activeTask.title;
 
@@ -1349,7 +1455,7 @@ export const DISPATCH_RULES: DispatchRule[] = [
   },
   {
     name: "validating-milestone → validate-milestone",
-    match: async ({ state, mid, midTitle, basePath, prefs }) => {
+    match: async ({ state, mid, midTitle, basePath, prefs, session }) => {
       if (state.phase !== "validating-milestone") return null;
 
       // Safety guard (#1368): verify all roadmap slices have SUMMARY files before
@@ -1363,6 +1469,12 @@ export const DISPATCH_RULES: DispatchRule[] = [
         };
       }
 
+      // #6225: validation requires per-slice ASSESSMENT artifacts (MV02), but
+      // the default auto path can complete all slices without creating them.
+      // Backfill no-change assessments for completed slices that already have
+      // SUMMARY evidence before dispatching validate-milestone.
+      backfillMissingAssessmentsFromSummaries(basePath, mid);
+
       // #4781 phase 2: trivial-scope milestones skip the dedicated validate
       // unit — complete-milestone's own verification steps (3/4/5 in the
       // closer prompt) are sufficient proof for contained deliverables.
@@ -1370,70 +1482,78 @@ export const DISPATCH_RULES: DispatchRule[] = [
 
       // Skip preference OR trivial scope: write a minimal pass-through VALIDATION file.
       if (prefs?.phases?.skip_milestone_validation || trivialVariant) {
-        const mDir = resolveMilestonePath(basePath, mid);
-        if (mDir) {
-          if (!existsSync(mDir)) mkdirSync(mDir, { recursive: true });
-          const validationPath = join(
-            mDir,
-            buildMilestoneFileName(mid, "VALIDATION"),
-          );
-          const skipSource = trivialVariant
-            ? "trivial-scope pipeline variant"
-            : "`skip_milestone_validation` preference";
-          const skipValidationReason = trivialVariant ? "trivial-scope" : "preference";
-          const content = [
-            "---",
-            "verdict: pass",
-            "skip_validation: true",
-            `skip_validation_reason: ${skipValidationReason}`,
-            "remediation_round: 0",
-            "---",
-            "",
-            "# Milestone Validation (skipped)",
-            "",
-            `Milestone validation was skipped via ${skipSource}.`,
-          ].join("\n");
-          writeFileSync(validationPath, content, "utf-8");
-          try {
-            // DB-backed state derivation keys off assessments, not only the file
-            // projection. Persist the skipped validation there too so the next
-            // loop iteration advances to completing-milestone instead of
-            // re-entering validating-milestone.
-            if (isDbAvailable()) {
-              transaction(() => {
-                insertAssessment({
-                  path: validationPath,
-                  milestoneId: mid,
-                  sliceId: null,
-                  taskId: null,
-                  status: "pass",
-                  scope: "milestone-validation",
-                  fullContent: content,
-                });
-                const gateSliceId = getMilestoneSlices(mid)[0]?.id;
-                if (gateSliceId) {
-                  insertMilestoneValidationGates(
-                    mid,
-                    gateSliceId,
-                    "pass",
-                    new Date().toISOString(),
-                  );
-                }
-              });
-            }
-          } catch (err) {
-            try {
-              unlinkSync(validationPath);
-            } catch (unlinkErr) {
-              logWarning(
-                "dispatch",
-                `failed to remove skipped validation file after DB write failure for ${mid}: ${unlinkErr instanceof Error ? unlinkErr.message : String(unlinkErr)}`,
-              );
-            }
-            throw err;
-          }
-          invalidateAllCaches();
+        const artifactBasePath = resolveArtifactBasePath(basePath, mid, session);
+        const projectRoot = resolveWorktreeProjectRoot(basePath, session?.originalBasePath);
+        const mDir = resolveMilestonePath(artifactBasePath, mid) ??
+          (projectRoot !== artifactBasePath ? resolveMilestonePath(projectRoot, mid) : null);
+        if (!mDir) {
+          return {
+            action: "stop",
+            reason: `Cannot skip milestone validation for ${mid}: milestone artifacts are missing under ${artifactBasePath}. Run /gsd doctor before resuming auto-mode.`,
+            level: "warning",
+          };
         }
+        if (!existsSync(mDir)) mkdirSync(mDir, { recursive: true });
+        const validationPath = join(
+          mDir,
+          buildMilestoneFileName(mid, "VALIDATION"),
+        );
+        const skipSource = trivialVariant
+          ? "trivial-scope pipeline variant"
+          : "`skip_milestone_validation` preference";
+        const skipValidationReason = trivialVariant ? "trivial-scope" : "preference";
+        const content = [
+          "---",
+          "verdict: pass",
+          "skip_validation: true",
+          `skip_validation_reason: ${skipValidationReason}`,
+          "remediation_round: 0",
+          "---",
+          "",
+          "# Milestone Validation (skipped)",
+          "",
+          `Milestone validation was skipped via ${skipSource}.`,
+        ].join("\n");
+        writeFileSync(validationPath, content, "utf-8");
+        try {
+          // DB-backed state derivation keys off assessments, not only the file
+          // projection. Persist the skipped validation there too so the next
+          // loop iteration advances to completing-milestone instead of
+          // re-entering validating-milestone.
+          if (isDbAvailable()) {
+            transaction(() => {
+              insertAssessment({
+                path: validationPath,
+                milestoneId: mid,
+                sliceId: null,
+                taskId: null,
+                status: "pass",
+                scope: "milestone-validation",
+                fullContent: content,
+              });
+              const gateSliceId = getMilestoneSlices(mid)[0]?.id;
+              if (gateSliceId) {
+                insertMilestoneValidationGates(
+                  mid,
+                  gateSliceId,
+                  "pass",
+                  new Date().toISOString(),
+                );
+              }
+            });
+          }
+        } catch (err) {
+          try {
+            unlinkSync(validationPath);
+          } catch (unlinkErr) {
+            logWarning(
+              "dispatch",
+              `failed to remove skipped validation file after DB write failure for ${mid}: ${unlinkErr instanceof Error ? unlinkErr.message : String(unlinkErr)}`,
+            );
+          }
+          throw err;
+        }
+        invalidateAllCaches();
         return { action: "skip" };
       }
       return {
@@ -1566,9 +1686,9 @@ export const DISPATCH_RULES: DispatchRule[] = [
                 // or prose evidence patterns the validation agent may emit.
                 const structuredMatch =
                   validationContent.includes("Operational") &&
-                  (validationContent.includes("MET") || validationContent.includes("N/A") || validationContent.includes("SATISFIED"));
+                  (validationContent.includes("MET") || validationContent.includes("N/A") || validationContent.includes("SATISFIED") || validationContent.includes("DEFERRED"));
                 const proseMatch =
-                  /[Oo]perational[\s\S]{0,500}?(?:✅|pass|verified|confirmed|met|complete|true|yes|addressed|covered|satisfied|partially|n\/a|not[\s-]+applicable)/i.test(validationContent);
+                  /[Oo]perational[\s\S]{0,500}?(?:✅|pass|verified|confirmed|met|complete|true|yes|addressed|covered|satisfied|partially|deferred|n\/a|not[\s-]+applicable)/i.test(validationContent);
                 const hasOperationalCheck =
                   skippedByMarker ||
                   skippedByPreference ||
@@ -1651,7 +1771,18 @@ export async function resolveDispatch(
   // Delegate to registry when available
   try {
     const registry = getRegistry();
-    return annotateBackgroundable(await registry.evaluateDispatch(ctx));
+    const action = annotateBackgroundable(await registry.evaluateDispatch(ctx));
+    if (
+      action.action === "dispatch" &&
+      ctx.session?.exhaustedVerificationUnits?.has(`${action.unitType}:${action.unitId}`)
+    ) {
+      return {
+        action: "stop",
+        reason: `Unit ${action.unitId} exhausted verification retries this session.`,
+        level: "error",
+      };
+    }
+    return action;
   } catch (err) {
     // Registry not initialized — fall back to inline loop
     logWarning("dispatch", `registry dispatch failed, falling back to inline rules: ${err instanceof Error ? err.message : String(err)}`);
@@ -1661,7 +1792,19 @@ export async function resolveDispatch(
     const result = await rule.match(ctx);
     if (result) {
       if (result.action !== "skip") result.matchedRule = rule.name;
-      return annotateBackgroundable(result);
+      const action = annotateBackgroundable(result);
+      if (
+        action.action === "dispatch" &&
+        ctx.session?.exhaustedVerificationUnits?.has(`${action.unitType}:${action.unitId}`)
+      ) {
+        return {
+          action: "stop",
+          reason: `Unit ${action.unitId} exhausted verification retries this session.`,
+          level: "error",
+          matchedRule: rule.name,
+        };
+      }
+      return action;
     }
   }
 

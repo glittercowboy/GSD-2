@@ -1,3 +1,6 @@
+// Project/App: GSD-2
+// File Purpose: Tests workflow MCP launch config, tool surface, and stdio elicitation behavior.
+
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -16,6 +19,8 @@ import {
   supportsStructuredQuestions,
   usesWorkflowMcpTransport,
 } from "../workflow-mcp.ts";
+
+const MCP_STDIO_TIMEOUT_MS = 90_000;
 
 type ElicitPayload = {
   message: string;
@@ -282,9 +287,9 @@ test("workflow MCP launch config reaches mutation tools over stdio", async () =>
   });
 
   try {
-    await client.connect(transport, { timeout: 30_000 });
+    await client.connect(transport, { timeout: MCP_STDIO_TIMEOUT_MS });
 
-    const tools = await client.listTools(undefined, { timeout: 30_000 });
+    const tools = await client.listTools(undefined, { timeout: MCP_STDIO_TIMEOUT_MS });
     assert.ok(
       (tools.tools ?? []).some((tool) => tool.name === "gsd_plan_slice"),
       "expected workflow MCP surface to expose gsd_plan_slice",
@@ -312,7 +317,7 @@ test("workflow MCP launch config reaches mutation tools over stdio", async () =>
         },
       },
       undefined,
-      { timeout: 30_000 },
+      { timeout: MCP_STDIO_TIMEOUT_MS },
     );
     assert.equal(askResult.isError, undefined);
     assert.equal(
@@ -351,7 +356,7 @@ test("workflow MCP launch config reaches mutation tools over stdio", async () =>
         },
       },
       undefined,
-      { timeout: 30_000 },
+      { timeout: MCP_STDIO_TIMEOUT_MS },
     );
     assert.equal(milestoneResult.isError, undefined);
     assert.match(
@@ -382,7 +387,7 @@ test("workflow MCP launch config reaches mutation tools over stdio", async () =>
         },
       },
       undefined,
-      { timeout: 30_000 },
+      { timeout: MCP_STDIO_TIMEOUT_MS },
     );
     assert.equal(sliceResult.isError, undefined);
     assert.match(
@@ -453,7 +458,7 @@ test("workflow MCP ask_user_questions uses stdio elicitation round-trip", async 
   });
 
   try {
-    await client.connect(transport, { timeout: 30_000 });
+    await client.connect(transport, { timeout: MCP_STDIO_TIMEOUT_MS });
 
     const result = await client.callTool(
       {
@@ -473,7 +478,7 @@ test("workflow MCP ask_user_questions uses stdio elicitation round-trip", async 
         },
       },
       undefined,
-      { timeout: 30_000 },
+      { timeout: MCP_STDIO_TIMEOUT_MS },
     );
 
     assert.ok(requestSeen, "expected stdio transport to forward an elicitation request");

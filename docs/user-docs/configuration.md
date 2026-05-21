@@ -403,6 +403,31 @@ Enable deep mode for the current project with `/gsd new-project --deep` or `/gsd
 
 In deep mode, `research-decision` writes `.gsd/runtime/research-decision.json` with `research` or `skip`. A `research` decision dispatches `research-project`, which writes `.gsd/research/STACK.md`, `FEATURES.md`, `ARCHITECTURE.md`, and `PITFALLS.md`; a `skip` decision proceeds directly to milestone work.
 
+### `workspace`
+
+Declares repository targets for project or parent workspaces. `plan-slice` validates `targetRepositories` against these IDs and scopes task file/input/output paths to the selected repository roots.
+
+```yaml
+workspace:
+  mode: parent   # "project" or "parent"
+  repositories:
+    frontend:
+      path: frontend
+      role: ui
+      verification:
+        - npm run test
+      commit_policy: auto   # "auto" or "skip"
+    backend:
+      path: backend
+```
+
+- `workspace.mode`: `project` (single-repo default) or `parent` (multi-repo workspace rooted at the current project).
+- `workspace.repositories.<id>.path`: required repository path (relative or absolute).
+- `workspace.repositories.<id>.role`: optional label used for planning/reporting context.
+- `workspace.repositories.<id>.verification`: optional default verification commands for that repository.
+- `workspace.repositories.<id>.commit_policy`: optional per-repository auto-commit policy (`auto` or `skip`).
+- Omitted slice/task `targetRepositories` default to `["project"]`.
+
 ### `reactive_execution`
 
 Controls automatic parallel task dispatch inside a slice. This is enabled by default and only dispatches when task-plan IO annotations produce a non-ambiguous graph with enough ready, non-conflicting tasks.
@@ -532,6 +557,46 @@ verification_max_retries: 2       # max retry attempts (default: 2)
 Verification commands must be simple executable commands, not shell pipelines or scripts packed into one line. GSD rejects pipes (`|`), redirects (`>` and `<`), semicolons, backticks, and command substitution (`$(...)`) because verification is run as a controlled command list, not as an arbitrary shell program. Use `python3 -m pytest tests -q` instead of `python3 -m pytest tests -q 2>&1 | tail -5`.
 
 When `verification_commands` is empty and no task-level `verify` command is available, GSD can auto-discover project checks. JavaScript projects use `package.json` scripts in this order: `typecheck`, `lint`, `test`. Python projects use the `python-project` discovery source and run `python3 -m pytest` when GSD finds files matching pytest's default test file patterns (`test_*.py` or `*_test.py`) under `tests/` or an explicit pytest configuration marker: `pytest.ini`, `[tool.pytest]`, `[tool.pytest.*]`, `[pytest]`, or `[tool:pytest]` in `pyproject.toml`.
+
+### `workspace`
+
+Multi-repository workspace configuration for a parent project that coordinates child repositories.
+
+```yaml
+workspace:
+  mode: parent
+  repositories:
+    frontend:
+      path: apps/frontend
+      role: web
+      verification:
+        - pnpm -C apps/frontend test
+      commit_policy: auto
+    backend:
+      path: services/backend
+      role: api
+      verification:
+        - pnpm -C services/backend test
+      commit_policy: skip
+```
+
+`project` is always available as an implicit repository ID pointing at the project root. If plan/task `targetRepositories` is omitted, GSD defaults to `["project"]`.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `workspace.mode` | `"project" \| "parent"` | `"project"` | Workspace operating mode. Use `parent` to declare and resolve child repositories. |
+| `workspace.repositories` | object | `{}` | Mapping of repository IDs to repository config. |
+| `workspace.repositories.<id>.path` | string | required | Child repository path, resolved relative to project root. Must stay inside the project root. |
+| `workspace.repositories.<id>.role` | string | optional | Human-oriented label used by prompts/reporting. |
+| `workspace.repositories.<id>.verification` | string[] | optional | Default verification commands for that repository. |
+| `workspace.repositories.<id>.commit_policy` | `"auto" \| "skip"` | optional | Per-repository auto-mode turn-commit policy. |
+
+Validation rules:
+
+- Repository IDs must match `^[A-Za-z0-9][A-Za-z0-9._-]*$`.
+- Repository paths are normalized and must be unique (case-insensitive).
+- Paths resolving outside the project root are rejected.
+- Unknown keys under `workspace` and each repository entry are ignored with warnings.
 
 ### URL Blocking (`fetch_page`)
 
@@ -703,6 +768,38 @@ github:
 **Commands:**
 - `/github-sync bootstrap` — initial setup and sync
 - `/github-sync status` — show sync mapping counts
+
+### `workspace` (v2.49)
+
+Multi-repository parent workspace configuration. This lets one `.gsd` state manage multiple child repositories and constrains planning file paths to declared repository roots.
+
+```yaml
+workspace:
+  mode: parent                  # "project" (default) or "parent"
+  repositories:
+    frontend:
+      path: frontend            # relative to project root (or absolute path within project root)
+      role: ui                  # optional
+      verification:             # optional default verification commands
+        - npm run test
+      commit_policy: auto       # optional: "auto" or "skip"
+    backend:
+      path: backend
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `mode` | string | `project` | Workspace mode. `parent` enables multi-repo registry behavior. |
+| `repositories` | object | `{}` | Map of repository ids to repository config objects. |
+| `repositories.<id>.path` | string | required | Repository root path. Relative paths resolve from project root and must stay inside project root. |
+| `repositories.<id>.role` | string | (none) | Optional human-oriented label for prompts/reporting. |
+| `repositories.<id>.verification` | string[] | (none) | Optional default verification commands for that repository. |
+| `repositories.<id>.commit_policy` | string | (none) | Optional per-repo auto-mode turn commit policy: `auto` or `skip`. |
+
+**Path-scope behavior:**
+- During planning (`plan-slice`/`replan-slice`), file paths are validated against the selected `targetRepositories`.
+- Absolute and relative paths are both checked; paths that resolve outside declared repository roots are rejected.
+- If no explicit `targetRepositories` are provided, planning defaults to `["project"]`.
 
 ### `notifications`
 

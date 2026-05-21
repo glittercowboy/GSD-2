@@ -732,9 +732,16 @@ const PLANNING_SAFE_TOOLS = new Set([
 ]);
 
 function isPathUnderGsd(absPath: string, basePath: string): boolean {
-  const gsdRoot = resolve(basePath, ".gsd");
-  const rel = relative(gsdRoot, absPath);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  const localGsdRoot = resolve(basePath, ".gsd");
+  const localRel = relative(localGsdRoot, absPath);
+  if (localRel === "" || (!localRel.startsWith("..") && !isAbsolute(localRel))) return true;
+
+  const projectRoot = resolveWorktreeProjectRoot(basePath);
+  if (projectRoot === basePath) return false;
+
+  const canonicalGsdRoot = resolve(projectRoot, ".gsd");
+  const canonicalRel = relative(canonicalGsdRoot, absPath);
+  return canonicalRel === "" || (!canonicalRel.startsWith("..") && !isAbsolute(canonicalRel));
 }
 
 function matchesAllowedGlob(absPath: string, basePath: string, globs: readonly string[]): boolean {

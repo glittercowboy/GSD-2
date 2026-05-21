@@ -44,10 +44,10 @@ function tryParseNumber(val: string): number | null {
   return !isNaN(n) && isFinite(n) ? n : null;
 }
 
-/** Parse a string as a number in the 0–100 range, or return null on failure. */
+/** Parse a string as 0 or a whole percentage in the 1–100 range, or return null on failure. */
 function tryParsePercentage(val: string): number | null {
   const n = Number(val);
-  return !isNaN(n) && n >= 0 && n <= 100 ? n : null;
+  return !isNaN(n) && (n === 0 || (n >= 1 && n <= 100)) ? n : null;
 }
 
 // ─── Prompt helpers (reduce boilerplate across configure* functions) ─────────
@@ -1053,7 +1053,7 @@ async function configureBudget(ctx: ExtensionCommandContext, prefs: Record<strin
         prefs.context_pause_threshold = parsed;
       }
     } else if (val) {
-      ctx.ui.notify(`Invalid context pause threshold "${val}" — must be 0-100. Keeping previous value.`, "warning");
+      ctx.ui.notify(`Invalid context pause threshold "${val}" — use 0 to disable or 1-100 percent. Keeping previous value.`, "warning");
     }
   }
 }

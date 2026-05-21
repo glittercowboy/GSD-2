@@ -129,6 +129,41 @@ describe("createWorktree — duplicate rejection", () => {
       "should throw on duplicate worktree name",
     );
   });
+
+});
+
+describe("createWorktree — branch cleanup on add failure", () => {
+  let base: string;
+  beforeEach(() => { base = makeBaseRepo(); });
+  afterEach(() => { rmSync(base, { recursive: true, force: true }); });
+
+  test("deletes force-reset branch when worktree add fails", () => {
+    // Pre-create a branch at worktree/cleanup-test so createWorktree enters
+    // the force-reset path (branch exists, reuseExistingBranch not set).
+    run("git branch worktree/cleanup-test", base);
+
+    // Make the worktrees parent directory non-writable so `git worktree add`
+    // fails after the branch has already been force-reset.
+    const parentDir = join(base, ".gsd", "worktrees");
+    mkdirSync(parentDir, { recursive: true });
+    run(`chmod 555 "${parentDir}"`, base);
+
+    try {
+      assert.throws(
+        () => createWorktree(base, "cleanup-test"),
+        "should throw when worktree add cannot create worktree directory",
+      );
+
+      // The force-reset branch must not be left as an orphan.
+      const branches = run("git branch", base);
+      assert.ok(
+        !branches.includes("worktree/cleanup-test"),
+        "force-reset branch should be deleted after failed worktree add",
+      );
+    } finally {
+      run(`chmod 755 "${parentDir}"`, base);
+    }
+  });
 });
 
 // ─── listWorktrees ────────────────────────────────────────────────────────────
@@ -153,6 +188,16 @@ describe("listWorktrees", () => {
     removeWorktree(base, "feature-x");
     const list = listWorktrees(base);
     assert.strictEqual(list.length, 0, "should have no worktrees after removal");
+  });
+
+  test("surfaces orphan milestone branches not in registered worktrees", () => {
+    run("git branch milestone/M003", base);
+    const list = listWorktrees(base);
+    const orphan = list.find((wt) => wt.branch === "milestone/M003");
+    assert.ok(orphan, "expected orphan milestone branch to be listed");
+    assert.strictEqual(orphan?.name, "M003", "orphan name should be derived from branch");
+    assert.strictEqual(orphan?.exists, false, "orphan should be marked missing on disk");
+    assert.strictEqual(orphan?.orphan, true, "orphan should be explicitly flagged");
   });
 });
 

@@ -519,6 +519,7 @@ function mergePreferences(base: GSDPreferences, override: GSDPreferences): GSDPr
       : undefined,
     language: override.language ?? base.language,
     planning_depth: override.planning_depth ?? base.planning_depth,
+    workspace: override.workspace ?? base.workspace,
   };
 }
 

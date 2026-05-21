@@ -23,7 +23,7 @@ import {
   type PreMergeCheckResult,
   type TaskCommitContext,
 } from "../../git-service.ts";
-import { nativeAddAllWithExclusions } from "../../native-git-bridge.ts";
+import { nativeAddAllWithExclusions, nativeHasChanges, _resetHasChangesCache } from "../../native-git-bridge.ts";
 function run(command: string, cwd: string): string {
   return execSync(command, { cwd, stdio: ["ignore", "pipe", "pipe"], encoding: "utf-8" }).trim();
 }
@@ -245,6 +245,27 @@ describe('git-service', async () => {
     assert.ok(subject.includes("Added auth BREAKING: injected trailer"), "control characters are flattened");
     assert.equal(subject.includes("\r"), false, "subject does not include carriage returns");
     assert.equal(subject.includes("\u0007"), false, "subject does not include control characters");
+  });
+
+  test('buildTaskCommitMessage truncates long ASCII subject to <=72 UTF-8 bytes', () => {
+    const msg = buildTaskCommitMessage({
+      taskId: "S01/T05",
+      taskTitle: "implement lint metadata",
+      oneLiner: "Added the core lint contract, seven-rule metadata catalogue, and parse-derived mechanical lint mappings with structured suggested_fix objects.",
+    });
+    const subject = msg.split("\n")[0] ?? "";
+    assert.ok(Buffer.byteLength(subject, "utf8") <= 72, "subject is capped at 72 UTF-8 bytes");
+  });
+
+  test('buildTaskCommitMessage truncates multibyte subject without breaking UTF-8 boundaries', () => {
+    const msg = buildTaskCommitMessage({
+      taskId: "S01/T06",
+      taskTitle: "implement emoji handling",
+      oneLiner: "Added emoji support 😀😀😀😀😀😀😀😀😀😀 with robust UTF-8 truncation guards for commit subject generation across locales.",
+    });
+    const subject = msg.split("\n")[0] ?? "";
+    assert.ok(Buffer.byteLength(subject, "utf8") <= 72, "multibyte subject is capped at 72 UTF-8 bytes");
+    assert.ok(subject.endsWith("..."), "truncated subject uses ASCII ellipsis");
   });
 
   {
@@ -1974,6 +1995,19 @@ describe('git-service', async () => {
     // No gsd snapshot commits in log
     const log = run("git log --oneline", repo);
     assert.ok(!log.includes("gsd snapshot"), "no gsd snapshot commits remain in history");
+
+    rmSync(repo, { recursive: true, force: true });
+  });
+
+  test('autoCommit: resets nativeHasChanges cache after successful commit', () => {
+    const repo = initTempRepo();
+    createFile(repo, "cache-reset.ts", "before");
+
+    _resetHasChangesCache();
+    const svc = new GitServiceImpl(repo);
+    const message = svc.autoCommit("execute-task", "S01/T-cache");
+    assert.ok(message !== null, "autoCommit should commit dirty changes");
+    assert.equal(nativeHasChanges(repo), false, "post-commit has-changes check should observe a clean tree");
 
     rmSync(repo, { recursive: true, force: true });
   });

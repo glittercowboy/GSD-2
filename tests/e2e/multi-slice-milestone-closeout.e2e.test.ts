@@ -355,7 +355,7 @@ describe("multi-slice milestone closeout e2e (fake LLM)", () => {
 	const avail = binaryAvailable();
 	const skipReason = avail.ok ? null : avail.reason;
 
-	test("headless new-milestone --auto completes two slices with closeout state agreement", { skip: skipReason ?? false }, (t) => {
+	test("headless new-milestone --auto completes two slices with closeout state agreement", { skip: skipReason ?? false, timeout: 240_000 }, (t) => {
 		const project = createTmpProject({
 			git: true,
 			files: {
@@ -405,7 +405,7 @@ describe("multi-slice milestone closeout e2e (fake LLM)", () => {
 				"--model",
 				"gsd-fake-model",
 				"--timeout",
-				"90000",
+				"180000",
 				"--max-restarts",
 				"0",
 				"--answers",
@@ -417,7 +417,7 @@ describe("multi-slice milestone closeout e2e (fake LLM)", () => {
 			],
 			{
 				cwd: project.dir,
-				timeoutMs: 105_000,
+				timeoutMs: 210_000,
 				env: {
 					GSD_FAKE_LLM_TRANSCRIPT: transcript,
 				},

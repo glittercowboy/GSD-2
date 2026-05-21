@@ -379,10 +379,14 @@ The migration tool:
 
 - Parses your old `PROJECT.md`, `ROADMAP.md`, `REQUIREMENTS.md`, phase directories, plans, summaries, and research
 - Maps phases → slices, plans → tasks, milestones → milestones
+- Treats an explicit path as the target project root, so `/gsd migrate ~/projects/my-old-project` writes to `~/projects/my-old-project/.gsd`
+- Blocks zero-slice migrations and refuses to run while active, paused, or worktree session state exists
+- Backs up any existing `.gsd/` to `.gsd-backups/migrate-YYYYMMDD-HHMMSS/`, deletes the old `.gsd/`, and restores the backup if migration fails
+- Writes imported hierarchy into the GSD database, renders/verifies markdown projections from DB state, and records a migration audit under `.gsd/migration/`
 - Preserves completion state (`[x]` phases stay done, summaries carry over)
-- Consolidates research files into the new structure
+- Consolidates research files into the new structure and archives the full legacy `.planning` source under `.gsd/migration/legacy/`
 - Shows a preview before writing anything
-- Optionally runs an agent-driven review of the output for quality assurance
+- Optionally runs a read-only review of the output for quality assurance
 
 Supports format variations including milestone-sectioned roadmaps with `<details>` blocks, bold phase entries, bullet-format requirements, decimal phase numbering, and duplicate phase numbers across milestones.
 

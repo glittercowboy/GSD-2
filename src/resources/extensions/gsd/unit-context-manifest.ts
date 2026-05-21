@@ -368,11 +368,11 @@ export const UNIT_MANIFESTS: Record<UnitType, UnitContextManifest> = {
     contextMode: "research",
     tools: TOOLS_PLANNING,
     artifacts: {
-      // Phase 3 migration (#4782): matches today's actual
-      // buildResearchMilestonePrompt inlining order.
-      inline: ["milestone-context", "project", "requirements", "decisions", "templates"],
+      // Keep the milestone-specific prompt compact. Broader project docs
+      // stay addressable without being loaded into every research turn.
+      inline: ["milestone-context", "templates"],
       excerpt: [],
-      onDemand: [],
+      onDemand: ["project", "requirements", "decisions"],
     },
     maxSystemPromptChars: COMMON_BUDGET_MEDIUM,
   },
@@ -385,9 +385,9 @@ export const UNIT_MANIFESTS: Record<UnitType, UnitContextManifest> = {
     contextMode: "planning",
     tools: TOOLS_PLANNING,
     artifacts: {
-      inline: ["project", "requirements", "decisions", "milestone-research", "templates"],
+      inline: ["milestone-context", "requirements", "milestone-research", "templates"],
       excerpt: [],
-      onDemand: [],
+      onDemand: ["project", "decisions"],
     },
     maxSystemPromptChars: COMMON_BUDGET_LARGE,
   },
@@ -417,9 +417,9 @@ export const UNIT_MANIFESTS: Record<UnitType, UnitContextManifest> = {
     // fixes before milestone closeout can proceed.
     tools: TOOLS_ALL,
     artifacts: {
-      inline: ["roadmap", "slice-summary", "slice-uat", "requirements", "decisions", "templates"],
-      excerpt: [],
-      onDemand: [],
+      inline: ["roadmap", "requirements", "templates"],
+      excerpt: ["slice-summary", "slice-assessment"],
+      onDemand: ["slice-summary", "slice-assessment", "decisions", "project", "milestone-context"],
     },
     maxSystemPromptChars: COMMON_BUDGET_LARGE,
   },
@@ -437,9 +437,9 @@ export const UNIT_MANIFESTS: Record<UnitType, UnitContextManifest> = {
       // #4780 landed slice-summary as excerpt for this unit; phase 2 of
       // the architecture will read this manifest as the source of truth
       // and retire the special-case wiring in auto-prompts.ts.
-      inline: ["roadmap", "milestone-context", "requirements", "decisions", "project", "templates"],
+      inline: ["roadmap", "requirements", "templates"],
       excerpt: ["slice-summary"],
-      onDemand: ["slice-summary"],
+      onDemand: ["slice-summary", "decisions", "project", "milestone-context"],
     },
     maxSystemPromptChars: COMMON_BUDGET_MEDIUM,
   },
@@ -458,7 +458,7 @@ export const UNIT_MANIFESTS: Record<UnitType, UnitContextManifest> = {
     artifacts: {
       inline: ["roadmap", "milestone-research", "dependency-summaries", "templates"],
       excerpt: [],
-      onDemand: [],
+      onDemand: ["decisions"],
     },
     maxSystemPromptChars: COMMON_BUDGET_MEDIUM,
   },
@@ -543,12 +543,9 @@ export const UNIT_MANIFESTS: Record<UnitType, UnitContextManifest> = {
     contextMode: "planning",
     tools: TOOLS_PLANNING,
     artifacts: {
-      // Phase 2 pilot (#4782): manifest now matches today's actual
-      // buildReassessRoadmapPrompt behavior for equivalence. Phase 3
-      // will tighten this list once the composer reports real telemetry.
-      inline: ["roadmap", "slice-context", "slice-summary", "project", "requirements", "decisions"],
-      excerpt: [],
-      onDemand: [],
+      inline: ["roadmap", "slice-context"],
+      excerpt: ["slice-summary"],
+      onDemand: ["project", "requirements", "decisions"],
     },
     maxSystemPromptChars: COMMON_BUDGET_MEDIUM,
   },
@@ -595,13 +592,9 @@ export const UNIT_MANIFESTS: Record<UnitType, UnitContextManifest> = {
     contextMode: "verification",
     tools: TOOLS_VERIFICATION,
     artifacts: {
-      // Phase 3 migration (#4782): manifest matches today's actual
-      // buildRunUatPrompt inlining. Prior phase-1 entry listed
-      // `slice-plan` aspirationally — the real builder inlines the UAT
-      // file, the slice SUMMARY (optional), and the project row.
-      inline: ["slice-uat", "slice-summary", "project"],
-      excerpt: [],
-      onDemand: [],
+      inline: ["slice-uat"],
+      excerpt: ["slice-summary"],
+      onDemand: ["slice-summary", "project"],
     },
     maxSystemPromptChars: COMMON_BUDGET_SMALL,
   },

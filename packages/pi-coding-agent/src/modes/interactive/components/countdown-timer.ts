@@ -1,11 +1,13 @@
+// GSD-2 + packages/pi-coding-agent/src/modes/interactive/components/countdown-timer.ts - Dialog countdown timer lifecycle.
 /**
  * Reusable countdown timer for dialog components.
  */
 
 import type { TUI } from "@gsd/pi-tui";
+import { ManagedInterval } from "./animated-component.js";
 
 export class CountdownTimer {
-	private intervalId: ReturnType<typeof setInterval> | undefined;
+	private interval = new ManagedInterval();
 	private remainingSeconds: number;
 	private _disposed = false;
 
@@ -18,7 +20,7 @@ export class CountdownTimer {
 		this.remainingSeconds = Math.ceil(timeoutMs / 1000);
 		this.onTick(this.remainingSeconds);
 
-		this.intervalId = setInterval(() => {
+		this.interval.start(1000, () => {
 			if (this._disposed) return;
 			this.remainingSeconds--;
 			this.onTick(this.remainingSeconds);
@@ -27,18 +29,15 @@ export class CountdownTimer {
 			if (this.remainingSeconds <= 0) {
 				this.dispose();
 				this.onExpire();
+				return true;
 			}
-		}, 1000);
-		// The TUI keeps the process alive while a dialog is open; this timer
-		// must not pin the event loop on its own if dispose() is missed.
-		this.intervalId.unref?.();
+			return false;
+		});
 	}
 
 	dispose(): void {
+		if (this._disposed) return;
 		this._disposed = true;
-		if (this.intervalId) {
-			clearInterval(this.intervalId);
-			this.intervalId = undefined;
-		}
+		this.interval.dispose();
 	}
 }

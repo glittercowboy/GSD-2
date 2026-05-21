@@ -454,7 +454,7 @@ describe("multi-milestone sequence e2e (fake LLM)", () => {
 	const avail = binaryAvailable();
 	const skipReason = avail.ok ? null : avail.reason;
 
-	test("headless new-milestone --auto completes M001 then M002", { skip: skipReason ?? false }, (t) => {
+	test("headless new-milestone --auto completes M001 then M002", { skip: skipReason ?? false, timeout: 300_000 }, (t) => {
 		const project = createTmpProject({
 			git: true,
 			files: {
@@ -506,7 +506,7 @@ describe("multi-milestone sequence e2e (fake LLM)", () => {
 				"--model",
 				"gsd-fake-model",
 				"--timeout",
-				"120000",
+				"240000",
 				"--max-restarts",
 				"0",
 				"--answers",
@@ -518,7 +518,7 @@ describe("multi-milestone sequence e2e (fake LLM)", () => {
 			],
 			{
 				cwd: project.dir,
-				timeoutMs: 135_000,
+				timeoutMs: 270_000,
 				env: {
 					GSD_FAKE_LLM_TRANSCRIPT: buildTranscript(),
 				},

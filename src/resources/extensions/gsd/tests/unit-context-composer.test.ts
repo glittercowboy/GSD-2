@@ -46,7 +46,7 @@ test("#4782 composer: returns empty string for unknown unit type", async () => {
 });
 
 test("#4782 composer: walks the manifest's inline list in declared order", async () => {
-  // reassess-roadmap manifest: [roadmap, slice-context, slice-summary, project, requirements, decisions]
+  // reassess-roadmap manifest keeps broad project docs out of inline context.
   const calls: ArtifactKey[] = [];
   const resolver: ArtifactResolver = async (key) => {
     calls.push(key);
@@ -56,10 +56,6 @@ test("#4782 composer: walks the manifest's inline list in declared order", async
   assert.deepEqual(calls, [
     "roadmap",
     "slice-context",
-    "slice-summary",
-    "project",
-    "requirements",
-    "decisions",
   ]);
   // Output joins blocks with the "---" separator.
   assert.match(out, /BODY:roadmap\n\n---\n\nBODY:slice-context/);
@@ -75,7 +71,7 @@ test("#4782 composer: null-returning resolvers are silently omitted", async () =
   assert.ok(!out.includes("BODY:slice-context"));
   assert.ok(!out.includes("BODY:project"));
   // Remaining keys still emitted in declared order
-  assert.match(out, /BODY:roadmap\n\n---\n\nBODY:slice-summary\n\n---\n\nBODY:requirements\n\n---\n\nBODY:decisions/);
+  assert.strictEqual(out, "BODY:roadmap");
 });
 
 test("#4782 composer: empty-string resolvers are omitted (treated as no-op)", async () => {
@@ -257,8 +253,15 @@ test("#4782 phase 2: buildReassessRoadmapPrompt emits composer-shaped context wi
   assert.match(prompt, /S01: First/);
 
   // Slice summary present
-  assert.match(prompt, /### S01 Summary/);
+  assert.match(prompt, /### S01 Summary \(excerpt\)/);
   assert.match(prompt, /One-liner/);
+  assert.ok(!prompt.includes("## What Happened\nDone."), "reassess prompt should not inline full completed-slice narrative");
+
+  // Broad project docs are advertised on demand instead of fully inlined.
+  assert.match(prompt, /### On-demand Planning Context/);
+  assert.match(prompt, /\.gsd\/PROJECT\.md/);
+  assert.match(prompt, /\.gsd\/REQUIREMENTS\.md/);
+  assert.match(prompt, /\.gsd\/DECISIONS\.md/);
 
   // Slice context is optional and not present in this fixture — must not
   // leave a stray empty section
@@ -374,20 +377,20 @@ test("#4924 v2 composer: omitting resolveArtifact skips inline keys without erro
 });
 
 test("#4924 v2 composer: walks inline + excerpt + computed sections in declared order", async () => {
-  // Reuse the run-uat manifest shape (small inline, no excerpt/computed) and
-  // synthesise a manifest-shape override via a temporary registration would
-  // require touching production data. Instead, drive the composer through
-  // the existing manifest plus mock resolvers and verify ordering against
-  // the declared sequence.
+  // Run-uat now keeps the UAT body inline and moves slice summary to excerpt
+  // context, so verify both resolver lanes preserve manifest order.
   const calls: string[] = [];
   const resolveArtifact: ArtifactResolver = async (key) => {
     calls.push(`art:${key}`);
     return `BODY:${key}`;
   };
-  const out = await composeUnitContext("run-uat", { base: { ...fakeBase, unitType: "run-uat" }, resolveArtifact });
-  // run-uat manifest inline order: slice-uat, slice-summary, project
-  assert.deepEqual(calls, ["art:slice-uat", "art:slice-summary", "art:project"]);
-  assert.match(out.inline, /BODY:slice-uat\n\n---\n\nBODY:slice-summary\n\n---\n\nBODY:project/);
+  const resolveExcerpt: ExcerptResolver = async (key) => {
+    calls.push(`excerpt:${key}`);
+    return `EXCERPT:${key}`;
+  };
+  const out = await composeUnitContext("run-uat", { base: { ...fakeBase, unitType: "run-uat" }, resolveArtifact, resolveExcerpt });
+  assert.deepEqual(calls, ["art:slice-uat", "excerpt:slice-summary"]);
+  assert.match(out.inline, /BODY:slice-uat\n\n---\n\nEXCERPT:slice-summary/);
 });
 
 test("#4924 v2 composer: excerpt section calls resolveExcerpt for declared keys", async () => {
@@ -487,7 +490,7 @@ test("#4924 v2 composer: computed builder returning null omits the section (no e
 
 test("#4924 v2 composer: backward-compat — composeInlinedContext still works for v1 callers", async () => {
   const out = await composeInlinedContext("run-uat", async (key) => `BODY:${key}`);
-  assert.match(out, /BODY:slice-uat\n\n---\n\nBODY:slice-summary\n\n---\n\nBODY:project/);
+  assert.strictEqual(out, "BODY:slice-uat");
 });
 
 test("#4926 review: computed builders see normalized base.unitType matching the resolved manifest", async () => {

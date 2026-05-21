@@ -6,11 +6,12 @@
  *
  * Validates inputs, checks all tasks are complete, writes slice row to DB in
  * a transaction, then (outside the transaction) renders SUMMARY.md + UAT.md
- * to disk, toggles the roadmap checkbox, stores rendered markdown in DB for
+ * to disk, regenerates the roadmap, stores rendered markdown in DB for
  * D004 recovery, and invalidates caches. Projection write failures are stale
  * projection diagnostics and do not roll back committed DB state.
  */
 
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { CompleteSliceParams } from "../types.js";
@@ -28,12 +29,13 @@ import {
   getPendingGatesForTurn,
 } from "../gsd-db.js";
 import { getGatesForTurn } from "../gate-registry.js";
-import { gsdProjectionRoot, clearPathCache } from "../paths.js";
+import { gsdProjectionRoot, clearPathCache, resolveMilestoneFile } from "../paths.js";
 import { resolveCanonicalMilestoneRoot } from "../worktree-manager.js";
 import { checkOwnership, sliceUnitKey } from "../unit-ownership.js";
 import { saveFile, clearParseCache } from "../files.js";
 import { invalidateStateCache } from "../state.js";
-import { renderRoadmapCheckboxes } from "../markdown-renderer.js";
+import { renderRoadmapFromDb } from "../markdown-renderer.js";
+import { parseRoadmap } from "../parsers-legacy.js";
 import { isStaleWrite } from "../auto/turn-epoch.js";
 import { renderAllProjections } from "../workflow-projections.js";
 import { writeManifest } from "../workflow-manifest.js";
@@ -46,10 +48,9 @@ export interface CompleteSliceResult {
   summaryPath: string;
   uatPath: string;
   /**
-   * True when this call re-completed an already-closed slice from a turn
-   * superseded by timeout recovery or cancellation. Response is shaped like
-   * success so the orphaned LLM tool call unwinds cleanly without mutating
-   * state.
+   * True when this call reached an already-closed slice. Healthy duplicates
+   * and superseded stale turns return without mutation; current unhealthy
+   * duplicates repair missing/stale projections before returning.
    */
   duplicate?: boolean;
   stale?: boolean;
@@ -81,6 +82,27 @@ function sliceSummaryPath(basePath: string, milestoneId: string, sliceId: string
     sliceId,
     `${sliceId}-SUMMARY.md`,
   );
+}
+
+function hasCompleteSliceArtifactContract(basePath: string, milestoneId: string, sliceId: string): boolean {
+  clearPathCache();
+  clearParseCache();
+
+  const summaryPath = sliceSummaryPath(basePath, milestoneId, sliceId);
+  if (!existsSync(summaryPath)) return false;
+  const uatPath = summaryPath.replace(/-SUMMARY\.md$/, "-UAT.md");
+  if (!existsSync(uatPath)) return false;
+
+  const roadmapPath = resolveMilestoneFile(basePath, milestoneId, "ROADMAP") ??
+    join(gsdProjectionRoot(basePath), "milestones", milestoneId, `${milestoneId}-ROADMAP.md`);
+  if (!existsSync(roadmapPath)) return false;
+
+  try {
+    const roadmap = parseRoadmap(readFileSync(roadmapPath, "utf-8"));
+    return roadmap.slices.some((slice) => slice.id === sliceId && slice.done);
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -322,6 +344,7 @@ export async function handleCompleteSlice(
   const completedAt = new Date().toISOString();
   let guardError: string | null = null;
   let existingSummaryMd = "";
+  let duplicateComplete = false;
 
   transaction(() => {
     // State machine preconditions (inside txn for atomicity).
@@ -336,11 +359,7 @@ export async function handleCompleteSlice(
     const slice = getSlice(params.milestoneId, params.sliceId);
     existingSummaryMd = slice?.full_summary_md?.trim() ?? "";
     if (slice && isClosedStatus(slice.status)) {
-      if (isStaleWrite("complete-slice")) {
-        guardError = "__stale_duplicate__";
-        return;
-      }
-      guardError = `slice ${params.sliceId} is already complete — use gsd_slice_reopen first if you need to redo it`;
+      duplicateComplete = true;
       return;
     }
 
@@ -358,28 +377,35 @@ export async function handleCompleteSlice(
       return;
     }
 
-    // All guards passed — perform writes
+    // All guards passed — perform writes. Preserve existing planning metadata:
+    // completion should not overwrite title/risk/depends/demo/sequence.
     insertMilestone({ id: params.milestoneId, title: params.milestoneId });
-    insertSlice({ id: params.sliceId, milestoneId: params.milestoneId, title: params.sliceId });
+    if (!slice) {
+      insertSlice({ id: params.sliceId, milestoneId: params.milestoneId, title: params.sliceTitle || params.sliceId });
+    }
     updateSliceStatus(params.milestoneId, params.sliceId, "complete", completedAt);
   });
 
-  if (guardError === "__stale_duplicate__") {
-    // Stale duplicate from a turn superseded by timeout recovery. Return a
-    // non-mutating success so the orphaned LLM tool call unwinds quietly.
+  if (duplicateComplete) {
     const staleSummaryPath = sliceSummaryPath(
       artifactBasePath,
       params.milestoneId,
       params.sliceId,
     );
-    return {
-      sliceId: params.sliceId,
-      milestoneId: params.milestoneId,
-      summaryPath: staleSummaryPath,
-      uatPath: staleSummaryPath.replace(/-SUMMARY\.md$/, "-UAT.md"),
-      duplicate: true,
-      stale: true,
-    };
+    const duplicateIsStale = isStaleWrite("complete-slice");
+    if (
+      duplicateIsStale ||
+      hasCompleteSliceArtifactContract(artifactBasePath, params.milestoneId, params.sliceId)
+    ) {
+      return {
+        sliceId: params.sliceId,
+        milestoneId: params.milestoneId,
+        summaryPath: staleSummaryPath,
+        uatPath: staleSummaryPath.replace(/-SUMMARY\.md$/, "-UAT.md"),
+        duplicate: true,
+        ...(duplicateIsStale ? { stale: true } : {}),
+      };
+    }
   }
 
   if (guardError) {
@@ -424,10 +450,11 @@ export async function handleCompleteSlice(
     await saveFile(summaryPath, summaryMd);
     await saveFile(uatPath, uatMd);
 
-    // Toggle roadmap checkbox via renderer module
-    const roadmapToggled = await renderRoadmapCheckboxes(artifactBasePath, params.milestoneId);
-    if (!roadmapToggled) {
-      logWarning("tool", `complete_slice — could not find roadmap for ${params.milestoneId}, skipping checkbox toggle`);
+    const roadmap = await renderRoadmapFromDb(artifactBasePath, params.milestoneId);
+    clearParseCache();
+    const roadmapSlice = parseRoadmap(roadmap.content).slices.find((slice) => slice.id === params.sliceId);
+    if (!roadmapSlice?.done) {
+      throw new Error(`roadmap render did not mark ${params.milestoneId}/${params.sliceId} complete`);
     }
   } catch (renderErr) {
     projectionStale = true;
@@ -535,6 +562,7 @@ export async function handleCompleteSlice(
     milestoneId: params.milestoneId,
     summaryPath,
     uatPath,
+    ...(duplicateComplete ? { duplicate: true } : {}),
     ...(projectionStale ? { stale: true } : {}),
   };
 }

@@ -53,6 +53,7 @@ export type JournalEventType =
   | "worktree-merge-start"
   | "worktree-merge-failed"
   | "artifact-verification-retry"
+  | "pre-execution-retry"
   // #4764 — worktree lifespan / divergence telemetry
   | "worktree-created"
   | "worktree-merged"

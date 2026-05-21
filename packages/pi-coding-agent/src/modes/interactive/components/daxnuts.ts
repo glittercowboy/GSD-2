@@ -1,11 +1,13 @@
+// GSD-2 + packages/pi-coding-agent/src/modes/interactive/components/daxnuts.ts - Animated Daxnuts easter egg component.
 /**
  * POWERED BY DAXNUTS - Easter egg for OpenCode + Kimi K2.5
  *
  * A heartfelt tribute to dax (@thdxr) for providing free Kimi K2.5 access via OpenCode.
  */
 
-import { type Component, type TUI, visibleWidth } from "@gsd/pi-tui";
+import { type TUI, visibleWidth } from "@gsd/pi-tui";
 import { theme } from "../theme/theme.js";
+import { AnimatedComponent } from "./animated-component.js";
 
 // 32x32 RGB image of dax, hex encoded (3 bytes per pixel)
 const DAX_HEX =
@@ -72,48 +74,29 @@ function buildImage(): string[] {
 	return lines;
 }
 
-export class DaxnutsComponent implements Component {
+export class DaxnutsComponent extends AnimatedComponent {
 	private ui: TUI;
 	private image: string[];
-	private interval: ReturnType<typeof setInterval> | null = null;
 	private tick = 0;
 	private maxTicks = 25; // ~2 seconds at 80ms
-	private cachedLines: string[] = [];
-	private cachedWidth = 0;
-	private cachedTick = -1;
 
 	constructor(ui: TUI) {
+		super();
 		this.ui = ui;
 		this.image = buildImage();
-		this.startAnimation();
+		this.startRevealAnimation();
 	}
 
-	invalidate(): void {
-		this.cachedWidth = 0;
-	}
-
-	private startAnimation(): void {
-		this.interval = setInterval(() => {
+	private startRevealAnimation(): void {
+		this.startAnimation(80, () => {
 			this.tick++;
-			if (this.tick >= this.maxTicks) {
-				this.stopAnimation();
-			}
-			this.cachedWidth = 0;
-			this.ui.requestRender();
-		}, 80);
-	}
-
-	private stopAnimation(): void {
-		if (this.interval) {
-			clearInterval(this.interval);
-			this.interval = null;
-		}
+			return this.tick >= this.maxTicks;
+		}, () => this.ui.requestRender());
 	}
 
 	render(width: number): string[] {
-		if (width === this.cachedWidth && this.cachedTick === this.tick) {
-			return this.cachedLines;
-		}
+		const cached = this.getCachedRender(width, this.tick);
+		if (cached) return cached;
 
 		const t = theme;
 		const lines: string[] = [];
@@ -171,13 +154,6 @@ export class DaxnutsComponent implements Component {
 		}
 		lines.push("");
 
-		this.cachedLines = lines;
-		this.cachedWidth = width;
-		this.cachedTick = this.tick;
-		return lines;
-	}
-
-	dispose(): void {
-		this.stopAnimation();
+		return this.setCachedRender(width, this.tick, lines);
 	}
 }

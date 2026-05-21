@@ -5,6 +5,7 @@
 - **Auto Orchestration**: runtime coordination of GSD auto-mode units from start to completion, including dispatch and stop/resume behavior; unit-execution failure recovery is classified by the Recovery Classification module.
 - **Unit**: the smallest executable workflow step (e.g., plan slice, execute task, complete slice).
 - **Unit progression**: movement from one Unit to the next under orchestration rules.
+- **Closeout Boundary Stop**: the rule that a foreground run stops after the first task, slice, or milestone closeout boundary and leaves a durable final closeout surface visible in the live terminal, not merely scrollback or a cleared progress area.
 - **Dispatch decision**: selection of the next Unit plus rationale and preconditions.
 - **Recovery decision**: retry/escalate/abort choice after runtime failure.
 - **Runtime persistence**: lock state, transition journal, and any persisted execution state required for safe resume.
@@ -63,6 +64,8 @@ Dispatch remains responsible for selecting the next Unit from reconciled state. 
 - State Reconciliation should be drift-driven. The Module surfaces terminal `blockers: string[]` and machine-actionable `DriftRecord[]`. Each pre-dispatch and pre-spawn site calls `reconcileBeforeDispatch` (strict closure). Drift catalog includes sketch-flag, merge-state, stale-render, stale-worker, unregistered-milestone, roadmap-divergence, missing-completion-timestamp. Repairs are idempotent. Re-derive is capped at 2 passes (loops only on cascading-drift success path). Persistent or repair-failed drift throws `ReconciliationFailedError` to Recovery Classification (kind `reconciliation-drift`).
 
   See `docs/dev/ADR-017-state-reconciliation-drift-driven.md`.
+
+- Foreground `/gsd next` and `/gsd auto` runs follow **Closeout Boundary Stop**: after the first durable task, slice, or milestone closeout boundary, the foreground terminal preserves the closeout transcript as the final visible surface instead of replacing it with a terminal roll-up widget. Headless runs may still emit durable terminal completion notifications/widgets for automation.
 
 ## Current implementation snapshot (phase 1)
 

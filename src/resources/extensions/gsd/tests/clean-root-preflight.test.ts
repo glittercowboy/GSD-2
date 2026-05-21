@@ -69,6 +69,7 @@ test("preflightCleanRoot — dirty tree warns user and auto-stashes", () => {
     });
 
     assert.equal(result.stashPushed, true, "stashPushed must be true when tree was dirty");
+    assert.ok(result.stashMarker, "stashMarker must be set when a stash entry is created");
     assert.ok(result.summary.length > 0, "summary must be non-empty when stash was pushed");
 
     // A warning notification must have been emitted before stashing
@@ -84,6 +85,7 @@ test("preflightCleanRoot — dirty tree warns user and auto-stashes", () => {
     // The stash entry must exist
     const stashList = run("git stash list", repo);
     assert.ok(stashList.includes("gsd-preflight-stash"), "stash entry must be named gsd-preflight-stash");
+    assert.ok(stashList.includes(result.stashMarker!), "stash list must include the generated stash marker");
   } finally {
     try { rmSync(repo, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch { /* ignore */ }
   }
@@ -169,6 +171,37 @@ test("preflightCleanRoot blocks unresolved stash-apply conflicts before stashing
     );
   } finally {
     run("git reset --hard HEAD 2>/dev/null || true", repo);
+    try { rmSync(repo, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch { /* ignore */ }
+  }
+});
+
+test("preflightCleanRoot — skips stash on Windows reserved untracked name", () => {
+  const originalPlatform = process.platform;
+  const repo = createTempRepo();
+  try {
+    Object.defineProperty(process, "platform", { value: "win32" });
+    if (originalPlatform !== "win32") {
+      writeFileSync(join(repo, "nul"), "");
+    } else {
+      writeFileSync(join(repo, "reserved-name-sentinel.txt"), "");
+    }
+
+    const notifications: Array<{ msg: string; level: string }> = [];
+    const result = preflightCleanRoot(repo, "M003W", (msg, level) => {
+      notifications.push({ msg, level });
+    });
+
+    assert.equal(result.stashPushed, false, "stash must be skipped for reserved Windows names");
+    assert.match(result.summary, /stash-skipped-reserved-device-names/);
+    assert.ok(
+      notifications.some((n) => n.level === "warning" && n.msg.includes("reserved Windows device name")),
+      "warning notification must mention reserved Windows device names",
+    );
+    Object.defineProperty(process, "platform", { value: originalPlatform });
+    const stashList = run("git stash list", repo);
+    assert.equal(stashList, "", "no stash entry should be created");
+  } finally {
+    Object.defineProperty(process, "platform", { value: originalPlatform });
     try { rmSync(repo, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch { /* ignore */ }
   }
 });
@@ -442,6 +475,34 @@ test("postflightPopStash requires manual recovery when an untracked stash path i
     assert.match(run("git status --porcelain", repo), /\?\? other-tests\.txt/, "partial restore must leave manual recovery visible");
     const stashList = run("git stash list", repo);
     assert.ok(preflight.stashMarker && stashList.includes(preflight.stashMarker), "stash must remain for manual recovery");
+  } finally {
+    try { rmSync(repo, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch { /* ignore */ }
+  }
+});
+
+test("postflightPopStash skips apply and drops stash when payload is .gsd metadata only", () => {
+  const repo = createTempRepo();
+  try {
+    writeFileSync(join(repo, ".gsd", "notifications.jsonl"), '{"msg":"before"}\n');
+    const preflight = preflightCleanRoot(repo, "M013", () => {});
+    assert.equal(preflight.stashPushed, true, "preflight must stash .gsd metadata changes");
+
+    writeFileSync(join(repo, ".gsd", "notifications.jsonl"), '{"msg":"after"}\n');
+    run("git add .gsd/notifications.jsonl", repo);
+    run('git commit -m "chore: update metadata"', repo);
+
+    const postflight = postflightPopStash(repo, "M013", preflight.stashMarker, () => {});
+    assert.equal(postflight.needsManualRecovery, false, ".gsd-only stash must not stop auto-mode");
+    assert.equal(postflight.restored, true, ".gsd-only stash should be treated as successfully handled");
+    assert.equal(postflight.resolution, "already-present-dropped");
+    assert.equal(
+      readFileSync(join(repo, ".gsd", "notifications.jsonl"), "utf-8"),
+      '{"msg":"after"}\n',
+      "post-merge metadata must remain untouched when the stash is skipped",
+    );
+
+    const stashList = run("git stash list", repo);
+    assert.ok(!stashList.includes(preflight.stashMarker ?? ""), ".gsd-only stash must be dropped");
   } finally {
     try { rmSync(repo, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch { /* ignore */ }
   }

@@ -199,6 +199,48 @@ export function shouldRenderExtensionNotifyInChat(type: ExtensionNotifyType): bo
 	return type !== "warning";
 }
 
+function hasAnsiStyling(message: string): boolean {
+	return /\x1b\[[0-9;]*m/.test(message);
+}
+
+function stripAnsiStyling(message: string): string {
+	return message.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
+function styleGsdStatusCardMessage(message: string): string | null {
+	const plain = stripAnsiStyling(message);
+	if (!/(Verification Gate|Commit|Snapshot|GSD .*Complete|Next step)/.test(plain)) return null;
+
+	const styled = plain.split("\n").map((line) => {
+		if (line.includes("╭─ ✓") || line.includes("✓ Verification Gate") || line.includes("✓ Commit") || line.includes("✓ Snapshot")) {
+			return line.replace(/(╭─)\s+(.*)/, (_match, border, title) =>
+				`${theme.fg("borderAccent", border)} ${theme.fg("success", theme.bold(title))}`);
+		}
+		if (line.includes("╭─ ✕") || line.includes("✕ Verification Gate")) {
+			return line.replace(/(╭─)\s+(.*)/, (_match, border, title) =>
+				`${theme.fg("borderAccent", border)} ${theme.fg("error", theme.bold(title))}`);
+		}
+		if (line.includes("╭─ Next step")) {
+			return line.replace(/(╭─)\s+(.*)/, (_match, border, title) =>
+				`${theme.fg("borderAccent", border)} ${theme.fg("accent", theme.bold(title))}`);
+		}
+		if (/^\s*╰/.test(line)) {
+			return theme.fg("borderAccent", line);
+		}
+		const contentMatch = /^(\s*)(.*)$/u.exec(line);
+		const indent = contentMatch?.[1] ?? "";
+		const text = contentMatch?.[2] ?? line;
+		if (/(Completed:|Next:|Continue:|Auto-run:)/.test(text)) {
+			const styled = text
+				.replace(/(Completed:|Next:|Continue:|Auto-run:)/g, (label) => theme.fg("dim", label))
+				.replace(/(\/gsd\s+(?:next|auto|status))/g, (command) => theme.fg("success", command));
+			return `${indent}${styled}`;
+		}
+		return text ? `${indent}${theme.fg("text", text)}` : line;
+	});
+	return styled.join("\n");
+}
+
 export interface ExtensionNotifyRenderResult {
 	rendered: boolean;
 	statusSpacer?: Spacer;
@@ -229,7 +271,12 @@ export function renderExtensionNotifyInChat(
 		return { rendered: true };
 	}
 
-	const statusText = new Text(theme.fg("dim", message), 1, 0);
+	const styledStatusCard = styleGsdStatusCardMessage(message);
+	const statusText = new Text(
+		styledStatusCard ?? (hasAnsiStyling(message) ? message : theme.fg("dim", message)),
+		1,
+		0,
+	);
 	chatContainer.addChild(statusText);
 	return { rendered: true, statusSpacer: spacer, statusText };
 }
@@ -292,7 +339,7 @@ export class InteractiveMode {
 	private isInitialized = false;
 	private onInputCallback?: (text: string) => void;
 	private loadingAnimation: Loader | undefined = undefined;
-	private pendingWorkingMessage: string | undefined = undefined;
+	private pendingWorkingMessage: string | null | undefined = undefined;
 	private readonly defaultWorkingMessage = "Working...";
 	private lastBlockingError: string | undefined = undefined;
 
@@ -329,6 +376,8 @@ export class InteractiveMode {
 	// Branch change listener unsubscribe function
 	private _branchChangeUnsub?: () => void;
 	private _themeChangeUnsub?: () => void;
+	private markdownThemeCache?: MarkdownTheme;
+	private markdownThemeCacheIndent?: string;
 
 	// Track if editor is in bash mode (text starts with !)
 	private isBashMode = false;
@@ -361,6 +410,7 @@ export class InteractiveMode {
 	private extensionInput: ExtensionInputComponent | undefined = undefined;
 	private extensionEditor: ExtensionEditorComponent | undefined = undefined;
 	private extensionTerminalInputUnsubscribers = new Set<() => void>();
+	private stdinErrorHandler: ((err: Error) => void) | undefined = undefined;
 
 	// Extension widgets (components rendered above/below the editor)
 	private extensionWidgetsAbove = new Map<string, Component & { dispose?(): void }>();
@@ -405,7 +455,7 @@ export class InteractiveMode {
 		this.adaptiveLayout = new AdaptiveLayoutComponent(() => ({
 			override: this.settingsManager.getAdaptiveMode(),
 			activeToolCount: this.pendingTools.size,
-			gsdPhase: this.pendingWorkingMessage,
+			gsdPhase: this.pendingWorkingMessage ?? undefined,
 			lastError: this.lastBlockingError,
 			sessionName: this.sessionManager.getSessionName(),
 			cwd: process.cwd(),
@@ -534,6 +584,22 @@ export class InteractiveMode {
 		}
 	}
 
+	private installStdinErrorRecovery(): void {
+		if (this.stdinErrorHandler) return;
+		this.stdinErrorHandler = (err: Error) => {
+			const errno = err as NodeJS.ErrnoException;
+			const isReadEio = errno.code === "EIO" || /read EIO/i.test(err.message);
+			if (!isReadEio) return;
+
+			process.stderr.write(`[pi] stdin EIO detected, aborting active stream\n`);
+			if (this.session.isStreaming) {
+				this.agent.abort("unknown");
+				this.showWarning("Terminal input was interrupted (EIO). Aborted the active response; send your message again.");
+			}
+		};
+		process.stdin.on("error", this.stdinErrorHandler);
+	}
+
 	async init(): Promise<void> {
 		if (this.isInitialized) return;
 
@@ -639,6 +705,7 @@ export class InteractiveMode {
 
 		// Start the UI
 		this.ui.start();
+		this.installStdinErrorRecovery();
 		this.isInitialized = true;
 
 		// Set terminal title
@@ -649,6 +716,7 @@ export class InteractiveMode {
 
 		// Set up theme file watcher
 		this._themeChangeUnsub = onThemeChange(() => {
+			this.clearMarkdownThemeCache();
 			this.ui.invalidate();
 			this.updateEditorBorderColor();
 			this.ui.requestRender();
@@ -847,10 +915,22 @@ export class InteractiveMode {
 	}
 
 	private getMarkdownThemeWithSettings(): MarkdownTheme {
-		return {
+		const codeBlockIndent = this.settingsManager.getCodeBlockIndent();
+		if (this.markdownThemeCache && this.markdownThemeCacheIndent === codeBlockIndent) {
+			return this.markdownThemeCache;
+		}
+
+		this.markdownThemeCacheIndent = codeBlockIndent;
+		this.markdownThemeCache = {
 			...getMarkdownTheme(),
-			codeBlockIndent: this.settingsManager.getCodeBlockIndent(),
+			codeBlockIndent,
 		};
+		return this.markdownThemeCache;
+	}
+
+	private clearMarkdownThemeCache(): void {
+		this.markdownThemeCache = undefined;
+		this.markdownThemeCacheIndent = undefined;
 	}
 
 	// =========================================================================
@@ -3300,6 +3380,7 @@ export class InteractiveMode {
 					onThemeChange: (themeName) => {
 						const result = setTheme(themeName, true);
 						this.settingsManager.setTheme(themeName);
+						this.clearMarkdownThemeCache();
 						this.ui.invalidate();
 						if (!result.success) {
 							this.showError(`Failed to load theme "${themeName}": ${result.error}\nFell back to dark theme.`);
@@ -3308,6 +3389,7 @@ export class InteractiveMode {
 					onThemePreview: (themeName) => {
 						const result = setTheme(themeName, true);
 						if (result.success) {
+							this.clearMarkdownThemeCache();
 							this.ui.invalidate();
 							this.ui.requestRender();
 						}
@@ -4022,6 +4104,7 @@ export class InteractiveMode {
 			this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
 			const themeName = this.settingsManager.getTheme();
 			const themeResult = themeName ? setTheme(themeName, true) : { success: true };
+			this.clearMarkdownThemeCache();
 			if (!themeResult.success) {
 				this.showError(`Failed to load theme "${themeName}": ${themeResult.error}\nFell back to dark theme.`);
 			}
@@ -4322,6 +4405,10 @@ export class InteractiveMode {
 		this.footerDataProvider.dispose();
 		if (this.unsubscribe) {
 			this.unsubscribe();
+		}
+		if (this.stdinErrorHandler) {
+			process.stdin.removeListener("error", this.stdinErrorHandler);
+			this.stdinErrorHandler = undefined;
 		}
 		if (this.isInitialized) {
 			this.ui.stop();

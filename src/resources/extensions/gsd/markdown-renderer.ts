@@ -454,11 +454,9 @@ export async function renderRoadmapFromDb(
 // ─── Roadmap Checkbox Rendering ───────────────────────────────────────────
 
 /**
- * Render roadmap checkbox states from DB.
- *
- * For each slice in the milestone, sets [x] if status === 'complete',
- * [ ] otherwise. Handles bidirectional updates (can uncheck previously
- * checked slices if DB says pending).
+ * Compatibility wrapper for legacy callers that used to patch roadmap
+ * checkboxes in-place. Roadmaps are now regenerated from DB rows so stale
+ * artifact content cannot preserve old titles/dependencies.
  *
  * @returns true if the roadmap was written, false on skip/error
  */
@@ -474,48 +472,7 @@ export async function renderRoadmapCheckboxes(
     return false;
   }
 
-  const absPath = resolveMilestoneFile(basePath, milestoneId, "ROADMAP");
-  const artifactPath = absPath ? toArtifactPath(absPath, basePath) : null;
-
-  // Load content from DB; regenerate from DB rows when the artifact is absent.
-  let content: string | null = null;
-  if (artifactPath) {
-    content = loadArtifactContent(artifactPath);
-  }
-
-  if (!content) {
-    await renderRoadmapFromDb(basePath, milestoneId);
-    return true;
-  }
-
-  // Apply checkbox patches for each slice
-  let updated = content;
-  for (const slice of slices) {
-    const isDone = isClosedStatus(slice.status);
-    const sid = slice.id;
-
-    if (isDone) {
-      // Set [x]: replace "- [ ] **S01:" with "- [x] **S01:"
-      updated = updated.replace(
-        new RegExp(`^(\\s*-\\s+)\\[ \\]\\s+\\*\\*${sid}:`, "m"),
-        `$1[x] **${sid}:`,
-      );
-    } else {
-      // Set [ ]: replace "- [x] **S01:" with "- [ ] **S01:"
-      updated = updated.replace(
-        new RegExp(`^(\\s*-\\s+)\\[x\\]\\s+\\*\\*${sid}:`, "mi"),
-        `$1[ ] **${sid}:`,
-      );
-    }
-  }
-
-  if (!absPath) return false;
-
-  await writeAndStore(absPath, artifactPath!, updated, {
-    artifact_type: "ROADMAP",
-    milestone_id: milestoneId,
-  });
-
+  await renderRoadmapFromDb(basePath, milestoneId);
   return true;
 }
 

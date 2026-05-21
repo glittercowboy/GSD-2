@@ -290,6 +290,42 @@ test("workspace.repositories rejects invalid shapes", () => {
   assert.ok(errors.some(e => e.includes("workspace.repositories.backend.path")));
 });
 
+test("workspace.repositories rejects duplicate paths with leading ./ normalization", () => {
+  const { errors } = validatePreferences({
+    workspace: {
+      mode: "parent",
+      repositories: {
+        frontend: { path: "frontend" },
+        frontendAlias: { path: "./frontend/" },
+      },
+    },
+  });
+
+  assert.ok(
+    errors.some((e) =>
+      e.includes("workspace.repositories.frontendAlias.path duplicates workspace.repositories.frontend.path"),
+    ),
+  );
+});
+
+test("workspace.repositories duplicate path error includes both repository ids", () => {
+  const { errors } = validatePreferences({
+    workspace: {
+      repositories: {
+        frontend: { path: "packages/app" },
+        backend: { path: "packages/app/" },
+      },
+    },
+  } as any);
+
+  assert.ok(
+    errors.some((e) =>
+      e.includes("workspace.repositories.backend.path duplicates workspace.repositories.frontend.path"),
+    ),
+  );
+});
+
+
 test("workspace is a recognized preference key (no unknown warning)", () => {
   const { warnings } = validatePreferences({
     workspace: { mode: "project" },
@@ -304,11 +340,20 @@ test("valid values pass through correctly", () => {
   const { preferences: p1 } = validatePreferences({ budget_enforcement: "halt" });
   assert.equal(p1.budget_enforcement, "halt");
 
-  const { preferences: p2 } = validatePreferences({ context_pause_threshold: 0.75 });
-  assert.equal(p2.context_pause_threshold, 0.75);
+  const { preferences: p2 } = validatePreferences({ context_pause_threshold: 75 });
+  assert.equal(p2.context_pause_threshold, 75);
 
   const { preferences: p3 } = validatePreferences({ auto_supervisor: { model: "claude-opus-4-6" } });
   assert.equal(p3.auto_supervisor?.model, "claude-opus-4-6");
+});
+
+test("context_pause_threshold rejects fractional ratio values", () => {
+  const { preferences, errors } = validatePreferences({ context_pause_threshold: 0.75 });
+  assert.equal(preferences.context_pause_threshold, undefined);
+  assert.ok(
+    errors.some((e) => e.includes("context_pause_threshold")),
+    "fractional ratio values should fail instead of pausing at less than one percent",
+  );
 });
 
 test("min_request_interval_ms floors decimals and rejects timer overflow values", () => {

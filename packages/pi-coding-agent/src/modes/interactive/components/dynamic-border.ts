@@ -1,6 +1,9 @@
-import type { Component, TUI } from "@gsd/pi-tui";
+// GSD-2 + packages/pi-coding-agent/src/modes/interactive/components/dynamic-border.ts - Width-adaptive border with optional spinner.
+
+import type { TUI } from "@gsd/pi-tui";
 import { visibleWidth } from "@gsd/pi-tui";
 import { theme } from "../theme/theme.js";
+import { AnimatedComponent } from "./animated-component.js";
 
 /**
  * Dynamic border component that adjusts to viewport width.
@@ -10,18 +13,18 @@ import { theme } from "../theme/theme.js";
  * because jiti creates a separate module cache. Always pass an explicit color
  * function when using DynamicBorder in components exported for extension use.
  */
-export class DynamicBorder implements Component {
+export class DynamicBorder extends AnimatedComponent {
 	private color: (str: string) => string;
 	private label?: string;
 	private spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 	private spinnerIndex = 0;
-	private spinnerInterval: NodeJS.Timeout | null = null;
 	private spinnerColorFn?: (str: string) => string;
 	private lastExternalRender = 0;
 
 	constructor(color: (str: string) => string = (str) => {
 		try { return theme.fg("border", str); } catch { return str; }
 	}, label?: string) {
+		super();
 		this.color = color;
 		this.label = label;
 	}
@@ -38,17 +41,12 @@ export class DynamicBorder implements Component {
 		this.stopSpinner();
 		this.spinnerColorFn = colorFn;
 		this.spinnerIndex = 0;
-		this.spinnerInterval = setInterval(() => {
+		this.startAnimation(200, () => {
 			this.spinnerIndex = (this.spinnerIndex + 1) % this.spinnerFrames.length;
 			// Only trigger standalone render if no other source rendered recently.
 			// During active streaming, message_update already calls requestRender().
-			if (Date.now() - this.lastExternalRender > 200) {
-				ui.requestRender();
-			}
-		}, 200);
-		// The spinner is purely cosmetic — it must never keep the Node event loop
-		// alive on its own (otherwise a process can hang waiting for it to stop).
-		this.spinnerInterval.unref?.();
+			return { render: Date.now() - this.lastExternalRender > 200 };
+		}, () => ui.requestRender());
 		ui.requestRender();
 	}
 
@@ -56,19 +54,16 @@ export class DynamicBorder implements Component {
 	 * Stop the spinner animation. The border reverts to a static label.
 	 */
 	stopSpinner(): void {
-		if (this.spinnerInterval) {
-			clearInterval(this.spinnerInterval);
-			this.spinnerInterval = null;
-		}
+		this.stopAnimation();
 		this.spinnerColorFn = undefined;
 	}
 
 	get isSpinning(): boolean {
-		return this.spinnerInterval !== null;
+		return this.isAnimating;
 	}
 
-	invalidate(): void {
-		// No cached state to invalidate currently
+	private get spinnerInterval(): ReturnType<typeof setInterval> | undefined {
+		return this.animationInterval;
 	}
 
 	/**
@@ -78,11 +73,12 @@ export class DynamicBorder implements Component {
 	 */
 	dispose(): void {
 		this.stopSpinner();
+		super.dispose();
 	}
 
 	render(width: number): string[] {
 		this.lastExternalRender = Date.now();
-		const spinnerPrefix = this.spinnerInterval && this.spinnerColorFn
+		const spinnerPrefix = this.isSpinning && this.spinnerColorFn
 			? this.spinnerColorFn(this.spinnerFrames[this.spinnerIndex]) + " "
 			: "";
 

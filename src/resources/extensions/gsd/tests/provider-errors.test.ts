@@ -15,8 +15,10 @@ import {
   isTerminalDeletedWorktreeProviderError,
   resetTransientRetryState,
   shouldDeferTransientErrorToCoreRetry,
+  suppressTerminalDeletedWorktreeMessageEnd,
 } from "../bootstrap/agent-end-recovery.ts";
 import { _buildCancelledUnitStopReason } from "../auto/phases.ts";
+import { autoSession } from "../auto-runtime-state.ts";
 import { getNextFallbackModel } from "../preferences.ts";
 // Zero-import module — imported by path rather than through the package
 // barrel to avoid pulling the full AgentSession / @gsd/pi-ai dep graph into
@@ -155,6 +157,12 @@ test("classifyError treats unknown error as not transient", () => {
   const result = classifyError("something went wrong");
   assert.ok(!isTransient(result));
   assert.equal(result.kind, "unknown");
+});
+
+test("classifyError treats schema overload as tool-schema (non-transient)", () => {
+  const result = classifyError("Schema overload: consecutive tool validation failures exceeded cap");
+  assert.equal(result.kind, "tool-schema");
+  assert.ok(!isTransient(result));
 });
 
 test("classifyError treats empty string as not transient", () => {
@@ -421,6 +429,45 @@ test("isTerminalDeletedWorktreeProviderError matches removed auto-worktree paths
     isTerminalDeletedWorktreeProviderError('Path "/Users/dev/.gsd/projects/abc123/worktrees/M005" failed with EACCES'),
     false,
   );
+});
+
+test("suppresses terminal completion deleted-worktree message before it renders", () => {
+  autoSession.reset();
+  autoSession.completionStopInProgress = true;
+  try {
+    const event = {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        stopReason: "error",
+        errorMessage: 'Path "/Users/dev/.gsd/projects/abc123/worktrees/M005" does not exist',
+        content: [],
+      },
+    } as any;
+
+    assert.equal(suppressTerminalDeletedWorktreeMessageEnd(event), true);
+    assert.equal(event.message.stopReason, "completed");
+    assert.equal(event.message.errorMessage, undefined);
+    assert.deepEqual(event.message.content, []);
+  } finally {
+    autoSession.reset();
+  }
+});
+
+test("does not suppress deleted-worktree provider errors outside terminal completion", () => {
+  autoSession.reset();
+  const event = {
+    type: "message_end",
+    message: {
+      role: "assistant",
+      stopReason: "error",
+      errorMessage: 'Path "/Users/dev/.gsd/projects/abc123/worktrees/M005" does not exist',
+      content: [],
+    },
+  } as any;
+
+  assert.equal(suppressTerminalDeletedWorktreeMessageEnd(event), false);
+  assert.equal(event.message.stopReason, "error");
 });
 
 // ── resumeAutoAfterProviderDelay ────────────────────────────────────────────

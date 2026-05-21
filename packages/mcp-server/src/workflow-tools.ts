@@ -547,6 +547,29 @@ function buildImportCandidates(relativePath: string): string[] {
   return [...new Set(candidates)];
 }
 
+function buildBridgeImportCandidates(relativePath: string): string[] {
+  const candidates: string[] = [];
+  const pushCompiledThenSource = (path: string | null) => {
+    if (!path) return;
+    candidates.push(path);
+    if (path.endsWith(".js")) candidates.push(path.replace(/\.js$/, ".ts"));
+  };
+
+  const sourcePath = relativePath.includes("/dist/")
+    ? relativePath.replace("/dist/", "/src/")
+    : relativePath;
+  const distPath = relativePath.includes("/src/")
+    ? relativePath.replace("/src/", "/dist/")
+    : relativePath.includes("/dist/")
+      ? relativePath
+      : null;
+
+  pushCompiledThenSource(distPath);
+  pushCompiledThenSource(sourcePath);
+
+  return [...new Set(candidates)];
+}
+
 function getWriteGateModuleCandidates(): string[] {
   const candidates: string[] = [];
   const explicitModule = process.env.GSD_WORKFLOW_WRITE_GATE_MODULE?.trim();
@@ -559,7 +582,7 @@ function getWriteGateModuleCandidates(): string[] {
   }
 
   candidates.push(
-    ...buildImportCandidates("../../../src/resources/extensions/gsd/bootstrap/write-gate.js")
+    ...buildBridgeImportCandidates("../../../src/resources/extensions/gsd/bootstrap/write-gate.js")
       .map((p) => new URL(p, import.meta.url).href),
   );
 
@@ -594,6 +617,11 @@ export function _buildImportCandidates(relativePath: string): string[] {
   // variant, before falling back to compiled dist. In source/dev execution a
   // stale dist/resources tree must not silently override edited source files.
   return buildImportCandidates(relativePath);
+}
+
+/** @internal — exported for testing only */
+export function _buildBridgeImportCandidates(relativePath: string): string[] {
+  return buildBridgeImportCandidates(relativePath);
 }
 
 async function importLocalModule<T>(relativePath: string): Promise<T> {
@@ -637,7 +665,7 @@ function getWorkflowExecutorModuleCandidates(env: NodeJS.ProcessEnv = process.en
   }
 
   candidates.push(
-    ...buildImportCandidates("../../../src/resources/extensions/gsd/tools/workflow-tool-executors.js")
+    ...buildBridgeImportCandidates("../../../src/resources/extensions/gsd/tools/workflow-tool-executors.js")
       .map((p) => new URL(p, import.meta.url).href),
   );
 
@@ -1809,21 +1837,16 @@ export function registerWorkflowTools(realServer: McpToolServer): void {
       const { projectDir, milestoneId, sliceId, reason } = parseWorkflowArgs(skipSliceSchema, args);
       await enforceWorkflowWriteGate("gsd_skip_slice", projectDir, milestoneId);
       await runSerializedWorkflowDbOperation(projectDir, async () => {
-        const { getSlice, updateSliceStatus } = await importLocalModule<any>("../../../src/resources/extensions/gsd/gsd-db.js");
+        const { handleSkipSlice } = await importLocalModule<any>("../../../src/resources/extensions/gsd/tools/skip-slice.js");
         const { invalidateStateCache } = await importLocalModule<any>("../../../src/resources/extensions/gsd/state.js");
         const { rebuildState } = await importLocalModule<any>("../../../src/resources/extensions/gsd/doctor.js");
-        const slice = getSlice(milestoneId, sliceId);
-        if (!slice) {
-          throw new Error(`Slice ${sliceId} not found in milestone ${milestoneId}`);
+        const result = handleSkipSlice({ milestoneId, sliceId, reason });
+        if (result.error) {
+          throw new Error(result.error);
         }
-        if (slice.status === "complete" || slice.status === "done") {
-          throw new Error(`Slice ${sliceId} is already complete and cannot be skipped`);
-        }
-        if (slice.status !== "skipped") {
-          updateSliceStatus(milestoneId, sliceId, "skipped");
-          invalidateStateCache();
-          await rebuildState(projectDir);
-        }
+
+        invalidateStateCache();
+        await rebuildState(projectDir);
       });
       return {
         content: [{ type: "text" as const, text: `Skipped slice ${sliceId} (${milestoneId}). Reason: ${reason ?? "User-directed skip"}.` }],

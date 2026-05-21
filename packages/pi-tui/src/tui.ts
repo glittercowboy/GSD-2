@@ -65,6 +65,52 @@ export function isFocusable(component: Component | null): component is Component
 	return component !== null && "focused" in component;
 }
 
+function getComponentDebugName(component: Component): string {
+	const name = component.constructor?.name;
+	return name && name !== "Object" ? name : "anonymous component";
+}
+
+function warnOnRenderWidthOverflow(component: Component, lines: string[], width: number): void {
+	if (process.env.PI_TUI_DEBUG !== "1" || width <= 0) return;
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i];
+		if (isImageLine(line)) continue;
+		const lineWidth = visibleWidth(line);
+		if (lineWidth > width) {
+			console.warn(
+				`[pi-tui] ${getComponentDebugName(component)}.render() line ${i + 1} exceeds width ${width} (visible width ${lineWidth})`,
+			);
+		}
+	}
+}
+
+const DEBUG_RENDER_LOG_LIMIT = 50;
+const DEBUG_RENDER_LOG_PATTERN = /^render-\d+-[a-z0-9]+\.log$/;
+
+export function pruneDebugRenderLogs(debugDir: string, maxFiles = DEBUG_RENDER_LOG_LIMIT): void {
+	if (maxFiles < 1) return;
+	let entries: { name: string; mtimeMs: number }[];
+	try {
+		entries = fs.readdirSync(debugDir, { withFileTypes: true })
+			.filter((entry) => entry.isFile() && DEBUG_RENDER_LOG_PATTERN.test(entry.name))
+			.map((entry) => {
+				const fullPath = path.join(debugDir, entry.name);
+				return { name: entry.name, mtimeMs: fs.statSync(fullPath).mtimeMs };
+			});
+	} catch {
+		return;
+	}
+
+	entries.sort((a, b) => b.mtimeMs - a.mtimeMs || b.name.localeCompare(a.name));
+	for (const entry of entries.slice(maxFiles)) {
+		try {
+			fs.unlinkSync(path.join(debugDir, entry.name));
+		} catch {
+			// Debug log cleanup must never break rendering.
+		}
+	}
+}
+
 /**
  * Cursor position marker - APC (Application Program Command) sequence.
  * This is a zero-width escape sequence that terminals ignore.
@@ -210,6 +256,7 @@ export class Container implements Component {
 	}
 
 	invalidate(): void {
+		this._prevRender = null;
 		for (const child of this.children) {
 			child.invalidate?.();
 		}
@@ -219,6 +266,9 @@ export class Container implements Component {
 		const lines: string[] = [];
 		for (const child of this.children) {
 			const rendered = child.render(width);
+			if (!(child instanceof Container)) {
+				warnOnRenderWidthOverflow(child, rendered, width);
+			}
 			for (let i = 0; i < rendered.length; i++) lines.push(rendered[i]);
 		}
 		// Return stable reference if output unchanged — allows doRender()
@@ -651,6 +701,8 @@ export class TUI extends Container {
 			const targetScreenRow = targetRow - viewportTop;
 			return targetScreenRow - currentScreenRow;
 		};
+		const widthChanged = this.previousWidth !== 0 && this.previousWidth !== width;
+		const heightChanged = this.previousHeight !== 0 && this.previousHeight !== height;
 
 		// Render all components to get new lines
 		let newLines = this.render(width);
@@ -663,7 +715,9 @@ export class TUI extends Container {
 		if (
 			newLines === this._lastRenderedComponents &&
 			this.overlayStack.length === 0 &&
-			!this._lastFrameHadOverlays
+			!this._lastFrameHadOverlays &&
+			!widthChanged &&
+			!heightChanged
 		) {
 			return;
 		}
@@ -679,10 +733,6 @@ export class TUI extends Container {
 		const cursorPos = extractCursorPosition(newLines, height);
 
 		newLines = applyLineResets(newLines);
-
-		// Width or height changed - need full re-render
-		const widthChanged = this.previousWidth !== 0 && this.previousWidth !== width;
-		const heightChanged = this.previousHeight !== 0 && this.previousHeight !== height;
 
 		// Helper to clear scrollback and viewport and render all new lines
 		const fullRender = (clear: boolean): void => {
@@ -1061,6 +1111,7 @@ export class TUI extends Container {
 				JSON.stringify(buffer),
 			].join("\n");
 			fs.writeFileSync(debugPath, debugData);
+			pruneDebugRenderLogs(debugDir);
 		}
 
 		// Write entire buffer at once

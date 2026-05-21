@@ -134,6 +134,27 @@ export const MINIMAL_AUTO_BASE_TOOL_NAMES = [
   "write",
 ] as const;
 
+const RUN_UAT_BROWSER_TOOL_NAMES = [
+  "browser_navigate",
+  "browser_click",
+  "browser_type",
+  "browser_fill_form",
+  "browser_click_ref",
+  "browser_fill_ref",
+  "browser_wait_for",
+  "browser_assert",
+  "browser_verify",
+  "browser_screenshot",
+  "browser_snapshot_refs",
+  "browser_find",
+  "browser_get_console_logs",
+  "browser_get_network_logs",
+  "browser_evaluate",
+  "browser_reload",
+  "browser_batch",
+  "browser_act",
+] as const;
+
 const AUTO_UNIT_SCOPED_TOOLS: Record<string, readonly string[]> = {
   "research-milestone": ["gsd_summary_save", "gsd_decision_save"],
   "plan-milestone": ["gsd_plan_milestone", "gsd_decision_save", "gsd_requirement_update"],
@@ -156,7 +177,7 @@ const AUTO_UNIT_SCOPED_TOOLS: Record<string, readonly string[]> = {
   "execute-task": ["gsd_task_complete", "gsd_decision_save"],
   "execute-task-simple": ["gsd_task_complete", "gsd_decision_save"],
   "reactive-execute": ["gsd_task_complete", "gsd_decision_save"],
-  "run-uat": ["gsd_summary_save"],
+  "run-uat": ["gsd_summary_save", ...RUN_UAT_BROWSER_TOOL_NAMES],
   "gate-evaluate": ["gsd_save_gate_result"],
   "rewrite-docs": ["gsd_summary_save", "gsd_decision_save"],
   "workflow-preferences": ["gsd_summary_save"],
@@ -609,6 +630,11 @@ export function registerHooks(
     } finally {
       activateDeferredApprovalGate(contextBasePath(ctx));
     }
+  });
+
+  pi.on("message_end", async (event) => {
+    const { suppressTerminalDeletedWorktreeMessageEnd } = await import("./agent-end-recovery.js");
+    suppressTerminalDeletedWorktreeMessageEnd(event);
   });
 
   // Squash-merge quick-task branch back to the original branch after the

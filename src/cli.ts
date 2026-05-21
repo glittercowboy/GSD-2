@@ -320,8 +320,27 @@ exitIfManagedResourcesAreNewer(agentDir)
 
 // Early TTY check — must come before heavy initialization to avoid dangling
 // handles that prevent process.exit() from completing promptly.
-const hasSubcommand = cliFlags.messages.length > 0
-if (!process.stdin.isTTY && !isPrintMode && !hasSubcommand && !cliFlags.listModels && !cliFlags.web) {
+// Subcommands exempt from the early non-TTY guard.
+// They are allowed past this gate and must enforce any command-specific TTY
+// requirements themselves (for example, `sessions` can be interactive).
+// Keep this list in sync with implemented CLI subcommands: if a legitimate
+// command is missing here, non-TTY invocation will fail early with a TTY error.
+const subcommandsExemptFromEarlyTtyCheck = new Set([
+  'auto',
+  'config',
+  'graph',
+  'headless',
+  'install',
+  'list',
+  'remove',
+  'sessions',
+  'update',
+  'web',
+  'worktree',
+  'wt',
+])
+const isSubcommandExemptFromEarlyTtyCheck = subcommandsExemptFromEarlyTtyCheck.has(cliFlags.messages[0] ?? '')
+if (!process.stdin.isTTY && !isPrintMode && !isSubcommandExemptFromEarlyTtyCheck && !cliFlags.listModels && !cliFlags.web) {
   printNonTtyErrorAndExit(undefined, false)
 }
 
@@ -453,7 +472,9 @@ if (cliFlags.messages[0] === 'headless') {
   initResources(agentDir)
   const { runHeadless, parseHeadlessArgs } = await import('./headless.js')
   await runHeadless(parseHeadlessArgs(process.argv))
-  process.exit(0)
+  // runHeadless is expected to terminate the process. If it returns, fail loud
+  // instead of silently reporting success.
+  process.exit(process.exitCode ?? 1)
 }
 
 /**
@@ -466,7 +487,9 @@ async function runHeadlessFromAuto(headlessArgs: string[]): Promise<never> {
   const { runHeadless, parseHeadlessArgs } = await import('./headless.js')
   const argv = [process.argv[0], process.argv[1], 'headless', ...headlessArgs]
   await runHeadless(parseHeadlessArgs(argv))
-  process.exit(0)
+  // runHeadless should not return; preserve any explicit exitCode and default
+  // to failure if control reaches here.
+  process.exit(process.exitCode ?? 1)
 }
 
 function flushPendingProviderRegistrations(resourceLoader: DefaultResourceLoaderInstance, modelRegistry: ModelRegistryInstance): void {

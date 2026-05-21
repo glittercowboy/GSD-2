@@ -258,12 +258,15 @@ export async function handleCompleteTask(
       return;
     }
 
-    // All guards passed — perform writes
+    // All guards passed — perform writes. Preserve existing slice planning
+    // metadata; completing a task must not reset title/risk/depends/demo.
     const taskRow = paramsToTaskRow(params, completedAt);
     summaryMd = renderSummaryContent(taskRow, params.sliceId, params.milestoneId, params.verificationEvidence ?? []);
 
     insertMilestone({ id: params.milestoneId, title: params.milestoneId });
-    insertSlice({ id: params.sliceId, milestoneId: params.milestoneId, title: params.sliceId });
+    if (!slice) {
+      insertSlice({ id: params.sliceId, milestoneId: params.milestoneId, title: params.sliceId });
+    }
     insertTask({
       id: params.taskId,
       sliceId: params.sliceId,

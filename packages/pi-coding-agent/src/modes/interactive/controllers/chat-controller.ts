@@ -42,6 +42,28 @@ let renderedSegments: RenderedSegment[] = [];
 // claude-code MCP pruning can remove stale provisional text later.
 let orphanedSegments: RenderedSegment[] = [];
 
+function startLoadingAnimation(host: InteractiveModeStateHost): void {
+	if (host.pendingWorkingMessage === null) {
+		host.loadingAnimation = undefined;
+		host.statusContainer.clear();
+		return;
+	}
+
+	host.loadingAnimation = new Loader(
+		host.ui,
+		(spinner) => theme.fg("accent", spinner),
+		(text) => theme.fg("muted", text),
+		host.defaultWorkingMessage,
+	);
+	host.statusContainer.addChild(host.loadingAnimation);
+	if (host.pendingWorkingMessage !== undefined) {
+		if (host.pendingWorkingMessage) {
+			host.loadingAnimation.setMessage(host.pendingWorkingMessage);
+		}
+		host.pendingWorkingMessage = undefined;
+	}
+}
+
 function getVisibleTextLikeBlockType(block: any): "text" | "thinking" | undefined {
 	if (block?.type === "text" && typeof block.text === "string" && block.text.trim().length > 0) return "text";
 	if (block?.type === "thinking" && typeof block.thinking === "string" && block.thinking.trim().length > 0) return "thinking";
@@ -350,19 +372,7 @@ export async function handleAgentEvent(host: InteractiveModeStateHost & {
 				host.loadingAnimation.stop();
 			}
 			host.statusContainer.clear();
-			host.loadingAnimation = new Loader(
-				host.ui,
-				(spinner) => theme.fg("accent", spinner),
-				(text) => theme.fg("muted", text),
-				host.defaultWorkingMessage,
-			);
-			host.statusContainer.addChild(host.loadingAnimation);
-			if (host.pendingWorkingMessage !== undefined) {
-				if (host.pendingWorkingMessage) {
-					host.loadingAnimation.setMessage(host.pendingWorkingMessage);
-				}
-				host.pendingWorkingMessage = undefined;
-			}
+			startLoadingAnimation(host);
 			host.ui.requestRender();
 			break;
 
@@ -727,19 +737,7 @@ export async function handleAgentEvent(host: InteractiveModeStateHost & {
 						lastPinnedText = "";
 						if (!host.loadingAnimation) {
 							host.statusContainer.clear();
-							host.loadingAnimation = new Loader(
-								host.ui,
-								(spinner) => theme.fg("accent", spinner),
-								(text) => theme.fg("muted", text),
-								host.defaultWorkingMessage,
-							);
-							host.statusContainer.addChild(host.loadingAnimation);
-							if (host.pendingWorkingMessage !== undefined) {
-								if (host.pendingWorkingMessage) {
-									host.loadingAnimation.setMessage(host.pendingWorkingMessage);
-								}
-								host.pendingWorkingMessage = undefined;
-							}
+							startLoadingAnimation(host);
 						}
 					}
 				}

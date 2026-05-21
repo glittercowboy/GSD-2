@@ -10,6 +10,7 @@ export interface PendingAutoStartEntry {
   basePath: string;
   milestoneId: string;
   step?: boolean;
+  startAuto?: boolean;
   createdAt: number;
   readyRejectCount?: number;
   scope: MilestoneScope;
@@ -22,6 +23,7 @@ export interface PendingAutoStartInput {
   ctx: ExtensionCommandContext;
   pi: ExtensionAPI;
   step?: boolean;
+  startAuto?: boolean;
   createdAt?: number;
 }
 

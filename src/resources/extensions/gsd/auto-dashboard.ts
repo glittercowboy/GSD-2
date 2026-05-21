@@ -44,6 +44,8 @@ import { logWarning } from "./workflow-logger.js";
 import { formattedShortcutPair } from "./shortcut-defs.js";
 import { readUnitRuntimeRecord, type AutoUnitRuntimeRecord } from "./unit-runtime.js";
 
+const ACTIVE_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
+
 // ─── UAT Slice Extraction ─────────────────────────────────────────────────────
 
 /**
@@ -271,13 +273,14 @@ export function formatWidgetTokens(count: number): string {
 export function formatRuntimeHealthSignal(
   record: AutoUnitRuntimeRecord | null,
   now = Date.now(),
-): { level: "green" | "yellow"; summary: string; detail?: string } | null {
+): { level: "green" | "yellow"; state: "recovering" | "waiting"; summary: string; detail?: string } | null {
   if (!record) return null;
   const idleMs = Math.max(0, now - record.lastProgressAt);
   const idleMinutes = Math.floor(idleMs / 60_000);
   if ((record.recoveryAttempts ?? 0) > 0 || record.phase === "recovered" || record.lastProgressKind.includes("recovery")) {
     return {
       level: "yellow",
+      state: "recovering",
       summary: "Recovering",
       detail: `retry ${record.recoveryAttempts ?? 1} after ${record.lastRecoveryReason ?? "idle"} stall`,
     };
@@ -285,8 +288,9 @@ export function formatRuntimeHealthSignal(
   if (record.progressCount === 0 && idleMs >= 60_000) {
     return {
       level: "yellow",
-      summary: "Waiting on provider",
-      detail: `no output for ${idleMinutes}m`,
+      state: "waiting",
+      summary: `provider idle ${idleMinutes}m`,
+      detail: `last output ${idleMinutes}m ago`,
     };
   }
   return null;
@@ -666,6 +670,9 @@ export function updateProgressWidget(
   if (typeof ctx.ui?.setStatus === "function") {
     ctx.ui.setStatus("gsd-step", undefined);
   }
+  if (!accessors.isSessionSwitching()) {
+    ctx.ui.setWidget("gsd-outcome", undefined);
+  }
 
   const verb = unitVerb(unitType);
   const phaseLabel = unitPhaseLabel(unitType);
@@ -686,7 +693,7 @@ export function updateProgressWidget(
   }
 
   ctx.ui.setWidget("gsd-progress", (tui, theme) => {
-    let pulseBright = true;
+    let spinnerIndex = 0;
     let cachedLines: string[] | undefined;
     let cachedWidth: number | undefined;
     let cachedRuntimeRecord: AutoUnitRuntimeRecord | null = null;
@@ -701,11 +708,12 @@ export function updateProgressWidget(
 
     refreshRuntimeRecord();
 
-    const pulseTimer = setInterval(() => {
-      pulseBright = !pulseBright;
+    const spinnerTimer = setInterval(() => {
+      spinnerIndex = (spinnerIndex + 1) % ACTIVE_SPINNER_FRAMES.length;
       cachedLines = undefined;
       tui.requestRender();
-    }, 800);
+    }, 200);
+    spinnerTimer.unref?.();
 
     // Refresh progress cache from disk every 15s so the widget reflects
     // task/slice completion mid-unit. Without this, the progress bar only
@@ -742,9 +750,7 @@ export function updateProgressWidget(
         // ── Line 1: Top bar ───────────────────────────────────────────────
         lines.push(...ui.bar());
 
-        const dot = pulseBright
-          ? theme.fg("accent", GLYPH.statusActive)
-          : theme.fg("dim", GLYPH.statusPending);
+        const spinner = theme.fg("accent", ACTIVE_SPINNER_FRAMES[spinnerIndex]);
         const elapsed = formatAutoElapsed(accessors.getAutoStartTime());
         const modeTag = accessors.isStepMode() ? "NEXT" : "AUTO";
 
@@ -759,9 +765,21 @@ export function updateProgressWidget(
         const healthIcon = healthLevel === "green" ? GLYPH.statusActive
           : healthLevel === "yellow" ? "!"
             : "x";
-        const healthStr = `  ${theme.fg(healthColor, healthIcon)} ${theme.fg(healthColor, healthSummary)}`;
+        const activeState = runtimeSignal?.state === "waiting" ? "waiting" : "running";
+        const stateColor = runtimeSignal?.state === "waiting" ? "warning" : "success";
+        const healthParts: string[] = [];
+        if (runtimeSignal?.summary) {
+          healthParts.push(theme.fg(healthColor, healthSummary));
+        } else if (healthLevel !== "green") {
+          healthParts.push(`${theme.fg(healthColor, healthIcon)} ${theme.fg(healthColor, healthSummary)}`);
+        }
 
-        const headerLeft = `${pad}${dot} ${theme.fg("accent", theme.bold("GSD"))}  ${theme.fg("success", modeTag)}${healthStr}`;
+        const headerLeft = [
+          `${pad}${spinner} ${theme.fg("accent", theme.bold("GSD"))}`,
+          theme.fg("success", modeTag),
+          theme.fg(stateColor, activeState),
+          ...healthParts,
+        ].join(` ${theme.fg("dim", "·")} `);
 
         // ETA in header right, after elapsed
         const eta = estimateTimeRemaining();
@@ -948,7 +966,7 @@ export function updateProgressWidget(
         lines.push("");
         // Step-mode guidance — shown above keyboard hints when auto is paused
         if (accessors.isStepMode()) {
-          lines.push(`${pad}${theme.fg("accent", "→")} ${theme.fg("dim", "Ctrl+N to advance to next step  ·  /gsd status for overview")}`);
+          lines.push(`${pad}${theme.fg("accent", "→")} ${theme.fg("dim", "/gsd next to advance one step  ·  /gsd status for overview")}`);
         }
 
         // Hints line
@@ -970,7 +988,7 @@ export function updateProgressWidget(
         cachedWidth = undefined;
       },
       dispose() {
-        clearInterval(pulseTimer);
+        clearInterval(spinnerTimer);
         if (progressRefreshTimer) clearInterval(progressRefreshTimer);
       },
     };
@@ -982,6 +1000,7 @@ export function setCompletionProgressWidget(
   snapshot: CompletionDashboardSnapshot,
 ): void {
   if (!ctx.hasUI) return;
+  const widgetKey = "gsd-progress";
   ctx.ui.setWidget("gsd-outcome", undefined);
 
   if (typeof ctx.ui?.setHeader === "function") {
@@ -994,7 +1013,7 @@ export function setCompletionProgressWidget(
     ctx.ui.setStatus("gsd-step", undefined);
   }
 
-  ctx.ui.setWidget("gsd-progress", (_tui, theme) => ({
+  ctx.ui.setWidget(widgetKey, (_tui, theme) => ({
     render(width: number): string[] {
       const ui = makeUI(theme, width);
       const pad = INDENT.base;

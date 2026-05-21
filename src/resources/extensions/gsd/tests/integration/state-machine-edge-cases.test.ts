@@ -911,6 +911,39 @@ describe("dispatch failure modes", () => {
     assert.equal(result, null, "ASSESSMENT FAIL should not hard-stop progression");
   });
 
+  test("UAT verdict gate: roadmap-scoped ASSESSMENT verdict is ignored", async () => {
+    base = createFullFixture();
+    openDatabase(join(base, ".gsd", "gsd.db"));
+    insertMilestone({ id: "M001", title: "Active", status: "active" });
+    insertSlice({ id: "S01", milestoneId: "M001", title: "First", status: "complete" });
+    insertSlice({ id: "S02", milestoneId: "M001", title: "Second", status: "pending" });
+
+    const s01Dir = join(base, ".gsd", "milestones", "M001", "slices", "S01");
+    const assessmentRelPath = join(".gsd", "milestones", "M001", "slices", "S01", "S01-ASSESSMENT.md");
+    writeFileSync(
+      join(s01Dir, "S01-ASSESSMENT.md"),
+      "---\nverdict: roadmap-adjusted\n---\n# Reassessment\n",
+    );
+    insertAssessment({
+      path: assessmentRelPath,
+      milestoneId: "M001",
+      sliceId: "S01",
+      status: "roadmap-adjusted",
+      scope: "roadmap",
+      fullContent: "---\nverdict: roadmap-adjusted\n---\n# Reassessment\n",
+    });
+
+    const ctx = buildDispatchCtx(base, "M001", {
+      phase: "planning",
+      activeSlice: { id: "S02", title: "Second" },
+      activeTask: null,
+    });
+    ctx.prefs = { uat_dispatch: true } as any;
+
+    const result = await getUatVerdictGate().match(ctx);
+    assert.equal(result, null, "roadmap scoped assessment verdict should not be treated as UAT");
+  });
+
   test("UAT verdict gate: ROADMAP fallback gates done slices when DB is unavailable", async () => {
     base = createFullFixture();
     const mDir = join(base, ".gsd", "milestones", "M001");

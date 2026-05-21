@@ -247,6 +247,50 @@ test("#4781 phase 2: validate-milestone rule writes pass-through VALIDATION for 
   assert.doesNotMatch(content, /#[0-9]{3,}/, "validation output must not include tracker-style refs");
 });
 
+test("validate-milestone skip writes to project root when active worktree lacks milestone projections", async (t) => {
+  const base = makeBase();
+  t.after(() => cleanup(base));
+
+  seedMilestone(base, "M001", TRIVIAL_INPUT);
+  const adapter = _getAdapter();
+  assert.ok(adapter, "test database should be open");
+  adapter.prepare("UPDATE slices SET status = 'complete' WHERE milestone_id = 'M001'").run();
+
+  const { writeFileSync, readFileSync } = await import("node:fs");
+  writeFileSync(
+    join(base, ".gsd", "milestones", "M001", "M001-ROADMAP.md"),
+    [
+      "# M001",
+      "## Slices",
+      "- [x] **S01: First** `risk:low` `depends:[]`",
+      "- [x] **S02: Second** `risk:low` `depends:[]`",
+    ].join("\n"),
+  );
+
+  const worktree = join(base, ".gsd", "worktrees", "M001");
+  mkdirSync(join(worktree, ".gsd", "runtime"), { recursive: true });
+
+  const ctx = {
+    ...makeCtx({ base: worktree, mid: "M001", phase: "validating-milestone" }),
+    session: {
+      basePath: worktree,
+      originalBasePath: base,
+      currentMilestoneId: "M001",
+    } as DispatchContext["session"],
+  };
+  const result = await findRule(VALIDATE_RULE).match(ctx);
+
+  assert.ok(result, "rule must return a result, not null");
+  assert.strictEqual(result!.action, "skip", "trivial variant must still skip validation");
+
+  const validationPath = join(base, ".gsd", "milestones", "M001", "M001-VALIDATION.md");
+  assert.ok(existsSync(validationPath), "pass-through VALIDATION.md must be written to the project root");
+  assert.match(readFileSync(validationPath, "utf-8"), /skip_validation: true/);
+
+  const worktreeValidationPath = join(worktree, ".gsd", "milestones", "M001", "M001-VALIDATION.md");
+  assert.equal(existsSync(worktreeValidationPath), false, "missing worktree milestone projection must not receive a phantom validation");
+});
+
 test("#4781 phase 2: validate-milestone skip path does not persist gates without a real slice", async (t) => {
   const base = makeBase();
   t.after(() => cleanup(base));

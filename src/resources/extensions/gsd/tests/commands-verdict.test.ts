@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 
 import { handleVerdict, parseValidationFile } from "../commands-verdict.ts";
-import { openDatabase, closeDatabase, _getAdapter } from "../gsd-db.ts";
+import { openDatabase, closeDatabase, _getAdapter, insertAssessment } from "../gsd-db.ts";
 import { invalidateStateCache } from "../state.ts";
 
 interface NotifyCall {
@@ -221,7 +221,7 @@ test("handleVerdict rejects needs-remediation without --rationale", async () => 
   }
 });
 
-test("handleVerdict rejects when VALIDATION file is missing", async () => {
+test("handleVerdict rejects when milestone validation is missing", async () => {
   const base = makeBase();
   try {
     openTestDb(base);
@@ -233,8 +233,8 @@ test("handleVerdict rejects when VALIDATION file is missing", async () => {
     await handleVerdict("pass --milestone M001", ctx, base);
 
     assert.ok(
-      calls.some((c) => /No VALIDATION file found/.test(c.message)),
-      `expected missing-VALIDATION warning, got: ${JSON.stringify(calls)}`,
+      calls.some((c) => /No milestone validation found/.test(c.message)),
+      `expected missing-validation warning, got: ${JSON.stringify(calls)}`,
     );
   } finally {
     closeDatabase();
@@ -261,6 +261,67 @@ test("handleVerdict pass override flips verdict and preserves sections", async (
     assert.match(rewritten, /Criterion A met/, "success criteria preserved");
     assert.match(rewritten, /S01 \| delivered/, "slice audit preserved");
     assert.match(rewritten, /Manually overridden via \/gsd verdict/, "default rationale applied");
+
+    assert.ok(
+      calls.some((c) => c.kind === "success" && /needs-attention.*->.*pass/.test(c.message)),
+      `expected success notification, got: ${JSON.stringify(calls)}`,
+    );
+  } finally {
+    closeDatabase();
+    invalidateStateCache();
+    cleanup(base);
+  }
+});
+
+test("handleVerdict pass override works when validation only exists in DB", async () => {
+  const base = makeBase();
+  try {
+    openTestDb(base);
+    seedMilestone("M001", "Test Milestone");
+    seedSlice("M001", "S01", "complete");
+
+    const dbOnlyValidation = [
+      "---",
+      "verdict: needs-attention",
+      "remediation_round: 1",
+      "---",
+      "",
+      "# Milestone Validation: M001",
+      "",
+      "## Success Criteria Checklist",
+      "- [x] Criterion A met",
+      "",
+      "## Slice Delivery Audit",
+      "| Slice | Result |",
+      "| --- | --- |",
+      "| S01 | delivered |",
+      "",
+      "## Cross-Slice Integration",
+      "Clean.",
+      "",
+      "## Requirement Coverage",
+      "Covered.",
+      "",
+      "## Verdict Rationale",
+      "Manual attention was requested.",
+      "",
+    ].join("\n");
+
+    insertAssessment({
+      path: "/external/worktree/.gsd/milestones/M001/M001-VALIDATION.md",
+      milestoneId: "M001",
+      status: "needs-attention",
+      scope: "milestone-validation",
+      fullContent: dbOnlyValidation,
+    });
+
+    const { ctx, calls } = makeMockCtx();
+    await handleVerdict('pass --milestone M001 --rationale "reviewed and accepted"', ctx, base);
+
+    const validationPath = join(base, ".gsd", "milestones", "M001", "M001-VALIDATION.md");
+    const rewritten = readFileSync(validationPath, "utf-8");
+    assert.match(rewritten, /^verdict: pass$/m, "DB-backed validation should be rewritten as pass");
+    assert.match(rewritten, /reviewed and accepted/, "explicit rationale should be persisted");
 
     assert.ok(
       calls.some((c) => c.kind === "success" && /needs-attention.*->.*pass/.test(c.message)),

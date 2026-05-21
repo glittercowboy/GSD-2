@@ -17,6 +17,8 @@ interface CallLog {
   mergeCalls: number;
   postflightCalls: number;
   stopAutoCalls: Array<string | undefined>;
+  stopAutoOptions: Array<{ preserveCompletedMilestoneBranch?: boolean } | undefined>;
+  pauseAutoCalls: Array<string | undefined>;
   notifyCalls: Array<{ message: string; level: string }>;
   milestoneMergedInPhases: boolean;
 }
@@ -31,6 +33,8 @@ function buildIc(opts: {
     mergeCalls: 0,
     postflightCalls: 0,
     stopAutoCalls: [],
+    stopAutoOptions: [],
+    pauseAutoCalls: [],
     notifyCalls: [],
     milestoneMergedInPhases: false,
   };
@@ -96,8 +100,21 @@ function buildIc(opts: {
         }
       },
     },
-    stopAuto: async (_c?: unknown, _p?: unknown, reason?: string) => {
+    stopAuto: async (
+      _c?: unknown,
+      _p?: unknown,
+      reason?: string,
+      options?: { preserveCompletedMilestoneBranch?: boolean },
+    ) => {
       log.stopAutoCalls.push(reason);
+      log.stopAutoOptions.push(options);
+    },
+    pauseAuto: async (
+      _c?: unknown,
+      _p?: unknown,
+      errorContext?: { message: string },
+    ) => {
+      log.pauseAutoCalls.push(errorContext?.message);
     },
   };
 
@@ -190,8 +207,11 @@ test("regression #5538-followup: postflight pop runs even when mergeAndExit thro
     1,
     "postflight pop must run even on merge failure (was the bug)",
   );
-  assert.equal(log.stopAutoCalls.length, 1);
-  assert.match(log.stopAutoCalls[0] ?? "", /Merge error on milestone M002/);
+  // A non-conflict merge failure is recoverable — pause (resumable), do not
+  // hard-stop and re-run the failed merge in stopAuto's teardown.
+  assert.equal(log.stopAutoCalls.length, 0, "merge failure must not hard-stop");
+  assert.equal(log.pauseAutoCalls.length, 1);
+  assert.match(log.pauseAutoCalls[0] ?? "", /Merge error on milestone M002/);
   assert.equal(
     log.milestoneMergedInPhases,
     false,
@@ -222,8 +242,14 @@ test("regression #5538-followup: postflight pop runs even when mergeAndExit thro
     1,
     "postflight pop must run on merge conflict (was the bug)",
   );
-  assert.equal(log.stopAutoCalls.length, 1);
-  assert.match(log.stopAutoCalls[0] ?? "", /Merge conflict on milestone M002/);
+  // A merge conflict is a recoverable human checkpoint: auto-mode must PAUSE
+  // (resumable, stays in the TUI), not STOP (full session teardown + a
+  // duplicate worktree re-merge in stopAuto's cleanup step, then drops the
+  // user onto a "stopped" surface).
+  assert.equal(log.stopAutoCalls.length, 0, "merge conflict must not hard-stop");
+  assert.equal(log.pauseAutoCalls.length, 1);
+  assert.match(log.pauseAutoCalls[0] ?? "", /Merge conflict on milestone M002/);
+  assert.match(log.pauseAutoCalls[0] ?? "", /lib\/models\.ts/);
 });
 
 test("clean tree: no stash to pop, merge succeeds, no pop attempted", async () => {
@@ -260,6 +286,11 @@ test("dirty overlap: preflight stops before merge and postflight restore", async
     log.stopAutoCalls[0] ?? "",
     /Pre-merge dirty working tree overlaps milestone M002/,
   );
+  assert.equal(
+    log.stopAutoOptions[0]?.preserveCompletedMilestoneBranch,
+    true,
+    "stopAuto cleanup must preserve the branch instead of merging after preflight blocks",
+  );
 });
 
 test("unmerged conflicts: preflight stops before merge and postflight restore", async () => {
@@ -281,6 +312,11 @@ test("unmerged conflicts: preflight stops before merge and postflight restore", 
   assert.match(
     log.stopAutoCalls[0] ?? "",
     /Pre-merge unresolved Git conflicts block milestone M002/,
+  );
+  assert.equal(
+    log.stopAutoOptions[0]?.preserveCompletedMilestoneBranch,
+    true,
+    "stopAuto cleanup must preserve the branch instead of merging after preflight blocks",
   );
 });
 
@@ -318,10 +354,11 @@ test("merge error is reported even when stash pop also failed (merge-error takes
 
   assert.deepEqual(result, { action: "break", reason: "merge-failed" });
   assert.equal(log.postflightCalls, 1, "postflight pop still attempted");
-  assert.equal(log.stopAutoCalls.length, 1, "stopAuto called once, not twice");
+  assert.equal(log.stopAutoCalls.length, 0, "merge failure must not hard-stop");
+  assert.equal(log.pauseAutoCalls.length, 1, "pauseAuto called once, not twice");
   assert.match(
-    log.stopAutoCalls[0] ?? "",
+    log.pauseAutoCalls[0] ?? "",
     /Merge error/,
-    "stopAuto message reflects merge error, not stash failure",
+    "pause message reflects merge error, not stash failure",
   );
 });

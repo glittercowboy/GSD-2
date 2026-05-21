@@ -71,11 +71,11 @@ function parseQuickDir(dirName: string): { number: number; slug: string } | null
 
 // ─── Phase Scanner ─────────────────────────────────────────────────────────
 
-/** Plan file pattern: NN-NN-PLAN.md (e.g. 29-01-PLAN.md) */
-const PLAN_RE = /^(\d+(?:\.\d+)?)-(\d+)-PLAN\.md$/i;
+/** Plan file pattern: NN-NN-PLAN.md (e.g. 29-01-PLAN.md) or NN-NNb-PLAN.md. */
+const PLAN_RE = /^(\d+(?:\.\d+)?)-(\d+[a-z]?)-PLAN\.md$/i;
 
-/** Summary file pattern: NN-NN-SUMMARY.md (e.g. 29-01-SUMMARY.md) */
-const SUMMARY_RE = /^(\d+(?:\.\d+)?)-(\d+)-SUMMARY\.md$/i;
+/** Summary file pattern: NN-NN-SUMMARY.md (e.g. 29-01-SUMMARY.md) or NN-NNb-SUMMARY.md. */
+const SUMMARY_RE = /^(\d+(?:\.\d+)?)-(\d+[a-z]?)-SUMMARY\.md$/i;
 
 /** Research file pattern: contains RESEARCH (case-insensitive) */
 const RESEARCH_RE = /research/i;

@@ -10,7 +10,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 
@@ -37,6 +37,7 @@ import {
   ReconciliationFailedError,
   type DriftHandler,
   type DriftRecord,
+  type ReconciliationDeps,
 } from "../state-reconciliation.ts";
 import { classifyFailure } from "../recovery-classification.ts";
 import type { GSDState } from "../types.ts";
@@ -250,6 +251,14 @@ function rmTreeQuiet(base: string): void {
   }
 }
 
+function resolveGitPathForTest(base: string, gitPath: string): string {
+  const resolvedPath = execFileSync("git", ["rev-parse", "--git-path", gitPath], {
+    cwd: base,
+    encoding: "utf-8",
+  }).trim();
+  return isAbsolute(resolvedPath) ? resolvedPath : resolve(base, resolvedPath);
+}
+
 test("ADR-017 (#5701): merge-state drift detected and repaired end-to-end", async (t) => {
   const base = makeGitBase();
   t.after(() => rmTreeQuiet(base));
@@ -322,6 +331,73 @@ test("ADR-017 (#5701): merge-state drift is detected in linked worktrees", async
   assert.ok(
     result.repaired.some((d) => d.kind === "unmerged-merge-state"),
     "repaired list should include the worktree merge-state drift record",
+  );
+});
+
+test("ADR-017 (#5701): stale clean squash marker is removed without a no-op commit", async (t) => {
+  const base = makeGitBase();
+  t.after(() => rmTreeQuiet(base));
+
+  const squashMsgPath = resolveGitPathForTest(base, "SQUASH_MSG");
+  const beforeHead = execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: base,
+    encoding: "utf-8",
+  }).trim();
+
+  writeFileSync(squashMsgPath, "stale squash message\n");
+  assert.equal(
+    execFileSync("git", ["status", "--porcelain"], { cwd: base, encoding: "utf-8" }).trim(),
+    "",
+    "pre: stale squash marker must not imply worktree/index changes",
+  );
+
+  const result = await reconcileBeforeDispatch(base, {
+    invalidateStateCache: () => {},
+    deriveState: async () => makeState(),
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(existsSync(squashMsgPath), false, "post: stale SQUASH_MSG is cleared");
+  assert.ok(
+    result.repaired.some((d) => d.kind === "unmerged-merge-state"),
+    "repaired list should include the stale squash marker drift",
+  );
+  assert.equal(
+    execFileSync("git", ["rev-parse", "HEAD"], { cwd: base, encoding: "utf-8" }).trim(),
+    beforeHead,
+    "reconciliation must not create a no-op commit for stale marker-only state",
+  );
+});
+
+test("ADR-017 (#5701): stale squash marker is removed after restored local changes", async (t) => {
+  const base = makeGitBase();
+  t.after(() => rmTreeQuiet(base));
+
+  const squashMsgPath = resolveGitPathForTest(base, "SQUASH_MSG");
+  const beforeHead = execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: base,
+    encoding: "utf-8",
+  }).trim();
+
+  writeFileSync(join(base, "local-notes.txt"), "restored local work\n");
+  writeFileSync(squashMsgPath, "stale squash message\n");
+
+  const result = await reconcileBeforeDispatch(base, {
+    invalidateStateCache: () => {},
+    deriveState: async () => makeState(),
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(existsSync(squashMsgPath), false, "post: stale SQUASH_MSG is cleared");
+  assert.equal(
+    readFileSync(join(base, "local-notes.txt"), "utf-8"),
+    "restored local work\n",
+    "reconciliation must preserve restored local work",
+  );
+  assert.equal(
+    execFileSync("git", ["rev-parse", "HEAD"], { cwd: base, encoding: "utf-8" }).trim(),
+    beforeHead,
+    "reconciliation must not commit restored local work",
   );
 });
 
@@ -1012,6 +1088,19 @@ test("ADR-017 (#5707): reconcileBeforeSpawn reports repaired drift in ok=true re
   if (result.ok) {
     assert.match(result.reason ?? "", /stale-sketch-flag/);
   }
+});
+
+test("ADR-017 (#6238): reconcileBeforeSpawn does not pass reconcile-only deps object", async () => {
+  let receivedDeps: ReconciliationDeps | undefined;
+  const result = await reconcileBeforeSpawn("/project", {
+    reconcile: async (_basePath, deps) => {
+      receivedDeps = deps;
+      return { ok: true, stateSnapshot: makeState(), repaired: [], blockers: [] };
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(receivedDeps, undefined);
 });
 
 // ─── Lifecycle and classification ────────────────────────────────────────────

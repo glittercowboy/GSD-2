@@ -133,6 +133,18 @@ describe("style", () => {
 		assert.equal(visibleWidth(plain[0]), 40);
 	});
 
+	test("open border truncates long right titles to the requested width", () => {
+		const plain = style()
+			.border("open")
+			.title("GSD")
+			.titleRight("x".repeat(80))
+			.render(["output"], 40)
+			.map((line) => stripAnsi(line));
+
+		assert.ok(plain[0].includes("GSD"));
+		assert.equal(visibleWidth(plain[0]), 40);
+	});
+
 	test("passes tone to toneColor when no explicit border color is set", () => {
 		const lines = style()
 			.border("minimal")

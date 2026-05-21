@@ -297,7 +297,7 @@ type WorktreeLifecyclePrimitiveOverrides = {
   teardownAutoWorktree?: (
     basePath: string,
     milestoneId: string,
-    opts?: { preserveBranch?: boolean },
+    opts?: { preserveBranch?: boolean; preserveWorktree?: boolean },
   ) => void;
   createAutoWorktree?: (basePath: string, milestoneId: string) => string;
   enterAutoWorktree?: (basePath: string, milestoneId: string) => string;
@@ -383,11 +383,16 @@ function lifecycleAutoWorktreeBranch(
     autoWorktreeBranch(milestoneId);
 }
 
+/**
+ * Dispatch teardown to the override registered in `deps`, or fall back to
+ * the real `teardownAutoWorktree`. Centralises testability: tests inject an
+ * override; production code uses the real implementation transparently.
+ */
 function lifecycleTeardownAutoWorktree(
   deps: WorktreeLifecycleDeps,
   basePath: string,
   milestoneId: string,
-  opts?: { preserveBranch?: boolean },
+  opts?: { preserveBranch?: boolean; preserveWorktree?: boolean },
 ): void {
   const override = primitiveOverrides(deps).teardownAutoWorktree;
   if (override) {
@@ -841,8 +846,8 @@ export function _enterMilestoneCore(
 /**
  * Resolve the basePath to adopt on resume from a paused session.
  *
- * Returns `persistedWorktreePath` when the path is non-null and exists on
- * disk; otherwise falls back to `base`. Used by
+ * Returns `persistedWorktreePath` when the path is non-null and still points
+ * at a git worktree; otherwise falls back to `base`. Used by
  * `WorktreeLifecycle.resumeFromPausedSession` (#5621). Exported as a pure
  * function so unit tests can exercise the path-resolution logic without
  * constructing a `WorktreeLifecycle` instance.
@@ -855,9 +860,26 @@ export function resolvePausedResumeBasePath(
   persistedWorktreePath: string | null | undefined,
   pathExists: (p: string) => boolean = existsSync,
 ): string {
-  return persistedWorktreePath && pathExists(persistedWorktreePath)
+  return persistedWorktreePath &&
+    isValidPersistedWorktreePath(persistedWorktreePath, pathExists)
     ? persistedWorktreePath
     : base;
+}
+
+function isValidPersistedWorktreePath(
+  persistedWorktreePath: string,
+  pathExists: (p: string) => boolean,
+): boolean {
+  if (!pathExists(persistedWorktreePath)) return false;
+
+  const gitPath = join(persistedWorktreePath, ".git");
+  if (!pathExists(gitPath)) return false;
+
+  try {
+    return readFileSync(gitPath, "utf8").trim().startsWith("gitdir: ");
+  } catch {
+    return false;
+  }
 }
 
 function rebuildGitService(
@@ -1401,7 +1423,7 @@ export class WorktreeLifecycle {
    */
   exitMilestone(
     milestoneId: string,
-    opts: { merge: boolean; preserveBranch?: boolean },
+    opts: { merge: boolean; preserveBranch?: boolean; preserveWorktree?: boolean },
     ctx: NotifyCtx,
   ): ExitResult {
     if (opts.merge) {
@@ -1422,6 +1444,7 @@ export class WorktreeLifecycle {
     try {
       this._exitWithoutMerge(milestoneId, ctx, {
         preserveBranch: opts.preserveBranch,
+        preserveWorktree: opts.preserveWorktree,
       });
       return { ok: true, merged: false, codeFilesChanged: false };
     } catch (err) {
@@ -1485,10 +1508,15 @@ export class WorktreeLifecycle {
 
   // ── Private — exit without merge ─────────────────────────────────────
 
+  /**
+   * Auto-commit and tear down the worktree without merging to main.
+   * When `opts.preserveWorktree` is true the worktree directory is left on
+   * disk (slice-parallel dispatch keeps the parent worktree for re-entry).
+   */
   private _exitWithoutMerge(
     milestoneId: string,
     ctx: NotifyCtx,
-    opts: { preserveBranch?: boolean },
+    opts: { preserveBranch?: boolean; preserveWorktree?: boolean },
   ): void {
     validateMilestoneId(milestoneId);
     if (!lifecycleIsInAutoWorktree(this.deps, this.s.basePath)) {
@@ -1544,6 +1572,7 @@ export class WorktreeLifecycle {
     try {
       lifecycleTeardownAutoWorktree(this.deps, this.s.originalBasePath, milestoneId, {
         preserveBranch: opts.preserveBranch ?? false,
+        preserveWorktree: opts.preserveWorktree ?? false,
       });
     } catch (err) {
       teardownFailed = true;

@@ -1,6 +1,9 @@
+// Project/App: GSD-2
+// File Purpose: UOK turn git action regression tests.
+
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
@@ -132,6 +135,35 @@ test("uok gitops turn action commit creates commit with unit trailer", () => {
     assert.ok(body.includes("GSD-Unit: M001/S01/T02"));
   } finally {
     rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("uok gitops turn action commits the active external-state worktree", () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), "gsd-uok-gitops-project-"));
+  const externalState = mkdtempSync(join(tmpdir(), "gsd-uok-gitops-state-"));
+  try {
+    initRepo(projectRoot);
+    symlinkSync(externalState, join(projectRoot, ".gsd"), "junction");
+    mkdirSync(join(externalState, "worktrees"), { recursive: true });
+    run("git worktree add .gsd/worktrees/M001 -b milestone/M001", projectRoot);
+
+    const worktreeRoot = realpathSync(join(projectRoot, ".gsd", "worktrees", "M001"));
+    writeFileSync(join(worktreeRoot, "feature.txt"), "worktree change\n", "utf-8");
+
+    const result = runTurnGitAction({
+      basePath: worktreeRoot,
+      action: "commit",
+      unitType: "execute-task",
+      unitId: "M001/S01/T04",
+    });
+
+    assert.equal(result.status, "ok");
+    assert.ok(result.commitMessage?.includes("chore: auto-commit after execute-task"));
+    assert.equal(run("git status --porcelain", worktreeRoot), "");
+    assert.ok(run("git log -1 --pretty=%B", worktreeRoot).includes("GSD-Unit: M001/S01/T04"));
+  } finally {
+    rmSync(projectRoot, { recursive: true, force: true });
+    rmSync(externalState, { recursive: true, force: true });
   }
 });
 

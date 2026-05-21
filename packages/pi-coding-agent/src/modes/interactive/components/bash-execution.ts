@@ -212,13 +212,27 @@ export class BashExecutionComponent extends Container {
 			} else {
 				// Use shared visual truncation utility
 				const styledOutput = previewLogicalLines.map((line) => theme.fg("muted", line)).join("\n");
-				const { visualLines } = truncateToVisualLines(
-					`\n${styledOutput}`,
-					PREVIEW_LINES,
-					this.ui.terminal.columns,
-					1, // padding
-				);
-				this.contentContainer.addChild({ render: () => visualLines, invalidate: () => {} });
+				let cachedWidth: number | undefined;
+				let cachedLines: string[] | undefined;
+				this.contentContainer.addChild({
+					render: (width: number) => {
+						if (cachedLines === undefined || cachedWidth !== width) {
+							const result = truncateToVisualLines(
+								`\n${styledOutput}`,
+								PREVIEW_LINES,
+								width,
+								1, // padding
+							);
+							cachedLines = result.visualLines;
+							cachedWidth = width;
+						}
+						return cachedLines;
+					},
+					invalidate: () => {
+						cachedWidth = undefined;
+						cachedLines = undefined;
+					},
+				});
 			}
 		}
 

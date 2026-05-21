@@ -26,6 +26,8 @@ FINDINGS=0
 # Blobs shorter than this have too many false positives.
 # 40 base64 chars decodes to ~30 bytes — minimum length for a meaningful directive.
 MIN_BLOB_LEN=40
+BASE64_CANDIDATE_RE="[A-Za-z0-9+/]{${MIN_BLOB_LEN},}={0,2}"
+DATA_URI_RE='data:[a-z]+/[a-z+.-]+;base64,'
 
 # ── Prompt injection patterns to match against decoded content ────────
 # Format: "Label:::flags:::regex"
@@ -205,25 +207,26 @@ while IFS= read -r file; do
   [[ -z "$file" ]] && continue
   should_scan "$file" || continue
 
-  content=$(get_content "$file")
-  [[ -z "$content" ]] && continue
+  candidate_lines=$(get_content "$file" | grep -nE "$BASE64_CANDIDATE_RE" 2>/dev/null || true)
+  [[ -z "$candidate_lines" ]] && continue
 
-  line_num=0
-  while IFS= read -r line; do
-    line_num=$((line_num + 1))
+  while IFS= read -r match_line; do
+    [[ -z "$match_line" ]] && continue
+    line_num="${match_line%%:*}"
+    line="${match_line#*:}"
 
     # Skip data URI lines — legitimate image/font embedding
-    echo "$line" | grep -qE 'data:[a-z]+/[a-z+.-]+;base64,' && continue
+    [[ "$line" =~ $DATA_URI_RE ]] && continue
 
     # Extract base64 candidates from this line
-    blobs=$(printf '%s' "$line" | grep -oE "[A-Za-z0-9+/]{${MIN_BLOB_LEN},}={0,2}" 2>/dev/null || true)
+    blobs=$(printf '%s' "$line" | grep -oE "$BASE64_CANDIDATE_RE" 2>/dev/null || true)
     [[ -z "$blobs" ]] && continue
 
     while IFS= read -r blob; do
       [[ -z "$blob" ]] && continue
       check_blob "$file" "$blob" "$line_num"
     done <<< "$blobs"
-  done <<< "$content"
+  done <<< "$candidate_lines"
 
 done <<< "$FILES"
 

@@ -25,7 +25,7 @@ const PREF_SAMPLE_VALUES: Record<string, unknown> = {
   unique_milestone_ids: true,
   budget_ceiling: 12.5,
   budget_enforcement: "warn",
-  context_pause_threshold: 0.8,
+  context_pause_threshold: 80,
   notifications: {
     enabled: true,
     on_complete: true,

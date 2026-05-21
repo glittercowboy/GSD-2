@@ -1,3 +1,5 @@
+// GSD-2 + packages/pi-tui/src/components/input.ts - Single-line terminal input component with editing, paste, and undo support.
+
 import { getEditorKeybindings } from "../keybindings.js";
 import { decodeKittyPrintable } from "../keys.js";
 import { KillRing } from "../kill-ring.js";
@@ -6,6 +8,7 @@ import { UndoStack } from "../undo-stack.js";
 import { getSegmenter, isPunctuationChar, isWhitespaceChar, visibleWidth } from "../utils.js";
 
 const segmenter = getSegmenter();
+const MAX_PASTE_CHARS = 100_000;
 
 interface InputState {
 	value: string;
@@ -433,12 +436,19 @@ export class Input implements Component, Focusable {
 
 	private handlePaste(pastedText: string): void {
 		this.lastAction = null;
-		this.pushUndo();
 
-		// Clean the pasted text - remove newlines and carriage returns
-		const cleanText = pastedText.replace(/\r\n/g, "").replace(/\r/g, "").replace(/\n/g, "");
+		// Clean the pasted text while enforcing a hard cap before insertion.
+		let cleanText = "";
+		for (let i = 0; i < pastedText.length && cleanText.length < MAX_PASTE_CHARS; i++) {
+			const char = pastedText[i];
+			if (char !== "\r" && char !== "\n") {
+				cleanText += char;
+			}
+		}
+		if (!cleanText) return;
 
 		// Insert at cursor position
+		this.pushUndo();
 		this.value = this.value.slice(0, this.cursor) + cleanText + this.value.slice(this.cursor);
 		this.cursor += cleanText.length;
 	}
