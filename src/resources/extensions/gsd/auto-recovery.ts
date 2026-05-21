@@ -561,21 +561,50 @@ function commitMatchesMilestone(basePath: string, message: string, milestoneId: 
   if (/^GSD-Task:\s*S[^/\s]+\/T\S+/m.test(message)) {
     if (files.some((file) => isMilestoneArtifactPath(file, milestoneId))) return true;
     if (commitMessageMentionsMilestone(message, milestoneId)) return true;
-    if (commitTaskTrailerBelongsToMilestone(basePath, message, milestoneId)) return true;
-    if (!isDbAvailable() && MILESTONE_ID_RE.test(milestoneId) && classifyImplementationFiles(files) === "present") {
-      return true;
-    }
+    const taskTrailerOwnership = getTaskOwnershipStatus(basePath, message, milestoneId);
+    if (taskTrailerOwnership === true) return true;
+    if (taskTrailerOwnership === false) return false;
+    // taskTrailerOwnership === null: unknown ownership. Apply fallback only
+    // in this case to avoid cross-milestone attribution.
+    if (MILESTONE_ID_RE.test(milestoneId) && classifyImplementationFiles(files) === "present") return true;
   }
 
-  if (!match) return false;
+  return false;
+}
+
+/**
+ * Tri-state task ownership probe.
+ * true => DB or local files confirm this milestone owns the task.
+ * false => DB is available and this milestone is registered, but task is absent.
+ * null => ownership unknown (milestone not in DB yet, or no DB + no local files).
+ */
+function getTaskOwnershipStatus(
+  basePath: string,
+  message: string,
+  milestoneId: string,
+): true | false | null {
+  const match = message.match(/^GSD-Task:\s*(S[^/\s]+)\/(T[^\s]+)/m);
+  if (!match) return null;
   const [, sliceId, taskId] = match;
 
-  if (getTask(milestoneId, sliceId, taskId)) return true;
+  if (isDbAvailable()) {
+    if (!getMilestone(milestoneId)) return null;
+    return getTask(milestoneId, sliceId, taskId) ? true : false;
+  }
 
+  // DB unavailable: fallback to local task-file presence.
   const tasksDir = resolveTasksDir(basePath, milestoneId, sliceId);
-  if (!tasksDir) return false;
-  return existsSync(join(tasksDir, `${taskId}-PLAN.md`))
-    || existsSync(join(tasksDir, `${taskId}-SUMMARY.md`));
+  if (
+    tasksDir
+    && (
+      existsSync(join(tasksDir, `${taskId}-PLAN.md`))
+      || existsSync(join(tasksDir, `${taskId}-SUMMARY.md`))
+    )
+  ) {
+    return true;
+  }
+
+  return null;
 }
 
 function commitMessageMentionsMilestone(message: string, milestoneId: string): boolean {
