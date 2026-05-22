@@ -1,0 +1,69 @@
+name: Archive Redirect (auto-close issues & PRs)
+
+# This repository's maintainer control was lost to an individual publicly linked
+# to a $GSD token rug-pull. Development continues at open-gsd/gsd-pi.
+#
+# Any issue or pull request opened here is automatically commented on and closed
+# with a redirect to the new home. Only safe, non-user-controlled inputs
+# (issue/PR numbers as integers, the repo slug) are exposed to shell — no titles,
+# bodies, branch refs, or commit messages are interpolated, so this workflow is
+# not susceptible to workflow injection.
+
+on:
+  issues:
+    types: [opened, reopened]
+  pull_request_target:
+    types: [opened, reopened]
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  redirect-issue:
+    if: github.event_name == 'issues'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Comment and close issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          cat > /tmp/body.md <<'EOF'
+          ⚠️ **This repository is no longer under legitimate maintainer control.**
+
+          Control of `gsd-build/gsd-2` was lost to an individual publicly linked to a `$GSD` token rug-pull. Active development continues under new, independent stewardship at **[open-gsd/gsd-pi](https://github.com/open-gsd/gsd-pi)**.
+
+          For background and the active community discussion, see **[open-gsd/get-shit-done-redux discussion #1](https://github.com/open-gsd/get-shit-done-redux/discussions/1)**.
+
+          **Please re-open this issue at** [open-gsd/gsd-pi/issues](https://github.com/open-gsd/gsd-pi/issues/new/choose).
+
+          This issue is being closed automatically. No action will be taken on it here.
+          EOF
+          gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body-file /tmp/body.md
+          gh issue close "$ISSUE_NUMBER" --repo "$REPO" --reason "not planned"
+
+  redirect-pr:
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Comment and close pull request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          cat > /tmp/body.md <<'EOF'
+          ⚠️ **This repository is no longer under legitimate maintainer control.**
+
+          Control of `gsd-build/gsd-2` was lost to an individual publicly linked to a `$GSD` token rug-pull. Active development continues under new, independent stewardship at **[open-gsd/gsd-pi](https://github.com/open-gsd/gsd-pi)**.
+
+          For background and the active community discussion, see **[open-gsd/get-shit-done-redux discussion #1](https://github.com/open-gsd/get-shit-done-redux/discussions/1)**.
+
+          **Please re-open this pull request at** [open-gsd/gsd-pi](https://github.com/open-gsd/gsd-pi).
+
+          This pull request is being closed automatically and will not be reviewed or merged here.
+          EOF
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file /tmp/body.md
+          gh pr close "$PR_NUMBER" --repo "$REPO"

@@ -1,1 +1,10 @@
 blank_issues_enabled: false
+contact_links:
+  - name: 🚨 This repository has moved — open issues at open-gsd/gsd-pi
+    url: https://github.com/open-gsd/gsd-pi/issues/new/choose
+    about: |
+      Control of gsd-build/gsd-2 was lost to an individual publicly linked to a $GSD token rug-pull.
+      Active development continues at open-gsd/gsd-pi. Please file new issues there.
+  - name: 💬 Background and community discussion
+    url: https://github.com/open-gsd/get-shit-done-redux/discussions/1
+    about: Context on the rug-pull, the fork, and the path forward.
