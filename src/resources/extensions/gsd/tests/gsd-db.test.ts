@@ -32,6 +32,7 @@ import {
   getSliceTasks,
   getActiveMilestoneFromDb,
   deleteMilestone,
+  deleteSlice,
   clearEngineHierarchy,
   recordMilestoneCommitAttribution,
   getMilestoneCommitAttributionShas,
@@ -1115,6 +1116,64 @@ describe('gsd-db', () => {
       assert.deepEqual(getMilestoneCommitAttributionShas('M001'), ['fedcba9876543210fedcba9876543210fedcba98']);
       clearEngineHierarchy();
       assert.deepEqual(getMilestoneCommitAttributionShas('M001'), []);
+      closeDatabase();
+    });
+  });
+
+  // ─── deleteSlice cascade (#6484) ─────────────────────────────────────────
+
+  describe('deleteSlice cascade', () => {
+    test('deleteSlice clears quality_gates FK rows and orphan gate_runs/replan_history/assessments/artifacts', () => {
+      openDatabase(':memory:');
+      insertMilestone({ id: 'M001', title: 'Milestone', status: 'active' });
+      insertSlice({ milestoneId: 'M001', id: 'S01', status: 'active' });
+      insertTask({
+        milestoneId: 'M001',
+        sliceId: 'S01',
+        id: 'T01',
+        title: 'Task under the slice',
+        planning: {
+          description: 'desc',
+          estimate: 'small',
+          files: ['src/a.ts'],
+          verify: 'npm test',
+          inputs: ['docs/in.md'],
+          expectedOutput: ['dist/out.md'],
+          observabilityImpact: '',
+        },
+      });
+
+      const adapter = _getAdapter()!;
+      adapter.prepare(
+        `INSERT INTO quality_gates (milestone_id, slice_id, gate_id) VALUES ('M001', 'S01', 'G1')`,
+      ).run();
+      adapter.prepare(
+        `INSERT INTO gate_runs (trace_id, turn_id, gate_id, milestone_id, slice_id) VALUES ('tr1', 'tu1', 'G1', 'M001', 'S01')`,
+      ).run();
+      adapter.prepare(
+        `INSERT INTO replan_history (milestone_id, slice_id) VALUES ('M001', 'S01')`,
+      ).run();
+      adapter.prepare(
+        `INSERT INTO assessments (path, milestone_id, slice_id) VALUES ('assessments/S01.md', 'M001', 'S01')`,
+      ).run();
+      adapter.prepare(
+        `INSERT INTO artifacts (path, milestone_id, slice_id) VALUES ('artifacts/S01.md', 'M001', 'S01')`,
+      ).run();
+
+      // Pre-fix this threw FOREIGN KEY constraint failed (quality_gates FK → slices)
+      // or left orphan rows in the four non-FK tables.
+      deleteSlice('M001', 'S01');
+
+      for (const table of ['quality_gates', 'gate_runs', 'replan_history', 'assessments', 'artifacts', 'tasks']) {
+        const row = adapter.prepare(
+          `SELECT count(*) as cnt FROM ${table} WHERE milestone_id = 'M001' AND slice_id = 'S01'`,
+        ).get() as { cnt: number };
+        assert.equal(row.cnt, 0, `${table} rows should be removed by deleteSlice`);
+      }
+      const slices = adapter.prepare(
+        `SELECT count(*) as cnt FROM slices WHERE milestone_id = 'M001' AND id = 'S01'`,
+      ).get() as { cnt: number };
+      assert.equal(slices.cnt, 0, 'slice row should be removed by deleteSlice');
       closeDatabase();
     });
   });
