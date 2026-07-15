@@ -3,6 +3,7 @@
 
 import type { AutoAdvanceResult, AutoOrchestrationModule, AutoOrchestratorDeps, AutoSessionContext, AutoStatus } from "./contracts.js";
 import type { GSDState } from "../types.js";
+import { clearStaleReactiveStates } from "../reactive-graph.js";
 
 function now(): number {
   return Date.now();
@@ -34,12 +35,41 @@ export class AutoOrchestrator implements AutoOrchestrationModule {
   private lastAdvanceKey: string | null = null;
   private lastFinalizedUnitKey: string | null = null;
   private dispatchKeyWindow: string[] = [];
+  private basePath: string | null = null;
 
   public constructor(deps: AutoOrchestratorDeps) {
     this.deps = deps;
   }
 
-  public async start(_sessionContext: AutoSessionContext): Promise<AutoAdvanceResult> {
+  /**
+   * When a reactive-execute unit trips the idempotency or stuck-loop guard,
+   * the usual cause is a stale reactive state file left by a crashed or
+   * context-exhausted session (#6485) — the unit looks "already active"
+   * forever. Evict stale files; when anything was evicted, reset the
+   * dispatch-key window so the current advance can proceed to dispatch.
+   * Returns true when eviction cleared the way. Genuinely-active units
+   * (nothing stale to evict) keep the normal blocked behaviour.
+   */
+  private evictStaleReactiveState(unitType: string): boolean {
+    if (unitType !== "reactive-execute" || !this.basePath) return false;
+    try {
+      const evicted = clearStaleReactiveStates(this.basePath);
+      if (evicted.length === 0) return false;
+      process.stderr.write(
+        `gsd-orchestrator: reactive-execute guard hit — evicted stale state for ${evicted
+          .map((e) => `${e.mid}/${e.sid}`)
+          .join(", ")}, continuing dispatch\n`,
+      );
+      this.lastAdvanceKey = null;
+      this.dispatchKeyWindow = [];
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  public async start(sessionContext: AutoSessionContext): Promise<AutoAdvanceResult> {
+    this.basePath = sessionContext.basePath;
     this.lastAdvanceKey = null;
     this.lastFinalizedUnitKey = null;
     this.dispatchKeyWindow = [];
@@ -203,35 +233,57 @@ export class AutoOrchestrator implements AutoOrchestrationModule {
       // checks coexist: idempotency for the common immediate-repeat case,
       // stuck-loop for the saturated-window case.
       if (this.lastAdvanceKey === nextKey && matchingCount < STUCK_WINDOW_SIZE) {
-        const blocked: AutoAdvanceResult = { kind: "blocked", reason: "idempotent advance: unit already active", action: "pause" };
-        await this.deps.runtime.journalTransition({
-          name: "advance-blocked",
-          reason: blocked.reason,
-          unitType: decision.unitType,
-          unitId: decision.unitId,
-        });
-        await this.deps.health.postAdvanceRecord(blocked);
-        return blocked;
+        if (this.evictStaleReactiveState(decision.unitType)) {
+          // Stale reactive state was the reason the unit looked active —
+          // continue this advance and let the unit dispatch normally.
+          await this.deps.runtime.journalTransition({
+            name: "advance-guard-evicted-stale-reactive",
+            reason: "idempotent guard: evicted stale reactive state, continuing dispatch",
+            unitType: decision.unitType,
+            unitId: decision.unitId,
+          });
+        } else {
+          const blocked: AutoAdvanceResult = { kind: "blocked", reason: "idempotent advance: unit already active", action: "pause" };
+          await this.deps.runtime.journalTransition({
+            name: "advance-blocked",
+            reason: blocked.reason,
+            unitType: decision.unitType,
+            unitId: decision.unitId,
+          });
+          await this.deps.health.postAdvanceRecord(blocked);
+          return blocked;
+        }
       }
 
       // Stuck-loop detection: when the ring is saturated with copies of
       // `nextKey` (count >= STUCK_WINDOW_SIZE), the orchestrator has been
       // picking the same unit across the whole window and must hard-stop with
-      // a diagnosable reason.
+      // a diagnosable reason. For reactive-execute the saturation is usually
+      // a stale reactive state file (#6485) — attempt eviction before the
+      // hard-stop and continue when it clears the way.
       if (matchingCount >= STUCK_WINDOW_SIZE) {
-        const blocked: AutoAdvanceResult = {
-          kind: "blocked",
-          reason: `stuck-loop: ${nextKey} picked ${matchingCount} times`,
-          action: "stop",
-        };
-        await this.deps.runtime.journalTransition({
-          name: "advance-blocked",
-          reason: blocked.reason,
-          unitType: decision.unitType,
-          unitId: decision.unitId,
-        });
-        await this.deps.health.postAdvanceRecord(blocked);
-        return blocked;
+        if (this.evictStaleReactiveState(decision.unitType)) {
+          await this.deps.runtime.journalTransition({
+            name: "advance-guard-evicted-stale-reactive",
+            reason: "stuck-loop guard: evicted stale reactive state, continuing dispatch",
+            unitType: decision.unitType,
+            unitId: decision.unitId,
+          });
+        } else {
+          const blocked: AutoAdvanceResult = {
+            kind: "blocked",
+            reason: `stuck-loop: ${nextKey} picked ${matchingCount} times`,
+            action: "stop",
+          };
+          await this.deps.runtime.journalTransition({
+            name: "advance-blocked",
+            reason: blocked.reason,
+            unitType: decision.unitType,
+            unitId: decision.unitId,
+          });
+          await this.deps.health.postAdvanceRecord(blocked);
+          return blocked;
+        }
       }
 
       const contract = await this.deps.toolContract.compileUnitToolContract(decision.unitType, decision.unitId);

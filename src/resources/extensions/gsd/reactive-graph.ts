@@ -16,7 +16,7 @@ import { parsePlan } from "./parsers-legacy.js";
 import { resolveTasksDir, resolveTaskFiles } from "./paths.js";
 import { join } from "node:path";
 import { loadJsonFileOrNull, saveJsonFile } from "./json-persistence.js";
-import { existsSync, unlinkSync } from "node:fs";
+import { existsSync, unlinkSync, readdirSync, statSync } from "node:fs";
 
 // ─── Graph Construction ───────────────────────────────────────────────────
 
@@ -334,4 +334,90 @@ export function clearReactiveState(
   } catch {
     // Non-fatal
   }
+}
+
+/**
+ * Age threshold (ms) after which a reactive state file is considered stale.
+ * Reactive-execute dispatches that haven't progressed in 30 minutes are
+ * almost certainly from a crashed or context-exhausted session.
+ */
+const STALE_REACTIVE_TTL_MS = 30 * 60 * 1000;
+
+/**
+ * Scan the runtime directory for stale reactive state files and remove them.
+ *
+ * A reactive state file is considered stale when:
+ * 1. Its mtime is older than STALE_REACTIVE_TTL_MS, OR
+ * 2. None of its dispatched task IDs have a SUMMARY file on disk, meaning
+ *    the prior dispatch never completed any work.
+ *
+ * This prevents stuck loops where the orchestrator keeps blocking the same
+ * reactive-execute key because a prior batch never returned (crash, context
+ * exhaustion, etc.).
+ *
+ * Returns the list of removed {mid, sid} pairs for logging.
+ */
+export function clearStaleReactiveStates(
+  basePath: string,
+): Array<{ mid: string; sid: string }> {
+  const runtimeDir = join(basePath, ".gsd", "runtime");
+  const removed: Array<{ mid: string; sid: string }> = [];
+  let files: string[];
+  try {
+    files = readdirSync(runtimeDir);
+  } catch {
+    return removed;
+  }
+  const now = Date.now();
+  for (const file of files) {
+    if (!file.endsWith("-reactive.json")) continue;
+    // Parse mid/sid from filename: "{mid}-{sid}-reactive.json" → "M002-S02"
+    const baseName = file.replace(/-reactive\.json$/, "");
+    const dashIdx = baseName.indexOf("-");
+    if (dashIdx === -1) continue;
+    const mid = baseName.slice(0, dashIdx);
+    const sid = baseName.slice(dashIdx + 1);
+
+    const filePath = join(runtimeDir, file);
+    let isStale = false;
+    try {
+      const mtime = statSync(filePath).mtimeMs;
+      if (now - mtime > STALE_REACTIVE_TTL_MS) {
+        isStale = true;
+      }
+    } catch {
+      // Can't stat — treat as stale
+      isStale = true;
+    }
+
+    // Also check if any dispatched task has a SUMMARY (meaning progress was made)
+    if (!isStale) {
+      const state = loadJsonFileOrNull(filePath, isReactiveState);
+      if (state && Array.isArray(state.dispatched)) {
+        const anySummaryExists = state.dispatched.some((tid) => {
+          try {
+            const tDir = resolveTasksDir(basePath, mid, sid);
+            if (!tDir) return false;
+            return existsSync(join(tDir, `${tid}-SUMMARY.md`));
+          } catch {
+            return false;
+          }
+        });
+        if (!anySummaryExists) {
+          // No task summaries exist — the dispatch never completed
+          isStale = true;
+        }
+      }
+    }
+
+    if (isStale) {
+      try {
+        unlinkSync(filePath);
+        removed.push({ mid, sid });
+      } catch {
+        // Non-fatal
+      }
+    }
+  }
+  return removed;
 }

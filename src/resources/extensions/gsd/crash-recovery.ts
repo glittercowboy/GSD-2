@@ -42,6 +42,7 @@ import { gsdRoot, normalizeRealPath } from "./paths.js";
 import { atomicWriteSync } from "./atomic-write.js";
 import { effectiveLockFile } from "./session-lock.js";
 import { isInFlightRuntimePhase, listUnitRuntimeRecords, type AutoUnitRuntimeRecord } from "./unit-runtime.js";
+import { clearStaleReactiveStates } from "./reactive-graph.js";
 
 export interface LockData {
   pid: number;
@@ -257,17 +258,29 @@ export function clearLock(basePath: string): void {
 export function clearStaleWorkerLock(basePath: string): void {
   clearLegacyLockFile(basePath);
 
-  if (!isDbAvailable()) return;
+  if (isDbAvailable()) {
+    try {
+      const projectRoot = normalizeRealPath(basePath);
+      const worker = findStaleWorkerForProject(projectRoot);
+      if (worker) {
+        markLatestActiveForWorkerCanceled(worker.worker_id, "crash-recovered");
+        markWorkerStopping(worker.worker_id);
+        forceReleaseLeasesForWorker(worker.worker_id);
+        deleteRuntimeKv("worker", worker.worker_id, SESSION_FILE_KV_KEY);
+      }
+    } catch {
+      // Best-effort.
+    }
+  }
+
+  // Clean up stale reactive-execute state files left by crashed sessions.
+  // Reactive dispatch claims tasks but the subagent may never return if the
+  // session crashes — leaving the slice blocked by the idempotent guard until
+  // the state file is removed. Filesystem-based, so it runs even without a DB.
   try {
-    const projectRoot = normalizeRealPath(basePath);
-    const worker = findStaleWorkerForProject(projectRoot);
-    if (!worker) return;
-    markLatestActiveForWorkerCanceled(worker.worker_id, "crash-recovered");
-    markWorkerStopping(worker.worker_id);
-    forceReleaseLeasesForWorker(worker.worker_id);
-    deleteRuntimeKv("worker", worker.worker_id, SESSION_FILE_KV_KEY);
+    clearStaleReactiveStates(basePath);
   } catch {
-    // Best-effort.
+    // Non-fatal — stale reactive files are cleaned again on later bootstraps.
   }
 }
 

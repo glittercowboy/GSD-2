@@ -55,6 +55,7 @@ import {
   getDeepDiagnostic,
   readActiveMilestoneId,
 } from "./session-forensics.js";
+import { clearStaleReactiveStates } from "./reactive-graph.js";
 import {
   writeLock,
   clearLock,
@@ -2708,6 +2709,24 @@ export async function startAuto(
     // effects (SUMMARY.md, DB updates) but died before emitting unit-end.
     emitCrashRecoveredUnitEnd(base, freshStartAssessment.lock);
     clearStaleWorkerLock(base);
+  }
+
+  // Evict stale reactive-execute state on every bootstrap — not only after a
+  // detected crash. A session can die without leaving a crash lock (killed
+  // during subagent execution, context exhaustion before the lock write) and
+  // its stale reactive file would block re-dispatch via the idempotent guard.
+  try {
+    const evicted = clearStaleReactiveStates(base);
+    if (evicted.length > 0) {
+      logWarning(
+        "session",
+        `bootstrap evicted stale reactive state: ${evicted.map((e) => `${e.mid}/${e.sid}`).join(", ")}`,
+        { file: "auto.ts" },
+      );
+    }
+  } catch (err) {
+    // Non-fatal — reactive state cleanup is best-effort.
+    logWarning("session", `bootstrap reactive-state cleanup failed: ${getErrorMessage(err)}`, { file: "auto.ts" });
   }
 
   if (!s.paused) {

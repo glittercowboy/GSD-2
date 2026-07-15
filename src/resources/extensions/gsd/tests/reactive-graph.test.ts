@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import * as os from "node:os";
 import {
   deriveTaskGraph,
   getReadyTasks,
@@ -8,6 +11,7 @@ import {
   getMissingAnnotationTasks,
   detectDeadlock,
   graphMetrics,
+  clearStaleReactiveStates,
 } from "../reactive-graph.ts";
 import { parseTaskPlanIO } from "../files.ts";
 import type { TaskIO, DerivedTaskNode } from "../types.ts";
@@ -360,4 +364,81 @@ test("getMissingAnnotationTasks: returns only tasks missing BOTH inputFiles and 
   assert.deepEqual(getMissingAnnotationTasks(graph), [
     { id: "T03", title: "Neither" },
   ]);
+});
+
+// ─── clearStaleReactiveStates (#6485) ─────────────────────────────────────
+
+function makeReactiveFixture(): { base: string; runtimeDir: string } {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "gsd-reactive-test-"));
+  const runtimeDir = path.join(base, ".gsd", "runtime");
+  fs.mkdirSync(runtimeDir, { recursive: true });
+  return { base, runtimeDir };
+}
+
+function writeReactiveState(
+  runtimeDir: string,
+  mid: string,
+  sid: string,
+  dispatched: string[],
+): string {
+  const file = path.join(runtimeDir, `${mid}-${sid}-reactive.json`);
+  fs.writeFileSync(
+    file,
+    JSON.stringify({ sliceId: sid, completed: [], dispatched, graphSnapshot: { taskCount: dispatched.length } }),
+  );
+  return file;
+}
+
+test("clearStaleReactiveStates removes state files older than the 30-minute TTL", () => {
+  const { base, runtimeDir } = makeReactiveFixture();
+  const file = writeReactiveState(runtimeDir, "M001", "S01", ["T01"]);
+  const old = new Date(Date.now() - 31 * 60 * 1000);
+  fs.utimesSync(file, old, old);
+
+  const removed = clearStaleReactiveStates(base);
+
+  assert.deepEqual(removed, [{ mid: "M001", sid: "S01" }]);
+  assert.ok(!fs.existsSync(file), "stale state file should be deleted");
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test("clearStaleReactiveStates removes fresh state when no dispatched task has a SUMMARY (dispatch never completed)", () => {
+  const { base, runtimeDir } = makeReactiveFixture();
+  const file = writeReactiveState(runtimeDir, "M001", "S01", ["T01", "T02"]);
+
+  const removed = clearStaleReactiveStates(base);
+
+  assert.deepEqual(removed, [{ mid: "M001", sid: "S01" }]);
+  assert.ok(!fs.existsSync(file), "no-summary state file should be deleted");
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test("clearStaleReactiveStates keeps fresh state when a dispatched task produced a SUMMARY", () => {
+  const { base, runtimeDir } = makeReactiveFixture();
+  const file = writeReactiveState(runtimeDir, "M001", "S01", ["T01"]);
+  const tasksDir = path.join(base, ".gsd", "milestones", "M001", "slices", "S01", "tasks");
+  fs.mkdirSync(tasksDir, { recursive: true });
+  fs.writeFileSync(path.join(tasksDir, "T01-SUMMARY.md"), "# done\n");
+
+  const removed = clearStaleReactiveStates(base);
+
+  assert.deepEqual(removed, [], "in-progress state with a task summary must be kept");
+  assert.ok(fs.existsSync(file), "in-progress state file should survive cleanup");
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test("clearStaleReactiveStates ignores non-reactive files and missing runtime dirs", () => {
+  const { base, runtimeDir } = makeReactiveFixture();
+  const other = path.join(runtimeDir, "notes.json");
+  fs.writeFileSync(other, "{}");
+  const old = new Date(Date.now() - 90 * 60 * 1000);
+  fs.utimesSync(other, old, old);
+
+  assert.deepEqual(clearStaleReactiveStates(base), []);
+  assert.ok(fs.existsSync(other), "non-reactive files must be untouched");
+  fs.rmSync(base, { recursive: true, force: true });
+
+  const empty = fs.mkdtempSync(path.join(os.tmpdir(), "gsd-reactive-empty-"));
+  assert.deepEqual(clearStaleReactiveStates(empty), [], "missing runtime dir returns []");
+  fs.rmSync(empty, { recursive: true, force: true });
 });

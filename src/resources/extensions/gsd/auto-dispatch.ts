@@ -1260,7 +1260,14 @@ export const DISPATCH_RULES: DispatchRule[] = [
           getReadyTasks,
           chooseNonConflictingSubset,
           graphMetrics,
+          clearStaleReactiveStates,
         } = await import("./reactive-graph.js");
+
+        // Evict stale reactive state from prior crashed sessions before
+        // deriving a new dispatch. A stale reactive file means the prior
+        // reactive-execute batch never completed (crash / context exhaustion)
+        // and would cause the idempotent guard to block the same key.
+        clearStaleReactiveStates(basePath);
 
         const taskIO = await loadSliceTaskIO(basePath, mid, sid);
         if (taskIO.length < 2) return null; // single task, no point
