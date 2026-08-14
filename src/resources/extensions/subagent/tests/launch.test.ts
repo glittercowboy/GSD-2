@@ -12,6 +12,7 @@ import type { AgentConfig } from "../agents.js";
 import {
 	SUBAGENT_CHILD_ENV_VAR,
 	SUBAGENT_CHILD_ENV_VALUE,
+	buildShellEnvAssignments,
 	buildSubagentProcessEnv,
 	createSubagentLaunchPlan,
 	isSubagentChildProcess,
@@ -111,5 +112,25 @@ describe("subagent launch module", () => {
 		}
 
 		assert.deepEqual(calls, []);
+	});
+
+	it("propagates the named child identity and increments governed delegation depth", () => {
+		const env = buildSubagentProcessEnv({
+			WXCODE_EXECUTION_ROUTING_CURRENT_AGENT: "projects-orchestrator",
+			WXCODE_EXECUTION_ROUTING_DEPTH: "0",
+		}, "research-agent");
+		assert.equal(env.GSD_SUBAGENT_PARENT_AGENT, "projects-orchestrator");
+		assert.equal(env.GSD_SUBAGENT_CURRENT_AGENT, "research-agent");
+		assert.equal(env.GSD_SUBAGENT_DELEGATION_DEPTH, "1");
+		assert.equal(env.WXCODE_EXECUTION_ROUTING_CURRENT_AGENT, "research-agent");
+		assert.equal(env.WXCODE_EXECUTION_ROUTING_DEPTH, "1");
+		assert.deepEqual(buildShellEnvAssignments(env), [
+			"GSD_SUBAGENT_CHILD=\"1\"",
+			"GSD_SUBAGENT_CURRENT_AGENT=\"research-agent\"",
+			"GSD_SUBAGENT_PARENT_AGENT=\"projects-orchestrator\"",
+			"GSD_SUBAGENT_DELEGATION_DEPTH=\"1\"",
+			"WXCODE_EXECUTION_ROUTING_CURRENT_AGENT=\"research-agent\"",
+			"WXCODE_EXECUTION_ROUTING_DEPTH=\"1\"",
+		]);
 	});
 });

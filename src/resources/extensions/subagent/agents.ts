@@ -10,11 +10,25 @@ const PROJECT_AGENT_DIR_CANDIDATES = [".gsd", ".pi"] as const;
 
 export type AgentScope = "user" | "project" | "both";
 
+/** CLI thinking levels accepted by the embedded OpenCode-compatible runtime. */
+export type AgentThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+
+const AGENT_THINKING_LEVELS = new Set<AgentThinkingLevel>([
+	"off",
+	"minimal",
+	"low",
+	"medium",
+	"high",
+	"xhigh",
+]);
+
 export interface AgentConfig {
 	name: string;
 	description: string;
 	tools?: string[];
 	model?: string;
+	/** Normalized from either the OpenCode `variant` or native `thinking` frontmatter. */
+	thinking?: AgentThinkingLevel;
 	conflictsWith?: string[];
 	systemPrompt: string;
 	source: "user" | "project";
@@ -31,6 +45,10 @@ interface AgentFrontmatter extends Record<string, unknown> {
 	description?: string;
 	tools?: string | string[];
 	model?: string;
+	/** OpenCode-compatible name for the requested thinking/reasoning level. */
+	variant?: string;
+	/** Native CLI name for the requested thinking/reasoning level. */
+	thinking?: string;
 	conflicts_with?: string;
 }
 
@@ -58,6 +76,15 @@ function parseAgentTools(value: string | string[] | undefined): string[] | undef
 	}
 
 	return undefined;
+}
+
+function parseAgentThinkingLevel(variant: unknown, thinking: unknown): AgentThinkingLevel | undefined {
+	// `thinking` is the native spelling. `variant` is accepted for materialized
+	// OpenCode agent definitions, so either form produces the same child CLI flag.
+	const candidate = typeof thinking === "string" ? thinking : typeof variant === "string" ? variant : undefined;
+	return candidate && AGENT_THINKING_LEVELS.has(candidate as AgentThinkingLevel)
+		? candidate as AgentThinkingLevel
+		: undefined;
 }
 
 function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig[] {
@@ -94,12 +121,14 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
 
 		const tools = parseAgentTools(frontmatter.tools);
 		const conflictsWith = parseConflictsWith(frontmatter.conflicts_with);
+		const thinking = parseAgentThinkingLevel(frontmatter.variant, frontmatter.thinking);
 
 		agents.push({
 			name: frontmatter.name,
 			description: frontmatter.description,
 			tools: tools && tools.length > 0 ? tools : undefined,
 			model: frontmatter.model,
+			thinking,
 			conflictsWith,
 			systemPrompt: body,
 			source,

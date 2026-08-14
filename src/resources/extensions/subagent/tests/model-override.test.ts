@@ -52,4 +52,12 @@ describe("buildSubagentProcessArgs model override", () => {
 		assert.notEqual(modelIndex, -1);
 		assert.equal(args[modelIndex + 1], "model-override");
 	});
+
+	it("keeps the named agent's thinking policy when a model override is supplied", () => {
+		const agent = makeAgent({ model: "model-a", thinking: "high" });
+		const args = buildSubagentProcessArgs(agent, "task", null, "model-b");
+		const thinkingIndex = args.indexOf("--thinking");
+		assert.notEqual(thinkingIndex, -1, "named agent thinking must reach the child CLI");
+		assert.equal(args[thinkingIndex + 1], "high");
+	});
 });
