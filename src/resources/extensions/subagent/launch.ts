@@ -7,6 +7,15 @@ import type { AgentConfig } from "./agents.js";
 
 export const SUBAGENT_CHILD_ENV_VAR = "GSD_SUBAGENT_CHILD";
 export const SUBAGENT_CHILD_ENV_VALUE = "1";
+export const SUBAGENT_CURRENT_AGENT_ENV_VAR = "GSD_SUBAGENT_CURRENT_AGENT";
+export const SUBAGENT_PARENT_AGENT_ENV_VAR = "GSD_SUBAGENT_PARENT_AGENT";
+export const SUBAGENT_DELEGATION_DEPTH_ENV_VAR = "GSD_SUBAGENT_DELEGATION_DEPTH";
+
+// These are intentionally string constants rather than an extension import: GSD
+// remains usable without WXCode, while a governed child still receives the
+// identity/depth that the execution-routing extension validates.
+const WXCODE_CURRENT_AGENT_ENV_VAR = "WXCODE_EXECUTION_ROUTING_CURRENT_AGENT";
+const WXCODE_DELEGATION_DEPTH_ENV_VAR = "WXCODE_EXECUTION_ROUTING_DEPTH";
 
 export type SubagentContextMode = "fresh" | "fork";
 
@@ -43,16 +52,48 @@ export function isSubagentChildProcess(env: NodeJS.ProcessEnv = process.env): bo
 	return env[SUBAGENT_CHILD_ENV_VAR] === SUBAGENT_CHILD_ENV_VALUE;
 }
 
-export function buildSubagentProcessEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-	return {
+function parseDelegationDepth(value: string | undefined): number {
+	if (!value || !/^(0|[1-9]\d*)$/.test(value)) return 0;
+	const depth = Number(value);
+	return Number.isSafeInteger(depth) ? depth : 0;
+}
+
+export function buildSubagentProcessEnv(
+	env: NodeJS.ProcessEnv = process.env,
+	childAgentName?: string,
+): NodeJS.ProcessEnv {
+	const childEnv: NodeJS.ProcessEnv = {
 		...env,
 		[SUBAGENT_CHILD_ENV_VAR]: SUBAGENT_CHILD_ENV_VALUE,
 	};
+	if (!childAgentName) return childEnv;
+
+	const parentAgent = env[SUBAGENT_CURRENT_AGENT_ENV_VAR] ?? env[WXCODE_CURRENT_AGENT_ENV_VAR];
+	const parentDepth = parseDelegationDepth(
+		env[SUBAGENT_DELEGATION_DEPTH_ENV_VAR] ?? env[WXCODE_DELEGATION_DEPTH_ENV_VAR],
+	);
+	const childDepth = String(parentDepth + 1);
+	childEnv[SUBAGENT_CURRENT_AGENT_ENV_VAR] = childAgentName;
+	childEnv[SUBAGENT_DELEGATION_DEPTH_ENV_VAR] = childDepth;
+	if (parentAgent) childEnv[SUBAGENT_PARENT_AGENT_ENV_VAR] = parentAgent;
+
+	if (env[WXCODE_CURRENT_AGENT_ENV_VAR] !== undefined || env[WXCODE_DELEGATION_DEPTH_ENV_VAR] !== undefined) {
+		childEnv[WXCODE_CURRENT_AGENT_ENV_VAR] = childAgentName;
+		childEnv[WXCODE_DELEGATION_DEPTH_ENV_VAR] = childDepth;
+	}
+	return childEnv;
 }
 
 export function buildShellEnvAssignments(env: NodeJS.ProcessEnv = process.env): string[] {
-	const value = env[SUBAGENT_CHILD_ENV_VAR];
-	return value ? [`${SUBAGENT_CHILD_ENV_VAR}=${JSON.stringify(value)}`] : [];
+	const names = [
+		SUBAGENT_CHILD_ENV_VAR,
+		SUBAGENT_CURRENT_AGENT_ENV_VAR,
+		SUBAGENT_PARENT_AGENT_ENV_VAR,
+		SUBAGENT_DELEGATION_DEPTH_ENV_VAR,
+		WXCODE_CURRENT_AGENT_ENV_VAR,
+		WXCODE_DELEGATION_DEPTH_ENV_VAR,
+	];
+	return names.flatMap((name) => env[name] === undefined ? [] : [`${name}=${JSON.stringify(env[name])}`]);
 }
 
 export function buildSubagentProcessArgs(
@@ -71,6 +112,9 @@ export function buildSubagentProcessArgs(
 	}
 	const effectiveModel = modelOverride ?? agent.model;
 	if (effectiveModel) args.push("--model", effectiveModel);
+	// Thinking is part of the named agent contract; a caller-supplied model
+	// override must never erase the snapshot materialized reasoning policy.
+	if (agent.thinking) args.push("--thinking", agent.thinking);
 	if (agent.tools && agent.tools.length > 0) args.push("--tools", agent.tools.join(","));
 	if (tmpPromptPath) args.push("--append-system-prompt", tmpPromptPath);
 	args.push(`Task: ${task}`);
@@ -124,7 +168,7 @@ export function createSubagentLaunchPlan(input: SubagentLaunchInput): SubagentLa
 			input.modelOverride,
 			session,
 		),
-		env: buildSubagentProcessEnv(),
+		env: buildSubagentProcessEnv(process.env, input.agent.name),
 		cwd: input.cwd ?? input.defaultCwd,
 		session,
 	};
